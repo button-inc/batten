@@ -299,15 +299,6 @@ on its row; this section is the pointer, not the argument.
   extra PR is a whole CI matrix and a whole lap. This line used to read "an
   efficiency, not a commandment", and that hatch is what let a plan split one
   bundle into two PRs against AGENTS.md's "one PR all of it" (2026-09-25).
-- **The wait is working time** (2026-09-26). While `land` holds the tree —
-  a 20-40 min `verify`, then CI — prepare the next change in a separate
-  worktree (`git worktree add ../<name> -b <branch> origin/main`): read the
-  code, draft the edit, run its unit tests there. The tree coming back should
-  mean committing, not starting to read. An agent that idles through a lap
-  pays the lap twice. **The worktree shares the main checkout's `target/`**
-  (`CARGO_TARGET_DIR=<main>/target`), and `land` runs from the main checkout
-  only: two warm targets exceed this box's disk floor, which is how a worktree
-  `land` failed on 2026-09-26.
 - **A slow local check gets CHEAPER; it never moves to CI** (2026-09-26). CI
   confirms, it never discovers (AGENTS.md, "Workflow contract"), so "make
   `verify` faster by running X only in CI" is not an option to weigh or to
@@ -417,9 +408,6 @@ provably reach the value the code reads, the run measured nothing.
   roster change.
 - **The `fast-forward` bot reads TRUNK's `CI_REQUIRED_CHECKS`**, not the head's. A
   roster change lands before the job it describes goes away.
-- **`step run` hides a failing step's output.** Rerun the underlying command:
-  `cargo nextest run --workspace --no-fail-fast` for `test:cargo`, and
-  `batten semver check` for `semver`.
 - **A new preset needs the FULL suite before `land`.** `policy_presets`
   (`PRESET_SCOPES`) and `scratch_names` caught registration gaps that every
   targeted tier passed. `semver` catches a changed `pub` signature, which needs
@@ -429,24 +417,30 @@ provably reach the value the code reads, the run measured nothing.
   `truncate_handle.rs` holds every `set_len` to an inline `.write(true)` handle.
   A clippy `disallowed-methods` ban is the wrong shape here: its per-site waiver
   is what `waiver add refused` forbids.
-- **A `#MUTANT` script may not contain `|`.** `mutate` splits a row on every pipe.
-  Anchor patterns `^…$` to the code line, because `cargo fmt` re-indents, and an
-  unanchored pattern then matches only its own declaration and "survives" while
-  testing nothing.
+- **Rust mutation is cargo-mutants', never a hand-written row** (CLOUD-2253).
+  `MUTANT_RUNNERS` gives it every Rust source, a `//MUTANT` row in a `.rs` file
+  is never run, and `mutant_rows.rs` refuses one. A Rust Ready obligation names
+  `"mutation": "cargo-mutants"`. Read <https://mutants.rs/> before changing how
+  it runs: copy mode, `-j`, `--iterate`, `--shard` and `.cargo/mutants.toml` are
+  its own, and a wrapper re-implementing one is the defect. `mutant:rust` runs
+  it through `batten mutate cargo`, an argv with no shell: the change as
+  `--in-diff`, `-j` sized from the machine and the declared `MUTANT_JOB_*_MB`. A compiler cache buys nothing here: each copy's root is
+  random, so sccache's keys never match (0 of 714, CLOUD-1414). Hand-written
+  `#MUTANT` rows are for Rego and the manifests only, split on every `|`.
 
 ## Measured 2026-10-20 (CLOUD-2376)
 
-- **An uncommitted `batten.toml` source pin burns every lap, and the stop does not
-  name the pin.** Working a draft against the branch's own engine means flipping
-  `engine = { release = "vX" }` to `{ source = "<digest>" }`. Leaving that flip
-  UNCOMMITTED is the trap: `verify` runs `linear-check`, which ends in
-  `batten receipt record linear-check`, which refuses because "the working tree
-  differs from HEAD in 1 path(s), so a receipt keyed to that commit would attest
-  bytes no commit contains". `linear-check` fails, `verify` fails, and the lap
-  dies at `check run red` naming the HEAD — not the pin. Two laps were spent this
-  way before the gate log was read. **The pin is for building and testing, not for
-  landing: restore it with `git checkout batten.toml` before the first lap.**
-  Committing it instead is worse — a non-release pin must never reach `main`.
+- **A local build pins itself; put the release pin back the moment its test
+  answered.** Building Batten locally rewrites `batten.toml` to
+  `engine = { source = "<digest>" }`, and whichever `batten` is on PATH reads that
+  pin at runtime and replaces itself — so a local build being "not on PATH" is
+  never the problem, and nothing needs installing by hand. The pin exists only for
+  the test that needed the local build: once that test has given its answer,
+  `git checkout batten.toml` back to the latest released pin. Never stash it,
+  never keep it "to restore later", never commit it: a PR judged by an unreleased
+  engine can never merge to `main`, and an uncommitted pin also fails every lap
+  (`linear-check`'s receipt refuses a tree that differs from HEAD, and the lap
+  dies at `check run red` without naming the pin).
 - **A completion notification is not the log, and `batten task alive` is the only
   truth about what is running.** A backgrounded `mise run land` that has not
   notified may be mid-`verify` for many minutes; the tail of its output file still

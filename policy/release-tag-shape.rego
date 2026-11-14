@@ -98,4 +98,4 @@ test_a_shallow_clone_does_not_fault if {
 
 #MUTANT-SUITE crates/batten/tests/it/history_facts.rs
 #MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree["git-history"]` and never installs the module, so no case in it can turn red under a mutation of the predicate
-#MUTANT malformed-tag-unread|s@^\tcount(malformed) > 0$@\tfalse@|a_declared_tag_glob_resolves_its_matching_set
+#MUTANT malformed-tag-unread|s@^\tcount(malformed) > 0$@\tfalse@|a_tag_missing_its_prefix_is_refused

@@ -33,7 +33,17 @@ use std::path::PathBuf;
 use common::{run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698): this
+    // suite exercises the `pipeline` kind, which the repository no longer
+    // declares. Per PROCESS, since nextest runs each case in its own.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!(
+            "pipeline-shapes-{}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 fn payload(command: &str) -> String {
@@ -308,8 +318,8 @@ fn a_command_describing_the_shape_is_not_the_shape() {
     // A commit message, an issue body, or documentation naming one of these
     // shapes is prose. The parser's quote handling is what makes this hold, and
     // it is pinned here because this repository's own commits say these things.
-    assert_allowed("git commit -m \"never run mise run verify | tail -6\"");
-    assert_allowed("git commit -m \"the nohup mise run land & shape is refused\"");
+    assert_allowed("git commit -m \"docs: never run mise run verify | tail -6\"");
+    assert_allowed("git commit -m \"docs: the nohup mise run land & shape is refused\"");
     assert_allowed("echo \"mise run verify | tail\" > /tmp/notes.md");
 }
 
@@ -615,4 +625,26 @@ fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
     // tool for it, so excluding `*` along with the regex metacharacters would
     // have opened the hole this row exists to close.
     assert_denied("ls mise-tasks/*.sh");
+}
+
+/// A verdict program's own leading options do not hide its subcommand
+/// (CLOUD-2666). Dropping every `-`-prefixed token left `-C`'s value as the
+/// subcommand, so each of these four matched no verdict row and was allowed.
+/// The cause class is asserted, not the exit code alone: no push gate refuses
+/// these, so only the verdict row can name them.
+#[test]
+fn a_verdict_behind_a_global_option_is_still_refused() {
+    for command in [
+        "git -C /tmp push origin x 2>&1 | tail",
+        "git -c core.pager=cat push | tail",
+        "gh -R o/r pr comment 1 -b x | tail",
+        "gh pr -R o/r comment 1 -b x | tail",
+    ] {
+        let cause = cause_backgrounded(command);
+        assert!(cause.contains("verdict read dropped"), "{command}: {cause}");
+    }
+    // Queries stay allowed, so the case discriminates against a matcher that
+    // refuses every `-C` or `-R`.
+    assert_allowed("git -C /tmp log | tail");
+    assert_allowed("gh -R o/r pr view 42 | tail -3");
 }

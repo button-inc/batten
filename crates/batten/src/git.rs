@@ -456,6 +456,80 @@ pub fn canonical(path: &Path) -> PathBuf {
     plain(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
+/// Where a call's target sits (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placement {
+    /// Inside a working tree, judged by this root: the directory itself where
+    /// it holds the authority, else its worktree's, else its repository's.
+    Root(PathBuf),
+    /// In no repository at all.
+    Outside,
+    /// A repository this cannot root: one with no working tree, or a discovery
+    /// that failed for any reason but "none here".
+    Unplaceable,
+}
+
+/// Place `target` (CLOUD-2672). A target that does not exist yet is placed by
+/// its nearest existing ancestor, a lexical walk up the path, and a file by its
+/// directory; then git's own discovery, never a config search.
+///
+/// **gix's error is kept**, because `repo_root`'s untyped one cannot tell "in no
+/// repository" from "in one this cannot root", and only the first allows.
+#[must_use]
+pub fn placement(target: &Path, file: &str) -> Placement {
+    let mut probe = target.to_path_buf();
+    while !probe.exists() {
+        if !probe.pop() {
+            return Placement::Outside;
+        }
+    }
+    // Resolved BEFORE a file is stepped up from, so a symlink names the
+    // repository its target lives in, not the one holding the link.
+    let mut probe = canonical(&probe);
+    if !probe.is_dir() {
+        probe.pop();
+    }
+    match gix::discover::upwards_opts(&probe, discovery(&ceiling_dirs())) {
+        Ok((found, _)) => {
+            if found
+                .into_repository_and_work_tree_directories()
+                .1
+                .is_none()
+            {
+                return Placement::Unplaceable;
+            }
+            if probe.join(file).is_file() {
+                return Placement::Root(probe);
+            }
+            crate::config::authority_root(&probe).map_or(Placement::Unplaceable, |root| {
+                Placement::Root(canonical(&root))
+            })
+        }
+        Err(err) => undiscovered(&err),
+    }
+}
+
+/// Where a failed discovery places a target: no repository above it is
+/// `Outside`, while any other failure — an untrusted repository, a ceiling
+/// that cannot be matched — is `Unplaceable`, never read as no repository.
+/// gix 0.90 erases the operation's error into `gix::Error`; the variants are
+/// recovered by downcast, never by the broad `NotFound` class, which would
+/// also read an untrusted repository as no repository.
+fn undiscovered(err: &gix::Error) -> Placement {
+    if matches!(
+        err.downcast_any_ref::<gix::discover::upwards::Error>(),
+        Some(
+            gix::discover::upwards::Error::NoGitRepository { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. }
+        )
+    ) {
+        Placement::Outside
+    } else {
+        Placement::Unplaceable
+    }
+}
+
 /// Resolve the root of THIS WORKING TREE — the checkout `start` is actually in.
 ///
 /// # THE SIBLING TO [`repo_root`], AND CHOOSING BETWEEN THEM IS THE WHOLE POINT
@@ -746,7 +820,6 @@ fn open(dir: &Path) -> Result<gix::Repository> {
 ///
 /// This is not `gix::discover`'s `_with_environment_overrides`, which re-admits
 /// the redirecting variables too. Only the ceiling is read, and only here.
-//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 fn ceiling_dirs() -> Vec<PathBuf> {
     std::env::var_os("GIT_CEILING_DIRECTORIES")
         .map(|raw| std::env::split_paths(&raw).collect())
@@ -780,8 +853,6 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
 /// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
 /// clone that shares its index and packed-refs snapshots, and a write through
 /// one would leave every later read in the call answered from the shared copy.
-//MUTANT remember-ignored|s@^    if !remember \x7c\x7c !scope_open() {$@    if !scope_open() {@|a_write_is_never_served_from_the_memo
-//MUTANT open-key-ignores-cwd|s@^        cwd: std::env::current_dir().ok(),$@        cwd: None,@|a_read_from_another_working_directory_is_opened_again
 fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
@@ -829,7 +900,6 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
 
 /// The discovery options [`open_upwards`] walks with: the ceilings, ignored
 /// where they fence nothing.
-//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
 fn discovery(ceilings: &[PathBuf]) -> gix::discover::upwards::Options<'static> {
     gix::discover::upwards::Options {
         ceiling_dirs: ceilings.to_vec(),
@@ -913,9 +983,6 @@ impl Drop for OpenScope {
 
 /// Remember this thread's repository opens for the life of the returned guard
 /// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
-//MUTANT open-scope-never-opens|s@^        \*opens = Some(Opens::default());$@@|a_repository_read_twice_in_one_scope_is_opened_once
-//MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
-//MUTANT open-memo-never-consulted|s@^    if let Some(repo) = with_opens(.opens. opens.get(\&key)).flatten() {$@    if let Some(repo) = None::<gix::Repository> {@|a_repository_read_twice_in_one_scope_is_opened_once
 #[must_use = "the memo lives only as long as the guard: an unbound scope ends at once"]
 pub(crate) fn open_scope() -> OpenScope {
     let owner = with_cell(|opens| {
@@ -947,7 +1014,6 @@ fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
 
 /// Whether an open may be remembered: a scope is alive and no write has spent
 /// it ([`Opens::spend`]).
-//MUTANT spent-scope-still-remembers|s@^    with_opens(.opens. !opens.1).unwrap_or(false)$@    with_opens(.opens. true).unwrap_or(false)@|a_write_spends_the_scopes_memo
 fn scope_open() -> bool {
     with_opens(|opens| !opens.1).unwrap_or(false)
 }
@@ -959,12 +1025,20 @@ fn scope_open() -> bool {
 /// file would have a remembered handle served stale, so any of them moving fails
 /// `the_memos_read_list_was_audited_against_this_gix` until the list is
 /// re-audited against the new open and this moves with it.
-//MUTANT audited-gix-moved|s@^    ("gix", "0.87.1"),$@    ("gix", "0.0.0"),@|the_memos_read_list_was_audited_against_this_gix
+///
+/// Re-audited for gix 0.90.0 / gix-config 0.62.2 / gix-discover 0.57.1
+/// (2026-11-11): `Permissions::isolated()` still disables system, installation,
+/// global, user, environment and include config, and the new
+/// `system_config_path` / `git_installation_config_path` options load only under
+/// those permissions. `gix-discover` now resolves `commondir` itself, which is
+/// already on the list. The one addition, an ownership check lowering trust on
+/// the resolved git, common and worktree directories, reads metadata rather
+/// than file content, so the list is unchanged.
 #[cfg(test)]
 const AUDITED_GIX: &[(&str, &str)] = &[
-    ("gix", "0.87.1"),
-    ("gix-config", "0.60.0"),
-    ("gix-discover", "0.55.0"),
+    ("gix", "0.90.0"),
+    ("gix-config", "0.62.2"),
+    ("gix-discover", "0.57.1"),
 ];
 
 /// The bytes of every file an isolated open of `git_dir` reads — no includes,
@@ -985,13 +1059,11 @@ fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
     if common != git_dir {
         read.push(common.join("config"));
     }
-    read.iter().map(|path| std::fs::read(path).ok()).collect()
+    read.iter()
+        .map(|path| crate::fsio::read(path).ok())
+        .collect()
 }
 
-//MUTANT common-config-unread|s@^        read.push(common.join("config"));$@@|a_linked_worktree_is_remembered
-//MUTANT nested-scope-resets|s@^        if opens.is_some() {$@        if false {@|a_nested_scope_does_not_end_the_outer_one
-//MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
-//MUTANT repository-memo-ignores-config|s@^        (opened.read == now).then@        true.then@|a_config_edited_after_open_is_read_again
 impl Opens {
     /// The repository remembered for `key`, if every file its open read is
     /// unchanged.
@@ -1589,7 +1661,7 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
             std::fs::read_link(&absolute)
                 .map(|target| target.to_string_lossy().into_owned().into_bytes())
         } else {
-            std::fs::read(&absolute)
+            crate::fsio::read(&absolute)
         };
         let Ok(content) = content else {
             changed.insert(path.to_owned());
@@ -1649,7 +1721,6 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository. Every
 /// caller reads that as could-not-look and allows, so a tree this cannot
 /// enumerate is never refused on the strength of a count nobody took.
-//MUTANT index-required|s@repo.index_or_empty()@repo.index()@|a_repository_nothing_was_added_to_tracks_nothing
 pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
     // The INDEX is what `ls-files` printed, so this is the same membership test
@@ -1743,7 +1814,9 @@ pub fn is_shallow(dir: &Path) -> Result<bool> {
     let Ok(repo) = open(dir) else {
         return Ok(true);
     };
-    Ok(repo.is_shallow())
+    // gix 0.90 answers a `Result`: an unreadable shallow file is the same
+    // conservative `true` as an unopenable repository.
+    Ok(repo.is_shallow().unwrap_or(true))
 }
 
 /// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
@@ -2184,8 +2257,6 @@ fn unreachable_from_remotes(
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
-//MUTANT write-from-the-memo|s@^    let repo = open_fresh(dir)?;$@    let repo = open(dir)?;@|a_write_is_never_served_from_the_memo
-//MUTANT write-keeps-the-memo|s@^    spend_scope();$@@|a_write_spends_the_scopes_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
     let repo = open_fresh(dir)?;
     spend_scope();
@@ -2332,9 +2403,6 @@ pub struct RawObject {
     pub body: Vec<u8>,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT base-subtracts-nothing|s@!carried.contains(object.id.as_str())@!carried.contains(\&object.id[..0])@|the_base_is_subtracted_rather_than_resent
-
 /// Every object a push of `base..head` must carry.
 ///
 /// # What the set is, and why it is not simply "everything reachable from head"
@@ -2475,7 +2543,7 @@ fn collect_tree(
 /// Raises a [`UsageError`] (exit `1`) when the message cannot be parsed.
 pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
     let _ = dir;
-    let body = std::fs::read(message).map_err(|_| {
+    let body = crate::fsio::read(message).map_err(|_| {
         UsageError::raise("could not parse the pending message's trailers".to_owned())
     })?;
     // The SAME parser `commit_record` reads a committed message with, which is
@@ -2522,7 +2590,6 @@ pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
 /// # Errors
 ///
 /// Raises a [`UsageError`] (exit `1`) when the write fails.
-//MUTANT config-write-from-the-memo|s@^    let repo = open_for_write(dir)?;$@    let repo = open(dir)?;@|a_config_write_spends_the_scopes_memo
 pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
     // A WRITE, so opened as one (CLOUD-2526): fresh, and spending the memo.
     let repo = open_for_write(dir)?;
@@ -3466,7 +3533,7 @@ pub struct BaseDelta {
 /// classified line-by-line without tracking state, and guessing fails in the
 /// refusing direction — so a file using them reads as code, which is the safe
 /// half.
-fn without_comments(path: &str, text: &str) -> String {
+pub(crate) fn without_comments(path: &str, text: &str) -> String {
     let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
         // Markdown is prose end to end; there is no non-comment remainder.
         Some("md") => return String::new(),
@@ -3665,7 +3732,7 @@ pub fn base_delta(
         // and the path would fall through to the text comparison below — which is
         // exactly what the previous, always-reading version concluded for it too.
         // So this can cost an extra read; it cannot manufacture a verdict.
-        let now = std::fs::read(dir.join(&path)).unwrap_or_default();
+        let now = crate::fsio::read(dir.join(&path)).unwrap_or_default();
         let unchanged = was.is_some_and(|was| {
             gix::objs::compute_hash(hash, gix::object::Kind::Blob, &now).is_ok_and(|now| now == was)
         });
@@ -4125,7 +4192,6 @@ struct IdentityMemo {
 /// The spelling of a commit that changes nothing, which has no identity.
 const NO_IDENTITY: &str = "-";
 
-//MUTANT identity-memo-never-served|s@^        if let Some(identity) = self.known.get(commit) {$@        if let Some(identity) = self.known.get(commit).filter(\x7c_\x7c false) {@|a_remembered_identity_is_served_in_place_of_a_recomputation
 impl IdentityMemo {
     /// The memo for the repository at `dir`, empty where none is stored or the
     /// state directory cannot be named.
@@ -4283,8 +4349,6 @@ pub(crate) fn patch_identities(
 /// being overwritten. So is any range that will not resolve, including an
 /// `other` this clone has not fetched.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT identity-less-commit-contained|s@let Some(identity) = commit_identity(&repo, &id) else {@let Some(identity) = commit_identity(&repo, &id).or_else(\x7c\x7c ours.iter().next().cloned()) else {@|an_empty_sibling_commit_is_never_admitted_by_patch_identity
 pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
     let Ok(repo) = open(dir) else {
         return false;
@@ -4339,6 +4403,7 @@ pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
     Ok(repo
         .merge_base(base_id, head_id)
         .ok()
+        .flatten()
         .map(|found| found.detach().to_string()))
 }
 
@@ -4357,6 +4422,7 @@ pub fn merge_base_of(dir: &Path, one: &str, other: &str) -> Result<Option<String
     Ok(repo
         .merge_base(one.detach(), other.detach())
         .ok()
+        .flatten()
         .map(|found| found.detach().to_string()))
 }
 
@@ -4382,7 +4448,7 @@ pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Optio
     let ancestor = ancestor.detach();
     Ok(Some(
         repo.merge_base(ancestor, descendant.detach())
-            .is_ok_and(|found| found.detach() == ancestor),
+            .is_ok_and(|found| found.is_some_and(|found| found.detach() == ancestor)),
     ))
 }
 
@@ -4393,19 +4459,216 @@ pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Optio
 ///
 /// When the repository cannot be opened or either revision is not a tree.
 pub fn paths_changed_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>> {
+    Ok(blobs_changed_between(dir, from, to, "**")?
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect())
+}
+
+/// One changed path and its blob id at each revision, `None` where the path is
+/// absent there.
+pub type ChangedBlob = (String, Option<String>, Option<String>);
+
+/// [`paths_changed_between`] with each path's blob id at both revs (`None`
+/// where it is absent), restricted to `glob` (CLOUD-2692).
+///
+/// The ids are what lets a count be cached by CONTENT: a blob's count under a
+/// given counter never changes, so a caller keyed on the id reads and counts a
+/// blob once, ever, rather than once per commit, rebase or row.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or either revision is not a tree.
+pub fn blobs_changed_between(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    glob: &str,
+) -> Result<Vec<ChangedBlob>> {
     let repository = open(dir)?;
     let mut before: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
-    walk_blob_ids(&repository, from, "**", |path, id| {
+    walk_blob_ids(&repository, from, glob, |path, id| {
         before.insert(path.to_owned(), id);
     })?;
-    let mut changed = BTreeSet::new();
-    walk_blob_ids(&repository, to, "**", |path, id| {
-        if before.remove(path) != Some(id) {
-            changed.insert(path.to_owned());
+    let mut changed = Vec::new();
+    walk_blob_ids(&repository, to, glob, |path, id| {
+        let was = before.remove(path);
+        if was != Some(id) {
+            changed.push((
+                path.to_owned(),
+                was.map(|id| id.to_string()),
+                Some(id.to_string()),
+            ));
         }
     })?;
-    changed.extend(before.into_keys());
+    changed.extend(
+        before
+            .into_iter()
+            .map(|(path, id)| (path, Some(id.to_string()), None)),
+    );
+    changed.sort();
     Ok(changed)
+}
+
+/// The blob id of each of `paths` at `reference`, where present.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or `reference` is not a tree.
+pub fn blob_ids_at(
+    dir: &Path,
+    reference: &str,
+    paths: &[&str],
+) -> Result<BTreeMap<String, String>> {
+    let repository = open(dir)?;
+    let tree = repository
+        .rev_parse_single(reference)
+        .map_err(|_| UsageError::raise(format!("{reference} does not resolve")))?
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+    let mut ids = BTreeMap::new();
+    for path in paths {
+        if let Ok(Some(entry)) = tree.lookup_entry_by_path(path)
+            && entry.mode().is_blob()
+        {
+            ids.insert((*path).to_owned(), entry.object_id().to_string());
+        }
+    }
+    Ok(ids)
+}
+
+/// The commit id each of `revs` names, through one repository open; `None`
+/// where a rev does not resolve (CLOUD-2692).
+///
+/// What a cache keyed on "the same HEAD against the same base" reads: two
+/// lookups at ~0.1 ms, where the merge base itself is a graph walk.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn rev_ids(dir: &Path, revs: &[&str]) -> Result<Vec<Option<String>>> {
+    let repository = open(dir)?;
+    Ok(revs
+        .iter()
+        .map(|rev| {
+            repository
+                .rev_parse_single(*rev)
+                .ok()
+                .map(|id| id.detach().to_string())
+        })
+        .collect())
+}
+
+/// Submit readahead for the whole of `path` and return at once (CLOUD-2692).
+///
+/// `POSIX_FADV_WILLNEED` queues the IO without waiting for it, so a caller that
+/// hints every file it will read before reading any of them keeps the device's
+/// queue full on a cold page cache. A hint only: any failure is ignored, and
+/// off Linux this is a no-op.
+pub fn will_need(path: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = rustix::fs::fadvise(&file, 0, None, rustix::fs::Advice::WillNeed);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
+}
+
+/// Ask the kernel to start reading this repository's pack files now
+/// (CLOUD-2692), so a cold page cache serves the blob reads that follow from
+/// IO already in flight rather than one page fault at a time.
+///
+/// `POSIX_FADV_WILLNEED` submits readahead and returns at once, so every pack
+/// is queued in one pass before any object is read. A hint only: a failure is
+/// ignored, and off Linux it is a no-op. Answers how many pack and index files
+/// it hinted, the one thing a hint can be checked by.
+#[must_use]
+pub fn prefetch_packs(dir: &Path) -> usize {
+    let Ok(repository) = open(dir) else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(repository.objects.store_ref().path().join("pack")) else {
+        return 0;
+    };
+    let mut hinted = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "pack" || ext == "idx")
+        {
+            will_need(&path);
+            hinted += 1;
+        }
+    }
+    hinted
+}
+
+/// `each` over the UTF-8 text of every blob in `ids`, in parallel, keyed by id
+/// (CLOUD-2692); an id that does not resolve to UTF-8 text is left out.
+///
+/// **Inflation is CPU work, so the win is cores**: measured on this repository,
+/// 442 blobs (32 MB) read in 47 ms on one thread and 27 ms on four. Each worker
+/// opens its own repository, because this crate's gix is built without
+/// `parallel` and a `Repository` is not `Sync`; an open costs ~1 ms against a
+/// chunk's tens. `each` runs inside the worker over the borrowed bytes, so no
+/// blob is copied into an owned string and the set is never held at once. A
+/// set too small to repay a thread is read on this one.
+///
+/// # Errors
+///
+/// When a worker cannot open the repository.
+pub fn map_blobs<R: Send>(
+    dir: &Path,
+    ids: &[&str],
+    each: &(dyn Fn(&str) -> R + Sync),
+) -> Result<BTreeMap<String, R>> {
+    const PER_WORKER: usize = 32;
+    let read = |chunk: &[&str]| -> Result<Vec<(String, R)>> {
+        let repository = open(dir)?;
+        let mut out = Vec::with_capacity(chunk.len());
+        for id in chunk {
+            let Ok(oid) = gix::ObjectId::from_hex(id.as_bytes()) else {
+                continue;
+            };
+            let Ok(object) = repository.find_object(oid) else {
+                continue;
+            };
+            if let Ok(text) = std::str::from_utf8(&object.data) {
+                out.push(((*id).to_owned(), each(text)));
+            }
+        }
+        Ok(out)
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(ids.len().div_ceil(PER_WORKER))
+        .max(1);
+    if workers == 1 {
+        return Ok(read(ids)?.into_iter().collect());
+    }
+    let chunks: Vec<&[&str]> = ids.chunks(ids.len().div_ceil(workers)).collect();
+    let results: Vec<Result<Vec<(String, R)>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = chunks
+            .iter()
+            .map(|chunk| scope.spawn(|| read(chunk)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(UsageError::raise("a blob reader panicked")))
+            })
+            .collect()
+    });
+    let mut all = BTreeMap::new();
+    for result in results {
+        all.extend(result?);
+    }
+    Ok(all)
 }
 
 /// The patch identity of the branch's whole change against a declared base REF
@@ -4473,7 +4736,9 @@ fn cumulative_patch_id(dir: &Path, target: &str, head: &str) -> Result<Option<Pa
     let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
     let base = repo
         .merge_base(target_id, head_id)
-        .map_err(|_| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
+        .ok()
+        .flatten()
+        .ok_or_else(|| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
     let old_tree = repo
         .find_object(base.detach())
         .map_err(|_| refused())?
@@ -4954,7 +5219,7 @@ pub fn worktree_fact(dir: &Path) -> Result<WorktreeFact> {
     let repo = open(dir)?;
     let mut linked: Vec<WorktreeRegistration> = Vec::new();
     for proxy in repo.worktrees()? {
-        let id = proxy.id().to_string();
+        let id = proxy.id()?.to_string();
         // Read, decide, drop — the base never leaves this scope, which is what
         // `WorktreeRegistration`'s missing path field is enforcing.
         let Ok(base) = proxy.base() else { continue };
@@ -5166,7 +5431,7 @@ pub fn history_facts(
     // SHALLOW IS COULD-NOT-LOOK, decided once for the family rather than per
     // query: a shallow clone's missing history is missing for every pattern, and
     // answering some of them would be a partial result nothing marks as partial.
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Err(UsageError::raise(
             "the repository is shallow, so its history cannot be resolved".to_owned(),
         ));
@@ -5395,7 +5660,7 @@ fn path_transitions(
 /// Raises when `dir` is not a repository.
 pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
     let repo = open(dir)?;
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Ok(None);
     }
     Ok(Some(
@@ -5417,7 +5682,7 @@ pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
 /// could-not-look, never a short history.
 pub fn path_changes(dir: &Path, path: &str) -> Result<Vec<(String, String)>> {
     let repo = open(dir)?;
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Err(UsageError::raise(
             "the repository is shallow, so a path's history cannot be walked".to_owned(),
         ));
@@ -5661,7 +5926,6 @@ impl LandingFact {
     }
 }
 
-//MUTANT nothing-to-land-read-as-landed|s@^            Verdict::NothingToLand => "nothing_to_land",$@            Verdict::NothingToLand => "landed",@|a_branch_with_nothing_to_land_is_not_landed
 impl serde::Serialize for LandingFact {
     fn serialize<S: serde::Serializer>(
         &self,
@@ -6173,7 +6437,7 @@ fn entry_diverges(
         if want_link {
             return true;
         }
-        std::fs::read(&absolute)
+        crate::fsio::read(&absolute)
     } else {
         // A directory where the index records a file is a type change.
         return true;
@@ -6329,6 +6593,21 @@ mod tests {
         );
     }
 
+    /// Every pack and index file is hinted, and nothing else in the pack
+    /// directory.
+    #[test]
+    fn every_pack_and_index_is_prefetched() {
+        let repo = crate::scratch::scratch("git-prefetch-packs");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let packs = repo.join(".git/objects/pack");
+        std::fs::create_dir_all(&packs).unwrap();
+        for name in ["p.pack", "p.idx", "p.keep", "p.rev"] {
+            std::fs::write(packs.join(name), "x").unwrap();
+        }
+        assert_eq!(prefetch_packs(&repo), 2);
+        assert_eq!(prefetch_packs(&repo.join("nowhere")), 0);
+    }
+
     /// A ceiling that contains nothing here fences nothing, which is how git reads
     /// it; gix's default refused the repository instead (CLOUD-2064).
     #[test]
@@ -6377,7 +6656,7 @@ mod tests {
         opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
         assert!(opens.get(&key).is_some(), "the premise: it was remembered");
         let config = dir.join(".git/config");
-        let text = fs::read_to_string(&config).expect("config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
         let edited = text.replacen("bare = false", "bare = fals0", 1);
         assert_ne!(text, edited, "the premise: the edit changes a byte");
         fs::write(&config, edited).expect("edit");
@@ -6490,7 +6769,7 @@ mod tests {
             .flatten()
             .expect("one key");
         let config = dir.join(".git/config");
-        let text = fs::read_to_string(&config).expect("config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
         let edited = text.replacen("bare = false", "bare = fals0", 1);
         assert_ne!(text, edited, "the premise: the edit changes a byte");
         fs::write(&config, edited).expect("edit");
@@ -6595,7 +6874,7 @@ mod tests {
     fn the_memos_read_list_was_audited_against_this_gix() {
         let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
         let lock: toml::Value =
-            toml::from_str(&fs::read_to_string(lock).expect("Cargo.lock")).expect("toml");
+            toml::from_str(&crate::fsio::read_to_string(lock).expect("Cargo.lock")).expect("toml");
         let packages = lock
             .get("package")
             .and_then(toml::Value::as_array)
@@ -6996,7 +7275,7 @@ mod tests {
         let (dir, _) = history("blank-remote");
         set_config_local(&dir, "remote.blank.url", "").expect("write a blank url");
         // And a remote with no name at all, which no config key can spell.
-        let mut config = fs::read_to_string(dir.join(".git/config")).expect("config");
+        let mut config = crate::fsio::read_to_string(dir.join(".git/config")).expect("config");
         config.push_str("[remote \"\"]\n\turl = https://example.invalid/unnamed.git\n");
         fs::write(dir.join(".git/config"), config).expect("config");
         assert_eq!(
@@ -7015,8 +7294,14 @@ mod tests {
         let (dir, [first, ..]) = history("materialize");
         let dest = scratch("materialize-dest");
         materialize_rev(&dir, &first, &dest).expect("materialise");
-        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "one\n");
-        assert_eq!(fs::read_to_string(dest.join("b.txt")).unwrap(), "b\n");
+        assert_eq!(
+            crate::fsio::read_to_string(dest.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert_eq!(
+            crate::fsio::read_to_string(dest.join("b.txt")).unwrap(),
+            "b\n"
+        );
         assert!(!dest.join("c.txt").exists());
     }
 
@@ -8031,7 +8316,7 @@ mod tests {
                 if path.extension() != Some(OsStr::new("rs")) {
                     continue;
                 }
-                let source = fs::read_to_string(&path).unwrap();
+                let source = crate::fsio::read_to_string(&path).unwrap();
                 definitions += source.matches(needle.as_str()).count();
                 if !scan_tokens || path.file_name() == Some(OsStr::new("git.rs")) {
                     continue;
@@ -8064,7 +8349,7 @@ mod tests {
             if skip_self && path.file_name() == Some(OsStr::new("git.rs")) {
                 continue;
             }
-            let source = fs::read_to_string(&path).unwrap();
+            let source = crate::fsio::read_to_string(&path).unwrap();
             sources.push((path, source));
         }
         // `read_dir` order is filesystem-defined; a gate's failure message must
@@ -8331,7 +8616,7 @@ mod tests {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for name in GIT_MODULES {
             let path = src.join(name);
-            let source = fs::read_to_string(&path)
+            let source = crate::fsio::read_to_string(&path)
                 .unwrap_or_else(|_| panic!("{name} is declared a git module and does not exist"));
             assert!(
                 source.contains("gix::"),
@@ -8339,6 +8624,72 @@ mod tests {
                  entry exempts nothing and should be dropped"
             );
         }
+    }
+
+    /// The tokens a build of `source` compiles into production, space-joined:
+    /// every non-trivia token outside an item carrying `#[cfg(test)]`. Comments
+    /// and whitespace are trivia, so prose never reaches the scan.
+    fn production_code(source: &str) -> String {
+        use ra_ap_syntax::{AstNode as _, NodeOrToken, SourceFile, ast, ast::HasAttrs as _};
+        let root = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).syntax_node();
+        let test_only: Vec<ra_ap_syntax::TextRange> = root
+            .descendants()
+            .filter_map(ast::Item::cast)
+            .filter(|item| {
+                item.attrs().any(|attr| {
+                    attr.syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<String>()
+                        == "#[cfg(test)]"
+                })
+            })
+            .map(|item| item.syntax().text_range())
+            .collect();
+        root.descendants_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            // Comments by their LEXEME as well as by trivia: a doc comment does
+            // not reach this walk as trivia in this parser (it documents the
+            // item), and it is still prose. Only a comment's text starts `//` or
+            // `/*`; a string literal's starts with its quote.
+            .filter(|token| {
+                let text = token.text();
+                !token.kind().is_trivia() && !text.starts_with("//") && !text.starts_with("/*")
+            })
+            .filter(|token| {
+                !test_only
+                    .iter()
+                    .any(|range| range.contains_range(token.text_range()))
+            })
+            .map(|token| token.text().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Fails by: the scan reading prose or a test fixture again, so a comment
+    /// naming `git stash push` refuses the crate; or skipping production code,
+    /// so a reinstated primitive passes.
+    #[test]
+    fn the_primitive_scan_reads_production_code_only() {
+        let word = ["sta", "sh"].concat();
+        let prose = format!(
+            "// `git {word} push` is not a push\n/// and `git {word} push` in a doc\nfn f() {{}}\n#[cfg(test)]\nmod tests {{ const C: &str = \"git {word} push\"; }}\n"
+        );
+        assert!(
+            !production_code(&prose).contains(&word),
+            "prose and tests are skipped"
+        );
+        let spawn = format!("fn f() {{ run(&[\"{word}\", \"push\"]); }}\n");
+        assert!(
+            production_code(&spawn).contains(&word),
+            "a spawn argument is code"
+        );
+        let primitive = format!("pub fn {word}_save() {{}}\n");
+        assert!(
+            production_code(&primitive).contains(&word),
+            "an identifier is code"
+        );
     }
 
     #[test]
@@ -8357,19 +8708,32 @@ mod tests {
         // concatenation so this test's own source is not a match — which is
         // also why the doc above points at the issue for what was dropped
         // instead of re-typing the vocabulary it forbids.
+        //
+        // CODE, NOT PROSE OR FIXTURES. The scan matched the token anywhere in a
+        // file, so it fired on a comment and a test naming `git stash push` as
+        // the operand a command row must NOT read as `git push` (CLOUD-2666) —
+        // and the "fix" was renaming the command until the scanner stopped
+        // noticing, `no_ancestry_decides_merged_ness`'s failure over again. A
+        // primitive is a production identifier or a spawn's string argument, so
+        // that is all this reads: comments and `#[cfg(test)]` items are skipped
+        // on the syntax tree, never by rewording.
         let forbidden = [
             ["sta", "sh"].concat(),
             ["prun", "able"].concat(),
             ["worktree", "_remove"].concat(),
         ];
         for (path, source) in crate_sources(false) {
+            let code = production_code(&source);
             for token in &forbidden {
+                let at = code.find(token.as_str());
                 assert!(
-                    !source.contains(token.as_str()),
-                    "{}: names {token:?}; that vocabulary retired with the primitives \
-                     built on it, and re-deriving either would put a spawn back that \
-                     exists only because gix has no equivalent (CLOUD-780)",
-                    path.display()
+                    at.is_none(),
+                    "{}: names {token:?} in `{}`; that vocabulary retired with the \
+                     primitives built on it, and re-deriving either would put a spawn \
+                     back that exists only because gix has no equivalent (CLOUD-780)",
+                    path.display(),
+                    at.map_or("", |at| &code
+                        [at.saturating_sub(60)..(at + 40).min(code.len())])
                 );
             }
         }
@@ -8437,7 +8801,7 @@ mod tests {
         // appear alongside the issue that owns its price. It cannot check that
         // the reason given is true; it can check that a reason with an owner is
         // present, which is the failure that actually happened.
-        let doc: String = fs::read_to_string(
+        let doc: String = crate::fsio::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("src")
                 .join("git.rs"),
@@ -8715,6 +9079,58 @@ mod tests {
         assert_eq!(iso_utc(1_577_934_245), "2020-01-02T03:04:05Z");
         assert_eq!(iso_utc(1_622_548_800), "2021-06-01T12:00:00Z");
     }
+
+    /// No repository above a target places it outside; a discovery that failed
+    /// for any other reason is unplaceable, never outside. #1276's sweep found
+    /// the guard forced to `true` unpinned: no case reached a non-absent error.
+    ///
+    /// Fails by: the no-repository guard forced either way.
+    #[test]
+    fn only_an_absent_repository_places_a_target_outside() {
+        let absent = gix::discover::upwards::Error::NoGitRepository {
+            path: PathBuf::from("/nowhere"),
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(absent)),
+            Placement::Outside
+        );
+        let untrusted = gix::discover::upwards::Error::NoTrustedGitRepository {
+            path: PathBuf::from("/here"),
+            candidate: PathBuf::from("/here/.git"),
+            required: gix::sec::Trust::Full,
+            trust: gix::sec::Trust::Reduced,
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(untrusted)),
+            Placement::Unplaceable,
+            "an untrusted repository is not an absent one"
+        );
+        let foreign = std::io::Error::other("unreadable");
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(foreign)),
+            Placement::Unplaceable
+        );
+    }
+
+    /// Fails by: an existing target walked past its own directory, a missing
+    /// one not walked up to its nearest existing ancestor, or a file placed by
+    /// itself rather than by its directory (CLOUD-2672).
+    #[test]
+    fn a_target_is_placed_by_its_nearest_existing_directory() {
+        let repo = crate::scratch::scratch("git-placement-walk");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let src = repo.join("src");
+        fs::create_dir_all(&src).unwrap();
+        crate::durable::replace(repo.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("a.rs"), "").unwrap();
+        let here = Placement::Root(canonical(&src));
+        assert_eq!(placement(&src.join("a.rs"), "batten.toml"), here);
+        assert_eq!(
+            placement(&src.join("new").join("b.rs"), "batten.toml"),
+            here
+        );
+    }
 }
 
 /*
@@ -8726,25 +9142,7 @@ case asserts the projection against `git` itself over one fixture.
 A ROW'S SCRIPT MAY CARRY NO `|` of its own (`rows_in` splits on every one), so a
 row naming a closure or a disjunction mutates the one operand it is about.
 
-#MUTANT-SUITE crates/batten/tests/it/git_state_facts.rs
-#MUTANT tag-glob-ignored|s@wildmatch(glob.into(), tag.into()@wildmatch("*".into(), tag.into()@|a_tag_glob_lists_the_tags_it_matches_and_no_others
-#MUTANT tagger-date-ignored|s@            tagged.map(iso_utc)@            Some(iso_utc(committed))@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
-#MUTANT lightweight-undated|s@^            Some(iso_utc(committed))$@            None@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
-#MUTANT signature-header-ignored|s@\*name == "gpgsig" @false @|a_signature_header_reads_signed_and_the_same_word_in_a_body_does_not
-#MUTANT paths-against-empty-tree|s@        Some(parent) => repo.find_commit(parent.detach()).ok()?.tree().ok()?,@        Some(_) => repo.empty_tree(),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
-#MUTANT dates-swapped|s@        authored: iso_utc(author.seconds()),@        authored: iso_utc(committer.seconds()),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
-#MUTANT effective-first-wins|s@        fact.effective = Some(value);@        fact.effective = fact.effective.or(Some(value));@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT implicit-not-true|s@                None => Some(true),@                None => None,@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT global-scope-mislabelled|s@=> "global",@=> "system",@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT unaddressable-key-accepted|s@        !parsed.section_name.is_empty()@        true@|a_config_key_git_cannot_address_is_refused_at_load
-#MUTANT index-spec-ignored|s@    let spec = spec.strip_prefix("./").unwrap_or(spec);@    let spec = ".";@|the_index_under_a_pathspec_is_ls_files_stage_entry_for_entry
-#MUTANT content-divergence-missed|s@^    if hashed != entry.id {$@    if false {@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
-#MUTANT untracked-dropped|s@                fact.untracked.push(path.clone());@@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
-#MUTANT file-mode-ignored|s@^    filemode .. !want_link @    !want_link @|a_flipped_executable_bit_diverges_only_where_file_mode_counts
-#MUTANT config-write-worktree-private|s@    let path = repo.common_dir().join("config");@    let path = repo.git_dir().join("config");@|a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it
-#MUTANT magic-pathspec-accepted|s@    !spec.is_empty() .. !spec.starts_with(':')@    !spec.is_empty()@|a_magic_pathspec_is_refused_at_load_rather_than_read_as_a_literal
 
 CLOUD-843's p6-board package: a trunk walk that breaks partway is could-not-look,
 never the shorter history above the break (`messages_reachable_from`).
-#MUTANT walk-break-is-a-shorter-history|s@        let info = info.ok()?;@        let Ok(info) = info else { break };@|a_trunk_whose_history_breaks_partway_is_could_not_look
 */

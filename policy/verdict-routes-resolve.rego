@@ -25,7 +25,7 @@
 # one decision.
 #
 # WHAT IT DOES NOT DECIDE, stated rather than discovered. That the task, once
-# run, actually clears the refusal is not checkable here and would be the model
+# run, actually clears the refusal is not checkable here and would be the gated-model
 # verdict rule 3 forbids. And a route naming a program on PATH is left alone, for
 # `command-task-defined`'s reason: only the `mise run` shape is claimed.
 #

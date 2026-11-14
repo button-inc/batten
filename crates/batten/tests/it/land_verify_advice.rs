@@ -113,17 +113,9 @@ fn a_gate_s_output_is_stored_and_pointed_at() {
         !said.contains("payload-line-from-the-gate"),
         "the log is not streamed: {said}"
     );
-    let handle = said
-        .split("run batten capture show ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or_else(|| panic!("the lap names the log: {said}"))
-        .to_owned();
-    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
     assert!(
-        String::from_utf8_lossy(&shown.stdout).contains("payload-line-from-the-gate"),
-        "the handle gives the output back: {}",
-        common::stderr(&shown)
+        gate_log_view(&said).contains("payload-line-from-the-gate"),
+        "the view gives the output back: {said}"
     );
 }
 
@@ -208,7 +200,7 @@ fn the_classifier_is_read_from_the_worktree_being_judged_not_the_main_checkout()
         "the row read back must be the worktree's, remedy and all: {said}"
     );
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "the main checkout declares no row; reading it is what produced this \
          advice for a failure the branch did not cause: {said}"
     );
@@ -252,7 +244,7 @@ fn a_worktree_declaring_nothing_is_not_handed_the_main_checkouts_classifier() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "this worktree declares no row, so nothing may be blamed on the \
          machine: {said}"
     );
@@ -291,7 +283,7 @@ fn a_refusal_the_declared_row_matches_is_named_as_the_environment() {
     );
     // THE ASSERTION THAT FAILED BEFORE THIS LANDED.
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "advice for a defect this branch did not write: {said}"
     );
 }
@@ -309,7 +301,7 @@ fn a_refusal_matching_no_declared_row_still_says_reproduce_it_locally() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "an ordinary refusal keeps the advice that is right for it: {said}"
     );
     assert!(
@@ -334,7 +326,7 @@ fn a_consumer_declaring_no_rows_classifies_nothing_as_the_environment() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "with no declared row the ordinary advice stands: {said}"
     );
     assert!(
@@ -406,7 +398,7 @@ fn a_refusal_over_a_borrowed_tree_names_the_base_and_offers_both_recoveries() {
     );
     // The advice that is wrong here must not also be present.
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "pointing at a defect the author did not write: {said}"
     );
 }
@@ -422,7 +414,10 @@ fn a_refusal_with_no_bet_outstanding_gets_the_ordinary_advice() {
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
-    assert!(said.contains("reproduce and fix locally"), "{said}");
+    assert!(
+        said.contains("fix the cause the gate log names, then run the lap again"),
+        "{said}"
+    );
     assert!(
         !said.contains("this tree is SPECULATIVE"),
         "there is no borrowed base to blame: {said}"
@@ -458,7 +453,7 @@ fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
         "a refused tree is a verdict, never the race: {said}"
     );
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "a verdict about the tree gets the tree's advice: {said}"
     );
 }
@@ -480,7 +475,7 @@ fn a_refused_gate_renders_its_verdict_with_its_cause() {
         .find(|line| line.contains("batten deny check run red"))
         .unwrap_or_else(|| panic!("the stop names its class: {said}"));
     assert!(
-        line.contains("reproduce and fix locally"),
+        line.contains("fix the cause the gate log names, then run the lap again"),
         "the cause rides the same line: {line}"
     );
     assert!(
@@ -500,17 +495,30 @@ fn the_gate_that_refused_is_shown_saying_why() {
     let dir = repo("verify-advice-tee", true);
     let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
     let (_, said) = verify(&dir, &gate);
-    let handle = said
-        .split("run batten capture show ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or_else(|| panic!("the lap points at the gate's log: {said}"))
-        .to_owned();
-    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
     assert!(
-        String::from_utf8_lossy(&shown.stdout).contains("a real finding"),
-        "the operator can read what the gate said: {}{}",
-        String::from_utf8_lossy(&shown.stdout),
-        common::stderr(&shown)
+        gate_log_view(&said).contains("a real finding"),
+        "the operator can read what the gate said: {said}"
     );
+}
+
+/// The view the lap's `land: gate log` line names, read whole (CLOUD-2284).
+///
+/// Fails by: the line pointing at its log by any route but the view every
+/// stored output takes, or naming a stream without its lines and tokens.
+fn gate_log_view(said: &str) -> String {
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("land: gate log "))
+        .unwrap_or_else(|| panic!("the lap names the log: {said}"));
+    assert!(line.contains("output point now at /"), "{line}");
+    assert!(line.contains("T)"), "each stream names its tokens: {line}");
+    assert!(
+        !line.contains("--raw") && !line.contains("--field"),
+        "the view is the only route: {line}"
+    );
+    let view = line.rsplit_once("; read ").map_or_else(
+        || panic!("the line names its view: {line}"),
+        |(_, path)| path.trim(),
+    );
+    std::fs::read_to_string(view).unwrap_or_else(|err| panic!("read {view}: {err}"))
 }

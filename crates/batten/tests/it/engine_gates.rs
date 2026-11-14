@@ -173,15 +173,15 @@ fn a_cached_pin_is_judged_without_asking_about_drafts() {
     assert!(!text(&output).contains("draft"), "{}", text(&output));
 }
 
-/// EVERY COPY AGREES WITH THE PIN (CLOUD-2279): a batten provision row on
-/// another release, and a floor above the pin, are each refused by `path:line`
-/// before the pinned release is judged. The release is seeded so that, were
-/// the check skipped, the gate would pass rather than reach the network.
+/// ONE DECLARATION (CLOUD-2595): the batten provision row IS the pin, so the one
+/// copy left to disagree is the `engine` key's release alias, refused before the
+/// pinned release is judged. The release is seeded so that, were the check
+/// skipped, the gate would pass rather than reach the network.
 #[test]
 fn a_provision_row_disagreeing_with_the_pin_is_refused() {
     let dir = repo(
         "engine-gate-disagreeing-provision",
-        "version = 1\nmin_batten_version = \"9.9.10\"\nengine = { release = \"v9.9.9\" }\n\n\
+        "version = 1\nengine = { release = \"v9.9.9\" }\n\n\
          [[provision]]\nname = \"batten\"\nversion = \"9.9.8\"\n\n\
          [[provision]]\nname = \"other\"\nversion = \"1.0.0\"\n",
     );
@@ -190,16 +190,38 @@ fn a_provision_row_disagreeing_with_the_pin_is_refused() {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     let said = text(&output);
     assert!(
-        said.contains("batten.toml:2 min_batten_version 9.9.10 disagrees with engine pin v9.9.9"),
-        "{said}"
-    );
-    assert!(
-        said.contains("batten.toml:7 provision batten 9.9.8 disagrees with engine pin v9.9.9"),
+        said.contains("engine pins v9.9.9 and the batten provision row pins v9.9.8"),
         "{said}"
     );
     assert!(
         !said.contains("other"),
         "another tool's row is not a copy: {said}"
+    );
+}
+
+/// EVERY BATTEN DECLARATION AGREES (CLOUD-2595), not only the row the follow
+/// reads: a second batten row a merge left behind names another engine, and a
+/// `min_batten_version` above the pin is one the followed engine refuses itself
+/// under. Both are refused by `path:line`, before the network.
+#[test]
+fn a_second_batten_row_or_a_floor_above_the_pin_is_refused() {
+    let dir = repo(
+        "engine-gate-second-row",
+        "version = 1\nmin_batten_version = \"9.9.10\"\n\n\
+         [[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\n\n\
+         [[provision]]\nname = \"batten\"\nversion = \"9.9.1\"\n",
+    );
+    seed_release(&dir, "v9.9.9", 0, &[]);
+    let output = run(&dir, &["engine", "gate"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("provision batten 9.9.1 disagrees with engine pin v9.9.9"),
+        "{said}"
+    );
+    assert!(
+        said.contains("min_batten_version 9.9.10 is above engine pin v9.9.9"),
+        "{said}"
     );
 }
 

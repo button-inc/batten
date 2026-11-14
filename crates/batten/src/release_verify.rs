@@ -113,9 +113,6 @@ pub enum Verdict {
 
 /// The state check: a draft when `draft` is asked, otherwise published,
 /// immutable, and tagged at its target.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT mutable-release-admitted|s@^        Some(false) => refused.push(Refusal::Mutable),$@        Some(false) => {}@|a_published_mutable_release_is_refused
-//MUTANT tag-commit-unchecked|s@^    if release.tag_commit.as_deref() != Some(release.target.as_str()) {$@    if false {@|a_tag_off_its_target_commit_is_refused
 fn judge_state(release: &Release, draft: bool, refused: &mut Vec<Refusal>) -> Result<(), String> {
     if draft {
         if !release.draft {
@@ -154,8 +151,6 @@ fn judge_state(release: &Release, draft: bool, refused: &mut Vec<Refusal>) -> Re
 /// The sums check: one `SHA256SUMS` line per other asset, each matching.
 ///
 /// `fetch` hands back an asset's bytes, or the pointer saying why it could not.
-//MUTANT sums-line-missing-admitted|s@^            refused.push(Refusal::Unsummed(asset.name.clone()));$@@|an_asset_without_a_sums_line_is_refused
-//MUTANT public-bytes-unchecked|s@^        if crate::release::digest(\&bytes) != \*expected {$@        if false {@|a_mismatched_public_asset_is_refused
 fn judge_sums(
     published: &Published,
     fetch: &mut dyn FnMut(&Asset) -> Result<Vec<u8>, String>,
@@ -189,7 +184,6 @@ fn judge_sums(
 ///
 /// `missing` is the asset module's answer: the names it demands that the
 /// release does not carry, or the pointer saying it could not evaluate.
-//MUTANT missing-target-admitted|s@^    refused.extend(missing.into_iter().map(Refusal::MissingAsset));$@    drop(missing);@|a_release_missing_a_target_is_refused
 pub fn judge(
     release: &Release,
     draft: bool,
@@ -218,7 +212,6 @@ pub fn judge(
 /// The lock check (CLOUD-2287): a present `install.lock` must name release
 /// `tag` and carry, for each archive it lists, exactly the line `sums`
 /// publishes. An absent lock has nothing to check, so nothing is refused.
-//MUTANT baked-lock-unchecked|s@^    refused.extend(disagreeing.into_iter().map(Refusal::LockDisagrees));$@@|a_lock_disagreeing_with_sha256sums_is_refused
 #[must_use]
 pub fn judge_lock(lock: Option<&str>, tag: &str, sums: &str) -> Vec<Refusal> {
     let Some(text) = lock else {

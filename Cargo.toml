@@ -65,6 +65,13 @@ disallowed_types = "deny"
 # each carries its verdict, so this level is load-bearing today rather than
 # written down against a future.
 disallowed_methods = "deny"
+# NO DAEMON, EVER, AND NO SITE MAY OPT OUT (`forbid`, which `#[expect]` cannot
+# lower). A child spawned and never waited for is the shape a detach takes:
+# `singleton detach` ran one, the harness lost sight of it, and a container with
+# nothing visible running is reaped (retired on #1276). Long-running work is the
+# harness's background task, never this binary's orphan. The daemonize
+# primitives themselves are `clippy.toml`'s `disallowed-methods`.
+zombie_processes = "forbid"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -133,6 +140,21 @@ rustls-graviola = "0.4"
 # the fetch reproducible across hosts, which suits a checksum-pinned provisioner
 # better than the platform store does.
 webpki-roots = "1"
+# FILE IO IS COMPLETION-BASED (CLOUD-2692, operator ruling 2026-11-11: a heavy
+# read/write tool uses asynchronous disk IO to its fullest). Tokio's file IO is a
+# blocking pool on every platform, so file reads go through compio instead: on
+# Linux its fusion driver uses io_uring and falls back to polling (a pool for
+# regular files) when the ring cannot be set up or lacks an opcode it needs,
+# seccomp `EPERM` and `io_uring_disabled` included (read in compio-driver
+# 0.10.0's `DriverType::suggest` and `fusion::Driver::new`); Windows gets IOCP,
+# macOS a pool. Tokio stays the network runtime.
+compio = { version = "0.19", default-features = false, features = [
+  "runtime",
+  "fs",
+  "io",
+  "io-uring",
+  "polling",
+] }
 # CURRENT-THREAD ONLY, and `clippy.toml` already refuses the multi-thread builder
 # (CLOUD-747): measured out of tree, current-thread costs +0.14ms over
 # constructing none where multi-thread costs +1.68ms and grows a worker per core,
@@ -207,7 +229,7 @@ schemars = "1"
 # straight into `serde_json::Value`, which is already vendored, so the document
 # tree gains no second value type.
 json5 = "1.0"
-jsonschema = { version = "0.51", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 # Snapshot testing (CLOUD-106). `default-features = false` drops insta's own
 # colour and glob machinery: the suite compares bytes and reports through
 # nextest, so a diff renderer is weight for a reader who never sees it.
@@ -304,7 +326,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # repository's filters is what git itself does — and it is not on any gate's
 # path: the patch identity still reads blobs from the odb and diffs them with
 # `imara-diff` taken directly, exactly as the block below describes.
-gix = { version = "0.87", default-features = false, features = [
+gix = { version = "0.90", default-features = false, features = [
   "revision",
   "sha1",
   "sha256",
@@ -327,7 +349,7 @@ gix = { version = "0.87", default-features = false, features = [
 # `pub mod tree` is ungated, so the tree half still costs nothing; what changed is
 # that the blob half is no longer bought separately, because it is no longer
 # avoidable.
-gix-diff = { version = "0.67", default-features = false }
+gix-diff = { version = "0.70", default-features = false }
 # The diff algorithm behind the in-process patch identity (CLOUD-739). Hunks in,
 # nothing else: it takes two byte slices and returns the edit script. No
 # filesystem, no process, no threads, no global state.
@@ -401,7 +423,7 @@ imara-diff = { version = "0.2", default-features = false, features = ["unified_d
 # This combination resolves NO `FRAMEWORK_CRATES` name, NO `AMBIENT_CRATES` name
 # and no new `links` crate — `defmt` is the only `links` entry and it is already
 # in this lockfile today, unactivated.
-gix-packetline = { version = "0.22", default-features = false, features = [
+gix-packetline = { version = "0.24", default-features = false, features = [
   "blocking-io",
 ] }
 # The policy evaluator (CLOUD-647, CLOUD-689). A `policy` row hands a REGISTERED
@@ -565,7 +587,7 @@ gix-packetline = { version = "0.22", default-features = false, features = [
 # up -- a leaf operation over a token the parser has already delimited, which is
 # a different risk class from deciding where the token ended.
 rable = { version = "0.2", default-features = false }
-regorus = { version = "0.11", default-features = false, features = [
+regorus = { version = "0.15", default-features = false, features = [
   "ast",
   "std",
   "arc",
@@ -712,6 +734,10 @@ rmp-serde = "1"
 mimalloc = { version = "0.1", default-features = false, features = ["no_thp"] }
 semver = "1"
 tar = "0.4"
+# A provisioned artifact published only as a zip (every Windows build of uv,
+# zizmor and actionlint). Deflate through the `flate2` already pinned above,
+# and nothing else: no encryption, no other codecs.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Rust source parsed into a syntax tree, so a policy predicate can ask WHERE a
@@ -770,25 +796,7 @@ toml_edit = "0.25"
 # PINNED EXACTLY because it tracks rust-analyzer's weekly cadence under a 0.0.x
 # version, where cargo treats every bump as breaking and a caret range would still
 # admit none. `=` makes a bump a deliberate edit that `cargo-deny` and `verify` see.
-ra_ap_syntax = "=0.0.331"
-# A TRANSITIVE crate this workspace does not call, pinned EXACTLY because
-# `cargo-semver-checks` re-resolves rather than reading `Cargo.lock` — so the lock
-# pinning 1.12.0 constrains our builds and not the tool's. Measured 2026-09-03:
-# 1.13.0 fails to compile under the feature set the tool synthesises for its
-# rustdoc build (`cannot find macro `vec`` at tinyvec.rs:710, an `alloc` gate that
-# does not hold under that combination), so the `semver` job graded nothing and
-# refused — correctly, since a run that graded nothing has not answered — on every
-# branch and not merely on the one that found it.
-#
-# A DIRECT EDGE IS THE ONLY THING THAT CONSTRAINS A RE-RESOLVE. `semver.rs`'s own
-# lock fallback cannot reach this: it replaces the BASELINE side, and the failure
-# is on the CURRENT side's rustdoc build. Nothing here calls tinyvec, and that is
-# the point — the edge exists to bound a version, which is why it is `=` rather
-# than a range a bot could widen back into the break.
-#
-# REMOVE IT when tinyvec ships the feature-gate fix; the pin is a workaround for
-# somebody else's defect and should not outlive it.
-tinyvec = "=1.12.0"
+ra_ap_syntax = "=0.0.362"
 unicode-normalization = "0.1"
 # X.509, for reading a trust bundle's certificate subjects (CLOUD-1455). The
 # RustCrypto line rather than the nom-based one: `const-oid` is already resolved
@@ -796,7 +804,7 @@ unicode-normalization = "0.1"
 # dependency, and the whole set is `no_std`-capable parsing with no network, no
 # runtime and no process — which is what keeps it off `ambient_authority.rs`'s
 # list on a property rather than by not having been noticed.
-x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
+x509-cert = { version = "0.3", default-features = false, features = ["pem"] }
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
 # INSIDE a host's config file rather than a file of its own (CLOUD-298). TOML and
 # JSON are already vendored, so this is the one format the extension dispatch
@@ -804,7 +812,7 @@ x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
 # must be a refusal, which needs a real parser rather than a line scan. yaml-rust2
 # is the maintained successor to yaml-rust (the archived `serde_yaml` carries
 # RUSTSEC-2024-0370); it is a parser only, so it adds no serde derive surface.
-yaml-rust2 = "0.12"
+yaml-rust2 = "0.13"
 
 [profile.release]
 lto = "thin"
@@ -996,6 +1004,13 @@ opt-level = 2
 # every `verify` lap that touches Rust. So the workspace crate is back at the
 # dev default. The dependency half above (CLOUD-1208) is untouched: those units
 # change only when the lockfile does, so their optimiser runs once.
+
+# cargo-mutants' builds (https://mutants.rs/performance.html, CLOUD-2253): one
+# incremental build per mutant, and nothing reads a mutant's debug info.
+# Selected by `.cargo/mutants.toml`.
+[profile.mutants]
+inherits = "test"
+debug = "none"
 
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release

@@ -46,7 +46,7 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
 }
 
 /// The file `engine install` places: `batten.exe` on Windows.
-fn binary() -> String {
+pub(crate) fn binary() -> String {
     format!("batten{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -122,13 +122,13 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
 }
 
 /// The repository path the TLS fixture serves the release from.
-const REPO: &str = "example/pkg";
+pub(crate) const REPO: &str = "example/pkg";
 
 /// The release a ref's `batten.toml` pins in the fixture, never this binary's own.
-const WANTED: &str = "v9.9.9";
+pub(crate) const WANTED: &str = "v9.9.9";
 
 /// The bytes the fixture release ships as its binary.
-const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
+pub(crate) const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
@@ -151,7 +151,7 @@ fn platform_digest(target: &str) -> String {
 /// The digest the fixture release `tag` served from `home` publishes for
 /// `target`'s archive, read off its `SHA256SUMS`: this build's own is the real
 /// archive's, which a case cannot spell ahead of the build.
-fn published(home: &Path, tag: &str, target: &str) -> String {
+pub(crate) fn published(home: &Path, tag: &str, target: &str) -> String {
     let sums = std::fs::read_to_string(
         home.join("www")
             .join(REPO)
@@ -174,7 +174,7 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
 /// [`ref_release_host`] with `main` pinning `main_pin` and the one published
 /// release `served`, so a case can stand a worktree's pin on either side of
 /// `main`'s.
-fn release_host(
+pub(crate) fn release_host(
     home: &Path,
     main_pin: &str,
     served: &str,
@@ -387,7 +387,7 @@ fn pin_worktree(home: &Path, tag: &str) {
 }
 
 /// `served`'s environment as a case passes it.
-fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
+pub(crate) fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
     served
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -620,6 +620,35 @@ fn an_update_never_moves_a_pin_backward() {
     assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
 }
 
+/// AN UPDATE PRINTS WHAT IT CROSSES BEFORE IT MOVES THE PIN (CLOUD-2660): the
+/// same block `engine outdated` prints, ahead of the config path.
+#[test]
+fn an_update_prints_the_breaking_counts_before_it_moves_the_pin() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-breaking");
+    pin_worktree(&home, "v8.8.8");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let said = stdout(&output);
+    assert!(said.starts_with(&breaking_block(&served)), "{said}");
+}
+
 /// THE UPDATE INSTALLS ITS OWN TARGET (CLOUD-2418), whatever
 /// `BATTEN_VERSION_FROM_REF` would pick: `engine install` re-derives its
 /// release from the ref, so handing off to it installed `main`'s v8.8.8 under a
@@ -746,7 +775,7 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         return;
     }
     let home = common::scratch_repo("engine-update-every-copy");
-    pin_every_copy(&home, "8.8.8", "");
+    pin_every_copy(&home, "0.0.1", "");
     let named = home.join("bin");
     let named_str = named.display().to_string();
     let (_host, served) = release_host(&home, WANTED, WANTED);
@@ -767,8 +796,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         config.contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
         "{config}"
     );
+    // THE FLOOR IS NO LONGER MOVED (CLOUD-2595): `min_batten_version` is retired
+    // and the row is the pin, so an update leaves the key as it found it.
     assert!(
-        config.contains("min_batten_version = \"9.9.9\""),
+        config.contains("min_batten_version = \"0.0.1\""),
         "{config}"
     );
     assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
@@ -908,8 +939,9 @@ fn an_update_leaves_a_digest_in_another_case() {
     );
 }
 
-/// The floor is RAISED, never lowered: a `min_batten_version` already past the
-/// release is the consumer's own word and stays.
+/// The floor is never moved (CLOUD-2595 retired the raise with the key): a
+/// `min_batten_version` already past the release is the consumer's own word and
+/// stays.
 #[test]
 fn an_update_never_lowers_min_batten_version() {
     if !cfg!(target_os = "linux") {
@@ -1010,9 +1042,14 @@ fn outdated_exits_by_the_pins_distance_from_main() {
     pin_worktree(&home, "v8.8.8");
     let behind = batten_in(&home, &["engine", "outdated"], &env);
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    // The tag's changelog is not served, so `main`'s was read and is the one
+    // pointed at (CLOUD-2660).
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/main/crates/batten/CHANGELOG.md?plain=1#L5-L9\n",
+            served_repository(&served)
+        )
     );
 
     common::write(&home, "batten.toml", "version = 1\n");
@@ -1145,8 +1182,60 @@ fn a_lagging_changelog_dates_main_from_its_own_tag() {
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L3-L3\n",
+            served_repository(&served)
+        )
     );
+}
+
+/// The repository `served` names, as the engine reads `BATTEN_RELEASES`.
+fn served_repository(served: &[(String, String)]) -> String {
+    served
+        .iter()
+        .find(|(name, _)| name == "BATTEN_RELEASES")
+        .map(|(_, value)| value.clone())
+        .expect("the host names its repository")
+}
+
+/// The changelog at `WANTED`'s tag the breaking-count cases read (CLOUD-2660):
+/// 9.1.0 carries two breaking entries, the others none. Even lines are blank.
+const BREAKING_CHANGELOG: &str = "# Changelog\n\n## [Unreleased]\n\n## [9.9.9](https://example.invalid) - 2020-02-01\n\n### Fixed\n\n- a fix\n\n## [9.1.0](https://example.invalid) - 2020-01-20\n\n### Changed\n\n- [**breaking**] one\n- [**breaking**] two\n\n## [9.0.0](https://example.invalid) - 2020-01-10\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n";
+
+/// Serve [`BREAKING_CHANGELOG`] at `WANTED`'s tag.
+fn serve_breaking_changelog(home: &Path) {
+    let dir = home
+        .join("www")
+        .join(REPO)
+        .join(WANTED)
+        .join("crates")
+        .join("batten");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("CHANGELOG.md"), BREAKING_CHANGELOG).unwrap();
+}
+
+/// The block both verbs print for [`BREAKING_CHANGELOG`].
+fn breaking_block(served: &[(String, String)]) -> String {
+    format!(
+        "v8.8.8 → {WANTED}\nv9.1.0 2020-01-20 breaking 2\nv9.0.0 2020-01-10 breaking 0\nv9.9.9 2020-02-01 breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L5-L22\n",
+        served_repository(served)
+    )
+}
+
+/// BREAKING RELEASES LEAD, AND ONE LINE POINTS AT THEIR SECTIONS (CLOUD-2660):
+/// a count per release and a pointer, never the notes.
+#[test]
+fn outdated_breaking_releases_lead_and_point_at_their_sections() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated-breaking");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    pin_worktree(&home, "v8.8.8");
+    let behind = batten_in(&home, &["engine", "outdated"], &served_env(&served));
+    assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    assert_eq!(stdout(&behind), breaking_block(&served));
 }
 
 /// A MALFORMED PIN IS NAMED AS ONE (CLOUD-2418), with the words every other
@@ -1555,6 +1644,44 @@ mod repair {
         );
         let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
         assert_eq!(stamp.trim(), digest, "and carries the pin's stamp");
+    }
+
+    /// A RELEASE PIN REWRITES ONLY WHAT DIFFERS (CLOUD-2287). The running engine is
+    /// the pinned release, so it is left alone and not listed; the stale copy on
+    /// `PATH` becomes it and is listed.
+    ///
+    /// Fails by: a target holding the release's bytes rewritten, or a stale
+    /// one skipped, which the sweep on #1276 found unguarded.
+    #[test]
+    fn a_release_pin_rewrites_only_the_copy_that_differs() {
+        let dir = repo("engine-update-release-differs");
+        stub_cargo(&dir);
+        let binary = private_binary(&dir);
+        common::write(
+            &dir,
+            "batten.toml",
+            &format!(
+                "version = 1\nengine = {{ release = \"v{}\" }}\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        common::write(&hook_bin(&dir), "batten", "an older engine\n");
+        let before = std::fs::read(&binary).unwrap();
+        let output = run(&binary, &dir, &["engine", "install"], "");
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(
+            std::fs::read(&on_path).unwrap(),
+            before,
+            "the stale copy became the release"
+        );
+        let listed = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            listed.contains("hook-bin"),
+            "the rewritten copy is listed: {listed}"
+        );
+        assert_eq!(listed.lines().count(), 1, "and only it: {listed}");
     }
 
     /// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`

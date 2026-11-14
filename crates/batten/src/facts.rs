@@ -803,6 +803,12 @@ pub enum Fact {
     /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
     /// record exists — the branch owes no push a read.
     RedHead,
+    /// Each pathspec a `git checkout`/`git restore` names, and whether it is
+    /// literal, tracked and clean (CLOUD-2684).
+    PathspecStatus,
+    /// Each `[budget.*]` set a write would change, measured before and after
+    /// the call (CLOUD-2661).
+    Budgeted,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1408,7 +1414,7 @@ pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
 pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
 
 /// [`Fact::Review`] — **the second occupant of [`Cost::Effect`]**, and the one
-/// that had to state why an LLM in the resolution path is not a model verdict in
+/// that had to state why an LLM in the resolution path is not a gated-model verdict in
 /// a gate.
 ///
 /// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS A
@@ -1426,7 +1432,7 @@ pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
 /// The distinction is what makes this fact legal at all. A gate reading this
 /// fact refuses **ABSENCE** — no record for this (prompt, subject) pair — which
 /// is a comparison of two digests and is as deterministic as any other fact
-/// here. A gate refusing on what the agent CONCLUDED would be a model verdict
+/// here. A gate refusing on what the agent CONCLUDED would be a gated-model verdict
 /// wearing an exit code, and `review-dispatched.rego` is written so it cannot
 /// express one: the findings reach the module as pointers, and a pointer carries
 /// no claim to weigh.
@@ -1545,6 +1551,14 @@ pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
 pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::PathspecStatus`]: one index and status read, only on a
+/// checkout or restore call (CLOUD-2684).
+pub const PATHSPEC_STATUS: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Budgeted`]: the target and a fixed count of literal members, each
+/// capped, only on a write a `[budget.*]` set selects (CLOUD-2661).
+pub const BUDGETED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1592,6 +1606,8 @@ impl Fact {
         Fact::Pinned,
         Fact::DispatchCleared,
         Fact::RedHead,
+        Fact::PathspecStatus,
+        Fact::Budgeted,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1642,6 +1658,8 @@ impl Fact {
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
             Fact::RedHead => "red-head",
+            Fact::PathspecStatus => "pathspec-status",
+            Fact::Budgeted => "budgeted",
         }
     }
 
@@ -1700,6 +1718,8 @@ impl Fact {
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
             Fact::RedHead => RED_HEAD,
+            Fact::PathspecStatus => PATHSPEC_STATUS,
+            Fact::Budgeted => BUDGETED,
         }
     }
 
@@ -1788,6 +1808,8 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Instant => false,
         }
     }
@@ -1958,7 +1980,9 @@ impl Fact {
             | Fact::DispatchCleared
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
-            | Fact::RedHead => None,
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted => None,
         }
     }
 
@@ -2071,6 +2095,12 @@ impl Fact {
             | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             Fact::RedHead => Self::red_head_schema_fragment(),
+            Fact::PathspecStatus => Self::pathspec_status_schema_fragment(),
+            Fact::Budgeted => serde_json::json!({
+                "type": ["array", "null"],
+                "description": "Fact::Budgeted (CLOUD-2661) -- each `[budget.*]` set this write would change, by name, with whether the call breaches a ceiling it grows past; null when no set selects the call. Counts only, never content.",
+                "items": {"type": "object", "properties": {"name": {"type": "string"}, "breach": {"type": "boolean"}}, "required": ["name", "breach"], "additionalProperties": false},
+            }),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
@@ -2253,7 +2283,7 @@ impl Fact {
             // emits `null` for both did-not-look answers, and a schema typing
             // this as a bare object refuses the module that handles them.
             "type": ["object", "null"],
-            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
+            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a gated-model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
             "additionalProperties": {
                 "type": "object",
                 "properties": {
@@ -2367,6 +2397,8 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Pinned
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
             }),
@@ -2458,6 +2490,8 @@ impl Fact {
             | Fact::Captured
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2487,6 +2521,31 @@ impl Fact {
     /// The schema fragment for [`Fact::RedHead`] (CLOUD-2270): the record's
     /// shape, stated so `opa check -s` refuses a module that walks `failed`
     /// without reading the `null` a branch with no red head carries.
+    fn pathspec_status_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::PathspecStatus (CLOUD-2684) -- one entry per pathspec of every `git checkout`/`git restore` program in the call, or null when the call has none or one cannot be placed. `path` is repo-relative; `literal` is false for `.`, pathspec magic, a glob or a directory; `tracked` that the index holds a path under it; `clean` that HEAD, the index and the worktree agree there. Paths only, never content.",
+            "properties": {
+                "pathspecs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "literal": {"type": "boolean"},
+                            "tracked": {"type": "boolean"},
+                            "clean": {"type": "boolean"},
+                        },
+                        "required": ["path", "literal", "tracked", "clean"],
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "required": ["pathspecs"],
+            "additionalProperties": false,
+        })
+    }
+
     fn red_head_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             "type": ["object", "null"],
@@ -2646,6 +2705,8 @@ impl Fact {
             | Fact::Landing
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2870,6 +2931,8 @@ impl Fact {
             | Fact::GitIndex
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2934,6 +2997,8 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),

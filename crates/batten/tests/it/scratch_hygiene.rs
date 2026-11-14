@@ -106,6 +106,110 @@ fn the_collector_ran_for_this_run() {
     }
 }
 
+/// CLOUD-2716. A case's `std::env::temp_dir()` is under a root the collector
+/// covers, so unit-case scratch is collected with the rest. Before, it was the
+/// system temp dir, which nothing collected: 29,597 entries filled the disk.
+///
+/// Fails by: the collector no longer publishing `TMPDIR`, or publishing one
+/// outside its roots.
+///
+/// Off unix the case abstains: Windows' `GetTempPath` reads `TMP`/`TEMP`,
+/// never `TMPDIR`, and Git Bash spells the roots `/d/a/...`.
+#[test]
+fn a_case_temp_dir_is_under_a_collected_root() {
+    if !cfg!(unix) {
+        return;
+    }
+    let roots = std::env::var(ROOTS).unwrap_or_default();
+    let temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temp dir resolves");
+    assert!(
+        std::env::split_paths(&roots).any(|root| temp.starts_with(root)),
+        "{} is not under a root the collector covers ({roots:?})",
+        temp.display()
+    );
+    let tree = crate::common::at_root(".")
+        .canonicalize()
+        .expect("the checkout resolves");
+    assert!(
+        !temp.starts_with(&tree),
+        "{} is inside the checkout, where a not-a-repository fixture is one",
+        temp.display()
+    );
+}
+
+/// The collector's `TMPDIR` is `batten-suite` under the temp dir it was given,
+/// published as its last covered root and created; a lone run takes the last
+/// run's entries there, and a run beside another leaves them. The existence
+/// half is unix only: Git Bash's `/d/a/...` spelling is not a path this
+/// process can open.
+///
+/// Fails by: `TMPDIR` unpublished, published under `target/`, left out of the
+/// roots, or collected under a live run.
+#[test]
+fn the_collector_publishes_a_temp_dir_it_owns() {
+    for (others, kept) in [("", false), ("4242", true)] {
+        let (survived, published) = collect_seeded(
+            &format!("temp-dir-{}", others.len()),
+            others,
+            &["tmp", "../tmpdir/batten-suite"],
+        );
+        assert_eq!(survived[1], kept, "others={others:?}: {published}");
+        let line = line_of(&published, "TMPDIR");
+        let temp = line.trim_start_matches("TMPDIR=");
+        assert!(
+            line.starts_with("TMPDIR=") && temp.ends_with("/tmpdir/batten-suite"),
+            "{published}"
+        );
+        let roots = line_of(&published, ROOTS);
+        assert_eq!(roots.rsplit(':').next(), Some(temp), "{published}");
+        assert!(
+            !cfg!(unix) || PathBuf::from(temp).is_dir(),
+            "the published TMPDIR exists: {published}"
+        );
+    }
+}
+
+/// A nextest running in ANOTHER checkout defers only the shared temp root:
+/// this checkout's `target/tmp` is still collected. Two cargo-mutants jobs
+/// each deferred the other's collection, and a copy grew 3 GB of fixtures
+/// until the disk filled under a build (CLOUD-2716).
+///
+/// Linux only, inside the case: the other run's directory is read from
+/// `/proc`, and where it cannot be read the run counts as this checkout's.
+///
+/// Fails by: `target/tmp` guarded by every run again, or the shared root
+/// guarded by this checkout's runs alone.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose directory `/proc` reports"
+)]
+fn a_run_in_another_checkout_defers_only_the_shared_root() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let elsewhere = crate::common::scratch("clear-scratch-elsewhere");
+    let mut other = std::process::Command::new("sleep")
+        .arg("60")
+        .current_dir(&elsewhere)
+        .spawn()
+        .expect("start the other run");
+    let (survived, published) = collect_seeded(
+        "clear-scratch-other-checkout",
+        &other.id().to_string(),
+        &["tmp", "../tmpdir/batten-suite"],
+    );
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![false, true],
+        "this checkout's scratch is taken, the shared root is left: {published}"
+    );
+}
+
 /// The committed `clear-scratch` command, exactly as nextest runs it.
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
@@ -175,6 +279,9 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
         .arg("-c")
         .arg(collector_command())
         .env("CARGO_TARGET_DIR", root.join("target"))
+        // ITS OWN TEMP DIR: a lone-run collector inheriting this suite's
+        // `TMPDIR` would take the running suite's temp root.
+        .env("TMPDIR", root.join("tmpdir"))
         .env("NEXTEST_ENV", &published)
         .env("PATH", path)
         .status()
@@ -195,7 +302,6 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
 // The declared mutation, in a plain comment because it is shell rather than
 // prose. `.config/nextest.toml` has no `batten mutate` sweep route, so the row is
 // inert under the sweep and its kill was shown by hand (CLOUD-1976):
-// MUTANT collector-skips-triple-roots|s@ "$base"/\*/tmp; do@; do@|a_target_triples_scratch_is_collected_too
 #[test]
 fn a_target_triples_scratch_is_collected_too() {
     let (survived, published) = collect_seeded(

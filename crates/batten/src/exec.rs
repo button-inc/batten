@@ -643,7 +643,7 @@ pub(crate) fn cancel_owned_group(repo_root: &Path) -> bool {
     // ABSENT IS THE COMMON CASE AND IT IS NOT A FAILURE: a gate run without the
     // grouping opt-in records no note, so there is no group to cancel and the
     // watcher simply loses whatever it was racing.
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return false;
     };
     let pgid = body.trim();
@@ -739,8 +739,6 @@ struct Drain {
 // (CLOUD-2059). One budget across both streams leaves the second exactly what the
 // first left — `0ns` once the first waited it out — and a pipe that never closes
 // is reported as such.
-//MUTANT drain-budget-per-stream|s@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed() * 0),@|a_surviving_grandchild_cannot_hang_exec
-//MUTANT drain-timeout-unreported|s@^                Err(mpsc::RecvTimeoutError::Timeout) => true,$@                Err(mpsc::RecvTimeoutError::Timeout) => false,@|the_drain_reports_what_arrived_when_the_pipe_never_closes
 impl Drain {
     /// Spawn a tee of `pipe` into `sink`.
     fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
@@ -1287,7 +1285,6 @@ impl Reaper {
     }
 }
 
-//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 impl Drop for Reaper {
     fn drop(&mut self) {
         if !self.armed {
@@ -1518,7 +1515,6 @@ pub(crate) fn terminate(signal: i32) -> Result<()> {
 // A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
 // case reads the recorded reason, so a swallowed second signal shows up as the
 // grace expiring rather than as a teardown that took longer.
-//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -1870,7 +1866,7 @@ pub fn run_in_with_env(
 ) -> Result<ExitCode> {
     let bundle = split_bundle(command)?;
     let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
-    report_bundle(&bundle, &outcomes, patterns, settings, report)
+    report_bundle(repo_root, &bundle, &outcomes, patterns, settings, report)
 }
 
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
@@ -2401,7 +2397,6 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
 
 // Carried from the retired shim's `forks-instead-of-execing` row (CLOUD-843): a
 // fork leaves the recorded pid pointing at a process that is not the server.
-//MUTANT spawn-forks-instead-of-execing|s@    let failed = command.exec();@    let failed = match command.status() { Ok(_) => std::process::exit(0), Err(error) => error };@|the_servers_pid_is_this_processs_it_execs_rather_than_forks
 /// Become `argv`: replace this process, or say why it could not be.
 ///
 /// # Why this is a THIRD shape beside `piped` and `detached`
@@ -2745,8 +2740,6 @@ fn dispatch_decided(
 /// The split is what `--jobs` forces: with several children in flight nothing may
 /// write to a shared stream on the completion path, or the bundle's own output
 /// would be ordered by the machine.
-//MUTANT escalation-unreported|s@^    if let Some(escalation) = escalated {$@    if let Some(escalation) = None::<Escalation> {@|a_second_signal_escalates_instead_of_being_swallowed
-//MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 fn run_one(
     repo_root: &Path,
     run: u64,
@@ -2913,6 +2906,7 @@ fn run_one(
 
 /// Render everything the bundle has to say, and decide its exit code.
 fn report_bundle(
+    repo_root: &Path,
     bundle: &[&[String]],
     outcomes: &[Outcome],
     patterns: &[OutputPattern],
@@ -2966,6 +2960,17 @@ fn report_bundle(
                 .collect(),
         }
         .emit(settings.format, report)?;
+        // CAPTURED, NOT SHOWN, SO POINTED AT (CLOUD-2284): with no tee the
+        // child's words reached nobody, and a handle alone is one more call
+        // away. Each command's streams get the one pointer every stored output
+        // takes, a view read in one hop.
+        if !settings.tee && settings.format == OutputFormat::Human {
+            for outcome in outcomes {
+                if let Some(line) = capture::streams_pointer(repo_root, &outcome.captures) {
+                    writeln!(report, "{line}")?;
+                }
+            }
+        }
     }
 
     // BATTEN DIES OF THE SIGNAL BATTEN WAS SENT (CLOUD-746 S2), and this is the
@@ -4012,10 +4017,39 @@ mod tests {
         }
     }
 
+    /// How long [`reap`] waits for a group the case asked to leave.
+    #[cfg(unix)]
+    const REAP_GRACE: Duration = Duration::from_secs(5);
+
     /// Reap this process's child `group` leader, which the caller has made
-    /// sure is exiting.
+    /// sure is exiting — or KILL it and fail at [`REAP_GRACE`].
+    ///
+    /// BOUNDED, BECAUSE A MUTANT BREAKS THE PREMISE. A cancel mutated into a
+    /// no-op leaves the spinner running, and an unbounded wait then hangs the
+    /// case until the runner's timeout SIGKILLs it, which runs no `Drop`: the
+    /// TERM-ignoring group outlived its case and spun a core for fourteen hours
+    /// (#1276). Failing here kills the mutant and reaps the group.
+    #[cfg(unix)]
     fn reap(group: &mut Group) {
-        await_reaped(group.pid.parse().expect("a numeric pid"));
+        let pid: u32 = group.pid.parse().expect("a numeric pid");
+        let (reaped, exited) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            await_reaped(pid);
+            let _ = reaped.send(());
+        });
+        if exited.recv_timeout(REAP_GRACE).is_err() {
+            let _ = escalate_group(&group.pid);
+            let _ = waiter.join();
+            group.reaped = true;
+            panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
+        }
+        let _ = waiter.join();
+        group.reaped = true;
+    }
+
+    /// No process groups off unix.
+    #[cfg(not(unix))]
+    fn reap(group: &mut Group) {
         group.reaped = true;
     }
 

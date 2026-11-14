@@ -133,18 +133,18 @@ fn lowering_a_rules_severity_is_reported_and_still_judged_at_the_base_rank() {
     let repo = pr_fixture(
         "trust-severity-lowered",
         &format!("version = 1\n{}", rule("no-todo", "deny")),
-        &format!("version = 1\n{}", rule("no-todo", "warn")),
+        &format!("version = 1\n{}", rule("no-todo", "advise")),
         &[("lib.rs", "TODO\n")],
     );
     assert_eq!(
         run(&repo, &["check"]).status.code(),
         Some(0),
-        "a warn finding does not fail by itself — the bar the branch lowered to"
+        "an advise finding does not fail by itself — the bar the branch lowered to"
     );
     let output = run(&repo, &["check", "--config-from", "origin/main"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        stdout(&output).contains("batten.toml:rule[no-todo].severity deny→warn"),
+        stdout(&output).contains("batten.toml:rule[no-todo].severity deny→advise"),
         "got: {}",
         stdout(&output)
     );

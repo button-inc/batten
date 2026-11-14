@@ -37,20 +37,6 @@
 // it (CLOUD-2193), and a Rust suite selects the runner rather than a target, so
 // the rows whose case lives in `tests/it/reclaim_census.rs` or
 // `tests/it/reclaim_report_once.rs` select it by libtest substring under this one.
-//MUTANT-SUITE crates/batten/src/reclaim.rs
-//MUTANT active-reads-as-idle|s@^        Some(("h", epoch)) => Verdict::Active(epoch.to_owned()),$@        Some(("h", epoch)) => Verdict::Idle(epoch.to_owned()),@|a_beat_under_the_judged_boot_is_active
-//MUTANT stop-reads-as-beat|s@\.then_some((kind, epoch))$@.then_some(("h", epoch))@|a_stop_after_the_beats_is_idle
-//MUTANT absence-reads-as-idle|s@^        None => Verdict::Unobserved,$@        None => Verdict::Idle(String::new()),@|absence_is_unobserved_never_idle
-//MUTANT finding-exits-clean|s@^            Ok(ExitCode::combine(1, 0))$@            Ok(ExitCode::combine(0, 0))@|a_landing_in_flight_when_the_container_was_replaced
-//MUTANT blind-spot-exits-clean|s@^            Ok(ExitCode::combine(0, 1))$@            Ok(ExitCode::combine(0, 0))@|absence_is_unobserved_never_idle
-//MUTANT newest-line-answers|s@^\(        .*\) && under == boot)@\1 \&\& !under.is_empty())@|the_newest_line_overall_does_not_answer_for_an_older_boot
-//MUTANT boot-recorded-every-time|s@^    if boots.last().map(String::as_str) != Some(boot) {$@    if true {@|record_boot_is_idempotent_by_the_last_line_and_appends_a_change
-//MUTANT malformed-override-falls-through|s@^        return value.ok_or(BootUnreadable::Malformed);$@        if let Some(value) = value { return Ok(value); }@|a_fresh_disk_or_a_malformed_boot_time_cannot_look
-//MUTANT kind-unchecked|s@^    if !matches!(kind, @    if false \&\& !matches!(kind, @|the_notes_carry_epoch_boot_and_only_a_given_reason
-//MUTANT reason-with-space-accepted|s@^    if reason.is_some_and(@    if false \&\& reason.is_some_and(@|the_notes_carry_epoch_boot_and_only_a_given_reason
-//MUTANT mark-ignored|s@^    seen.trim_end() == boot$@    seen.trim_end() == "never-a-boot"@|a_reclaim_is_reported_once_and_the_repeat_is_silent
-//MUTANT mark-not-keyed-to-boot|s@^    seen.trim_end() == boot$@    !seen.is_empty()@|a_new_boot_is_reported_though_an_older_one_was_already_marked
-//MUTANT boot-unrecorded-at-session-start|s@^        let _ = record_boot(&git_dir, &boot);$@        let _ = (\&git_dir, \&boot);@|report_once_records_this_boot_for_the_next_container
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -118,7 +104,7 @@ pub fn boot_time() -> std::result::Result<String, BootUnreadable> {
         let value = value.to_str().and_then(parse_override);
         return value.ok_or(BootUnreadable::Malformed);
     }
-    std::fs::read_to_string("/proc/stat")
+    crate::fsio::read_to_string("/proc/stat")
         .ok()
         .as_deref()
         .and_then(parse_btime)
@@ -423,7 +409,7 @@ pub fn run_report(once: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resul
 /// Whether the once-per-boot mark says `boot`'s verdict was already read. An
 /// absent or unreadable mark says nothing, so the report speaks.
 fn marked_for(mark: &Path, boot: &str) -> bool {
-    let seen = std::fs::read_to_string(mark).unwrap_or_default();
+    let seen = crate::fsio::read_to_string(mark).unwrap_or_default();
     seen.trim_end() == boot
 }
 

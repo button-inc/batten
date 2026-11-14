@@ -73,8 +73,15 @@ pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
 /// repositories live.
 #[must_use]
 pub(crate) fn target_tmp() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    // A RUNTIME OVERRIDE FIRST: cargo bakes `CARGO_TARGET_TMPDIR` into the
+    // binary, so a mutation sweep running one case on several workers at once
+    // gives each its own root here, or two runs would share a fixture path.
+    std::env::var_os(TEST_TMPDIR)
+        .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
+
+/// The variable a mutation sweep sets to move [`target_tmp`] per worker.
+pub(crate) const TEST_TMPDIR: &str = "BATTEN_TEST_TMPDIR";
 
 /// A committed file at the repository root, located from this crate's manifest
 /// directory.
@@ -354,6 +361,28 @@ pub(crate) fn task_depends(name: &str) -> Vec<String> {
     }
 }
 
+/// Every task a task reaches directly: its `depends`, each `mise run X` step, and
+/// each `::: X` member of a `mise run --continue-on-error` fan (the verify fan of
+/// 2026-11-11). A gate moved from `depends` into the fan is still reached, so a
+/// test asking "does verify run X" must not care which of the two spells it.
+pub(crate) fn task_reaches(name: &str) -> Vec<String> {
+    let mut reached = task_depends(name);
+    for line in task_body(name).lines() {
+        let Some(rest) = line.trim().strip_prefix("mise run ") else {
+            continue;
+        };
+        for member in rest.split(":::") {
+            if let Some(task) = member
+                .split_whitespace()
+                .find(|word| !word.starts_with('-'))
+            {
+                reached.push(task.to_owned());
+            }
+        }
+    }
+    reached
+}
+
 /// Every `BATTEN_` variable the command surface declares, derived from the
 /// surface itself so the set cannot drift behind a new flag.
 fn declared_env_vars() -> Vec<&'static str> {
@@ -433,7 +462,6 @@ fn bypass_env_vars() -> Vec<String> {
 ///
 /// A two-field serde view rather than a `toml::Value` tree: everything but the
 /// `[[rule]]` rows' one column is skipped by the deserializer instead of built.
-//MUTANT bypass-read-drops-rows|s@^        .filter_map(\x7crule\x7c rule.bypass_env)$@        .filter_map(\x7crule\x7c rule.bypass_env.filter(\x7c_\x7c false))@|the_cheap_bypass_read_names_what_the_full_load_names
 pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     #[derive(serde::Deserialize)]
     struct Rows {
@@ -521,6 +549,21 @@ pub(crate) fn batten() -> Batten {
         batten::mutate::RUNNERS,
         batten::mutate::RUNNER,
         batten::mutate::SHARD,
+        "MUTANT_PRESETS",
+        "MUTANT_OVERLAY_ENV",
+        "MUTANT_OVERLAY_FEATURES",
+        // THE HOST SIGNALS (CLOUD-2709): a suite run inside a cloud session
+        // inherited them and decided `host` one way, and CI the other. A case
+        // that means a host sets it.
+        "CLAUDE_CODE_REMOTE",
+        "BATTEN_ENVIRONMENT",
+        // THE LAP'S GATE MARKER (CLOUD-2707): a lap exports it to the whole gate,
+        // the suite included, so a placement case would read every head as the
+        // lap's own and its refusal arm could never fail.
+        "BATTEN_LAND_GATE",
+        // NOT the overlay variable itself: it is how a mutated preset reaches the
+        // `batten` a suite spawns, and scrubbing it judged every preset row
+        // against the embedded, unmutated text (85 false survivors).
     ] {
         command.env_remove(name);
     }
@@ -545,6 +588,13 @@ pub(crate) fn batten() -> Batten {
     ] {
         command.env_remove(name);
     }
+    // NOR THE REAL RELEASE HOST (CLOUD-2595). An engine that finds a config
+    // pinning nothing fetches its own release's `SHA256SUMS` to write the pin,
+    // so with network a case's starter or session start was rewritten by
+    // whatever GitHub served that minute. A loopback port nothing listens on
+    // fails the fetch at once; a case that wants a release serves its own and
+    // sets this after, as the engine suites do.
+    command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
     Batten(command)
 }
 
@@ -675,10 +725,6 @@ fn refuse_fall_through_at(cwd: &Path) {
     );
 }
 
-//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
-//MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
-//MUTANT task-door-unguarded|s@^        self.refuse_fall_through();$@@|a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs
-//MUTANT piped-door-unguarded|s@^    refuse_fall_through_at(dir);$@@|a_piped_spawn_into_a_fall_through_is_refused_before_it_runs
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {
@@ -976,7 +1022,6 @@ fn mise_dirs() -> &'static [(&'static str, PathBuf)] {
 fn pin_mise(command: &mut Command) {
     // The declared mutation, in a plain comment because `common/` is harness
     // rather than a sweep route; its kill is shown by hand (CLOUD-2021):
-    // MUTANT state-redirect-moves-mise|s@command.env(name, dir);@let _ = (name, dir);@|a_redirected_state_root_leaves_mises_installs_where_they_are
     for (name, dir) in mise_dirs() {
         command.env(name, dir);
     }
@@ -991,8 +1036,7 @@ fn pin_mise(command: &mut Command) {
     // `session:*` task against the host, 200 processes and 78s. A case run over
     // the real repository has its manifest in its own cwd, below no ceiling.
     // The declared mutation, in a plain comment for the reason above:
-    // MUTANT fixture-mise-walks-to-checkout|s@^    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));$@@|every_spawn_stops_mises_walk_at_the_fixture_root
-    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));
+    command.env("MISE_CEILING_PATHS", target_tmp());
 }
 
 /// The mise data dir [`batten`] pins, for the case asserting a state redirect
@@ -1273,6 +1317,38 @@ pub(crate) fn committed_protected_path() -> &'static str {
     }
 }
 
+/// The `pipeline` row this repository retired (CLOUD-2698), byte for byte as it
+/// was committed.
+///
+/// The ROW is gone from `batten.toml` by owner ruling; the `pipeline` kind and
+/// the `tool run loose` class it raised stay in the engine, because a consumer
+/// may still declare one. So the suites that exercise that kind and the refusal
+/// machinery over it carry the row as a fixture instead of borrowing it from
+/// the repository's policy.
+pub(crate) const SUBSTITUTION_ROW: &str = "
+[[rule]]
+id = \"tool select other\"
+kind = \"pipeline\"
+scope = \"mediated_call\"
+severity = \"deny\"
+substitutes = [\"cat\", \"head\", \"tail\", \"sed:-n\", \"grep\", \"rg\", \"find\", \"ls\", \"wc\"]
+reason = \"Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed.\"
+";
+
+/// [`committed_fixture_with_protected`], plus [`SUBSTITUTION_ROW`]: this
+/// repository's rows with the retired substitution row declared, so the
+/// `pipeline` kind stays under test (CLOUD-2698).
+#[must_use]
+pub(crate) fn committed_fixture_with_substitution(name: &str) -> PathBuf {
+    let dir = committed_fixture_with_protected(name);
+    let path = dir.join("batten.toml");
+    let mut config = std::fs::read_to_string(&path).expect("read the fixture config");
+    config.push_str(SUBSTITUTION_ROW);
+    std::fs::write(&path, config).expect("write the fixture config");
+    git_in(&dir, &["commit", "-qam", "declare the substitution row"]);
+    dir
+}
+
 /// A fixture carrying the committed `batten.toml` and policy modules, with the
 /// protected-path set DECLARED — the engine's protected-path mechanism under
 /// this repository's own rows, independent of whether the owner has the
@@ -1374,6 +1450,12 @@ pub(crate) fn scratch_state_root() -> &'static Path {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let dir = target_tmp().join(format!("state-{}", std::process::id()));
+        // WIPED FIRST, LIKE EVERY SCRATCH PATH: pid_max is 32768 here and a run
+        // spawns more processes than that, so this name is a dead process's.
+        // Inherited, it kept that process's store AND its old mtime, so the disk
+        // collector dated a live root stale and removed it between a spend and
+        // the hook that read it (bypass_scrub, a mutation baseline).
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the scratch state root");
         // THIS process's own library calls resolve the same root its children
         // are pinned to, so a case that spawns and calls in-process reads one
@@ -1973,7 +2055,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", target_tmp())
         // A hook a fixture installs runs under git's PATH, so git gets the
         // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
         .env("PATH", ambient_path())
@@ -2660,7 +2742,6 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// committed table declares `<id>`" after the committed module stopped raising
 /// it. A scratch fixture carries no `.gitignore`, so it is walked in full as
 /// before.
-// MUTANT vocabulary-reads-ignored-tree|s@batten::rules::tree_files(root).expect("the vocabulary root is walkable")@std::fs::read_dir(root).into_iter().flatten().flatten().flat_map(\x7cdir\x7c std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(move \x7cfile\x7c format!("{}/{}", dir.file_name().to_string_lossy(), file.file_name().to_string_lossy()))).collect::<Vec<_>>()@|the_declared_vocabulary_never_reads_an_ignored_directory
 #[must_use]
 pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

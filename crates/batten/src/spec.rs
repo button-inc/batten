@@ -590,6 +590,10 @@ mod tests {
                 // The adopted runner's drift gate (CLOUD-947): a `read`, where its
                 // generator sibling writes the artifact and so is not here.
                 "hk drift".to_owned(),
+                // `land placed` (CLOUD-2707) compares the tree with HEAD and HEAD with
+                // the remote-tracking refs, writes nothing and always exits 0: it is
+                // advice on stderr. Sorted before `landed`, since a space precedes `e`.
+                "land placed".to_owned(),
                 // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
                 // stdin and three caller-supplied evidence files and starts no
                 // program — the `claimed-keys` spawn its shell predecessor made
@@ -982,6 +986,10 @@ mod tests {
             "engine stamp".to_owned(),
             "engine update".to_owned(),
             "exec".to_owned(),
+            // CLOUD-2690: the forge's door, one event payload on stdin.
+            "forge".to_owned(),
+            "forge intake".to_owned(),
+            "forge poll".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every
             // derivation the one emitter (CLOUD-244).
@@ -1038,6 +1046,7 @@ mod tests {
             // fetch the lap already makes. `write` for that fetch, and so absent
             // from the read-only allowlist.
             "land linear".to_owned(),
+            "land placed".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),
@@ -1113,6 +1122,7 @@ mod tests {
             // refuses an `ask`, and a `write` noun is what a consumer reading
             // an allowlist entry as a prefix should find (CLOUD-121).
             "mutate".to_owned(),
+            "mutate cargo".to_owned(),
             "mutate census".to_owned(),
             "mutate sweep".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
@@ -1345,9 +1355,6 @@ mod tests {
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
-            // The per-turn background run (CLOUD-1991, retiring `cross-turn`):
-            // unclassified, since it runs the command it is handed.
-            "singleton detach".to_owned(),
             "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's

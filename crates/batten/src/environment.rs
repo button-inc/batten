@@ -58,8 +58,6 @@ const DISPOSABLE: &str = "disposable";
 /// The read itself is judged over the compiled binary (CLOUD-2497): the reclaim
 /// suite runs one bench declared disposable and one not, and each repairs only
 /// as its declaration licenses.
-//MUTANT-SUITE crates/batten/tests/it/wiring_reclaim.rs
-//MUTANT disposable-never-read|s@^    licenses(std::env::var(KEY).ok().as_deref())$@    licenses(None)@|the_repair_takes_the_siblings_and_leaves_battens_own_registration
 #[must_use]
 pub fn disposable() -> bool {
     licenses(std::env::var(KEY).ok().as_deref())
@@ -75,9 +73,89 @@ fn licenses(value: Option<&str>) -> bool {
     value == Some(DISPOSABLE)
 }
 
+/// What kind of machine a mediated call runs on, as a policy reads it
+/// (`input.call.host`, CLOUD-2709).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    /// A hosted, disposable session: a harness's cloud container.
+    Disposable,
+    /// Anything else, a developer's own machine included.
+    Machine,
+}
+
+impl Host {
+    /// The token a policy module compares.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disposable => "disposable",
+            Self::Machine => "machine",
+        }
+    }
+}
+
+/// The host a call runs on: DETECTED from the harness first, declared second.
+///
+/// **THE HARNESS SAYS WHERE IT RUNS, AND BATTEN IS THE LAYER THAT READS EACH
+/// HARNESS** (CLOUD-2709). A hand-set variable is a second authority over a fact
+/// the host already states, and one forgotten export reads a cloud session as a
+/// laptop. So each harness's own signal decides, and [`disposable`]'s explicit
+/// declaration is the fallback for a harness whose hosted form states nothing.
+///
+/// Distinct from [`disposable`] on purpose: a destructive repair still needs the
+/// explicit declaration, because the expensive direction is the one that must be
+/// said; a policy that only refuses a practice can follow detection.
+#[must_use]
+pub fn host(signal: Option<HostSignal>) -> Host {
+    let read = |key: &str| std::env::var(key).ok();
+    host_of(signal, &read)
+}
+
+/// A harness's own statement that it runs hosted: the variable it exports and
+/// the value that means a hosted session (CLOUD-2709). Named per harness by
+/// `Harness::host_signal` in the hook adapter, so this module reads a signal and
+/// never a harness — it stays plumbing.
+pub type HostSignal = (&'static str, &'static str);
+
+/// [`host`]'s decision over an environment reader, split for the unit cases
+/// (`set_var` is `unsafe`, and `unsafe` is forbidden here).
+fn host_of(signal: Option<HostSignal>, read: &dyn Fn(&str) -> Option<String>) -> Host {
+    let stated = signal.is_some_and(|(key, value)| read(key).as_deref() == Some(value));
+    if licenses(read(KEY).as_deref()) || stated {
+        Host::Disposable
+    } else {
+        Host::Machine
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2709. Fails by: a cloud session read as a machine because nobody
+    /// exported the declaration, or a local session read as disposable.
+    #[test]
+    fn the_harness_states_its_host_and_the_declaration_is_the_fallback() {
+        let claude: Option<HostSignal> = Some(("CLAUDE_CODE_REMOTE", "true"));
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        let cloud = env(&[("CLAUDE_CODE_REMOTE", "true")]);
+        let local = env(&[]);
+        let declared = env(&[("BATTEN_ENVIRONMENT", "disposable")]);
+        assert_eq!(host_of(claude, &cloud), Host::Disposable);
+        assert_eq!(host_of(claude, &local), Host::Machine);
+        // A harness with no signal of its own is not read through another one's.
+        assert_eq!(host_of(None, &cloud), Host::Machine);
+        // The declaration decides wherever detection says nothing.
+        assert_eq!(host_of(None, &declared), Host::Disposable);
+        assert_eq!(host_of(None, &local), Host::Machine);
+    }
 
     #[test]
     fn only_the_exact_value_licenses_a_destructive_repair() {

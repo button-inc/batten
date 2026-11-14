@@ -84,9 +84,6 @@ const USE_MARK: &str = "used";
 /// least recently used evicted first. A partition without a mark — the mark was
 /// lost — takes that path too, and gains one where one can be made; where none
 /// can, it is served from the cold path and neither marked nor pruned.
-//MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partition-mark-never-made|s@^    if crate::durable::create_empty(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
-//MUTANT unmarkable-partition-prunes|s@^    if crate::durable::create_empty(\&mark).is_err() {$@    if crate::durable::create_empty(\&mark).is_err() \&\& false {@|a_partition_that_cannot_be_marked_does_not_prune
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -131,8 +128,6 @@ const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 /// CLOUD-2361 ranks by it, and sharing a cache with one, a partition marked
 /// only through its file would read to that release as never used. It can go
 /// once no supported release ranks by the directory.
-//MUTANT partition-use-never-refreshed|s@^    if stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
-//MUTANT partition-directory-never-refreshed|s@^        let _ = touch(own, now);$@@|a_refresh_moves_the_partition_directory_too
 ///
 /// `now` is the caller's, so the bound itself is a case: a mark exactly one
 /// [`USE_REFRESH`] old is not yet stale.
@@ -178,9 +173,6 @@ fn is_partition(name: &str) -> bool {
 /// flat layout entries were written in before partitions existed. Best-effort:
 /// another process pruning the same directory, or one writing into a partition
 /// removed here, costs a miss and never a wrong answer.
-//MUTANT partition-bound-off-by-one|s@^    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {$@    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS) {@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partitions-evicted-most-recent-first|s@^    partitions.sort_by_key(\x7c(made, _)\x7c std::cmp::Reverse(\*made));$@    partitions.sort_by_key(\x7c(made, _)\x7c *made);@|a_partition_in_use_is_refreshed_and_survives_the_prune
-//MUTANT partitions-ranked-by-directory|s@^        let made = std::fs::metadata(path.join(USE_MARK))$@        let made = std::fs::metadata(\&path)@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -233,10 +225,9 @@ pub fn key(format: &str, inputs: &[&[u8]]) -> String {
 /// The entry is `<key>\n<length> <blake3(body)>\n<body>`: the key decides
 /// whether the entry answers this question at all, and the length and digest
 /// decide whether the bytes are the ones written.
-//MUTANT torn-entry-served|s@^    if check != integrity(body).as_bytes() {$@    if false {@|a_torn_entry_is_a_miss_not_a_wrong_answer
 #[must_use]
 pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
-    let mut bytes = std::fs::read(path).ok()?;
+    let mut bytes = crate::fsio::read(path).ok()?;
     let (head, rest) = split_line(&bytes)?;
     if head != key.as_bytes() {
         return None;
@@ -391,7 +382,6 @@ fn elf_build_id(head: &[u8]) -> Option<Vec<u8>> {
 
 /// The GNU build-id note in the note segment at `(start, size)` within `head`,
 /// or `None` where the segment is outside it, malformed, or carries none.
-//MUTANT build-id-search-stops-at-a-bad-segment|s@^        if let Some(id) = build_id_note(head, segment, little) {$@        if let Some(id) = Some(build_id_note(head, segment, little)?) {@|a_build_id_after_an_unreadable_note_segment_is_found
 fn build_id_note(head: &[u8], (start, size): (usize, usize), little: bool) -> Option<Vec<u8>> {
     const NT_GNU_BUILD_ID: u64 = 3;
     let notes = head.get(start..start.checked_add(size)?)?;
@@ -458,7 +448,6 @@ pub struct Stamp {
     pub changed: std::time::Duration,
 }
 
-//MUTANT racy-window-unwidened|s@^        self.changed.saturating_add(TIMESTAMP_TICK) >= written$@        self.changed >= written@|a_change_within_one_coarse_tick_is_racy
 impl Stamp {
     /// GIT'S RACY-TIMESTAMP RULE (`Documentation/technical/racy-git`): a file
     /// whose change time is not clearly older than the moment its entry was
@@ -626,12 +615,12 @@ mod tests {
         let dir = scratch("torn");
         let path = dir.join("entry");
         write(&path, "key", b"the whole body");
-        let mut bytes = std::fs::read(&path).expect("read");
+        let mut bytes = crate::fsio::read(&path).expect("read");
         bytes.truncate(bytes.len() - 3);
         std::fs::write(&path, &bytes).expect("tear");
         assert!(read(&path, "key").is_none(), "a truncated body is a miss");
         write(&path, "key", b"the whole body");
-        let mut bytes = std::fs::read(&path).expect("read");
+        let mut bytes = crate::fsio::read(&path).expect("read");
         let last = bytes.len() - 1;
         bytes[last] = 0;
         std::fs::write(&path, &bytes).expect("zero");
@@ -945,7 +934,7 @@ mod tests {
         let root = own
             .parent()
             .expect("the partition sits in the tagged directory");
-        let tag = std::fs::read_to_string(root.join("CACHEDIR.TAG")).expect("tag");
+        let tag = crate::fsio::read_to_string(root.join("CACHEDIR.TAG")).expect("tag");
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
     }
 

@@ -182,7 +182,6 @@ const BAN_UNREAD_OPERATORS: [char; 5] = ['{', '}', '[', ']', '\\'];
 ///
 /// The row below reads every glob as portable, and the unit case's brace, class
 /// and escape then load.
-//MUTANT ban-unread-operator-admitted|s@^    glob.chars().find(.c. BAN_UNREAD_OPERATORS.contains(c))$@    glob.chars().find(char::is_ascii_control)@|a_glob_the_ban_reads_differently_is_refused
 fn ban_unread(glob: &str) -> Option<char> {
     glob.chars().find(|c| BAN_UNREAD_OPERATORS.contains(c))
 }
@@ -213,12 +212,6 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 /// The grammar's mutation rows. Each one breaks a clause the ban's own module
 /// carries, so a census that lost it would count differently from the gate; each
 /// is caught by the unit case it names, run from this file.
-//MUTANT-SUITE crates/batten/src/census.rs
-//MUTANT comments-counted|s@    !text.is_empty() && !text.starts_with('#')@    !text.is_empty()@|a_body_counts_its_code_lines_and_skips_comments_and_blanks
-//MUTANT metacharacters-unread|s@    if value.contains(METACHARACTERS) {@    if false {@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT env-prefix-unread|s@ \x7c\x7c first.contains('=')@ \x7c\x7c false@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT block-never-ends|s@        indent(line) + 2$@        indent(line) + 200@|a_block_ends_at_the_first_line_at_or_left_of_its_key
-//MUTANT workflow-one-liner-unread|s@        } else if !rest.is_empty() && shell_syntax(rest) {@        } else if false {@|a_block_ends_at_the_first_line_at_or_left_of_its_key
 #[must_use]
 pub fn code_line(line: &str) -> bool {
     let text = line.trim();
@@ -532,8 +525,6 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 ///
 /// An exempt file is set apart and never totalled; the row below reads the
 /// exempt list as empty, and the compiled tier's pinned totals go red.
-//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
-//MUTANT exempt-unread|s@    let exempt: Vec<Selector> = declared$@    let exempt: Vec<Selector> = ShellCensus::default()@|the_census_counts_the_fixture_as_the_shapes_say
 ///
 /// `tracked` is the tree's tracked paths, which is where workflows and shell
 /// files are found; a declared manifest is read by its path whether or not it
@@ -563,7 +554,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
     let mut set_apart: BTreeMap<String, usize> = BTreeMap::new();
 
     for manifest in &declared.manifests {
-        let text = std::fs::read_to_string(root.join(&manifest.path)).map_err(|err| {
+        let text = crate::fsio::read_to_string(root.join(&manifest.path)).map_err(|err| {
             anyhow::anyhow!(
                 "census shell: the declared manifest {} cannot be read: {err}",
                 manifest.path
@@ -588,7 +579,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         let is_workflow = workflows.iter().any(|selector| selector.matches(path));
         // A path that is not a file — a submodule's gitlink, a file deleted from
         // the working tree — has no lines to count.
-        let Ok(bytes) = std::fs::read(root.join(path)) else {
+        let Ok(bytes) = crate::fsio::read(root.join(path)) else {
             continue;
         };
         // Decoding every tracked file to ask about its first two bytes would

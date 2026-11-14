@@ -808,7 +808,6 @@ pub fn normalize_span(span: &str, mode: SpanNormalization) -> String {
 /// that the quick check calls NFC is returned as it is, which is exactly what
 /// the rewrite returns for it; anything else — a `CRLF`, or a quick check
 /// answering `No` or `Maybe` — takes the rewrite, and is the only text that does.
-//MUTANT nfc-fast-path-never|s@^    if !span.contains("\\r\\n")$@    if false \&\& !span.contains("\\r\\n")@|normalized_text_is_fingerprinted_without_a_rewrite
 fn canonical_text(span: &str) -> std::borrow::Cow<'_, str> {
     if !span.contains("\r\n")
         && unicode_normalization::is_nfc_quick(span.chars())
@@ -1290,8 +1289,6 @@ pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
 ///
 /// When the reader fails, the sink fails, or it yields a different count than
 /// `len` — a digest over a length the bytes do not have would name nothing.
-//MUTANT-SUITE crates/batten/src/identity.rs
-//MUTANT streamed-capture-unframed|s@^    write_field(\&mut hasher, CAPTURE_TAG.as_bytes());$@@|a_streamed_capture_fingerprint_equals_the_buffered_one
 pub fn capture_fingerprint_streamed(
     stream: &str,
     len: u64,

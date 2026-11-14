@@ -108,10 +108,6 @@ pub fn without_engine_line(config: &str) -> String {
 /// `batten.toml` changed outside its `engine` line. `verify` runs G1 in
 /// published mode on the pin; `is_ancestor` answers whether a tag commit is the
 /// head or reachable from it. Neither is called for an inherited pin.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT pin-change-path-green|s@^        Ok(Published::Refused(why)) => failures.extend(why),$@        Ok(Published::Refused(_)) => {}@|a_pin_change_is_failure_until_its_release_verifies
-//MUTANT release-head-extra-path-green|s@^        failures.push(format!("touches {path}, outside the release paths"));$@@|a_release_head_touching_another_path_is_failure
-//MUTANT burned-tag-admitted|s@^            Ok(Some(false)) => failures.push(format!($@            Ok(Some(false)) => drop(format!(@|a_burned_release_is_failure
 pub fn judge(
     base: &Side,
     head: &Side,
@@ -179,7 +175,6 @@ pub fn release_shaped(changed: &BTreeSet<String>, other_config_change: bool) -> 
 /// that pins an unverified release passes the one check it does require; after
 /// it, a release-shaped head is excused, because `release-path` itself is the
 /// gate and its pre-publication failure must not refuse `land`.
-//MUTANT final-seal-dropped|s@^    matches!(verdict, Verdict::Failure(_)) \&\& (!release_shaped \x7c\x7c !settings_green)$@    false@|the_seal_holds_an_unverified_pin_until_the_settings_are_green
 #[must_use]
 pub fn seals(verdict: &Verdict, release_shaped: bool, settings_green: bool) -> bool {
     matches!(verdict, Verdict::Failure(_)) && (!release_shaped || !settings_green)

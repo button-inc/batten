@@ -107,6 +107,20 @@ fn call(command: &str) -> String {
         "a fixture whose first word is not plainly the program needs the real \
          projection: use tests/preset_segments.rs"
     );
+    // The projected subcommand (CLOUD-2354), by the same fixture-guard rule: the
+    // first argument is it, and a fixture with an option before it is refused
+    // rather than parsed, because the engine's option table is the one parser.
+    let tabled = matches!(program, "git" | "gh");
+    let first = words.get(1).copied();
+    assert!(
+        !tabled || first.is_none_or(|word| !word.starts_with('-')),
+        "a fixture with a global option needs the real projection: use tests/preset_segments.rs"
+    );
+    let (subcommand, global_options) = if tabled {
+        (serde_json::json!(first), serde_json::json!([]))
+    } else {
+        (serde_json::Value::Null, serde_json::Value::Null)
+    };
     serde_json::json!({"call": {
         "command": command,
         "segments": [{"words": words, "raw": command, "terminator": null}],
@@ -115,6 +129,8 @@ fn call(command: &str) -> String {
             "name": program,
             "arguments": &words[1..],
             "mediated": false,
+            "subcommand": subcommand,
+            "global-options": global_options,
         }],
         "operation": "run",
         "event": "pre_tool",
@@ -1657,4 +1673,34 @@ fn an_ejected_module_behind_the_manifest_version_is_reported() {
         "names the class and the copy: {said}"
     );
     assert!(stale.status.success(), "a warning, never a refusal: {said}");
+}
+
+/// CLOUD-2354: no vendored preset carries its own copy of git's option table.
+/// The engine projects `subcommand` and `global-options` once; a rule HEAD for
+/// one of the three deleted parsers is a fifth copy drifting from the rest. A
+/// comment naming one is not a parser, so the scan reads heads, not substrings.
+#[test]
+fn no_preset_parses_gits_global_options() {
+    let head =
+        regex::Regex::new(r"(?m)^(subcommand|value_of_global|some_word_before_is_not_global)\(")
+            .unwrap();
+    let mut pending = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/policy/presets")];
+    let mut modules = 0;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rego") {
+                modules += 1;
+                let text = fs::read_to_string(&path).unwrap();
+                assert!(
+                    !head.is_match(&text),
+                    "{} parses git's global options itself",
+                    path.display()
+                );
+            }
+        }
+    }
+    assert!(modules > 0, "the walk found no preset module");
 }

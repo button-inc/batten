@@ -172,6 +172,12 @@ pub enum Command {
         /// `None` means the boundary reads its own clock, which is what it has
         /// always done, so no committed row changes meaning by this arriving.
         instant: Option<String>,
+        /// `--show-input`: store the exact policy input this call produced and
+        /// print its pointer (CLOUD-2696).
+        show_input: bool,
+        /// `--event <name>`: the host's event name, for a payload that names
+        /// none (CLOUD-2700).
+        event: Option<String>,
     },
     /// Print one allowlisted field of a hook payload read from stdin.
     HookField {
@@ -496,6 +502,33 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// Forge events into the hook surface (CLOUD-2690).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Forge {
+        /// The sub-verb selected.
+        command: ForgeCommand,
+    },
+}
+
+/// `batten forge`'s sub-verbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForgeCommand {
+    /// One forge event payload on stdin, normalized, deduplicated and run
+    /// through the same handlers and rules as a harness hook (CLOUD-2690).
+    Intake {
+        /// The `X-GitHub-Event` name a webhook body arrived under.
+        event: Option<String>,
+        /// `wake`: stdin is a harness user-prompt-submit payload.
+        from: Option<String>,
+    },
+    /// One round from the first available `[[forge.source]]`, or a loop every
+    /// N seconds registered with `task` (CLOUD-2693).
+    Poll {
+        /// The interval, in whole seconds above 0.
+        every: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -735,8 +768,9 @@ pub enum HkCommand {
 /// No `hold`: this process cannot hold anything, because it exits immediately.
 /// `acquire` and `release` act on the CALLER's behalf and the caller's exit trap
 /// owns the release, exactly as `land-lock`'s verbs act for the `land` that
-/// invoked them. `detach` is the one exception, and it holds through the copy
-/// it starts rather than through itself.
+/// invoked them. There is no `detach`: a process started past the harness is
+/// invisible to it and dies with the container (CLOUD-1731's per-turn run,
+/// retired).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SingletonCommand {
@@ -753,26 +787,6 @@ pub enum SingletonCommand {
     Release {
         /// The task's name.
         task: String,
-    },
-    /// Run a command in the background as this task, and report the previous
-    /// run's failure (CLOUD-1991, retiring `[tasks.cross-turn]`).
-    ///
-    /// The one verb here that HOLDS: not this process, which announces, clears
-    /// and returns, but the attached copy it starts, which takes the lock for
-    /// its own pid, runs the command, and releases.
-    Detach {
-        /// The task's name, which is what the lock is keyed by.
-        task: String,
-        /// Where a failed run's pointers wait for the next invocation.
-        marker: String,
-        /// Where the run's whole output is written.
-        log: String,
-        /// The `[[pattern]]` row selecting a pointer line from the output.
-        pattern: String,
-        /// This invocation IS the background copy: take the lock and run.
-        attached: bool,
-        /// The command, after `--`.
-        command: Vec<String>,
     },
 }
 
@@ -823,6 +837,11 @@ pub enum LandCommand {
     /// A flag would put a second spelling of one name on the surface, and the
     /// two would drift.
     Verify,
+    /// Advise a gate run outside the lap on a committed, pushed head that `land`
+    /// is the next step and reuses this run's receipt (CLOUD-2707). Never
+    /// refuses: verifying without landing is legitimate. A consumer's gate names
+    /// this as an early step.
+    Placed,
     /// Ask the fast-forward bot to land this head, and read the answer keyed to
     /// that request.
     ///
@@ -874,6 +893,8 @@ pub enum MutateCommand {
     /// Report every gate that is neither enforced nor carrying a filed
     /// exemption, in both directions.
     Census,
+    /// Run cargo-mutants over the change, on as many jobs as this machine holds.
+    Cargo,
 }
 
 /// Subcommands of `task`.
@@ -1501,17 +1522,23 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
-    /// Link this clone's two commit hooks to a hook body the repository checks
-    /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
+    /// Link every git hook in this clone to the running batten binary
+    /// (CLOUD-2339), or, given a body, the two commit hooks to that hook body
+    /// the repository checks in (CLOUD-1991).
     Gate {
-        /// The hook body, relative to the repository root.
-        body: String,
+        /// The hook body, relative to the repository root; absent links the
+        /// binary itself.
+        body: Option<String>,
+        /// Decide whether a link is owed, and write nothing.
+        check: bool,
     },
     /// Register batten on the session root when a session is rooted above this
     /// repository (CLOUD-2111). Last, so no existing variant's discriminant moves.
     Register {
         /// Decide whether a registration is owed, and write nothing.
         check: bool,
+        /// Also register on every harness's committed surface (CLOUD-2676).
+        all: bool,
     },
 }
 
@@ -2728,6 +2755,7 @@ fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
     match matches.subcommand()? {
         ("sweep", _) => Some(MutateCommand::Sweep),
         ("census", _) => Some(MutateCommand::Census),
+        ("cargo", _) => Some(MutateCommand::Cargo),
         _ => None,
     }
 }
@@ -2769,9 +2797,11 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         }),
         ("register", matches) => Some(WiringCommand::Register {
             check: flag(matches, "check"),
+            all: flag(matches, "all"),
         }),
         ("gate", matches) => Some(WiringCommand::Gate {
-            body: matches.get_one::<String>("body")?.clone(),
+            body: matches.get_one::<String>("body").cloned(),
+            check: flag(matches, "check"),
         }),
         _ => None,
     }
@@ -3023,6 +3053,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         }),
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
+        ("placed", _) => Some(LandCommand::Placed),
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
             reference: reference_of(matches),
@@ -3358,17 +3389,6 @@ fn singleton_of(matches: &ArgMatches) -> Option<SingletonCommand> {
         }),
         ("release", matches) => Some(SingletonCommand::Release {
             task: matches.get_one::<String>("task").cloned()?,
-        }),
-        ("detach", matches) => Some(SingletonCommand::Detach {
-            task: matches.get_one::<String>("task").cloned()?,
-            marker: matches.get_one::<String>("marker").cloned()?,
-            log: matches.get_one::<String>("log").cloned()?,
-            pattern: matches.get_one::<String>("pattern").cloned()?,
-            attached: flag(matches, "attached"),
-            command: matches
-                .get_many::<String>("command")?
-                .cloned()
-                .collect::<Vec<_>>(),
         }),
         _ => None,
     }
@@ -3988,19 +4008,8 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
-        "adjudicate" => matches
-            .get_one::<Harness>("harness")
-            .map(|harness| Command::Hook {
-                harness: *harness,
-                instant: matches.get_one::<String>("instant").cloned(),
-            }),
-        "payload" => match matches.subcommand()? {
-            ("field", inner) => Some(Command::HookField {
-                harness: *inner.get_one::<Harness>("harness")?,
-                field: *inner.get_one::<HookFieldName>("name")?,
-            }),
-            _ => None,
-        },
+        "adjudicate" => adjudicate_of(matches),
+        "payload" => payload_of(matches),
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
         "record" => record_of(matches).map(|command| Command::Record { command }),
@@ -4015,6 +4024,41 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
+        "forge" => forge_of(matches).map(|command| Command::Forge { command }),
+        _ => None,
+    }
+}
+
+fn adjudicate_of(matches: &ArgMatches) -> Option<Command> {
+    matches
+        .get_one::<Harness>("harness")
+        .map(|harness| Command::Hook {
+            harness: *harness,
+            instant: matches.get_one::<String>("instant").cloned(),
+            show_input: flag(matches, "show_input"),
+            event: matches.get_one::<String>("event").cloned(),
+        })
+}
+
+fn payload_of(matches: &ArgMatches) -> Option<Command> {
+    match matches.subcommand()? {
+        ("field", inner) => Some(Command::HookField {
+            harness: *inner.get_one::<Harness>("harness")?,
+            field: *inner.get_one::<HookFieldName>("name")?,
+        }),
+        _ => None,
+    }
+}
+
+fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
+    match matches.subcommand()? {
+        ("intake", matches) => Some(ForgeCommand::Intake {
+            event: matches.get_one::<String>("event").cloned(),
+            from: matches.get_one::<String>("from").cloned(),
+        }),
+        ("poll", matches) => Some(ForgeCommand::Poll {
+            every: matches.get_one::<String>("every").cloned(),
+        }),
         _ => None,
     }
 }

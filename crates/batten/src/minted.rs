@@ -140,7 +140,7 @@ pub fn fields(
             let Some(subject) = subject_of(filename, &row.mint) else {
                 continue;
             };
-            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            let Ok(text) = crate::fsio::read_to_string(entry.path()) else {
                 // A receipt that exists and will not read says nothing about its
                 // subject, so the subject stays absent.
                 continue;

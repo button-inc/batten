@@ -2328,7 +2328,7 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
 #[test]
 fn policy_explain_answers_a_rule_a_class_and_a_native() {
     let root = common::at_root("");
-    let names = ["tool select other", "tool run loose", "program-unknown"];
+    let names = ["cargo run loose", "tool run loose", "program-unknown"];
     let mut args = vec!["policy", "explain"];
     args.extend(names);
     let explained = batten_with(&root, &args, &[]);
@@ -2360,8 +2360,8 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     );
 
     // `policy rule` is `explain` with one name, byte for byte.
-    let rule = batten_with(&root, &["policy", "rule", "tool select other"], &[]);
-    let one = batten_with(&root, &["policy", "explain", "tool select other"], &[]);
+    let rule = batten_with(&root, &["policy", "rule", "cargo run loose"], &[]);
+    let one = batten_with(&root, &["policy", "explain", "cargo run loose"], &[]);
     assert_eq!(rule.stdout, one.stdout, "one projection, two spellings");
     assert_eq!(rule.status.code(), Some(0));
 
@@ -2372,6 +2372,25 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     assert_eq!(
         document[0]["name"], "tool run loose",
         "each section names what was asked: {document}"
+    );
+}
+
+/// A module's finding id explains as the `[[rule]]` row binding that module
+/// (CLOUD-1638): `test cover unseen` is `policy/cfg-gated-test.rego`'s
+/// finding, and the committed row binding the module is `test cover missing`.
+/// No row is named `test cover unseen`, so only the module hop reaches it.
+///
+/// Fails by: the hop from finding id to owning row answering nothing, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_modules_finding_id_explains_as_the_row_that_binds_it() {
+    let root = common::at_root(".");
+    let explained = batten_with(&root, &["policy", "explain", "test cover unseen"], &[]);
+    let out = String::from_utf8_lossy(&explained.stdout);
+    assert_eq!(explained.status.code(), Some(0), "{out}");
+    assert!(
+        out.contains("test cover missing"),
+        "the owning row is the answer: {out}"
     );
 }
 
@@ -2535,6 +2554,187 @@ const EVENTS: &[EventRow] = &[
         state_decided: false,
     },
     EventRow {
+        event: batten::hook::Event::PostToolFailure,
+        spelling: "PostToolUseFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Notification,
+        spelling: "Notification",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::UserPromptExpansion,
+        spelling: "UserPromptExpansion",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SessionEnd,
+        spelling: "SessionEnd",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::StopFailure,
+        spelling: "StopFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStart,
+        spelling: "SubagentStart",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStop,
+        spelling: "SubagentStop",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreCompact,
+        spelling: "PreCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostCompact,
+        spelling: "PostCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreModelSwitch,
+        spelling: "PreModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostModelSwitch,
+        spelling: "PostModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionRequest,
+        spelling: "PermissionRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionDenied,
+        spelling: "PermissionDenied",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Setup,
+        spelling: "Setup",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TeammateIdle,
+        spelling: "TeammateIdle",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TaskCreated,
+        spelling: "TaskCreated",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Elicitation,
+        spelling: "Elicitation",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ElicitationResult,
+        spelling: "ElicitationResult",
+        adjudicated: false,
+        state_decided: false,
+    },
+    // CLOUD-2581's worktree pair answers the host's request natively, and the
+    // census sends no `name` / `worktree_path`, so on claude-code the action
+    // refuses before any write (exit 2) and elsewhere the event is undeclared
+    // (exit 0). `state_decided` is the arm that admits both and still holds
+    // that the answer never names the payload's command.
+    EventRow {
+        event: batten::hook::Event::WorktreeCreate,
+        spelling: "WorktreeCreate",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::WorktreeRemove,
+        spelling: "WorktreeRemove",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::InstructionsLoaded,
+        spelling: "InstructionsLoaded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::CwdChanged,
+        spelling: "CwdChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::FileChanged,
+        spelling: "FileChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::DirectoryAdded,
+        spelling: "DirectoryAdded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::MessageDisplay,
+        spelling: "MessageDisplay",
+        adjudicated: false,
+        state_decided: false,
+    },
+    // CLOUD-2700: Codex's and Copilot's PascalCase names, which the converged
+    // decoder reads.
+    EventRow {
+        event: batten::hook::Event::ModelRequest,
+        spelling: "PreModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ModelResponse,
+        spelling: "PostModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Interrupt,
+        spelling: "Interrupt",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ErrorOccurred,
+        spelling: "ErrorOccurred",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
         adjudicated: false,
@@ -2617,15 +2817,132 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
     }
 }
 
+/// The events only one host spells (CLOUD-2700): no converged name exists, so
+/// each is fed through its own host's decoder rather than `Event::normalize`,
+/// which keeps host vocabulary out of the harness-blind core.
+const HOST_EVENTS: &[(batten::hook::Harness, batten::hook::Event, &str)] = &[
+    (
+        batten::hook::Harness::GeminiCli,
+        batten::hook::Event::ToolSelection,
+        "BeforeToolSelection",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentResponse,
+        "afterAgentResponse",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentThought,
+        "afterAgentThought",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::WorkspaceOpen,
+        "workspaceOpen",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileRead,
+        "beforeTabFileRead",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileEdit,
+        "afterTabFileEdit",
+    ),
+];
+
+#[test]
+fn a_host_only_event_passes_through_undecided() {
+    // Each row normalizes on its own host, and a banned command in its payload
+    // is neither denied nor answered with a decision document: no rule selects
+    // for these moments yet.
+    let dir = repo_with_gh_policy("host-event-census");
+    for (harness, event, spelling) in HOST_EVENTS {
+        assert_eq!(
+            batten::hook::normalize_event(*harness, spelling),
+            *event,
+            "{spelling} normalizes on {}",
+            harness.as_str()
+        );
+        let output = run_hook_in(
+            &dir,
+            harness.as_str(),
+            &payload_at(spelling, "gh pr merge 42"),
+        );
+        let at = format!("{}/{spelling}", harness.as_str());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{at}: {}",
+            common::stderr(&output)
+        );
+        let raw = String::from_utf8_lossy(&output.stdout);
+        assert!(!raw.contains("\"deny\""), "{at}: {raw}");
+    }
+}
+
+#[test]
+fn a_named_event_decodes_a_payload_that_names_none() {
+    // Copilot's camelCase dialect sends no `hook_event_name` (CLOUD-2700). With
+    // no name the decoder assumes pre-tool, so a banned command is refused at a
+    // moment that is not a tool call. The registration's `--event` names the
+    // moment instead, and the payload's own name still wins when present.
+    let dir = repo_with_gh_policy("named-event");
+    let nameless = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr merge 42" },
+    })
+    .to_string();
+    let run = |args: &[&str], payload: &str| common::run_with_stdin(&dir, args, payload);
+    let assumed = run(&["adjudicate", "--harness", "copilot-cli"], &nameless);
+    assert_eq!(
+        assumed.status.code(),
+        Some(2),
+        "no name is assumed pre-tool"
+    );
+    for event in ["subagentStart", "userPromptTransformed"] {
+        let named = run(
+            &["adjudicate", "--harness", "copilot-cli", "--event", event],
+            &nameless,
+        );
+        assert_eq!(
+            named.status.code(),
+            Some(0),
+            "{event}: {}",
+            common::stderr(&named)
+        );
+    }
+    let own = run(
+        &[
+            "adjudicate",
+            "--harness",
+            "copilot-cli",
+            "--event",
+            "subagentStart",
+        ],
+        &payload_at("PreToolUse", "gh pr merge 42"),
+    );
+    assert_eq!(own.status.code(), Some(2), "the payload's own name wins");
+}
+
 #[test]
 fn the_census_covers_every_normalized_event() {
     // Total, or the golden set is coverage rather than a contract: a variant
     // added to `Event::ALL` with no row would ship with its decision unpinned.
-    let mut covered: Vec<&str> = EVENTS.iter().map(|row| row.event.as_str()).collect();
+    let mut covered: Vec<&str> = EVENTS
+        .iter()
+        .map(|row| row.event.as_str())
+        .chain(HOST_EVENTS.iter().map(|(_, event, _)| event.as_str()))
+        .collect();
     covered.sort_unstable();
     covered.dedup();
+    // A row is fed to a host as `hook_event_name`, and no host spells a forge
+    // event, so `host_emitted` exempts it; `forge_events.rs` pins its decision.
     let mut required: Vec<&str> = batten::hook::Event::ALL
         .iter()
+        .filter(|event| event.host_emitted())
         .map(|event| event.as_str())
         .collect();
     required.sort_unstable();
@@ -2880,7 +3197,7 @@ fn shape_scope_parses_independently_of_severity() {
     // Acceptance (d). The two keys are separate axes, and a shape row proves it
     // over the binary: `mediated_call` × each severity all load, and neither
     // key's vocabulary is accepted in the other's slot.
-    for severity in ["deny", "warn", "allow"] {
+    for severity in ["deny", "advise", "record", "allow"] {
         let dir = repo_with_config(
             &format!("shape-severity-{severity}"),
             &format!(
@@ -3712,7 +4029,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     let promoted_rows: std::collections::BTreeSet<&str> = parsed
         .rules
         .iter()
-        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Warn)
+        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Advise)
         .map(|rule| rule.id.as_str())
         .collect();
     for case in SHAPE_CENSUS {
@@ -4783,6 +5100,11 @@ fn captures_in(home: &std::path::Path) -> Vec<String> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            // A view is a derived reading of a capture, rewritten from it on
+            // demand, never a capture of its own.
+            if path.is_dir() && path.file_name().is_some_and(|name| name == "views") {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -5073,11 +5395,16 @@ fn every_format_is_byte_stable_over_the_same_run() {
         for style in ["interleave", "timed", "keep-order"] {
             let mut seen = Vec::new();
             for run in 0..2 {
-                let (output, _) = exec_cmd(
+                let (output, home) = exec_cmd(
                     &format!("exec-stable-{format}-{style}-{run}-home"),
                     &["exec", "--format", format, "--style", style, "--", &program],
                 );
-                seen.push(String::from_utf8_lossy(&output.stderr).into_owned());
+                // Each run has its own state home, so the view the pointer
+                // names sits under a different directory; the rest is the run.
+                seen.push(
+                    String::from_utf8_lossy(&output.stderr)
+                        .replace(&home.display().to_string(), "<home>"),
+                );
             }
             assert_eq!(
                 seen[0], seen[1],
@@ -6278,7 +6605,7 @@ fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> 
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten receipt")
 }
@@ -7053,9 +7380,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 
     // A stale fixture from a prior run would add findings and break the byte
     // equality below — `repo_with_config` does not clear the directory itself.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-dirty"));
     let dirty = repo_with_config("config-agnostic-dirty", &contents);
 
     // Both a Rust file and a non-Rust one, because that is what discriminates
@@ -7121,9 +7446,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // The other half of the discriminator: the same rules must stay silent on a
     // tree that carries none of the shapes. A rule that fired on everything
     // would pass the case above and still be useless.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-clean"));
     let clean = repo_with_config("config-agnostic-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -7175,9 +7498,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-dirty"));
     let dirty = repo_with_config("config-portability-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -7264,9 +7585,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // one in-place form BSD accepts, a `read` loop replaces `mapfile`, bare
     // `xargs` replaces the short flag, and a plain `branch main` off an explicitly
     // named branch replaces the force.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-clean"));
     let clean = repo_with_config("config-portability-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -7532,7 +7851,7 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     // per-field-pinned default resolves explicitly rather than vanishing.
     let dir = repo_with_config(
         "severity-byte-stable",
-        &severity_fixture("severity = \"warn\"\n"),
+        &severity_fixture("severity = \"advise\"\n"),
     );
     let run = || {
         batten()
@@ -7546,7 +7865,7 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     assert_eq!(first.status.code(), Some(0));
     let value: serde_json::Value =
         serde_json::from_slice(&first.stdout).expect("config show stdout is JSON");
-    assert_eq!(value["rule"]["value"][0]["severity"], "warn");
+    assert_eq!(value["rule"]["value"][0]["severity"], "advise");
     assert_eq!(value["rule"]["value"][0]["scope"], "tree");
     assert_eq!(
         first.stdout,
@@ -7606,7 +7925,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
         for rule in value["rule"]["value"].as_array().expect("rules in output") {
             let severity = rule["severity"].as_str().expect("severity token");
             assert!(
-                ["allow", "warn", "deny"].contains(&severity),
+                ["allow", "record", "advise", "ask", "deny"].contains(&severity),
                 "{label}: severity {severity:?} outside the vocabulary"
             );
             // Derived from the vocabulary rather than pinned to `tree`: the
@@ -8149,6 +8468,88 @@ fn worktree_status(dir: &std::path::Path) -> Output {
     common::run(dir, &["worktree", "status"])
 }
 
+/// A `--depth 1` clone of a repository whose `branch` has two commits, so the
+/// clone's history stops at a boundary with a missing parent (CLOUD-2655). The
+/// origin declares `must_land_on = target`; the clone then commits once more.
+fn shallow_clone(name: &str, target: &str, branch: &str) -> PathBuf {
+    let origin = worktree_repo(&format!("{name}-origin"), target);
+    if branch != "main" {
+        git_in(&origin, &["checkout", "-q", "-b", branch]);
+    }
+    commit_file(&origin, "second.txt", "two\n", "second");
+    let parent = common::scratch(name);
+    let url = format!("file://{}", origin.display());
+    git_in(
+        &parent,
+        &[
+            "clone", "-q", "--depth", "1", "--branch", branch, &url, "clone",
+        ],
+    );
+    let clone = parent.join("clone");
+    assert_eq!(
+        git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    git_in(&clone, &["config", "user.name", "Fixture Author"]);
+    git_in(&clone, &["config", "user.email", "fixture@example.com"]);
+    clone
+}
+
+/// The repro: a new local branch in a shallow clone. Could-not-look, naming the
+/// unshallow, never exit 3 (CLOUD-2655).
+#[test]
+fn a_shallow_clone_reports_could_not_look_and_names_the_unshallow() {
+    let clone = shallow_clone("worktree-shallow", "origin/main", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(
+        text.contains("unlanded: not-computable (the clone is shallow; `git fetch --unshallow`"),
+        "{text}"
+    );
+}
+
+/// A tracking branch in a shallow clone: whether its work is upstream could not
+/// be computed, and that is never read as pushed (CLOUD-2655).
+#[test]
+fn a_shallow_upstream_is_not_computable_never_pushed() {
+    let clone = shallow_clone("worktree-shallow-upstream", "origin/feat", "feat");
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(text.contains("unpushed: not-computable"), "{text}");
+}
+
+/// An unresolvable target is a config error on a shallow clone too: only a
+/// failed walk is could-not-look (CLOUD-2655).
+#[test]
+fn a_shallow_clone_with_an_unresolvable_target_is_still_a_usage_error() {
+    let clone = shallow_clone("worktree-shallow-nope", "origin/nope", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{} {}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+}
+
 #[test]
 fn a_dirty_tree_is_at_risk_and_names_the_count_not_the_paths() {
     let dir = worktree_repo("worktree-dirty", "main");
@@ -8442,7 +8843,7 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten state")
 }
@@ -9128,7 +9529,7 @@ fn session_cmd(
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION", session);
     match parent {
         Some(parent) => command.env("BATTEN_SESSION_PARENT", parent),
@@ -10071,9 +10472,11 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
 
 #[test]
 fn a_host_without_the_capability_fires_nothing_and_still_answers() {
-    // Acceptance (b). `task-completed` is Claude-only, so the neutral exit-code
-    // adapter must spawn nothing — and must still answer its contract, because
-    // an absent capability is a fact about the host, never an error.
+    // Acceptance (b). `task-completed` is Claude-only among the surveyed hosts,
+    // so `codex-cli` must spawn nothing — and must still answer its contract,
+    // because an absent capability is a fact about the host, never an error.
+    // Not exit-code: that is Batten's own envelope and carries every moment
+    // (CLOUD-2674).
     let dir = action_repo(
         "action-uncapable",
         "task-completed",
@@ -10081,7 +10484,7 @@ fn a_host_without_the_capability_fires_nothing_and_still_answers() {
     );
     let output = run_hook_in(
         &dir,
-        "exit-code",
+        "codex-cli",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
     );
     assert_eq!(output.status.code(), Some(0), "allow, never an error");
@@ -11254,6 +11657,23 @@ fn capture_only_reports_handles_instead_of_the_childs_bytes() {
     assert!(
         !report.contains("bravo warning here"),
         "the handle report echoed the payload: {report}"
+    );
+    // THE ONE POINTER EVERY STORED OUTPUT TAKES (CLOUD-2284): a view read in
+    // one hop, never a handle that needs a second call to reach the words.
+    let pointer = report
+        .lines()
+        .find(|line| line.contains("output point now at /"))
+        .unwrap_or_else(|| panic!("the capture is pointed at: {report}"));
+    assert!(pointer.contains("T)"), "{pointer}");
+    let view = pointer.rsplit_once("; read ").map_or_else(
+        || panic!("the pointer names its view: {pointer}"),
+        |(_, path)| path.trim(),
+    );
+    assert!(
+        std::fs::read_to_string(view)
+            .unwrap_or_default()
+            .contains("bravo warning here"),
+        "the view holds the stream: {view}"
     );
 }
 
@@ -12552,9 +12972,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // The prescription, spelled the way the hook spells it. Line 2, so the
     // pointer proves the finding is anchored rather than reported file-wide.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-dirty"));
     let dirty = repo_with_config("denied-identity-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -12605,9 +13023,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     // The discriminator. Stating the precedence rather than the command is what
     // the rule leaves room for — otherwise the row would forbid the very prose
     // AGENTS.md rule 8 and `rules/commits.md` are made of.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-clean"));
     let clean = repo_with_config("denied-identity-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -13440,7 +13856,7 @@ fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
         .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(repo)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

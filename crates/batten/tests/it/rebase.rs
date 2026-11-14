@@ -71,16 +71,6 @@
 //! applied to the engine file, the named case observed red, the file restored.
 //! Nothing in CI re-derives that, and this paragraph is the only record of it.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/rebase.rs
-#MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
-#MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::git::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
-#MUTANT conflict-stop-names-no-route|s@    subjects.extend(named.iter().map@    subjects.extend(named.iter().take(1).map@|the_conflict_stop_names_every_path_and_the_route_out
-#MUTANT merge-range-refused|s@    replay_range(dir, branch, onto, onto, resolutions, None, true)@    replay_range(dir, branch, onto, onto, resolutions, None, false)@|a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge
-#MUTANT merge-conflict-taken|s@    if let Settled::Conflicted(paths, candidates) = settled {@    if let Settled::Conflicted(paths, candidates) = Settled::Clean(Vec::new()) {@|a_merge_carrying_branch_that_conflicts_with_trunk_moves_nothing
-#MUTANT merge-path-open-to-every-caller|s@    replay_range(dir, branch, upstream, onto, &\[\], None, false)@    replay_range(dir, branch, upstream, onto, \&[], None, true)@|a_plain_rebase_still_refuses_a_merge_carrying_range
-*/
-
 #![cfg(unix)]
 
 use crate::common;
@@ -1425,7 +1415,10 @@ fn assert_flat(dir: &Path, trunk: gix::ObjectId, head: &str) {
     let repo = gix::open(dir).expect("reopen");
     let head: gix::ObjectId = head.parse().expect("head is a sha");
     assert_eq!(
-        repo.merge_base(trunk, head).expect("merge base").detach(),
+        repo.merge_base(trunk, head)
+            .expect("merge base")
+            .expect("a shared history")
+            .detach(),
         trunk,
         "the head descends from the trunk"
     );

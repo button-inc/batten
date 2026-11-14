@@ -12,8 +12,6 @@
 //
 // The obligations CLOUD-1580's Ready block binds. The rows themselves are swept
 // from `crates/batten/src/codemod.rs`, the file they mutate:
-// MUTANT codemod-splices-bytes|see `codemod::rename_method_calls`|a_rename_changes_only_the_edited_token
-// MUTANT codemod-ignores-parse-errors|see `codemod::rename_method_calls`|invalid_rust_is_could_not_look
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -96,5 +94,62 @@ fn every_matching_call_is_renamed() {
     assert_eq!(
         edited,
         "fn f(a: &mut R, b: &mut R) { a.random(); b.random(); }\n"
+    );
+}
+
+/// CLOUD-2692: a call through a named path is redirected, arguments and every
+/// other byte kept, while the same name in a `use`, a comment, a string, a
+/// longer path or a method call is left alone.
+#[test]
+fn a_named_call_path_is_redirected_and_nothing_else() {
+    const SOURCE: &str = r#"use std::fs::read_to_string;
+// fs::read_to_string(a) in a comment
+fn f(p: &str) -> String {
+    let _s = "fs::read_to_string(x)";
+    let _l = fs::read_to_string_lossy(p);
+    let _m = reader.read_to_string(&mut buf);
+    let a = fs::read_to_string(p).unwrap();
+    let b = std::fs::read_to_string( p ).unwrap();
+    assert_eq!(std::fs::read_to_string(p).unwrap(), "in a macro");
+    assert!(x::fs::read_to_string(p).is_ok(), "fs::read_to_string(y)");
+    a + &b
+}
+"#;
+    let edited = codemod::redirect_calls(
+        SOURCE,
+        Edition::E2021,
+        &["fs::read_to_string", "std::fs::read_to_string"],
+        "crate::io::read_to_string",
+    )
+    .unwrap();
+    assert!(
+        edited.contains("let a = crate::io::read_to_string(p).unwrap();"),
+        "{edited}"
+    );
+    assert!(
+        edited.contains("let b = crate::io::read_to_string( p ).unwrap();"),
+        "{edited}"
+    );
+    // Inside a macro's arguments too, and only the path's own bytes change.
+    assert!(
+        edited.contains("assert_eq!(crate::io::read_to_string(p).unwrap(), \"in a macro\");"),
+        "{edited}"
+    );
+    for kept in [
+        "x::fs::read_to_string(p)",
+        "\"fs::read_to_string(y)\"",
+        "use std::fs::read_to_string;",
+        "// fs::read_to_string(a) in a comment",
+        "\"fs::read_to_string(x)\"",
+        "fs::read_to_string_lossy(p)",
+        "reader.read_to_string(&mut buf)",
+    ] {
+        assert!(edited.contains(kept), "{kept} kept: {edited}");
+    }
+    // Nothing to redirect is byte-identical.
+    let none = "fn g() {}\n";
+    assert_eq!(
+        codemod::redirect_calls(none, Edition::E2021, &["fs::read"], "crate::io::read").unwrap(),
+        none
     );
 }

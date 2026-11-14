@@ -53,7 +53,7 @@
 # WHAT IT DELIBERATELY DOES NOT DECIDE. Whether the guard is CORRECT — whether
 # the adapter's exit codes are read the right way round, whether the step runs
 # before the push. That is a judgement, and a gate resolving to it would be the
-# model verdict non-negotiable rule 3 forbids. `crates/batten/tests/it/landing_roster.rs`
+# gated-model verdict non-negotiable rule 3 forbids. `crates/batten/tests/it/landing_roster.rs`
 # is the tier that drives the engine over the real committed file; the adapter's
 # own behaviour is `tests/checks-green.bats`'s and is not restated here.
 #MUTANT-SUITE crates/batten/tests/it/landing_roster.rs

@@ -417,14 +417,6 @@ fn peak_concurrency(runs: &[Run]) -> i64 {
 // THE PRODUCER'S OWN DISCRIMINATION, each over the compiled binary against the
 // fixture forge so the mutation has to survive the whole path: flags, the walk,
 // the join, the store. Each row restores a failure the retired suite caught.
-//MUTANT-SUITE crates/batten/tests/it/land_divergence.rs
-//MUTANT post-merge-run-attributed|s@^            run.branch == \*branch && run.created.as_str() <= merged.as_str() && !run.skipped()$@            run.branch == *branch \&\& !run.skipped()@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
-//MUTANT skipped-run-graded|s@ <= merged.as_str() && !run.skipped()$@ <= merged.as_str()@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
-//MUTANT truncated-walk-reads-whole|s@^            \*unreadable += 1;$@@|a_truncated_ci_walk_is_judged_as_a_prefix_and_counted_unreadable
-//MUTANT unreadable-jobs-dropped|s@^            _ => unreadable += 1,$@            _ => {}@|a_run_whose_jobs_cannot_be_read_is_unreadable_never_a_zero_wait
-//MUTANT merged-list-unpaged|s@^    at < since_at$@    at < i64::MIN@|the_merged_pr_list_is_paged_until_it_leaves_the_window
-//MUTANT stale-record-survives|s@^            crate::record::clear_named(verb, family)?;$@@|an_unreadable_ci_window_is_could_not_look_and_removes_the_stale_record
-//MUTANT environment-unread|s@^                .ok()$@                .ok().and(None::<String>)@|the_environment_names_the_window_when_no_flag_does
 #[must_use]
 pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let mut unreadable = 0_u64;
@@ -600,15 +592,6 @@ fn classify(job: &Value, verdict_steps: &[String]) -> (&'static str, String) {
 // declared here so the whole-file sweep's admission scope runs them too: the rows
 // below select by case name, but a survivor the sweep measures over the scope
 // alone stays live while the suite that kills it is left undeclared.
-//MUTANT-SUITE crates/batten/tests/it/nonverdict.rs
-//MUTANT roster-ignored|s@^                    && spec.roster.iter().any(.required. required == name))$@                    \&\& true)@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT fan-in-counted|s@^                (!spec.excluded.iter().any(.excluded. excluded == name)$@                (true@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT every-failure-a-verdict|s@^        Some(step) => ("verdict", step),$@        Some(step) => ("nonverdict", step),@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT unreadable-run-dropped|s@^            unread_runs += 1;$@@|a_run_whose_jobs_cannot_be_read_is_counted_unreadable
-//MUTANT verdict-steps-unread|s@^    let verdict_steps = listed(verdict_steps, "CI_VERDICT_STEPS", false);$@    let verdict_steps = verdict_steps.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT fan-in-unread|s@^    let excluded = listed(excluded, "CI_FANIN_CHECK", true);$@    let excluded = excluded.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT roster-env-unread|s@^    let roster = listed(required, "CI_REQUIRED_CHECKS", true);$@    let roster = required.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT roster-flag-ignored|s@^    let roster = listed(required, "CI_REQUIRED_CHECKS", true);$@    let roster = listed(\&[], "CI_REQUIRED_CHECKS", true);@|the_vendored_route_runs_on_its_flags_alone
 #[must_use]
 pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let per_page = spec.window.to_string();

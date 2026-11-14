@@ -119,12 +119,12 @@ pub fn verdicts(
 ) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut found = BTreeMap::new();
     for row in declared {
-        let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+        let Ok(bytes) = crate::fsio::read(root.join(&row.input)) else {
             // COULD NOT LOOK at the subject, so no key can be composed for it.
             continue;
         };
         let key = record_key(row, &digest(&bytes));
-        let Ok(text) = std::fs::read_to_string(record_path(git_dir, &key)) else {
+        let Ok(text) = crate::fsio::read_to_string(record_path(git_dir, &key)) else {
             // ABSENT, not empty. This is the arm the whole family turns on: a
             // record under a DIFFERENT key — another version, another revision of
             // the input — is not read here, it is not seen at all.

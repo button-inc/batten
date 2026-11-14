@@ -15,10 +15,80 @@
           ]
         },
         "command": {},
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "event": {
           "type": "string"
         },
         "final-message": {},
+        "forge": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "event": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "number": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "home": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "enum": [
+            "disposable",
+            "machine"
+          ],
+          "type": "string"
+        },
         "operation": {
           "type": "string"
         },
@@ -45,6 +115,15 @@
                   "null"
                 ]
               },
+              "global-options": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "mediated": {
                 "type": "boolean"
               },
@@ -56,11 +135,26 @@
               },
               "reads-only": {
                 "type": "boolean"
+              },
+              "subcommand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "type": "object"
           },
           "type": "array"
+        },
+        "roots": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "run-in-background": {
           "type": [
@@ -97,6 +191,12 @@
               "raw": {
                 "type": "string"
               },
+              "redirects": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "terminator": {
                 "type": [
                   "string",
@@ -130,6 +230,29 @@
         "agent-sourced": {
           "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null."
         },
+        "budgeted": {
+          "description": "Fact::Budgeted (CLOUD-2661) -- each `[budget.*]` set this write would change, by name, with whether the call breaches a ceiling it grows past; null when no set selects the call. Counts only, never content.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "breach": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "breach"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "dispatch-cleared": {
           "description": "Fact::DispatchCleared (CLOUD-1978). TRUE when this call is a session-management method (`create_session`, `send_message`) whose prompt's SHA-256 has BOTH a passing `batten lint brief` receipt and the owner's approval receipt; FALSE for any other call or any prompt missing either receipt; NULL when the receipt store could not be located. Keyed by the prompt's own bytes, so a prompt edited after approval is false. A boolean and nothing else: no byte of the prompt reaches this document.",
           "type": [
@@ -149,6 +272,46 @@
         },
         "keys": {
           "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
+        },
+        "pathspec-status": {
+          "additionalProperties": false,
+          "description": "Fact::PathspecStatus (CLOUD-2684) -- one entry per pathspec of every `git checkout`/`git restore` program in the call, or null when the call has none or one cannot be placed. `path` is repo-relative; `literal` is false for `.`, pathspec magic, a glob or a directory; `tracked` that the index holds a path under it; `clean` that HEAD, the index and the worktree agree there. Paths only, never content.",
+          "properties": {
+            "pathspecs": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "clean": {
+                    "type": "boolean"
+                  },
+                  "literal": {
+                    "type": "boolean"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "tracked": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "path",
+                  "literal",
+                  "tracked",
+                  "clean"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pathspecs"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "pinned-programs": {
           "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",

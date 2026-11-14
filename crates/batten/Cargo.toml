@@ -89,6 +89,11 @@ probe-evaluator-io = ["regorus/http"]
 # probed at run time, so the default build states it does not run them and a
 # build that asks for them fails on a missing ref instead of passing (CLOUD-2059).
 live-remote = []
+# A mutation sweep's suite build only (`MUTANT_OVERLAY_FEATURES`): presets read
+# their source from `$BATTEN_PRESET_OVERLAY` where a mutated copy is there, so
+# a row runs without recompiling the crate. Never in a shipped build: it is the
+# feature that lets a file replace a shipped rule (`PresetModule::text`).
+preset-overlay = []
 
 [dependencies]
 anyhow.workspace = true
@@ -105,6 +110,8 @@ rustls.workspace = true
 rustls-graviola.workspace = true
 rustls-pki-types.workspace = true
 tokio.workspace = true
+compio.workspace = true
+batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
 tower-service.workspace = true
 webpki-roots.workspace = true
 clap.workspace = true
@@ -136,16 +143,12 @@ sha2.workspace = true
 proc-macro2.workspace = true
 syn.workspace = true
 tar.workspace = true
+zip.workspace = true
 toml.workspace = true
 # `config_edit`'s TOML backend (CLOUD-1575) — the write half `toml` cannot be.
 toml_edit.workspace = true
 # `codemod`'s Rust backend (CLOUD-1580): the lossless CST a Rust `fix` writes through.
 ra_ap_syntax.workspace = true
-# Unused by this crate BY DESIGN — the edge exists only so the exact pin in
-# `[workspace.dependencies]` reaches `cargo-semver-checks`' re-resolve, which
-# ignores `Cargo.lock`. The rationale, the measurement and the removal condition
-# live with the pin rather than here.
-tinyvec.workspace = true
 unicode-normalization.workspace = true
 # Reading a trust bundle's certificate SUBJECTS, so a `[[provision.env]]` row can
 # be conditioned on which CA the host trusts rather than on a refusal it has
@@ -209,7 +212,7 @@ regex-automata = { version = "0.4", default-features = false, features = [
 # CLOUD-2224: the bench times the regex the DFA replaced, and the two runtime
 # vocabularies the compile-time table replaced; `o200k`'s anti-drift case and
 # the vocabulary check (CLOUD-1284 arm 4) count against tiktoken-rs.
-fancy-regex = "0.17"
+fancy-regex = "0.20"
 tiktoken-rs.workspace = true
 bpe-openai.workspace = true
 # Only what the *tests* need and the crate itself does not. A normal dependency

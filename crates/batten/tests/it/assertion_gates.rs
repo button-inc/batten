@@ -19,7 +19,7 @@
 //! # Why a marker rather than re-deriving the claim
 //!
 //! The gate cannot check the claims themselves — they are arbitrary properties of
-//! the tree, and a scanner that tried to evaluate English would be the model
+//! the tree, and a scanner that tried to evaluate English would be the gated-model
 //! verdict non-negotiable rule 3 refuses. What it CAN decide is whether a claim
 //! names something runnable, which is the same discipline `config.rs` already
 //! applies to a `[[recorder]]` naming an undeclared program: the claim must point

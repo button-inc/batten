@@ -124,6 +124,14 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [
         {
+          "name": "event",
+          "short": null,
+          "long": "event",
+          "takes_value": true,
+          "positional": false,
+          "help": "The host's event name, used only when the payload names none"
+        },
+        {
           "name": "harness",
           "short": null,
           "long": "harness",
@@ -138,6 +146,14 @@ expression: stdout_of(&output)
           "takes_value": true,
           "positional": false,
           "help": "The epoch second to judge time-dependent records against, supplied as data"
+        },
+        {
+          "name": "show_input",
+          "short": null,
+          "long": "show-input",
+          "takes_value": false,
+          "positional": false,
+          "help": "Store the exact policy input this call produced and print its pointer on stderr"
         }
       ],
       "subcommands": []
@@ -1790,6 +1806,60 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "forge",
+      "id": "forge",
+      "about": "Take forge events into the hook surface",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "forge intake",
+          "id": "forge.intake",
+          "about": "Run one forge event payload from stdin through the handlers and rules a harness hook gets",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "event",
+              "short": null,
+              "long": "event",
+              "takes_value": true,
+              "positional": false,
+              "help": "The X-GitHub-Event name the webhook body on stdin arrived under"
+            },
+            {
+              "name": "from",
+              "short": null,
+              "long": "from",
+              "takes_value": true,
+              "positional": false,
+              "help": "`wake`: stdin is a harness user-prompt-submit payload carrying the event"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "forge poll",
+          "id": "forge.poll",
+          "about": "Read forge events from the first available declared source and run each through intake",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "every",
+              "short": null,
+              "long": "every",
+              "takes_value": true,
+              "positional": false,
+              "help": "Poll every this many seconds, registered with `task` as forge-poll"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "generate",
       "id": "generate",
       "about": "Emit artifacts derived from the command spec, on stdout",
@@ -1995,6 +2065,15 @@ expression: stdout_of(&output)
               "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "land placed",
+          "id": "land.placed",
+          "about": "Advise a gate run on a committed, pushed head that land is next and reuses its receipt",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -2590,6 +2669,15 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "mutate cargo",
+          "id": "mutate.cargo",
+          "about": "Run cargo-mutants over the change since $MUTANT_CHANGED_SINCE on as many jobs as this machine holds",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
         {
           "path": "mutate census",
           "id": "mutate.census",
@@ -4626,64 +4714,6 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
-          "path": "singleton detach",
-          "id": "singleton.detach",
-          "about": "Run a command in the background under a task's lock, and report the previous run's failure",
-          "effect": "unclassified",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "attached",
-              "short": null,
-              "long": "attached",
-              "takes_value": false,
-              "positional": false,
-              "help": "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure"
-            },
-            {
-              "name": "command",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The command to run in the background, after `--`"
-            },
-            {
-              "name": "log",
-              "short": null,
-              "long": "log",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where the background run's whole output is written"
-            },
-            {
-              "name": "marker",
-              "short": null,
-              "long": "marker",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where a failed run's pointers wait, announced and cleared by the next invocation"
-            },
-            {
-              "name": "pattern",
-              "short": null,
-              "long": "pattern",
-              "takes_value": true,
-              "positional": false,
-              "help": "The `[[pattern]]` row whose matching output lines are the failure's pointers"
-            },
-            {
-              "name": "task",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The task's name, which is what the lock is keyed by"
-            }
-          ],
-          "subcommands": []
-        },
-        {
           "path": "singleton release",
           "id": "singleton.release",
           "about": "Drop a task's lock, which its exit trap does and a kill cannot",
@@ -5014,7 +5044,7 @@ expression: stdout_of(&output)
               "long": "program-root",
               "takes_value": true,
               "positional": false,
-              "help": "The directory this consumer keeps its task programs in, matched inside a live process's cmdline"
+              "help": "Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)"
             }
           ],
           "subcommands": []
@@ -5250,7 +5280,7 @@ expression: stdout_of(&output)
         {
           "path": "wiring gate",
           "id": "wiring.gate",
-          "about": "Link this clone's two commit hooks to a hook body the repository checks in",
+          "about": "Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body",
           "effect": "write",
           "data_channel": false,
           "flags": [
@@ -5260,7 +5290,15 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The hook body to link, relative to the repository root"
+              "help": "A hook body to link both commit hooks to, relative to the repository root"
+            },
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit non-zero if a git hook link is owed, and write nothing"
             }
           ],
           "subcommands": []
@@ -5298,6 +5336,14 @@ expression: stdout_of(&output)
           "effect": "write",
           "data_channel": false,
           "flags": [
+            {
+              "name": "all",
+              "short": null,
+              "long": "all",
+              "takes_value": false,
+              "positional": false,
+              "help": "Also register batten on every harness's committed wiring file"
+            },
             {
               "name": "check",
               "short": null,
@@ -5504,6 +5550,10 @@ expression: stdout_of(&output)
     {
       "id": "hk.drift",
       "path": "hk drift"
+    },
+    {
+      "id": "land.placed",
+      "path": "land placed"
     },
     {
       "id": "landed.abandoned",

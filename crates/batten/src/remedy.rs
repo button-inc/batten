@@ -36,9 +36,6 @@
 /// Returns a `'static` sentence rather than an error, so the caller owns the
 /// rule id and the exit class (`UsageError`, exit `1`).
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/fix_declared.rs
-//MUTANT fix-and-reason-both-admitted|s@^    if fix.is_some() && no_fix_reason.is_some() {$@    if false {@|a_row_with_both_keys_is_malformed
-//MUTANT empty-fix-reason-admitted|s@^    if no_fix_reason.map(str::trim).is_some_and(str::is_empty) {$@    if false {@|a_blank_reason_is_malformed
 pub fn malformed(fix: Option<&str>, no_fix_reason: Option<&str>) -> Option<&'static str> {
     if fix.is_some() && no_fix_reason.is_some() {
         return Some(

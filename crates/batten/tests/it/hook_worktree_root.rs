@@ -209,6 +209,95 @@ fn outside_a_repository_the_call_is_allowed_rather_than_refused() {
     );
 }
 
+/// A policy that declares nothing to refuse: the worktree's own authority in
+/// [`worktree_with_its_own_authority`], so a call it judges is allowed.
+const DECLARES_NOTHING: &str = "version = 1\n";
+
+/// A repository whose `main` carries [`ONE_DENY`], plus a linked worktree on a
+/// branch whose OWN `batten.toml` declares nothing (CLOUD-2532).
+///
+/// The opposite of [`repo_with_bare_worktree`]: there the worktree has no
+/// authority and must fall through to the repository's; here it has one, and
+/// must be judged by it from anywhere inside its tree.
+fn worktree_with_its_own_authority(name: &str) -> (PathBuf, PathBuf) {
+    let main = Fixture::new(name).file("README.md", "base\n").git().build();
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "base"]);
+    git_in(&main, &["branch", "own-authority"]);
+    common::write(&main, "batten.toml", ONE_DENY);
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "authority"]);
+
+    let linked = common::scratch(&format!("{name}-linked"));
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().unwrap_or_default(),
+            "own-authority",
+        ],
+    );
+    common::write(&linked, "batten.toml", DECLARES_NOTHING);
+    git_in(&linked, &["add", "-A"]);
+    git_in(
+        &linked,
+        &["commit", "-q", "-m", "the branch's own authority"],
+    );
+    (main, linked)
+}
+
+#[test]
+fn two_worktrees_with_different_configs_get_different_verdicts() {
+    // THE REGRESSION (CLOUD-2532, reproduced 2026-11-04). A desktop session
+    // runs in a linked worktree, and its shell stands wherever the agent last
+    // `cd`'d. From a subdirectory `anchor` found no `./batten.toml` and fell
+    // straight to `repo_root` — the MAIN checkout — so the branch's calls were
+    // judged by another branch's config, and a fix written into the worktree's
+    // own `batten.toml` could not unblock it.
+    let (main, linked) = worktree_with_its_own_authority("hook-root-own");
+    let nested = linked.join("src").join("deep");
+    std::fs::create_dir_all(&nested).expect("create a nested directory");
+
+    assert!(
+        denied(&hook_from(&main)),
+        "the main checkout is judged by its own deny"
+    );
+    assert!(
+        !denied(&hook_from(&linked)),
+        "the worktree's root is judged by the worktree's authority"
+    );
+    let output = hook_from(&nested);
+    assert!(
+        !denied(&output),
+        "a call from a subdirectory of a linked worktree carrying its own \
+         `batten.toml` must be judged by THAT file, not the main checkout's: \
+         {:?} {:?}",
+        output.status.code(),
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_session_that_stood_in_the_main_checkout_is_judged_by_the_worktree_it_moves_to() {
+    // The session-record shape of the same incident. The record answers only
+    // when the cwd resolves no authority, so once the worktree's own file is
+    // found from any depth, an earlier stand in the main checkout cannot
+    // override it. Red before the fix: `anchor` resolved `src` to the main
+    // checkout, which carries a file, so the record was never even consulted.
+    let (main, linked) = worktree_with_its_own_authority("hook-root-own-session");
+    let nested = linked.join("src");
+    std::fs::create_dir_all(&nested).expect("create a nested directory");
+    let session = "cloud-2532-moved";
+    assert!(denied(&hook_in_session(&main, session)));
+    assert!(
+        !denied(&hook_in_session(&nested, session)),
+        "the worktree's authority answers for a call made inside it"
+    );
+}
+
 /// The same refused call, carrying the session it belongs to (CLOUD-2204).
 fn hook_in_session(dir: &Path, session: &str) -> Output {
     let payload = serde_json::json!({
@@ -283,5 +372,332 @@ fn a_recorded_root_that_lost_its_authority_is_not_used() {
     assert!(
         !denied(&hook_in_session(&parent, session)),
         "a recorded root no longer carrying `batten.toml` must not be used"
+    );
+}
+
+// --- CLOUD-2672: the call's target judges, and the session keeps its home ---
+
+/// A repository config refusing `frobnicate`, for the home cases.
+const FROBNICATE_DENY: &str = r#"version = 1
+
+[[rule]]
+id = "no-frobnicate"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "frobnicate"
+reason = "frobnicate is refused here"
+"#;
+
+/// A parent directory holding no repository, with repositories `a` and `b`
+/// under it, each committing its own config.
+fn two_repositories(name: &str, a: &str, b: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let parent = common::scratch_outside_tree("hook-reach", name);
+    let mut made = Vec::new();
+    for (sub, config) in [("a", a), ("b", b)] {
+        let dir = parent.join(sub);
+        std::fs::create_dir_all(&dir).expect("create repository");
+        batten::gitwrite::init_on_main(&dir).expect("a repository on main");
+        std::fs::write(dir.join("batten.toml"), config).expect("write config");
+        std::fs::write(dir.join("f"), "x\n").expect("write file");
+        git_in(&dir, &["add", "-A"]);
+        git_in(
+            &dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "fix: base",
+            ],
+        );
+        made.push(dir.canonicalize().expect("canonical repository"));
+    }
+    let parent = parent.canonicalize().expect("canonical parent");
+    (parent, made.remove(0), made.remove(0))
+}
+
+/// One hook call from `process_cwd`, with the payload's `cwd` where given.
+fn hook_call(
+    process_cwd: &Path,
+    payload_cwd: Option<&Path>,
+    session: &str,
+    tool: &str,
+    tool_input: &serde_json::Value,
+) -> Output {
+    let mut payload = serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": tool_input,
+    });
+    if let Some(cwd) = payload_cwd {
+        payload["cwd"] = serde_json::json!(cwd);
+    }
+    let mut command = common::batten();
+    command
+        .current_dir(process_cwd)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .env_remove("CLAUDE_PROJECT_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.to_string().as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+fn bash(process_cwd: &Path, cwd: &Path, session: &str, command: &str) -> Output {
+    hook_call(
+        process_cwd,
+        Some(cwd),
+        session,
+        "Bash",
+        &serde_json::json!({ "command": command }),
+    )
+}
+
+fn shown(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[test]
+fn a_call_is_judged_by_the_repository_it_targets() {
+    let (_, a, b) = two_repositories("reach-judging", DECLARES_NOTHING, ONE_DENY);
+    // The payload's cwd beats the process cwd.
+    assert!(denied(&bash(&a, &b, "judging", "gh pr merge 42")));
+    // A followed `cd` moves the call into the repository that refuses it.
+    let crossing = format!("cd {} && gh pr merge 42", b.display());
+    assert!(denied(&bash(&a, &a, "judging", &crossing)));
+    // Allow control: the same call at home in A.
+    assert!(!denied(&bash(&a, &a, "judging", "gh pr merge 42")));
+}
+
+#[test]
+fn a_visit_to_another_repository_does_not_rehome_the_session() {
+    let (parent, a, b) = two_repositories("reach-home", FROBNICATE_DENY, DECLARES_NOTHING);
+    let _ = bash(&parent, &a, "home-a", "ls");
+    let _ = bash(&parent, &b, "home-a", "ls");
+    assert!(
+        denied(&bash(&parent, &parent, "home-a", "frobnicate")),
+        "the visit to B must not re-home a session that started in A"
+    );
+    // Allow control: a session that started in B is judged by B from the parent.
+    let _ = bash(&parent, &b, "home-b", "ls");
+    assert!(!denied(&bash(&parent, &parent, "home-b", "frobnicate")));
+}
+
+/// A's config, arming the reach gate at `deny`.
+fn armed() -> String {
+    format!(
+        "{DECLARES_NOTHING}\n{}",
+        common::native_row("repository-reach", "deny")
+    )
+}
+
+fn edit(path: &Path) -> serde_json::Value {
+    serde_json::json!({"file_path": path, "old_string": "x", "new_string": "y"})
+}
+
+#[test]
+fn a_reach_out_of_the_home_is_refused_only_where_the_home_arms_it() {
+    let (parent, a, b) = two_repositories("reach-armed", &armed(), DECLARES_NOTHING);
+    let (_, unarmed, _) = two_repositories("reach-unarmed", DECLARES_NOTHING, DECLARES_NOTHING);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(b.join("f"), a.join("link")).expect("symlink into B");
+    let outside = parent.join("plain");
+    std::fs::create_dir_all(&outside).expect("a directory in no repository");
+    let crossings = [
+        format!("cd {} && touch x", b.display()),
+        format!("pushd {} && touch x", b.display()),
+        format!("cd {}", b.display()),
+        format!("cd {} || exit", b.display()),
+        format!("git -C {} status", b.display()),
+        format!("git -c a=b -C {} status", b.display()),
+        format!("git --git-dir={}/.git status", b.display()),
+        format!("git --work-tree {} status", b.display()),
+    ];
+    for (home, session, refused) in [(&a, "armed", true), (&unarmed, "unarmed", false)] {
+        let _ = bash(home, home, session, "ls");
+        for command in &crossings {
+            let out = bash(home, home, session, command);
+            assert_eq!(
+                denied(&out),
+                refused,
+                "{session}: `{command}`\n{}",
+                shown(&out)
+            );
+        }
+        let edited = hook_call(home, Some(home), session, "Edit", &edit(&b.join("f")));
+        assert_eq!(
+            denied(&edited),
+            refused,
+            "{session}: Edit B/f\n{}",
+            shown(&edited)
+        );
+        let written = hook_call(
+            home,
+            Some(home),
+            session,
+            "Write",
+            &serde_json::json!({"file_path": b.join("new/x"), "content": "x"}),
+        );
+        assert_eq!(
+            denied(&written),
+            refused,
+            "{session}: Write B/new/x\n{}",
+            shown(&written)
+        );
+    }
+    #[cfg(unix)]
+    assert!(denied(&hook_call(
+        &a,
+        Some(&a),
+        "armed",
+        "Edit",
+        &edit(&a.join("link"))
+    )));
+    // Allow controls in the armed session.
+    assert!(!denied(&hook_call(
+        &a,
+        Some(&a),
+        "armed",
+        "Edit",
+        &edit(&a.join("f"))
+    )));
+    std::fs::create_dir_all(a.join("sub")).expect("a subdirectory of the home");
+    let inside = format!("cd {} && touch x", a.join("sub").display());
+    assert!(!denied(&bash(&a, &a, "armed", &inside)));
+    let nowhere = format!("cd {} && touch x", outside.display());
+    assert!(!denied(&bash(&a, &a, "armed", &nowhere)));
+}
+
+#[test]
+fn an_unplaceable_target_is_refused_where_reach_is_armed() {
+    let (parent, a, b) = two_repositories("reach-unplaceable", &armed(), DECLARES_NOTHING);
+    let bare = parent.join("bare.git");
+    batten::gitwrite::init_bare_on_main(&parent.join("bare.git")).expect("a bare repository");
+    std::fs::create_dir_all(a.join("sub")).expect("a subdirectory of the home");
+    let _ = bash(&a, &a, "unplaceable", "ls");
+    for command in [
+        format!("cd -P {} && touch x", b.display()),
+        format!("command cd {} && touch x", b.display()),
+        format!("{{ cd {}; touch x; }}", b.display()),
+        format!("git -C {} status", bare.display()),
+        format!("cd -P {} && touch x", a.join("sub").display()),
+    ] {
+        let out = bash(&a, &a, "unplaceable", &command);
+        assert!(denied(&out), "`{command}` must be refused\n{}", shown(&out));
+    }
+    let placed = format!("cd {} && touch x", a.join("sub").display());
+    assert!(!denied(&bash(&a, &a, "unplaceable", &placed)));
+}
+
+const REACH_MODULE: &str = r#"package batten.fixture_reach
+
+import rego.v1
+
+rules contains "fixture-reach"
+
+violation contains {
+	"rule": "fixture-reach",
+	"verdict": "fixture reach probe",
+	"subjects": [{"path": "reach"}],
+} if {
+	some root in input.call.roots
+	root != input.call.home
+}
+
+violation contains {
+	"rule": "fixture-reach",
+	"verdict": "fixture reach probe",
+	"subjects": [{"path": "cwd"}],
+} if {
+	input.call.cwd != input.call.home
+}
+"#;
+
+const REACH_CONFIG: &str = r#"version = 1
+
+[[verdict]]
+id = "fixture reach probe"
+gloss = "the fixture reach predicate matched"
+class = """
+A fixture class, carrying one route so the registry's own shape rules are met.
+"""
+
+[[verdict.route]]
+id = "fixture reach route"
+kind = "command"
+target = "stop reaching"
+
+[[rule]]
+id = "fixture-reach"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/fixture-reach.rego"
+severity = "deny"
+"#;
+
+#[test]
+fn a_policy_sees_the_call_cwd_roots_and_home() {
+    // The module in both, because the TARGET's config judges: `Edit B/f` is
+    // decided by B's rows, with A as the home the input names.
+    let (_, a, b) = two_repositories("reach-module", REACH_CONFIG, REACH_CONFIG);
+    for repository in [&a, &b] {
+        std::fs::create_dir_all(repository.join("policy")).expect("policy dir");
+        std::fs::write(repository.join("policy/fixture-reach.rego"), REACH_MODULE).expect("module");
+        git_in(repository, &["add", "-A"]);
+        git_in(
+            repository,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "fix: module",
+            ],
+        );
+    }
+    let _ = bash(&a, &a, "module", "ls");
+    let out = hook_call(&a, Some(&a), "module", "Edit", &edit(&b.join("f")));
+    assert!(denied(&out), "Edit B/f leaves the home\n{}", shown(&out));
+    let out = hook_call(&a, Some(&a), "module", "Edit", &edit(&a.join("f")));
+    assert!(
+        !denied(&out),
+        "Edit A/f stays home, and cwd is the home\n{}",
+        shown(&out)
+    );
+}
+
+#[test]
+fn a_visit_keeps_the_session_ledger_in_the_home() {
+    let (parent, a, b) = two_repositories("reach-ledger", FROBNICATE_DENY, ONE_DENY);
+    let first = bash(&parent, &a, "ledger", "frobnicate");
+    assert!(denied(&first));
+    assert!(
+        shown(&first).contains("policy explain <class>"),
+        "{}",
+        shown(&first)
+    );
+    let second = bash(&parent, &b, "ledger", "gh pr merge 42");
+    assert!(denied(&second), "{}", shown(&second));
+    assert!(
+        !shown(&second).contains("policy explain <class>"),
+        "the legend is the session's, delivered once in its home\n{}",
+        shown(&second)
     );
 }

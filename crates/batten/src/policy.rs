@@ -1280,10 +1280,11 @@ fn preset_sources(
     // declared — so the reader can see which half to change.
     if sources.is_empty() {
         let reads: Vec<&str> = manifest.providers_at(rule.scope);
+        let repair = provider_repair(&reads);
         return Err(UsageError::raise(format!(
             "rule `{}` enables the preset `{name}` at scope `{}`, but every module \
              there reads {}, and this row declares {} — on another provider those \
-             modules match nothing and would report a clean tree they never read",
+             modules match nothing and would report a clean tree they never read{repair}",
             rule.id,
             rule.scope.as_str(),
             reads.join(" and "),
@@ -1291,6 +1292,21 @@ fn preset_sources(
         )));
     }
     Ok(sources)
+}
+
+/// The repair a provider refusal ends with (CLOUD-2658): the column and the
+/// values the preset's modules read, so the reader does not have to know the
+/// key. Empty when no module names a provider.
+fn provider_repair(reads: &[&str]) -> String {
+    let values: Vec<String> = reads
+        .iter()
+        .filter(|read| **read != "no provider")
+        .map(|read| format!("provider = \"{read}\""))
+        .collect();
+    if values.is_empty() {
+        return String::new();
+    }
+    format!("; declare it on the row as {}", values.join(" or "))
 }
 
 /// Read one row's declared module text, from the working tree or from a ref.
@@ -1328,7 +1344,7 @@ fn read_sources(
                     "rule `{rule_id}` registers `{path}`, which is absent at {reference}"
                 ))
             })?,
-            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+            None => crate::fsio::read_to_string(root.join(path)).map_err(|_| {
                 UsageError::raise(format!(
                     "rule `{rule_id}` registers `{path}`, which cannot be read"
                 ))
@@ -1416,8 +1432,6 @@ fn without_test_rules(source: &str) -> String {
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
-//MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
-//MUTANT package-address-dropped|s@            packages.insert(relative);@            packages.insert(Vec::new());@|the_module_s_own_violation_still_raises
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -1455,11 +1469,19 @@ pub fn compile(
         let package = engine
             .add_policy(path.clone(), source.clone())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
-        // A package outside `data.batten` is unreachable by the one query this
-        // gate runs, so it has no address to record.
-        if let Some(relative) = relative_package(&package) {
-            packages.insert(relative);
-        }
+        // A PACKAGE OUTSIDE `data.batten` IS REFUSED, NOT SKIPPED (CLOUD-2696).
+        // The one query this gate runs never reaches it, so live it decided
+        // nothing and the call was allowed, while `policy test` evaluated its
+        // cases directly and passed them: a module green under its own tests and
+        // inert at the gate, with nothing to tell the two apart.
+        let Some(relative) = relative_package(&package) else {
+            return Err(UsageError::raise(format!(
+                "`{path}` declares `{package}`, outside `data.batten`, so the gate's query \
+                 never reaches it and it would decide nothing live; name it \
+                 `package batten.<name>`"
+            )));
+        };
+        packages.insert(relative);
         modules.push(Module { path: path.clone() });
     }
 
@@ -1793,7 +1815,6 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -2011,6 +2032,52 @@ pub(crate) struct Compiled {
     entries: BTreeSet<(Vec<String>, String)>,
     /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
     facts: Vec<String>,
+    /// What a bytecode refusal is confirmed against, when the bundle's sources
+    /// are at hand (CLOUD-2696).
+    confirm: Option<Confirm>,
+}
+
+/// The interpreter a bytecode refusal is re-decided by (CLOUD-2696).
+///
+/// **THE TWO EVALUATORS DISAGREE, MEASURED.** regorus's VM (0.11 and 0.15 alike)
+/// reads a helper function that is UNDEFINED for a call as satisfied when its
+/// result is bound with `:=` and negated over, so a module refused live what its
+/// own `with input as` cases — run by the interpreter under `policy test` —
+/// passed as clean (`an_undefined_helper_decides_alike_in_both_evaluators`).
+/// A gate whose live answer differs from its tested one is not the gate that was
+/// tested.
+///
+/// So a refusal is the interpreter's answer, always: the bytecode stays the fast
+/// path for the common allow, and a call it would refuse is decided again by the
+/// evaluator the module's cases ran under. Built once per process, on the first
+/// refusal, so an allow pays nothing.
+struct Confirm {
+    id: String,
+    sources: Vec<(String, String)>,
+    data: serde_json::Value,
+    engine: std::sync::OnceLock<Option<Box<regorus::Engine>>>,
+}
+
+impl Confirm {
+    fn new(id: &str, sources: &[(String, String)], data: serde_json::Value) -> Self {
+        Self {
+            id: id.to_owned(),
+            sources: sources.to_vec(),
+            data,
+            engine: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The interpreter over the same sources and data, compiled on first use.
+    fn engine(&self) -> Option<&regorus::Engine> {
+        self.engine
+            .get_or_init(|| {
+                compile(&self.id, &self.sources, &self.data)
+                    .ok()
+                    .and_then(|bundle| bundle.evaluator.engine().cloned().map(Box::new))
+            })
+            .as_deref()
+    }
 }
 
 /// [`compile`] on the hot path, through the bytecode cache (CLOUD-2236).
@@ -2024,7 +2091,6 @@ pub(crate) struct Compiled {
 ///
 /// The cache is best-effort by construction: an unwritable state directory or
 /// an unreadable entry is a miss, never an error.
-//MUTANT cache-never-read|s@read_cached(path, \&key@read_cached(Path::new("/"), \&key@|a_warm_load_compiles_no_engine
 fn compile_cached(
     root: &Path,
     id: &str,
@@ -2044,6 +2110,7 @@ fn compile_cached(
     let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
         return Ok(bundle);
     };
+    let compiled = compiled.confirmed_by(id, sources, data);
     if let Some(path) = path {
         write_cached(&path, &key, &bundle, &compiled);
         // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
@@ -2074,7 +2141,6 @@ const CACHE_FORMAT: &str = "batten-policy-rvm-3";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
-//MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
     // load asked, and each answer canonicalised the root, derived the state
@@ -2116,7 +2182,6 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// included, is a miss, and a relink to identical code is not. The pattern
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
-//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
 fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
@@ -2174,6 +2239,11 @@ fn read_cached(
         data: data_value(data)?,
         entries: header.entries,
         facts: header.facts,
+        confirm: Some(Confirm::new(
+            id,
+            sources,
+            serde_json::from_str(data).unwrap_or_else(|_| serde_json::json!({})),
+        )),
     };
     Some(Bundle {
         id: id.to_owned(),
@@ -2231,7 +2301,6 @@ fn entry_point(package: &[String], rule: &str) -> String {
     path
 }
 
-//MUTANT bootstrap-entry-fixed|s@candidates.iter().find_map(@candidates.iter().take(1).find_map(@|the_repositorys_bundles_answer_alike_compiled_and_interpreted
 impl Compiled {
     /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
     /// compiler cannot express a rule it defines.
@@ -2269,7 +2338,21 @@ impl Compiled {
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            confirm: None,
         })
+    }
+
+    /// This bytecode, with what its refusals are confirmed against.
+    fn confirmed_by(
+        self,
+        id: &str,
+        sources: &[(String, String)],
+        data: &serde_json::Value,
+    ) -> Self {
+        Self {
+            confirm: Some(Confirm::new(id, sources, data.clone())),
+            ..self
+        }
     }
 
     /// `bundle` evaluating through this bytecode rather than its interpreter.
@@ -2402,7 +2485,28 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
-    let Some(answered) = answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]) else {
+    let decided = denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]));
+    // A BYTECODE REFUSAL IS THE INTERPRETER'S, OR IT IS NONE ([`Confirm`]).
+    if let Look::Is(found) = &decided
+        && !found.is_empty()
+        && let Evaluator::Compiled(compiled) = &bundle.evaluator
+        && let Some(engine) = compiled.confirm.as_ref().and_then(Confirm::engine)
+    {
+        let mut engine = engine.clone();
+        let interpreted = engine
+            .set_input_json(input)
+            .ok()
+            .and_then(|()| engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok())
+            .map(|results| Answer::of(&results));
+        return denials(bundle, interpreted);
+    }
+    decided
+}
+
+/// The violations an answer carries, or could-not-look where it carries none
+/// readable or names an id the bundle never declared.
+fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
+    let Some(answered) = answered else {
         return Look::CouldNotLook;
     };
 
@@ -2464,7 +2568,6 @@ pub struct Rewrite {
 }
 
 /// Whether a module may rewrite this tool input key ([`REWRITABLE`]).
-//MUTANT rewrite-key-unchecked|s@^    REWRITABLE.contains(\&key)$@    true@|a_rewrite_outside_the_allowlist_is_refused
 #[must_use]
 pub fn rewritable(key: &str) -> bool {
     REWRITABLE.contains(&key)
@@ -2961,8 +3064,6 @@ pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
-//MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
-//MUTANT identity-arm-dropped|s@            Some(class) if rule.id != class => findings.push(format!(@            Some(class) if false \&\& rule.id != class => findings.push(format!(@|a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,
@@ -3073,8 +3174,6 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 /// # Errors
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
@@ -3097,8 +3196,6 @@ pub fn registry_for(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(\x7c_\x7c false) {@|a_class_the_binary_ships_is_still_refused_by_check
 fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
     let vendored: BTreeSet<String> = crate::verdict::vendored()
         .into_iter()
@@ -3499,7 +3596,7 @@ fn claim_ids(
 /// can never fire, two that contradict, a cycle — and nothing decided any of
 /// them. At 33 committed rows that was still tractable by reading; it does not
 /// stay tractable, and "read it carefully" is not a gate: non-negotiable rule 3
-/// makes a model verdict inadmissible, so the alternative to a decidable
+/// makes a gated-model verdict inadmissible, so the alternative to a decidable
 /// mechanism here is not careful review, it is nothing.
 ///
 /// # Why the sweep has to be DRIVEN
@@ -3867,7 +3964,7 @@ pub fn call_input_schema() -> Result<String> {
             facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
         }
     }
-    let document = serde_json::json!({
+    let mut document = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "batten mediated-call policy input",
         "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
@@ -3981,7 +4078,78 @@ pub fn call_input_schema() -> Result<String> {
             },
         },
     });
+    extend_call_schema(&mut document);
     Ok(serde_json::to_string_pretty(&document)?)
+}
+
+/// The keys `call_input_schema` adds after its `json!` document is built: one
+/// more key inline exceeds the macro's recursion limit.
+///
+/// * `forge` (CLOUD-2689): a forge event's tokens, never a body.
+/// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
+/// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
+///   past its own value-taking options, and the words before it.
+fn extend_call_schema(document: &mut serde_json::Value) {
+    let forge = serde_json::json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "event": {"type": ["string", "null"]},
+            "action": {"type": ["string", "null"]},
+            "repo": {"type": ["string", "null"]},
+            "number": {"type": ["integer", "null"]},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+        },
+    });
+    if let Some(call) = document
+        .pointer_mut("/properties/call/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        call.insert("forge".to_owned(), forge);
+        // CLOUD-2709: the kind of machine, as the environment declared it —
+        // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!({"type": "string", "enum": ["disposable", "machine"]}),
+        );
+        // CLOUD-2672: where the call stands, what it reaches, and its home.
+        call.insert(
+            "cwd".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        call.insert(
+            "roots".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        call.insert(
+            "home".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+    }
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "redirects".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
+    if let Some(program) = document
+        .pointer_mut("/properties/call/properties/programs/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        program.insert(
+            "subcommand".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "global-options".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+    }
 }
 
 /// A reference expression as a dotted path: `batten.trunk_based`, `violation`.
@@ -4882,6 +5050,58 @@ rules contains not_quoted\n";
         Compiled::from_bundle(&bundle, &serde_json::json!({}))
             .expect("the fixture compiles to bytecode")
             .into_bundle(bundle)
+    }
+
+    /// CLOUD-2696's shape: a helper function undefined for the call, bound with
+    /// `:=` and then negated over. Both evaluators must read the undefined
+    /// helper as no violation. Fails by: the bytecode deciding a violation the
+    /// interpreter — and so `policy test` — does not.
+    const UNDEFINED_HELPER: &str = r#"package batten.helper
+
+import rego.v1
+
+rules contains "commit name refused"
+
+subject(args) := message if {
+	some i, word in args
+	word == "-m"
+	message := args[i + 1]
+}
+
+violation contains {"rule": "commit name refused", "verdict": "commit name refused", "subjects": []} if {
+	some program in input.call.programs
+	message := subject(program.arguments)
+	not regex.match(`^feat`, message)
+}
+"#;
+
+    #[test]
+    fn an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix: x"]}]}}"#;
+        let right = r#"{"call":{"programs":[{"arguments":["commit","-m","feat: x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]);
+        // As `compile_cached` builds it: bytecode that confirms a refusal.
+        let sources = sources_of(&[("policy/h.rego", UNDEFINED_HELPER)]);
+        let data = serde_json::json!({});
+        let compiled = {
+            let bundle = compile("row", &sources, &data).expect("the fixture compiles");
+            Compiled::from_bundle(&bundle, &data)
+                .expect("the fixture compiles to bytecode")
+                .confirmed_by("row", &sources, &data)
+                .into_bundle(bundle)
+        };
+        assert!(compiled.is_bytecode());
+        let refused = Some(vec!["commit name refused".to_owned()]);
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, none),
+                Some(Vec::new()),
+                "{evaluator}: no -m, no subject"
+            );
+            assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
+            assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
+        }
     }
 
     #[test]

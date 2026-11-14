@@ -52,7 +52,8 @@ use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{
-    CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope,
+    CallEvent, CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
+    RuleScope,
 };
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::{MutatingVerb, OperandScope};
@@ -164,6 +165,35 @@ impl Harness {
     /// reversing it would have to invent which of the four to register.
     #[must_use]
     pub fn wiring(self) -> Option<Wiring> {
+        self.wiring_row()
+    }
+
+    /// The variable this host sets to the session owner's email (CLOUD-2659).
+    ///
+    /// Beside [`Wiring::project_dir_var`], the precedent for a per-host variable
+    /// name. Measured for Claude Code in a cloud container; every other host is
+    /// `None` until surveyed, which is could-not-look, not "sets none".
+    #[must_use]
+    pub const fn session_owner_email_var(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("CLAUDE_CODE_USER_EMAIL"),
+            _ => None,
+        }
+    }
+
+    /// Whether this host's payload at `spelling` omits `hook_event_name`, so
+    /// the registration must name the event on argv (CLOUD-2700).
+    ///
+    /// Copilot's camelCase keys select its camelCase dialect, whose payload
+    /// carries no event name (M1); two events are documented only that way.
+    /// Without the name, the decoder would assume pre-tool, which is the wrong
+    /// moment entirely.
+    #[must_use]
+    pub fn names_event_on_argv(self, spelling: &str) -> bool {
+        self == Harness::CopilotCli && spelling.starts_with(|c: char| c.is_ascii_lowercase())
+    }
+
+    fn wiring_row(self) -> Option<Wiring> {
         match self {
             // The host merges hooks across its settings files and defines no
             // hooks-only project file, so batten owns a KEY here, never the
@@ -197,7 +227,7 @@ impl Harness {
             // name at all.
             Harness::CopilotCli => Some(Wiring {
                 file: WiringFile::Whole(".github/hooks/batten.json"),
-                spellings: CLAUDE_SPELLINGS,
+                spellings: COPILOT_SPELLINGS,
                 project_dir_var: None,
             }),
             // The one host whose names are a structural gap in an otherwise
@@ -212,7 +242,20 @@ impl Harness {
                     (Event::PreTool, "BeforeTool"),
                     (Event::PostTool, "AfterTool"),
                     (Event::Stop, "AfterAgent"),
-                    (Event::SessionStart, "BeforeAgent"),
+                    // `SessionStart`, Gemini's own session-start event, never
+                    // `BeforeAgent`, which Gemini documents as after-prompt,
+                    // before planning (CLOUD-2676).
+                    (Event::SessionStart, "SessionStart"),
+                    // CLOUD-2695: `BeforeAgent` is Gemini's prompt-submit moment,
+                    // and `PreCompress` its pre-compaction.
+                    (Event::UserPromptSubmit, "BeforeAgent"),
+                    (Event::SessionEnd, "SessionEnd"),
+                    (Event::Notification, "Notification"),
+                    (Event::PreCompact, "PreCompress"),
+                    // CLOUD-2700.
+                    (Event::ModelRequest, "BeforeModel"),
+                    (Event::ModelResponse, "AfterModel"),
+                    (Event::ToolSelection, "BeforeToolSelection"),
                 ],
                 project_dir_var: None,
             }),
@@ -222,10 +265,32 @@ impl Harness {
             Harness::Cursor => Some(Wiring {
                 file: WiringFile::Whole(".cursor/hooks.json"),
                 spellings: &[
+                    // ONE MOMENT, SEVERAL HOST NAMES (CLOUD-2700): Cursor splits
+                    // pre-tool and post-tool across a generic event and
+                    // specialized ones, and a consumer's handler can be keyed on
+                    // any of them, so Batten registers on every one. The first
+                    // spelling per event is the primary one a reader takes.
                     (Event::PreTool, "preToolUse"),
+                    (Event::PreTool, "beforeShellExecution"),
+                    (Event::PreTool, "beforeMCPExecution"),
+                    (Event::PreTool, "beforeReadFile"),
                     (Event::PostTool, "afterFileEdit"),
+                    (Event::PostTool, "postToolUse"),
+                    (Event::PostTool, "afterShellExecution"),
+                    (Event::PostTool, "afterMCPExecution"),
+                    (Event::AgentResponse, "afterAgentResponse"),
+                    (Event::AgentThought, "afterAgentThought"),
+                    (Event::WorkspaceOpen, "workspaceOpen"),
+                    (Event::TabFileRead, "beforeTabFileRead"),
+                    (Event::TabFileEdit, "afterTabFileEdit"),
                     (Event::Stop, "stop"),
                     (Event::SessionStart, "sessionStart"),
+                    // CLOUD-2695.
+                    (Event::PostToolFailure, "postToolUseFailure"),
+                    (Event::SessionEnd, "sessionEnd"),
+                    (Event::SubagentStart, "subagentStart"),
+                    (Event::SubagentStop, "subagentStop"),
+                    (Event::PreCompact, "preCompact"),
                 ],
                 project_dir_var: None,
             }),
@@ -250,6 +315,25 @@ impl Harness {
     #[must_use]
     pub const fn reason_travels_in_band(self) -> bool {
         self.capabilities().reason_travels_in_band
+    }
+
+    /// How this harness states that it runs hosted: the variable it exports and
+    /// the value meaning a hosted, disposable session (CLOUD-2709), or `None`
+    /// where its hosted form states nothing and the declaration decides.
+    ///
+    /// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured
+    /// in this repository's own sessions, 2026-11-10). A harness gains a signal
+    /// here when its hosted form is measured stating one.
+    #[must_use]
+    pub const fn host_signal(self) -> Option<crate::environment::HostSignal> {
+        match self {
+            Harness::ClaudeCode => Some(("CLAUDE_CODE_REMOTE", "true")),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
+        }
     }
 
     /// The tools on this host whose call **writes the path it names**.
@@ -1284,17 +1368,34 @@ impl Wiring {
     ///
     /// Ordered by [`Event::ALL`] rather than by the table, so emission is
     /// byte-stable (§6) whatever order a row happens to list its names in.
+    /// EVERY event the host emits (owner ruling, 2026-11-09): Batten is
+    /// registered on 100% of each host's hook surface, because a consumer's
+    /// `[[hook.handler]]` can only fire on an event Batten itself is on. So this
+    /// is [`Wiring::admits`], and a wiring short of it is unregistered.
     #[must_use]
     pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
+        self.admits(harness)
+    }
+
+    /// Every event this host emits, with its name: what `doctor hooks` ADMITS
+    /// a registration under (CLOUD-2581).
+    ///
+    /// [`Wiring::registrations`] without its default filter. A registration
+    /// under an admitted event that is not registered by default is a consumer's
+    /// choice, never `hook-wiring-event-underived`.
+    #[must_use]
+    pub fn admits(&self, harness: Harness) -> Vec<(Event, &'static str)> {
         let capabilities = harness.capabilities();
         Event::ALL
             .iter()
             .filter(|event| capabilities.emits(**event))
-            .filter_map(|event| {
+            // EVERY spelling of the event, not the first (CLOUD-2700): a host
+            // that names one moment several ways is registered under each.
+            .flat_map(|event| {
                 self.spellings
                     .iter()
-                    .find(|(named, _)| named == event)
-                    .map(|(_, spelling)| (*event, *spelling))
+                    .filter(move |(named, _)| named == event)
+                    .map(move |(_, spelling)| (*event, *spelling))
             })
             .collect()
     }
@@ -1319,7 +1420,107 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     // Safe to share for the same reason, and only Claude lists it in its own
     // event set: a spelling is a NAME, not a registration.
     (Event::UserPromptSubmit, "UserPromptSubmit"),
+    // CLOUD-2581: the other 25 Claude Code events, each its host name.
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Notification, "Notification"),
+    (Event::UserPromptExpansion, "UserPromptExpansion"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::StopFailure, "StopFailure"),
+    (Event::SubagentStart, "SubagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::PostCompact, "PostCompact"),
+    (Event::PreModelSwitch, "PreModelSwitch"),
+    (Event::PostModelSwitch, "PostModelSwitch"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::PermissionDenied, "PermissionDenied"),
+    (Event::Setup, "Setup"),
+    (Event::TeammateIdle, "TeammateIdle"),
+    (Event::TaskCreated, "TaskCreated"),
+    (Event::Elicitation, "Elicitation"),
+    (Event::ElicitationResult, "ElicitationResult"),
+    (Event::WorktreeCreate, "WorktreeCreate"),
+    (Event::WorktreeRemove, "WorktreeRemove"),
+    (Event::InstructionsLoaded, "InstructionsLoaded"),
+    (Event::CwdChanged, "CwdChanged"),
+    (Event::FileChanged, "FileChanged"),
+    (Event::DirectoryAdded, "DirectoryAdded"),
+    (Event::MessageDisplay, "MessageDisplay"),
+    // CLOUD-2700: names Claude Code never sends, safe here for the reason
+    // `PostToolBatch`'s comment gives. Codex and Copilot emit them.
+    (Event::ModelRequest, "PreModelRequest"),
+    (Event::ModelResponse, "PostModelRequest"),
+    (Event::Interrupt, "Interrupt"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
 ];
+
+/// Copilot CLI's names: its `PascalCase` dialect, which is Claude's spellings,
+/// plus the two events it documents only in camelCase (CLOUD-2700), which
+/// [`Harness::names_event_on_argv`] registers with the event on argv.
+const COPILOT_SPELLINGS: &[(Event, &str)] = &[
+    (Event::PreTool, "PreToolUse"),
+    (Event::PostTool, "PostToolUse"),
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Stop, "Stop"),
+    (Event::SessionStart, "SessionStart"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::SubagentStart, "subagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::Notification, "Notification"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::UserPromptExpansion, "userPromptTransformed"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
+];
+
+/// How one registration entry is shaped on a host's committed surface
+/// (CLOUD-2694).
+///
+/// Claude Code, Codex and Gemini nest the command one level down,
+/// `[{"hooks": [{"type": "command", "command": …}]}]`. Cursor and Copilot take
+/// one flat object per entry, which is what their docs show and the only shape
+/// either host reads: a nested entry there is a hook that can never fire.
+/// `write` is the key the command is written under; `read` is every key a
+/// reader counts (Copilot's `command` is a documented cross-platform fallback,
+/// but only `bash` is honoured under its cloud agent, so `bash` is written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryShape {
+    /// `{"hooks": [{"type": "command", "command": …}]}`.
+    Nested,
+    /// `{"type": "command", "<write>": …}`.
+    Flat {
+        /// The key the command is written under.
+        write: &'static str,
+        /// Every key a reader accepts as the command.
+        read: &'static [&'static str],
+    },
+}
+
+/// Cursor's flat entry: `{"type": "command", "command": …}`.
+const CURSOR_ENTRY: EntryShape = EntryShape::Flat {
+    write: "command",
+    read: &["command"],
+};
+
+/// Copilot's flat entry: written under `bash`, read under `bash` or `command`.
+const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
+    write: "bash",
+    read: &["bash", "command"],
+};
+
+impl Harness {
+    /// The entry shape this host reads (CLOUD-2694); the one function every
+    /// writer and reader asks, so render, register, doctor and reclaim agree.
+    pub(crate) const fn entry_shape(self) -> EntryShape {
+        match self {
+            Harness::Cursor => CURSOR_ENTRY,
+            Harness::CopilotCli => COPILOT_ENTRY,
+            Harness::ClaudeCode | Harness::CodexCli | Harness::GeminiCli | Harness::ExitCode => {
+                EntryShape::Nested
+            }
+        }
+    }
+}
 
 /// The command a host's registration invokes.
 ///
@@ -1377,15 +1578,29 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // The values go through `serde_json` rather than being interpolated raw:
     // they are ASCII identifiers today, and a row that ever carries a quote or a
     // backslash would otherwise emit JSON that does not parse.
-    let command = json_string(&wiring_command(harness));
+    // Per spelling, because a registration whose payload names no event carries
+    // it on argv (CLOUD-2700).
+    let command_for = |spelling: &str| json_string(&registration_command(harness, spelling));
     let registrations = wiring.registrations(harness);
+    let shape = harness.entry_shape();
 
     // Built as lines with an explicit indent rather than through a map type:
     // key order is the contract here (§6 byte-stability), and a map would sort
     // or hash it. The indent is a parameter so the same body serves a whole file
     // and a key's value, which differ only by one level.
-    let entry = |spelling: &str, indent: &str| {
-        [
+    // ONE ENTRY IN THE SHAPE THE HOST READS (CLOUD-2694): flat on Cursor and
+    // Copilot, nested everywhere else.
+    let entry = |spelling: &str, indent: &str| match (shape, command_for(spelling)) {
+        (EntryShape::Flat { write, .. }, command) => [
+            format!("{indent}{}: [", json_string(spelling)),
+            format!("{indent}  {{"),
+            format!("{indent}    \"type\": \"command\","),
+            format!("{indent}    {}: {command}", json_string(write)),
+            format!("{indent}  }}"),
+            format!("{indent}]"),
+        ]
+        .join("\n"),
+        (EntryShape::Nested, command) => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
             format!("{indent}    \"hooks\": ["),
@@ -1397,7 +1612,7 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
             format!("{indent}  }}"),
             format!("{indent}]"),
         ]
-        .join("\n")
+        .join("\n"),
     };
 
     match wiring.file {
@@ -1416,7 +1631,17 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "    "))
                 .collect();
-            format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}", body.join(",\n"))
+            // A flat host's file carries `"version": 1` first, as both hosts
+            // document it (CLOUD-2694).
+            let version = if matches!(shape, EntryShape::Flat { .. }) {
+                "  \"version\": 1,\n"
+            } else {
+                ""
+            };
+            format!(
+                "{{\n{version}  \"hooks\": {{\n{}\n  }}\n}}",
+                body.join(",\n")
+            )
         }
     }
 }
@@ -1430,12 +1655,84 @@ fn json_string(raw: &str) -> String {
     serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""))
 }
 
-/// The events every surveyed host emits — the converged core.
-const CONVERGED_EVENTS: &[Event] = &[
+// EACH NON-CLAUDE HOST'S DOCUMENTED EVENTS THAT NAME A MOMENT BATTEN HAS A
+// VARIANT FOR (CLOUD-2695, fetched from each host's docs 2026-11-09). A
+// prompt-submit event is derived only where Batten's deny reaches the host:
+// Codex (exit 2 + stderr) and Gemini (`BeforeAgent`, exit 2). Cursor's
+// `beforeSubmitPrompt` reads `continue` where Batten writes `permission`, and
+// Copilot documents no blocking output for it, so both would fail open.
+// What stays off each surface is CLOUD-2700's.
+
+/// Codex CLI: all 14 of its documented events (CLOUD-2700 added the last three).
+const CODEX_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::Interrupt,
     Event::PreTool,
     Event::PostTool,
     Event::Stop,
     Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PermissionRequest,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::UserPromptSubmit,
+];
+
+/// Copilot CLI: 13 of 14. The one left is `UserPromptSubmit` (no documented
+/// blocking output, CLOUD-1941). The two camelCase-only events are registered
+/// with their name on argv (CLOUD-2700).
+const COPILOT_EVENTS: &[Event] = &[
+    Event::ErrorOccurred,
+    Event::SubagentStart,
+    Event::UserPromptExpansion,
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::Notification,
+    Event::PermissionRequest,
+];
+
+/// Gemini CLI: all 11 (CLOUD-2700 added the model and tool-selection three).
+const GEMINI_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::ToolSelection,
+    Event::PreTool,
+    Event::PostTool,
+    Event::Stop,
+    Event::SessionStart,
+    Event::UserPromptSubmit,
+    Event::SessionEnd,
+    Event::Notification,
+    Event::PreCompact,
+];
+
+/// Cursor: 14 moments under 20 of its 21 names. The four colliding names are
+/// extra spellings of pre-tool and post-tool (CLOUD-2700); `beforeSubmitPrompt`
+/// is left off because a deny there is ignored (CLOUD-1941).
+const CURSOR_EVENTS: &[Event] = &[
+    Event::AgentResponse,
+    Event::AgentThought,
+    Event::WorkspaceOpen,
+    Event::TabFileRead,
+    Event::TabFileEdit,
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
 ];
 
 /// The attribution row group every named host shares: nothing the evidence
@@ -1492,6 +1789,32 @@ const CLAUDE_EVENTS: &[Event] = &[
     // surveyed host emits it, and claiming it for the converged core would be
     // claiming something about hosts nobody surveyed.
     Event::UserPromptSubmit,
+    // CLOUD-2581: the rest of the 33 events Claude Code 2.1.319 emits.
+    Event::PostToolFailure,
+    Event::Notification,
+    Event::UserPromptExpansion,
+    Event::SessionEnd,
+    Event::StopFailure,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::PreModelSwitch,
+    Event::PostModelSwitch,
+    Event::PermissionRequest,
+    Event::PermissionDenied,
+    Event::Setup,
+    Event::TeammateIdle,
+    Event::TaskCreated,
+    Event::Elicitation,
+    Event::ElicitationResult,
+    Event::WorktreeCreate,
+    Event::WorktreeRemove,
+    Event::InstructionsLoaded,
+    Event::CwdChanged,
+    Event::FileChanged,
+    Event::DirectoryAdded,
+    Event::MessageDisplay,
 ];
 
 impl Harness {
@@ -1654,7 +1977,7 @@ impl Harness {
                 // found, and a name taken from a forum post is exactly what
                 // CLOUD-209's "assume it wrong without a fetch" refuses.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                events: CURSOR_EVENTS,
                 // The row that forced this column to become event-scoped
                 // (CLOUD-601). M1 records the verdict vocabulary as
                 // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
@@ -1694,7 +2017,7 @@ impl Harness {
                 // Not fetched, like the rest of this host's tool surface — the
                 // same survey gap `operation_of` records for it.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                events: COPILOT_EVENTS,
                 // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
                 // verdict exists and names the `preToolUse` output *fields*
                 // (`permissionDecision`/`permissionDecisionReason`) without
@@ -1728,7 +2051,7 @@ impl Harness {
                 // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
                 // default and disableable with `"useWriteTodos": false`.
                 plan_tools: PlanTools::Surveyed(&["write_todos"]),
-                events: CONVERGED_EVENTS,
+                events: GEMINI_EVENTS,
                 // Allow/deny only. A policy wanting confirmation must hard-deny
                 // here — degrading to *allow* would turn "ask a human" into "go
                 // ahead".
@@ -1793,7 +2116,7 @@ impl Harness {
             Harness::CodexCli => Capabilities {
                 // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
                 plan_tools: PlanTools::Surveyed(&["update_plan"]),
-                events: CONVERGED_EVENTS,
+                events: CODEX_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
                 // supported yet" in the docs. Advertised is not available, and
                 // that is a measurement rather than a gap — hence `No`.
@@ -1818,7 +2141,10 @@ impl Harness {
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
-                events: CONVERGED_EVENTS,
+                // Every moment, not the converged four: this is Batten's own
+                // envelope, so it carries whatever the core normalizes, and a
+                // handler keyed on any of them runs here (CLOUD-2674).
+                events: Event::MOMENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
                 ask: AskReach::unreachable(Declaration::No),
@@ -2029,16 +2355,26 @@ const fn unsupported(reason: &'static str) -> HookDisposition {
     HookDisposition::Unsupported { reason }
 }
 
+/// Whether `name` is a githooks(5) hook name, one of [`GIT_HOOKS`] (CLOUD-2339).
+#[must_use]
+pub fn is_git_hook(name: &str) -> bool {
+    GIT_HOOKS.iter().any(|(hook, _)| *hook == name)
+}
+
 /// githooks(5) for git 2.43, one row per name, alphabetical.
 ///
-/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The two
+/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The
 /// registered rows must equal `doctor::COMMIT_HOOKS`, which stays the runtime
 /// authority for which git hooks batten links.
 ///
+/// `pre-push` IS REGISTERED, no longer `adjudicated-elsewhere`: the push was
+/// left to the mediated call and `land`, and a commit `git revert` made through
+/// the sequencer (no `commit-msg`) reached `verify` with a non-conventional
+/// subject. The push is the last local point every commit passes.
+///
 /// Every reason is a stable id: `after-the-fact` refuses nothing that has not
 /// already happened (the [`Event::PostTool`] argument), `server-side` runs on a
-/// remote, `adjudicated-elsewhere` is the push — decided at the mediated call and
-/// by `land` — and `no-predicate` is a hook nothing here has a rule for yet.
+/// remote, and `no-predicate` is a hook nothing here has a rule for yet.
 /// `pre-merge-commit` stays `no-predicate`: fast-forward landing makes no merge
 /// commits. Registering a further hook is per-source work, not this table's.
 pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
@@ -2061,7 +2397,7 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
     ("pre-auto-gc", unsupported("no-predicate")),
     ("pre-commit", BY_GATE),
     ("pre-merge-commit", unsupported("no-predicate")),
-    ("pre-push", unsupported("adjudicated-elsewhere")),
+    ("pre-push", BY_GATE),
     ("pre-rebase", unsupported("no-predicate")),
     ("pre-receive", unsupported("server-side")),
     ("prepare-commit-msg", unsupported("no-predicate")),
@@ -2072,15 +2408,33 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
     ("update", unsupported("server-side")),
 ];
 
-/// What batten reads from the forge, and the two ingress shapes it refuses to be
-/// (CLOUD-204: no server, and a webhook's silence is not success).
+/// The verb that takes a catalog event (CLOUD-2690).
+const INTAKE: &str = "forge intake";
+
+/// A catalog event's door (CLOUD-2690).
+const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };
+
+/// What batten reads from the forge, and the ingress shape it refuses to be
+/// (CLOUD-204: no server). Payload intake is a verb reading stdin, so `webhook`
+/// left this table when the catalog joined it (CLOUD-2689).
 const CI_READS: &[(&str, HookDisposition)] = &[
     ("poll:pull-request", BY_FORGE),
     ("poll:check-run", BY_FORGE),
     ("poll:workflow-run", BY_FORGE),
-    ("webhook", unsupported("no-server")),
     ("socket", unsupported("no-server")),
 ];
+
+/// The forge's whole vocabulary: the polls, then one entry per catalog event
+/// (CLOUD-2689), each taken by `forge intake` (CLOUD-2690).
+fn ci_vocabulary() -> Vec<(String, HookDisposition)> {
+    let mut entries = owned(CI_READS);
+    entries.extend(
+        crate::forge_event::CATALOG
+            .iter()
+            .map(|row| (row.name.to_owned(), BY_INTAKE)),
+    );
+    entries
+}
 
 fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
     table
@@ -2089,11 +2443,6 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
         .collect()
 }
 
-//MUTANT source-unenumerated|s@^        HookSource::Git,$@@|every_hook_source_is_enumerated_with_a_nonempty_vocabulary
-//MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
-//MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
-//MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
-//MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
 impl HookSource {
     /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
     /// a fifth source does not compile until it declares a vocabulary.
@@ -2128,7 +2477,7 @@ impl HookSource {
                 .collect(),
             HookSource::Harness => harness_vocabulary(),
             HookSource::Git => owned(GIT_HOOKS),
-            HookSource::Ci => owned(CI_READS),
+            HookSource::Ci => ci_vocabulary(),
         }
     }
 
@@ -2145,7 +2494,6 @@ impl HookSource {
 }
 
 /// Whether a source's findings get the once-per-cycle full arm (CLOUD-2075).
-//MUTANT harness-lifecycle-unsighted|s@^            HookSource::Harness => Lifecycle::Sighted,$@            HookSource::Harness => Lifecycle::PrintedFull,@|every_hook_source_declares_its_finding_lifecycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifecycle {
     /// Full once per context per compaction cycle, the pointer otherwise.
@@ -2170,7 +2518,7 @@ fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
             .unwrap_or_default();
         for event in Event::ALL
             .iter()
-            .filter(|event| **event != Event::Unrecognized)
+            .filter(|event| **event != Event::Unrecognized && event.host_emitted())
         {
             let disposition = if wiring.is_none() {
                 unsupported("no-wiring-surface")
@@ -2279,6 +2627,89 @@ pub enum Event {
     /// degrades to the operator's stream. Deny reaches the model; advice does
     /// not.
     UserPromptSubmit,
+    // CLOUD-2581: the rest of Claude Code's 33 hook events (measured on
+    // 2.1.319), appended for the discriminant reason above. All but the
+    // worktree pair carry no verdict and pass through until a rule needs one.
+    /// A tool call failed. Claude Code (CLOUD-2581).
+    PostToolFailure,
+    /// The host showed the user a notification. Claude Code (CLOUD-2581).
+    Notification,
+    /// A submitted prompt was expanded (a slash command or mention). Claude Code (CLOUD-2581).
+    UserPromptExpansion,
+    /// A session ended. Claude Code (CLOUD-2581).
+    SessionEnd,
+    /// A turn ended on an error rather than a stop. Claude Code (CLOUD-2581).
+    StopFailure,
+    /// A subagent started. Claude Code (CLOUD-2581).
+    SubagentStart,
+    /// A subagent finished. Claude Code (CLOUD-2581).
+    SubagentStop,
+    /// Before the context is compacted. Claude Code (CLOUD-2581).
+    PreCompact,
+    /// After the context was compacted. Claude Code (CLOUD-2581).
+    PostCompact,
+    /// Before the session's model changes. Claude Code (CLOUD-2581).
+    PreModelSwitch,
+    /// After the session's model changed. Claude Code (CLOUD-2581).
+    PostModelSwitch,
+    /// The host is about to ask the user for a permission. Claude Code (CLOUD-2581).
+    PermissionRequest,
+    /// A permission was denied. Claude Code (CLOUD-2581).
+    PermissionDenied,
+    /// The host's setup phase. Claude Code (CLOUD-2581).
+    Setup,
+    /// A teammate agent went idle. Claude Code (CLOUD-2581).
+    TeammateIdle,
+    /// A task was created. Claude Code (CLOUD-2581).
+    TaskCreated,
+    /// An MCP server asked the user for input. Claude Code (CLOUD-2581).
+    Elicitation,
+    /// The user answered an elicitation. Claude Code (CLOUD-2581).
+    ElicitationResult,
+    /// The host asks for a linked worktree; stdout answers with its path. Claude Code (CLOUD-2581).
+    WorktreeCreate,
+    /// The host asks for a linked worktree to be removed. Claude Code (CLOUD-2581).
+    WorktreeRemove,
+    /// An instructions file was loaded. Claude Code (CLOUD-2581).
+    InstructionsLoaded,
+    /// The session's working directory changed. Claude Code (CLOUD-2581).
+    CwdChanged,
+    /// A watched file changed. Claude Code (CLOUD-2581).
+    FileChanged,
+    /// A directory was added to the session. Claude Code (CLOUD-2581).
+    DirectoryAdded,
+    /// The host displayed a message. Claude Code (CLOUD-2581).
+    MessageDisplay,
+    /// The host is about to send a model request. Codex `PreModelRequest`,
+    /// Gemini `BeforeModel` (CLOUD-2700).
+    ModelRequest,
+    /// A model response arrived. Codex `PostModelRequest`, Gemini `AfterModel`
+    /// (CLOUD-2700).
+    ModelResponse,
+    /// The host is about to choose which tools the model is offered. Gemini
+    /// `BeforeToolSelection` (CLOUD-2700).
+    ToolSelection,
+    /// The agent finished a response. Cursor `afterAgentResponse` (CLOUD-2700).
+    AgentResponse,
+    /// The agent finished a thinking block. Cursor `afterAgentThought`
+    /// (CLOUD-2700).
+    AgentThought,
+    /// The user interrupted the agent. Codex `Interrupt` (CLOUD-2700).
+    Interrupt,
+    /// The host reported an error. Copilot `ErrorOccurred` (CLOUD-2700).
+    ErrorOccurred,
+    /// A workspace was opened. Cursor `workspaceOpen` (CLOUD-2700).
+    WorkspaceOpen,
+    /// Tab completion is about to read a file. Cursor `beforeTabFileRead`
+    /// (CLOUD-2700). Not a tool call: the payload carries no tool.
+    TabFileRead,
+    /// Tab completion edited a file. Cursor `afterTabFileEdit` (CLOUD-2700).
+    TabFileEdit,
+    /// A forge event: one of GitHub's webhook events, normalized by
+    /// [`crate::forge_event`] (CLOUD-2689). No host emits it, so no wiring
+    /// registers it; `forge intake` is its door. Its verdict is a finding about
+    /// something that already happened, as on `post-tool`.
+    Forge,
 }
 
 impl Event {
@@ -2295,12 +2726,61 @@ impl Event {
         // chronological start of a turn: this list is what the wiring emitter
         // iterates, so its order is a committed artifact's key order, and the
         // grouping that already holds — converged core, then the events one host
-        // alone offers — is the one a reader can check against
-        // `CONVERGED_EVENTS`. `Unrecognized` stays last because it is not a
-        // moment.
+        // alone offers — is the one a reader can check against each host's
+        // event set. `Unrecognized` stays last because it is not a moment.
         Event::UserPromptSubmit,
+        Event::PostToolFailure,
+        Event::Notification,
+        Event::UserPromptExpansion,
+        Event::SessionEnd,
+        Event::StopFailure,
+        Event::SubagentStart,
+        Event::SubagentStop,
+        Event::PreCompact,
+        Event::PostCompact,
+        Event::PreModelSwitch,
+        Event::PostModelSwitch,
+        Event::PermissionRequest,
+        Event::PermissionDenied,
+        Event::Setup,
+        Event::TeammateIdle,
+        Event::TaskCreated,
+        Event::Elicitation,
+        Event::ElicitationResult,
+        Event::WorktreeCreate,
+        Event::WorktreeRemove,
+        Event::InstructionsLoaded,
+        Event::CwdChanged,
+        Event::FileChanged,
+        Event::DirectoryAdded,
+        Event::MessageDisplay,
+        // CLOUD-2700: the moments only non-Claude hosts emit.
+        Event::ModelRequest,
+        Event::ModelResponse,
+        Event::ToolSelection,
+        Event::AgentResponse,
+        Event::AgentThought,
+        Event::Interrupt,
+        Event::ErrorOccurred,
+        Event::WorkspaceOpen,
+        Event::TabFileRead,
+        Event::TabFileEdit,
+        Event::Forge,
         Event::Unrecognized,
     ];
+
+    /// Every event that is a moment: [`Event::ALL`] without `Unrecognized`.
+    ///
+    /// Derived in const context, so a new variant in `ALL` is a moment here with
+    /// no second edit. The `panic!` arm makes "`Unrecognized` stays last" a
+    /// compile error rather than a comment, so a reordered `ALL` cannot quietly
+    /// drop a real moment. The neutral exit-code adapter declares exactly this set
+    /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
+    /// would be a statement about nobody.
+    pub const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
+        Some((Event::Unrecognized, moments)) => moments,
+        _ => panic!("Event::ALL ends with Unrecognized"),
+    };
 
     /// Whether a refusal is a thing this moment can carry at all.
     ///
@@ -2332,9 +2812,49 @@ impl Event {
     /// and [`adjudicate`]'s arms still say the same thing.
     #[must_use]
     pub const fn carries_a_verdict(self) -> bool {
+        // CLOUD-2581's pass-through events carry no verdict either: allowed
+        // before any rule until a rule needs one. The worktree pair is absent on
+        // purpose, so a handler can refuse the host's worktree request.
         !matches!(
             self,
-            Event::Stop | Event::SessionStart | Event::ConfigChange | Event::TaskCompleted
+            Event::Stop
+                | Event::SessionStart
+                | Event::ConfigChange
+                | Event::TaskCompleted
+                | Event::PostToolFailure
+                | Event::Notification
+                | Event::UserPromptExpansion
+                | Event::SessionEnd
+                | Event::StopFailure
+                | Event::SubagentStart
+                | Event::SubagentStop
+                | Event::PreCompact
+                | Event::PostCompact
+                | Event::PreModelSwitch
+                | Event::PostModelSwitch
+                | Event::PermissionRequest
+                | Event::PermissionDenied
+                | Event::Setup
+                | Event::TeammateIdle
+                | Event::TaskCreated
+                | Event::Elicitation
+                | Event::ElicitationResult
+                | Event::InstructionsLoaded
+                | Event::CwdChanged
+                | Event::FileChanged
+                | Event::DirectoryAdded
+                | Event::MessageDisplay
+                // CLOUD-2700's, for the same reason: no rule selects for them.
+                | Event::ModelRequest
+                | Event::ModelResponse
+                | Event::ToolSelection
+                | Event::AgentResponse
+                | Event::AgentThought
+                | Event::Interrupt
+                | Event::ErrorOccurred
+                | Event::WorkspaceOpen
+                | Event::TabFileRead
+                | Event::TabFileEdit
         )
     }
 
@@ -2362,6 +2882,15 @@ impl Event {
         matches!(self, Event::PreTool)
     }
 
+    /// Whether any HOST emits this moment (CLOUD-2689). Only [`Event::Forge`]
+    /// is not a host's: it arrives through `forge intake`, so it appears in no
+    /// harness vocabulary and in no wiring, and a census of host spellings
+    /// exempts it.
+    #[must_use]
+    pub const fn host_emitted(self) -> bool {
+        !matches!(self, Event::Forge)
+    }
+
     /// The normalized token. Deliberately not a host spelling — a host's own
     /// word for an event travels in [`Envelope::raw_event`] and is echoed back
     /// verbatim, so this one is free to name the concept.
@@ -2376,6 +2905,42 @@ impl Event {
             Event::ConfigChange => "config-change",
             Event::PostToolBatch => "post-tool-batch",
             Event::UserPromptSubmit => "user-prompt-submit",
+            Event::PostToolFailure => "post-tool-failure",
+            Event::Notification => "notification",
+            Event::UserPromptExpansion => "user-prompt-expansion",
+            Event::SessionEnd => "session-end",
+            Event::StopFailure => "stop-failure",
+            Event::SubagentStart => "subagent-start",
+            Event::SubagentStop => "subagent-stop",
+            Event::PreCompact => "pre-compact",
+            Event::PostCompact => "post-compact",
+            Event::PreModelSwitch => "pre-model-switch",
+            Event::PostModelSwitch => "post-model-switch",
+            Event::PermissionRequest => "permission-request",
+            Event::PermissionDenied => "permission-denied",
+            Event::Setup => "setup",
+            Event::TeammateIdle => "teammate-idle",
+            Event::TaskCreated => "task-created",
+            Event::Elicitation => "elicitation",
+            Event::ElicitationResult => "elicitation-result",
+            Event::WorktreeCreate => "worktree-create",
+            Event::WorktreeRemove => "worktree-remove",
+            Event::InstructionsLoaded => "instructions-loaded",
+            Event::CwdChanged => "cwd-changed",
+            Event::FileChanged => "file-changed",
+            Event::DirectoryAdded => "directory-added",
+            Event::MessageDisplay => "message-display",
+            Event::ModelRequest => "model-request",
+            Event::ModelResponse => "model-response",
+            Event::ToolSelection => "tool-selection",
+            Event::AgentResponse => "agent-response",
+            Event::AgentThought => "agent-thought",
+            Event::Interrupt => "interrupt",
+            Event::ErrorOccurred => "error-occurred",
+            Event::WorkspaceOpen => "workspace-open",
+            Event::TabFileRead => "tab-file-read",
+            Event::TabFileEdit => "tab-file-edit",
+            Event::Forge => "forge",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -2398,6 +2963,37 @@ impl Event {
             "ConfigChange" => Event::ConfigChange,
             "PostToolBatch" => Event::PostToolBatch,
             "UserPromptSubmit" => Event::UserPromptSubmit,
+            "PostToolUseFailure" => Event::PostToolFailure,
+            "Notification" => Event::Notification,
+            "UserPromptExpansion" => Event::UserPromptExpansion,
+            "SessionEnd" => Event::SessionEnd,
+            "StopFailure" => Event::StopFailure,
+            "SubagentStart" => Event::SubagentStart,
+            "SubagentStop" => Event::SubagentStop,
+            "PreCompact" => Event::PreCompact,
+            "PostCompact" => Event::PostCompact,
+            "PreModelSwitch" => Event::PreModelSwitch,
+            "PostModelSwitch" => Event::PostModelSwitch,
+            "PermissionRequest" => Event::PermissionRequest,
+            "PermissionDenied" => Event::PermissionDenied,
+            "Setup" => Event::Setup,
+            "TeammateIdle" => Event::TeammateIdle,
+            "TaskCreated" => Event::TaskCreated,
+            "Elicitation" => Event::Elicitation,
+            "ElicitationResult" => Event::ElicitationResult,
+            "WorktreeCreate" => Event::WorktreeCreate,
+            "WorktreeRemove" => Event::WorktreeRemove,
+            "InstructionsLoaded" => Event::InstructionsLoaded,
+            "CwdChanged" => Event::CwdChanged,
+            "FileChanged" => Event::FileChanged,
+            "DirectoryAdded" => Event::DirectoryAdded,
+            "MessageDisplay" => Event::MessageDisplay,
+            // CLOUD-2700: Codex's and Copilot's own PascalCase names, read here
+            // because both hosts ship the converged spellings.
+            "PreModelRequest" => Event::ModelRequest,
+            "PostModelRequest" => Event::ModelResponse,
+            "Interrupt" => Event::Interrupt,
+            "ErrorOccurred" => Event::ErrorOccurred,
             _ => Event::Unrecognized,
         }
     }
@@ -2410,6 +3006,23 @@ impl Event {
 /// simply omitted the field, turning a missing key into a silent bypass. Guessing
 /// pre-tool can only ever over-adjudicate, which is the safe direction.
 const ASSUMED_EVENT: &str = "PreToolUse";
+
+/// The event a registration named on argv (`adjudicate --event`, CLOUD-2700),
+/// read only when the payload names none. Set once per process, at dispatch.
+pub static NAMED_EVENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The command one registration runs: the harness's mediation command, plus
+/// `--event <spelling>` where the host's payload at that spelling names no
+/// event (CLOUD-2700).
+#[must_use]
+pub fn registration_command(harness: Harness, spelling: &str) -> String {
+    let command = wiring_command(harness);
+    if harness.names_event_on_argv(spelling) {
+        format!("{command} --event {spelling}")
+    } else {
+        command
+    }
+}
 
 /// The prefix every MCP-provided tool carries in the converged wire format.
 ///
@@ -2630,7 +3243,7 @@ pub struct Envelope {
     ///
     /// **A HOST FACT, never an inference from the user's prose.** Whether a turn
     /// may write is something the harness states; reading intent out of what the
-    /// user typed would be a model verdict, which non-negotiable rule 3 forbids.
+    /// user typed would be a gated-model verdict, which non-negotiable rule 3 forbids.
     /// So this is the token the host sent and nothing else — the same
     /// echo-the-host's-spelling posture [`Envelope::raw_event`] takes.
     ///
@@ -2650,6 +3263,9 @@ pub struct Envelope {
     /// resolved by its adapter at decode from the variables it reads; `None` on
     /// every other host, so the core carries no host's arithmetic.
     pub background_ceiling: Option<u64>,
+    /// A forge event's tokens (CLOUD-2689); `None` on every host event.
+    /// Projected as `input.call.forge`.
+    pub forge: Option<crate::forge_event::ForgeCall>,
 }
 
 /// The mode a host names when the turn may propose but not perform.
@@ -2682,7 +3298,6 @@ impl Envelope {
     }
 }
 
-//MUTANT session-less-shared|s@^        let session = self.session.as_deref()?;$@        let session = self.session.as_deref().unwrap_or("unnamed");@|a_session_less_payload_is_full_on_every_firing
 impl Envelope {
     /// The reader a sighting belongs to: the session, plus the agent id when a
     /// subagent is the reader (CLOUD-2075).
@@ -2693,10 +3308,17 @@ impl Envelope {
     #[must_use]
     pub fn context(&self) -> Option<String> {
         let session = self.session.as_deref()?;
-        Some(match self.agent.as_deref() {
-            Some(agent) => format!("{session}\u{1f}{agent}"),
-            None => session.to_owned(),
-        })
+        Some(sighting_context(session, self.agent.as_deref()))
+    }
+}
+
+/// The sighting key for `session`, and `agent` when a subagent is the reader:
+/// [`Envelope::context`]'s spelling, for a caller holding only the raw fields.
+#[must_use]
+pub fn sighting_context(session: &str, agent: Option<&str>) -> String {
+    match agent {
+        Some(agent) => format!("{session}\u{1f}{agent}"),
+        None => session.to_owned(),
     }
 }
 
@@ -3083,7 +3705,7 @@ impl Field {
             Field::InputDraft => envelope
                 .input
                 .get("draft")
-                .and_then(Value::as_bool)
+                .and_then(draft_flag)
                 .map(|flag| flag.to_string()),
         };
         value.filter(|text| !text.is_empty())
@@ -3239,7 +3861,6 @@ pub struct Repair {
     pub subject: Option<String>,
 }
 
-//MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
     /// The record line, in the finding grammar (CLOUD-2145): `batten note call
     /// fix silent at <rule>[ <subject>] (repaired <class>)` — the class this
@@ -3295,9 +3916,13 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
 /// (CLOUD-2224), which never holds the payload as one string.
 #[must_use]
 pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
+    // The payload's own name first; then the one the registration put on argv
+    // (`--event`, CLOUD-2700), for a dialect whose payload names none; then the
+    // conservative assumption.
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)
+        .or_else(|| NAMED_EVENT.get().map(String::as_str))
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
     let event = normalize_event(harness, &raw_event);
@@ -3430,6 +4055,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         agent: present_str(value, "agent_id"),
         start_source: present_str(value, "source"),
         background_ceiling: background_ceiling(harness),
+        forge: None,
     })
 }
 
@@ -3445,7 +4071,7 @@ fn background_ceiling(harness: Harness) -> Option<u64> {
 }
 
 /// One non-empty string member of a decoded payload, owned.
-fn present_str(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -3459,7 +4085,8 @@ fn present_str(value: &Value, key: &str) -> Option<String> {
 /// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
-fn normalize_event(harness: Harness, raw: &str) -> Event {
+#[must_use]
+pub fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
         // Claude-identical payload.
@@ -3469,6 +4096,13 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // `AfterAgent` is Gemini's end-of-turn; it is the Stop family's
             // member here even though the word differs.
             "AfterAgent" => Some(Event::Stop),
+            // Its prompt-submit moment and its pre-compaction (CLOUD-2695).
+            "BeforeAgent" => Some(Event::UserPromptSubmit),
+            "PreCompress" => Some(Event::PreCompact),
+            // CLOUD-2700.
+            "BeforeModel" => Some(Event::ModelRequest),
+            "AfterModel" => Some(Event::ModelResponse),
+            "BeforeToolSelection" => Some(Event::ToolSelection),
             _ => None,
         },
         // Cursor splits pre-tool across a generic event and three specialized
@@ -3478,12 +4112,36 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" | "beforeReadFile" => {
                 Some(Event::PreTool)
             }
-            "afterFileEdit" => Some(Event::PostTool),
-            "stop" | "subagentStop" => Some(Event::Stop),
+            // Post-tool is split the same way (CLOUD-2700): the generic
+            // `postToolUse` and three specialized after-events.
+            "postToolUse" | "afterFileEdit" | "afterShellExecution" | "afterMCPExecution" => {
+                Some(Event::PostTool)
+            }
+            "afterAgentResponse" => Some(Event::AgentResponse),
+            "afterAgentThought" => Some(Event::AgentThought),
+            "workspaceOpen" => Some(Event::WorkspaceOpen),
+            "beforeTabFileRead" => Some(Event::TabFileRead),
+            "afterTabFileEdit" => Some(Event::TabFileEdit),
+            // `subagentStop` is its own moment now (CLOUD-2695): the Stop-family
+            // mapping predates the variant, and a subagent ending does not run
+            // the end-of-turn gate on Claude Code either.
+            "stop" => Some(Event::Stop),
             "sessionStart" => Some(Event::SessionStart),
+            "postToolUseFailure" => Some(Event::PostToolFailure),
+            "sessionEnd" => Some(Event::SessionEnd),
+            "subagentStart" => Some(Event::SubagentStart),
+            "subagentStop" => Some(Event::SubagentStop),
+            "preCompact" => Some(Event::PreCompact),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        // Copilot's two camelCase-only events (CLOUD-2700). Their payload names
+        // no event, so the name arrives through `--event`.
+        Harness::CopilotCli => match raw {
+            "subagentStart" => Some(Event::SubagentStart),
+            "userPromptTransformed" => Some(Event::UserPromptExpansion),
+            _ => None,
+        },
+        Harness::ClaudeCode | Harness::CodexCli | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -3532,6 +4190,16 @@ fn cursor_specialized_input(value: &Value) -> Value {
 /// ignores it — and `--config-from` is inherited for free.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
+    /// The resolved `[commit]` convention, which the commit-subject gate judges
+    /// a mediated commit's message against (CLOUD-2683). `None` arms nothing.
+    pub commit: Option<crate::commit::Commit>,
+    /// The resolved `[budget]` sets, judged at a write that would change one
+    /// (CLOUD-2661). `None` arms nothing.
+    pub budget: Option<crate::budget::Budget>,
+    /// The ratchet rows a write can be judged against (CLOUD-2692), held apart
+    /// from `shapes` because they are tree-scoped rows every `shapes` consumer
+    /// would otherwise have to filter out.
+    pub ratchets: Vec<Rule>,
     /// The host this policy is being applied on, and through it the
     /// [`Capabilities`] row a rule may branch on (CLOUD-779).
     ///
@@ -3668,6 +4336,9 @@ impl Policy {
     #[must_use]
     pub fn declaring_nothing(harness: Harness) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -3821,6 +4492,14 @@ impl Policy {
                 })
             },
             facts: resolved.facts.clone(),
+            commit: resolved.commit.clone(),
+            budget: resolved.budget.clone(),
+            ratchets: resolved
+                .rules
+                .iter()
+                .filter(|rule| crate::rules::judged_at_call(rule))
+                .cloned()
+                .collect(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
             patterns: resolved.patterns.clone(),
@@ -4247,6 +4926,52 @@ impl Policy {
             })
     }
 
+    /// The ratchet rows a write selects (CLOUD-2692): a `PreTool` write whose
+    /// target a blocking row's glob matches. Empty means the boundary reads
+    /// nothing for the ratchets, so a write no glob covers pays one glob match
+    /// per row and no git read.
+    #[must_use]
+    pub fn ratchets_for(&self, envelope: &Envelope) -> Vec<&Rule> {
+        let Some(target) = envelope.writes.as_deref() else {
+            return Vec::new();
+        };
+        if envelope.event != Event::PreTool || envelope.operation != Operation::Write {
+            return Vec::new();
+        }
+        self.ratchets
+            .iter()
+            .filter(|rule| {
+                blocks(rule.severity(), self.fail_on_warning)
+                    && rule
+                        .glob
+                        .as_deref()
+                        .is_some_and(|glob| crate::rules::glob_match(glob, target))
+            })
+            .collect()
+    }
+
+    /// The `[budget.*]` sets a write selects (CLOUD-2661): a `PreTool` write
+    /// whose target a set's `files` entry matches. Empty means the boundary
+    /// reads nothing for the budget.
+    #[must_use]
+    pub fn budget_sets_for(&self, envelope: &Envelope) -> Vec<&str> {
+        let (Some(budget), Some(target)) = (&self.budget, envelope.writes.as_deref()) else {
+            return Vec::new();
+        };
+        if envelope.event != Event::PreTool || envelope.operation != Operation::Write {
+            return Vec::new();
+        }
+        budget
+            .sets()
+            .filter(|(_, set)| {
+                set.files
+                    .iter()
+                    .any(|entry| crate::rules::glob_match(entry, target))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     /// The rev a `requires_key` row needs commit evidence read since, if one
     /// fires on this call at all (CLOUD-446).
     ///
@@ -4261,7 +4986,10 @@ impl Policy {
     /// tie-break everywhere else on this surface.
     #[must_use]
     pub fn key_base_for(&self, envelope: &Envelope) -> Option<&str> {
-        if envelope.event != Event::PreTool || envelope.command.is_empty() {
+        // A structured call that raises an event an `on` row keys on is judged,
+        // so its key evidence is owed too (CLOUD-2662).
+        let unjudged = envelope.command.is_empty() && call_event(envelope).is_none();
+        if envelope.event != Event::PreTool || unjudged {
             return None;
         }
         // The column test BEFORE the command parse, so "a repository declaring
@@ -4439,6 +5167,13 @@ impl Policy {
             // is the case the unit tests over `policy::deny` cannot make.
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
+            // A declared `[commit]` convention arms the commit-subject gate
+            // (CLOUD-2683), which this short-circuit would otherwise never reach.
+            && self.commit.is_none()
+            // And a `[budget]` set arms the budget gate (CLOUD-2661).
+            && self.budget.as_ref().is_none_or(crate::budget::Budget::is_empty)
+            // And a ratchet row arms the ratchet gate (CLOUD-2692).
+            && self.ratchets.is_empty()
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -4458,6 +5193,9 @@ impl Policy {
     #[must_use]
     pub fn without_hatched(&self, set: &std::collections::BTreeSet<String>) -> Policy {
         Policy {
+            commit: self.commit.clone(),
+            budget: self.budget.clone(),
+            ratchets: self.ratchets.clone(),
             shapes: self
                 .shapes
                 .iter()
@@ -4614,10 +5352,18 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // So the match below is exhaustive with no wildcard: an eighth `Event` fails
     // to compile here until somebody says what it decides. Each arm's comment is
     // the answer, not decoration — that is the whole of what this replaced.
+    // A FORGE EVENT IS JUDGED BY THE MODULES ALONE (CLOUD-2690). It carries a
+    // verdict, so a rule over `input.call.forge` decides; it names no command
+    // and no write, and the command and write gates stay `pre-tool`'s.
+    if envelope.event == Event::Forge {
+        return policy_rules(policy, envelope, facts);
+    }
     if let Some(decided) = event_decides(envelope.event) {
         return decided;
     }
-    if policy.is_empty() {
+    // An empty JUDGING policy still owes the home's reach gate (CLOUD-2672),
+    // which a target repository with no rows cannot lower by having none.
+    if policy.is_empty() && reach_refusal(facts.reach).is_none() {
         return Decision::Allow;
     }
     adjudicated_call_gates(policy, envelope, facts)
@@ -4680,6 +5426,48 @@ fn event_decides(event: Event) -> Option<Decision> {
         // design decision. CLOUD-312 owns the retirement of the two guards; when
         // a kind can key on this event, this is where it dispatches.
         | Event::UserPromptSubmit
+        // CLOUD-2581's 25: no rule kind selects for any of them yet. The worktree
+        // pair's verdict is its handlers', and its action is `run_hook`'s.
+        | Event::PostToolFailure
+        | Event::Notification
+        | Event::UserPromptExpansion
+        | Event::SessionEnd
+        | Event::StopFailure
+        | Event::SubagentStart
+        | Event::SubagentStop
+        | Event::PreCompact
+        | Event::PostCompact
+        | Event::PreModelSwitch
+        | Event::PostModelSwitch
+        | Event::PermissionRequest
+        | Event::PermissionDenied
+        | Event::Setup
+        | Event::TeammateIdle
+        | Event::TaskCreated
+        | Event::Elicitation
+        | Event::ElicitationResult
+        | Event::WorktreeCreate
+        | Event::WorktreeRemove
+        | Event::InstructionsLoaded
+        | Event::CwdChanged
+        | Event::FileChanged
+        | Event::DirectoryAdded
+        | Event::MessageDisplay
+        // CLOUD-2700's: no rule kind selects for any of them yet.
+        | Event::ModelRequest
+        | Event::ModelResponse
+        | Event::ToolSelection
+        | Event::AgentResponse
+        | Event::AgentThought
+        | Event::Interrupt
+        | Event::ErrorOccurred
+        | Event::WorkspaceOpen
+        | Event::TabFileRead
+        | Event::TabFileEdit
+        // `Forge` (CLOUD-2690): the native gate chain is `pre-tool`'s alone.
+        // A forge event is judged by the policy modules, in their own arm of
+        // `adjudicated_gates`, before this table is read.
+        | Event::Forge
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the
         // host, never a reason to refuse a call (CLOUD-45), and guessing which
@@ -4688,44 +5476,69 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+// CLOUD-2667's detach gate, below in `native_fired`, `detached_call`, `waited_on`
+// and `waits_on`.
+// CLOUD-2683's commit-subject gate: `native_fired`, `commit_subject_gate`,
+// `segment_commit_message`, and the `cat_bodies` fill in `flatten_command`.
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
 /// carries one (`resolve::apply_local`).
-fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
+///
+/// `repository-reach` is graded by the HOME's rows (CLOUD-2672), which the
+/// boundary read into [`Reach::grade`]: a target's config cannot arm or lower a
+/// gate that exists to keep a session at home.
+fn native_grade(policy: &Policy, gate: NativeGate, facts: &Facts<'_>) -> RuleSeverity {
+    if gate == NativeGate::RepositoryReach {
+        return facts.reach.grade.unwrap_or(RuleSeverity::Allow);
+    }
     crate::rules::native_grade(&policy.shapes, gate)
 }
 
 /// The first compiled gate that fired at a blocking grade, disposed as its
 /// grade says (CLOUD-2291). Lifted out of [`adjudicated_call_gates`], whose line
 /// budget the grading spent.
-fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
-    native_fired(facts).into_iter().find_map(|(gate, refusal)| {
-        let severity = native_grade(policy, gate);
-        blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
-    })
+fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Decision> {
+    native_fired(policy, envelope, facts)
+        .into_iter()
+        .find_map(|(gate, refusal)| {
+            let severity = native_grade(policy, gate, facts);
+            blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
+        })
 }
 
 /// The refusals of every compiled gate that fired at a reporting, non-blocking
-/// grade, delivered as advisories while the call is allowed (CLOUD-2291).
-fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
-    native_fired(facts)
+/// grade, each at that grade: spoken if `advise`, recorded if `record`
+/// (CLOUD-2291, CLOUD-2707).
+fn native_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
+    native_fired(policy, envelope, facts)
         .into_iter()
-        .filter(|(gate, _)| {
-            let severity = native_grade(policy, *gate);
-            severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
-        })
-        .map(|(_, refusal)| refusal)
+        .map(|(gate, refusal)| (native_grade(policy, gate, facts), refusal))
+        .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
         .collect()
+}
+
+/// A finding with the severity its row was graded at, so the boundary can tell
+/// what it SPEAKS (`advise`) from what it RECORDS (`record`) (CLOUD-2707).
+pub type Graded = (RuleSeverity, Refusal);
+
+/// Whether a grade reports without refusing: `advise` or `record`, never
+/// `allow` (off) and never a blocking grade, which is the caller's `Decision`.
+fn nonblocking(severity: RuleSeverity, fail_on_warning: bool) -> bool {
+    !matches!(severity, RuleSeverity::Allow) && !blocks(severity, fail_on_warning)
 }
 
 /// Every compiled gate that FIRED on this call, with its refusal, in the order
 /// the mediated chain has always run them (CLOUD-2291).
 ///
 /// The one place each gate's predicate is written: [`native_denial`] and
-/// [`native_advice`] differ only in which grades they take, so the deny and the
+/// [`native_nonblocking`] differ only in which grades they take, so the deny and the
 /// advisory cannot disagree about when a gate fires. Facts first, grades after
 /// — the facts are already resolved and nearly always empty.
-fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
+fn native_fired(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<(NativeGate, Refusal)> {
     let mut fired = Vec::new();
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
@@ -4773,7 +5586,286 @@ fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
     if let Some(refusal) = history_gate(facts) {
         fired.push((NativeGate::History, refusal));
     }
+    // THE DETACH GATE (CLOUD-2667): a `&` job the call does not wait on loses
+    // the session's wake-up whatever program it runs, so it is not left to a
+    // pipeline row that names only verdict-bearing programs.
+    if let Some(refusal) = detached_call(envelope) {
+        fired.push((NativeGate::Detach, refusal));
+    }
+    // THE COMMIT-SUBJECT GATE (CLOUD-2683), last: a bad subject loses nothing
+    // before landing, so every gate above outranks it.
+    if let Some(refusal) = commit_subject_gate(policy, facts) {
+        fired.push((NativeGate::CommitSubject, refusal));
+    }
+    // THE REACH GATE (CLOUD-2672), graded by the home and `allow` until armed.
+    if let Some(refusal) = reach_refusal(facts.reach) {
+        fired.push((NativeGate::RepositoryReach, refusal));
+    }
     fired
+}
+
+/// Where a call stands and what it reaches, as the boundary placed it
+/// (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// The call's start directory, canonical.
+    pub cwd: Option<String>,
+    /// The sorted, unique canonical roots of every target; empty when none is
+    /// in a repository, and `None` when one cannot be placed.
+    pub roots: Option<Vec<String>>,
+    /// The session's home, canonical, or `None` where it has none.
+    pub home: Option<String>,
+    /// The home's `repository-reach` grade, `None` where the home arms none.
+    pub grade: Option<RuleSeverity>,
+}
+
+/// The reach of a call nothing placed: no directory, no root, no home.
+pub static NO_REACH: Reach = Reach {
+    cwd: None,
+    roots: Some(Vec::new()),
+    home: None,
+    grade: None,
+};
+
+// CLOUD-2672's projection, in `call_document`.
+/// The rule id the reach gate refuses under (CLOUD-2672).
+pub const REPOSITORY_REACH: &str = "repository-reach";
+
+/// A call that leaves the home, or cannot be placed, where the home arms the
+/// gate. A target in no repository passes; containment fails closed.
+fn reach_refusal(reach: &Reach) -> Option<Refusal> {
+    reach.grade.filter(|grade| *grade != RuleSeverity::Allow)?;
+    let home = reach.home.as_deref()?;
+    let elsewhere = match &reach.roots {
+        None => Some("an unplaceable target"),
+        Some(roots) => roots.iter().map(String::as_str).find(|root| *root != home),
+    }?;
+    Some(Refusal::declared(
+        REPOSITORY_REACH,
+        crate::verdict::Native::CallReachLoose,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: home.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: elsewhere.to_owned(),
+            },
+        ],
+        Fix::declared(Some(
+            "work there from a session homed in it, or `batten override request --rule repository-reach`",
+        )),
+    ))
+}
+
+/// The rule id the commit-subject gate refuses under (CLOUD-2683).
+pub const COMMIT_SUBJECT: &str = "commit-subject";
+
+/// A mediated commit whose subject `[commit].subject_pattern` refuses, judged
+/// by [`crate::commit::Commit::judge`], the one matcher. Armed only where the
+/// table is declared and the boundary read a subject; could-not-look allows.
+fn commit_subject_gate(policy: &Policy, facts: &Facts<'_>) -> Option<Refusal> {
+    let commit = policy.commit.as_ref()?;
+    let broken = match facts.commit_subject {
+        crate::facts::Look::Is(text) => commit
+            .judge(&[crate::commit::Subject {
+                label: "pending".to_owned(),
+                text: text.clone(),
+            }])
+            .is_ok_and(|findings| !findings.is_empty()),
+        crate::facts::Look::IsNot => false,
+        crate::facts::Look::CouldNotLook => return None,
+    };
+    broken.then(commit_subject_refusal)
+}
+
+/// The refusal names the gate and the pattern's key, never the subject text.
+fn commit_subject_refusal() -> Refusal {
+    Refusal::declared(
+        COMMIT_SUBJECT,
+        crate::verdict::Native::SubjectUnconventional,
+        &[crate::verdict::Subject::Artifact {
+            artifact: "[commit].subject_pattern".to_owned(),
+        }],
+        Fix::declared(Some(
+            "reword the subject to match `[commit].subject_pattern`",
+        )),
+    )
+}
+
+/// Where a mediated `git commit` takes its message from (CLOUD-2683).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitMessage {
+    /// The message itself: `-m`, `--message`, a `cat` heredoc inside one, or
+    /// `-F -` fed by a heredoc or here-string.
+    Text(String),
+    /// A file `-F` names, resolved against the call's cwd and each `-C`.
+    File(PathBuf),
+}
+
+/// The message the first `git commit` in this call names, or `None` where it
+/// names none the boundary can read: the editor, `--amend --no-edit`, `-F -`
+/// fed by a file redirect, or a command that does not parse.
+#[must_use]
+pub fn commit_message(envelope: &Envelope) -> Option<CommitMessage> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    parsed
+        .iter()
+        .find_map(|segment| segment_commit_message(segment, envelope.cwd.as_deref()))
+}
+
+fn segment_commit_message(segment: &Segment, cwd: Option<&Path>) -> Option<CommitMessage> {
+    let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(segment.redirects.len());
+    let program = effective_program(&tokens[..handed])?;
+    if program_name(program_token(tokens[program])) != "git" {
+        return None;
+    }
+    let arguments: Vec<&str> = tokens[program + 1..handed].to_vec();
+    let verb = subcommand_index(&arguments, &GIT_VALUE_OPTIONS)?;
+    if arguments[verb] != "commit" {
+        return None;
+    }
+    let text = |operand: &str| {
+        let body = segment
+            .cat_bodies
+            .iter()
+            .find(|(spelled, _)| spelled == operand)
+            .map_or(operand, |(_, body)| body.as_str());
+        Some(CommitMessage::Text(body.to_owned()))
+    };
+    let file = |operand: &str| {
+        if operand == "-" {
+            let [fed] = segment.stdin_text.as_slice() else {
+                return None;
+            };
+            return Some(CommitMessage::Text(fed.clone()));
+        }
+        let mut path = cwd?.to_path_buf();
+        for (index, word) in arguments[..verb].iter().enumerate() {
+            if *word == "-C" {
+                path.push(arguments.get(index + 1)?);
+            }
+        }
+        path.push(operand);
+        Some(CommitMessage::File(path))
+    };
+    let (_, rest) = arguments[verb..].split_first()?;
+    for (index, word) in rest.iter().enumerate() {
+        let next = || rest.get(index + 1).copied();
+        if *word == "-m" || *word == "--message" {
+            return text(next()?);
+        } else if let Some(body) = word.strip_prefix("--message=") {
+            return text(body);
+        } else if *word == "-F" || *word == "--file" {
+            return file(next()?);
+        } else if let Some(path) = word.strip_prefix("--file=") {
+            return file(path);
+        } else if let Some(body) = word.strip_prefix("-m").filter(|body| !body.is_empty()) {
+            return text(body);
+        } else if let Some(path) = word.strip_prefix("-F").filter(|path| !path.is_empty()) {
+            return file(path);
+        }
+    }
+    None
+}
+
+/// The subject of `message`: its first line, or could-not-look where that line
+/// holds a `$`, a backtick or a backslash, any of which the shell may expand.
+#[must_use]
+pub fn commit_subject(message: &str) -> crate::facts::Look<String> {
+    let line = message.lines().next().unwrap_or_default();
+    if line.contains(['$', '`', '\\']) {
+        crate::facts::Look::CouldNotLook
+    } else {
+        crate::facts::Look::Is(line.to_owned())
+    }
+}
+
+/// The rule id the detach gate refuses under (CLOUD-2667).
+pub const DETACHED_CALL: &str = "detached-call";
+
+/// A call that backgrounds a job with `&` and does not wait on it in the same
+/// call, on a harness with a supported background option (CLOUD-2667).
+///
+/// A harness without one has no better shape to name, so the gate never fires
+/// there. Pointer-only: the refusal carries a count of detached jobs, never the
+/// command. `nohup` alone is not detaching: a foreground `nohup x` blocks until
+/// `x` exits, and `nohup x &` is caught by its `&`.
+fn detached_call(envelope: &Envelope) -> Option<Refusal> {
+    envelope.background_ceiling?;
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let backgrounded = |segment: &Segment| segment.terminator == Some(Separator::Background);
+    let jobs = parsed
+        .iter()
+        .filter(|segment| backgrounded(segment))
+        .count();
+    let detached = (0..parsed.len())
+        .filter(|&index| backgrounded(&parsed[index]) && !waited_on(&parsed, index, jobs))
+        .count();
+    (detached > 0).then(|| {
+        Refusal::declared(
+            DETACHED_CALL,
+            crate::verdict::Native::RunOrphaned,
+            &[crate::verdict::Subject::Count {
+                count: detached as u64,
+            }],
+            Fix::declared(Some(
+                "set `run_in_background` on the tool call; `a & b & wait` in one call is not detached",
+            )),
+        )
+    })
+}
+
+/// Whether a segment after `parsed[index]` waits on it.
+fn waited_on(parsed: &[Segment], index: usize, jobs: usize) -> bool {
+    let detached = &parsed[index];
+    parsed[index + 1..]
+        .iter()
+        .any(|later| waits_on(later, detached, jobs))
+}
+
+/// Whether `later` is a `wait` that covers `detached`: in the same subshell and
+/// substitution, and either waiting on every job or, where there is only one,
+/// naming it by an own-job reference.
+fn waits_on(later: &Segment, detached: &Segment, jobs: usize) -> bool {
+    if later.grouped != detached.grouped || later.nested != detached.nested {
+        return false;
+    }
+    let tokens: Vec<&str> = later.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(later.redirects.len());
+    let Some(program) = effective_program(&tokens[..handed]) else {
+        return false;
+    };
+    if program_token(tokens[program]) != "wait" {
+        return false;
+    }
+    let operands = &tokens[program + 1..handed];
+    operands.is_empty() || (jobs == 1 && operands.iter().all(|word| own_job_ref(word)))
+}
+
+/// A `wait` operand that can only name the call's own job: `-n`, `$!`, a
+/// job spec (`%`, `%%`, `%+`, `%1`) or a variable holding a pid. A literal pid
+/// names a job this call did not start.
+fn own_job_ref(word: &str) -> bool {
+    let name = |text: &str| {
+        text.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    matches!(word, "-n" | "$!" | "%" | "%%" | "%+")
+        || word
+            .strip_prefix('%')
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        || word
+            .strip_prefix("${")
+            .and_then(|rest| rest.strip_suffix('}'))
+            .is_some_and(name)
+        || word.strip_prefix('$').is_some_and(name)
 }
 
 /// The history gate (CLOUD-2144): a config row changed by a context that has
@@ -4807,7 +5899,7 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // gate that could still see it would be a second place the answer is made.
     let Facts { receipts, keys, .. } = *facts;
     // The three compiled gates, first and in their order (CLOUD-2291).
-    if let Some(denied) = native_denial(policy, facts) {
+    if let Some(denied) = native_denial(policy, envelope, facts) {
         return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -4861,6 +5953,17 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
             // gate (CLOUD-1639). Stated rather than wildcarded, the
             // way the sibling arms are.
             | Decision::Repaired(_) => {}
+    }
+    // THE BUDGET GATE (CLOUD-2661), at the write that would breach a ceiling it
+    // grows past; a write that holds or shrinks a standing breach is its repair.
+    if let Some(refusal) = budget_rules(facts) {
+        return Decision::Deny(refusal);
+    }
+    // THE RATCHET GATE (CLOUD-2692), at the write that would move a ratchet
+    // row the banned way past its base. Only a write that itself moves the
+    // banned way is judged, so a repair of a standing breach goes through.
+    if let Some(refusal) = ratchet_rules(facts) {
+        return Decision::Deny(refusal);
     }
     // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
     // works: ABOVE the `command.is_empty()` early return, which every structured
@@ -4994,7 +6097,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
     // it asked for is the answer. Falling through would let a second row overrule
     // an escalation the first one wanted, which declaration order decides.
-    if !envelope.command.is_empty() {
+    // An `on` shape row is judged here on a structured call too (CLOUD-2662).
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    if shape_gated {
         match shape_rules(policy, envelope, &envelope.command, keys) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
             Decision::Allow
@@ -5161,6 +6266,36 @@ pub type ProspectiveFacts = crate::facts::Look<String>;
 /// applied in order, and a notebook cell's replacement source. A batch shape left
 /// unread would be the widest hole a content-keyed gate can have — the same edit,
 /// spelled the other way, inspected by nothing.
+/// What a call's budgeted sets measure before and after it (CLOUD-2661).
+pub type BudgetFacts = crate::facts::Look<Vec<crate::budget::CallMeasure>>;
+
+/// The ratchet rows a write would move the banned way (CLOUD-2692), read at
+/// the boundary because the base counts are git reads.
+pub type RatchetFacts = crate::facts::Look<Vec<crate::rules::CallRatchet>>;
+
+/// The text an edit-shaped payload lands over `current`: its spans applied in
+/// order, the first occurrence each unless `replace_all` (CLOUD-2661). One edit
+/// model, shared by [`prospective_facts`] and the budget's boundary read.
+#[must_use]
+pub fn landed_from(current: &str, input: &Value) -> crate::facts::Look<String> {
+    let Some(spans) = edit_spans(input) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    let mut landed = current.to_owned();
+    for (old, new, replace_all) in spans {
+        // `replacen(.., 1)` rather than `replace`, and the default matters: the
+        // surveyed hosts replace the FIRST occurrence unless the call says
+        // otherwise, so modelling it as replace-all would decide over content
+        // the call would not actually produce.
+        landed = if replace_all {
+            landed.replace(&old, &new)
+        } else {
+            landed.replacen(&old, &new, 1)
+        };
+    }
+    crate::facts::Look::Is(landed)
+}
+
 #[must_use]
 pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> ProspectiveFacts {
     use crate::facts::Look;
@@ -5190,25 +6325,10 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     if std::fs::metadata(&target).is_ok_and(|meta| meta.len() > MAX_PROSPECTIVE_BYTES) {
         return crate::facts::Look::CouldNotLook;
     }
-    let Ok(current) = std::fs::read_to_string(&target) else {
+    let Ok(current) = crate::fsio::read_to_string(&target) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let Some(spans) = edit_spans(&envelope.input) else {
-        return crate::facts::Look::CouldNotLook;
-    };
-    let mut landed = current;
-    for (old, new, replace_all) in spans {
-        // `replacen(.., 1)` rather than `replace`, and the default matters: the
-        // surveyed hosts replace the FIRST occurrence unless the call says
-        // otherwise, so modelling it as replace-all would decide over content
-        // the call would not actually produce.
-        landed = if replace_all {
-            landed.replace(&old, &new)
-        } else {
-            landed.replacen(&old, &new, 1)
-        };
-    }
-    Look::Is(landed)
+    landed_from(&current, &envelope.input)
 }
 
 /// The largest file the prospective read will pull into memory.
@@ -5323,6 +6443,21 @@ pub struct Facts<'a> {
     /// blob and the receipt store — and only for a write to the authority.
     /// Could-not-look ALLOWS; empty is a real answer and allows.
     pub unread_history: &'a crate::facts::Look<Vec<String>>,
+    /// The subject of the message a mediated `git commit` names (CLOUD-2683).
+    ///
+    /// **Resolved at the boundary**, because `-F <file>` is a file read; the
+    /// judgement stays in [`native_fired`]. Could-not-look ALLOWS: no message, an
+    /// expansion in the first line, an unreadable file, or no `[commit]` table.
+    pub commit_subject: &'a crate::facts::Look<String>,
+    /// Where this call stands and what it reaches (CLOUD-2672), placed at the
+    /// boundary because placing a directory asks git.
+    pub reach: &'a Reach,
+    /// Each `[budget.*]` set this write would change, measured before and
+    /// after (CLOUD-2661), read at the boundary.
+    pub budgeted: &'a BudgetFacts,
+    /// Each ratchet row this write would move the banned way past its base
+    /// (CLOUD-2692), read at the boundary.
+    pub ratcheted: &'a RatchetFacts,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -5378,6 +6513,8 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Each pathspec a checkout or restore names, with its status (CLOUD-2684).
+    pub pathspec_status: &'a crate::facts::Look<serde_json::Value>,
 }
 
 impl<'a> Facts<'a> {
@@ -5406,6 +6543,10 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "every row read": a caller that resolved
             // nothing has not established what this context read (CLOUD-2144).
             unread_history: &crate::facts::Look::CouldNotLook,
+            commit_subject: &crate::facts::Look::CouldNotLook,
+            reach: &NO_REACH,
+            budgeted: &crate::facts::Look::CouldNotLook,
+            ratcheted: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -5430,6 +6571,7 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            pathspec_status: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -5522,8 +6664,6 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Could-not-look answers `true` — the row stays selected — for the reason
 /// [`marker_present`]'s unreadable arms give: an answer nobody could read must
 /// not switch a refusal off on exactly the checkouts least able to notice.
-//MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
-//MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
 fn head_unpushed() -> bool {
     crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)
 }
@@ -5561,10 +6701,6 @@ fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::pa
         .join(format!("{marker}.{}", branch.replace('/', "-")))
 }
 
-//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-//MUTANT offer-unread|s@    marker_path(&git_dir, marker, &branch).exists()@    false@|a_write_after_a_punt_is_refused
-//MUTANT every-ending-punts|s@    marker_path(&git_dir, marker, &branch).exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
-
 /// Fold a value for [`Rule::when_value`]'s comparison.
 ///
 /// Case-insensitive, and the three separators a tracker's state parameter treats
@@ -5590,7 +6726,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Write
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -5610,7 +6746,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
     if !envelope.raw_tool.is_empty() {
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !rule.selects_tool(&envelope.raw_tool)
                 || !modifier_admits(rule, envelope)
             {
@@ -5619,13 +6755,31 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             matched.push(rule);
         }
     }
+    // THE EVENT-KEYED ROWS (CLOUD-2662), selected on every route the engine
+    // knows raises the event, before the command walk so a structured call
+    // reaches them too.
+    let receipt_event = call_event(envelope);
+    if receipt_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt
+                || rule.on != receipt_event
+                || rule.severity() == RuleSeverity::Allow
+                || !modifier_admits(rule, envelope)
+            {
+                continue;
+            }
+            if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                matched.push(rule);
+            }
+        }
+    }
     // ABSTAIN RATHER THAN CLEAR (CLOUD-1381). A command this build cannot parse
     // is one whose shape is unknown, so no row is SELECTED over it — the same
     // abstention a module with no `missing` clause gets. Selecting rows from a
     // shape nobody could read is the silent under-denial the row is about, and
     // refusing outright is not available either: `3` never blocks a call.
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE, and this walk is the one where missing it is WORST (CLOUD-1287).
     // A receipt row is a PRECONDITION — `gh pr ready` demands a verify receipt —
@@ -5639,15 +6793,12 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         };
         // Normalised with the program, for the reason `matching_shape_rows`
         // states: a grouped command's closing paren rides the last operand.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        // Anchored at the subcommand, for the shape walk's reason (CLOUD-2666).
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Command
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -5705,6 +6856,9 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
 /// not a tidiness: this gate sees a row only if that row's own `tool` selected
 /// this call.
 fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
+    // THE STRUCTURED ROUTE of an `on` row (CLOUD-2662); a shell call's is
+    // `receipt_rules`, after the shape gate, as this header's order requires.
+    let event = structured_event(envelope);
     // Both non-answers allow, and for the same reason [`receipt_rules`] gives
     // them one arm: a boundary that had no question to ask and a boundary that
     // could not ask reach the same verdict here, and neither is evidence a
@@ -5719,7 +6873,7 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
     for rule in &policy.shapes {
         if rule.kind != RuleKind::Receipt
             || !blocks(rule.severity(), policy.fail_on_warning)
-            || !rule.selects_tool(&envelope.raw_tool)
+            || !(rule.selects_tool(&envelope.raw_tool) || on_selects(rule, event))
         {
             continue;
         }
@@ -5751,6 +6905,12 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => return Decision::Allow,
     };
     for rule in matching_receipt_rows(policy, envelope) {
+        // The selection carries `advise` and `record` rows too (CLOUD-2707), so
+        // their receipts are resolved; only a blocking row decides here, and
+        // `receipt_nonblocking` reports the rest at their own grades.
+        if !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
         // Every named receipt must be valid. An unresolved name is Missing,
         // never absent-and-therefore-fine: a boundary that answered for
         // fewer checks than the row requires has not proved the precondition.
@@ -5759,6 +6919,93 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         }
     }
     Decision::Allow
+}
+
+/// The `advise` and `record` receipt rows' findings (CLOUD-2707): a
+/// precondition the call still lacks, at the row's own grade. Before this a
+/// nonblocking receipt row was skipped at selection, so it decided nothing on
+/// any path.
+fn receipt_nonblocking(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Vec<Graded> {
+    let crate::facts::Look::Is(resolved) = facts else {
+        return Vec::new();
+    };
+    matching_receipt_rows(policy, envelope)
+        .into_iter()
+        .filter(|rule| nonblocking(rule.severity(), policy.fail_on_warning))
+        .filter_map(|rule| {
+            receipt_verdict(policy, rule, resolved).map(|refusal| (rule.severity(), refusal))
+        })
+        .collect()
+}
+
+/// Every other call gate's `advise` and `record` findings (CLOUD-2707).
+///
+/// The content, tool, ceiling, pipeline and command-shape gates each select
+/// only BLOCKING rows, so a nonblocking row of those kinds loaded and then
+/// decided nothing on any path — the silence `land_hand_stepping.rs` records.
+/// Rather than a second predicate per gate, which could drift from the deny
+/// side, the SAME gates run over those rows promoted to `deny`, and whatever
+/// they refuse is the finding, carried back at the row's own grade. Receipt
+/// rows have [`receipt_nonblocking`] (their facts are resolved per row) and
+/// native rows [`native_nonblocking`].
+fn gate_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
+    let graded: Vec<&Rule> = policy
+        .shapes
+        .iter()
+        .filter(|rule| {
+            !matches!(rule.kind, RuleKind::Receipt | RuleKind::Native)
+                && nonblocking(rule.severity(), policy.fail_on_warning)
+        })
+        .collect();
+    if graded.is_empty() {
+        return Vec::new();
+    }
+    let promoted = Policy {
+        shapes: graded
+            .iter()
+            .map(|rule| Rule {
+                severity: Some(RuleSeverity::Deny),
+                ..(*rule).clone()
+            })
+            .collect(),
+        bundles: Vec::new(),
+        ..policy.clone()
+    };
+    let mut measured = 0;
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    let mut decided = vec![
+        content_rules(&promoted, envelope, facts.prospective),
+        tool_rules(&promoted, envelope),
+        ceiling_rules(&promoted, envelope, &mut measured),
+        pipeline_rules(&promoted, envelope),
+    ];
+    if shape_gated {
+        decided.push(shape_rules(
+            &promoted,
+            envelope,
+            &envelope.command,
+            facts.keys,
+        ));
+    }
+    decided
+        .into_iter()
+        .filter_map(|decision| match decision {
+            Decision::Deny(refusal) | Decision::Ask(refusal) => {
+                // Back at the grade the row declared, found by the id the
+                // refusal carries; a refusal no graded row owns is dropped
+                // rather than guessed at.
+                let severity = graded
+                    .iter()
+                    .find(|rule| rule.id == refusal.rule())
+                    .map(|rule| rule.severity())?;
+                Some((severity, refusal))
+            }
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => None,
+        })
+        .collect()
 }
 
 /// Adjudicate one receipt row against the resolved facts (CLOUD-1297).
@@ -5948,10 +7195,6 @@ fn receipt_refusal(
     Refusal::declared(&rule.id, native, &subjects, fix)
 }
 
-//MUTANT override-subject-unchecked|s@^    if rule.kind != RuleKind::Receipt {$@    if true {@|an_override_request_naming_a_subject_no_refusal_binds_is_refused
-//MUTANT bindable-subjects-empty|s@^    Some(bindable)$@    Some(Vec::new())@|a_spent_admission_clears_a_superseded_receipt
-//MUTANT class-filter-dropped|s@^            if refusal.verdict() == Some(class) {$@            if true {@|a_receipt_rows_age_bound_binds_only_under_the_expiry_class
-//MUTANT shape-subject-unchecked|s@^    if rule.kind == RuleKind::Shape && rule.max.is_none() && rule.requires_key.is_none() {$@    if false {@|a_shape_admission_for_an_unbindable_subject_is_refused
 /// Every subject a refusal of `class` by this RECEIPT row binds, or `None` for
 /// a row of any other kind (CLOUD-1996).
 ///
@@ -6116,16 +7359,11 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // the resolved program — otherwise the wrapper that orphans the run
             // is the one token the parser hides.
             let detached_here = tokens.contains(&"nohup");
-            // NORMALISED, and the operand window is normalised with it: a grouped
-            // command's closing paren lands on the LAST token, which is a matched
-            // operand whenever the command takes no trailing argument, so
-            // `(mise run land)` would otherwise not match where `(mise run land x)`
-            // did.
-            let words: Vec<&str> = tokens[program_index + 1..]
-                .iter()
-                .map(|token| program_token(token))
-                .filter(|token| !token.starts_with('-'))
-                .collect();
+            // No bare word matches nothing, so skipping the line preserves the
+            // behaviour of the flag-dropping list this replaced.
+            let Some(words) = verdict_words(&tokens, program_index) else {
+                continue;
+            };
             if !verdicts
                 .iter()
                 .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
@@ -6313,8 +7551,6 @@ impl<'a> FirstStage<'a> {
 /// the bare `grep` was refused, because an early return on the assignment left
 /// every later element unjudged — the permissive direction, which nothing
 /// reports.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-pipe-refused|s@^            continue; // fed by a pipe$@            {}@|a_tracked_script_or_a_downstream_interpreter_is_allowed
 fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
     let mut stages = Vec::new();
     let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
@@ -6453,7 +7689,6 @@ fn grammar(program: &str) -> Grammar {
 /// that text. An operand naming a variable or `~`, or a relative one with no
 /// known directory, cannot be placed and is left alone, as is every operand
 /// when the root is unknown or does not resolve.
-//MUTANT script-outside-admitted|s@^            \&\& outside_repository(\&resolved, root)$@            \&\& false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
 fn interpreter_decision(
     rule: &Rule,
     interprets: &[String],
@@ -6649,13 +7884,8 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // `Harness::capabilities`'s Claude Code `plan_tools` row (CLOUD-2400). Declared
 // here, directly above the next suite, because a suite declared before this
 // file's first one would become the suite of every row above it.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
-//MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,
@@ -6678,6 +7908,264 @@ fn followed_cd(
         return None;
     }
     shell_resolved(target, current)
+}
+
+/// The directories a call acts on (CLOUD-2672), or `None` where one of them
+/// cannot be placed.
+///
+/// Only a tool call has targets; every other event is judged by the session's
+/// home. A structured call's target is its `file_path`, `notebook_path` or
+/// `path`, joined to `start` when relative, or `start` itself where it names
+/// none. A shell call's are `start`, advanced through each followed `cd` or
+/// `pushd`; every top-level `cd`/`pushd` operand whatever its terminator; and
+/// each `git -C`, `--git-dir` and `--work-tree` operand.
+#[must_use]
+pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::PathBuf>> {
+    if !matches!(
+        envelope.event,
+        Event::PreTool | Event::PostTool | Event::PermissionRequest
+    ) {
+        return Some(Vec::new());
+    }
+    if envelope.command.is_empty() {
+        let named = ["/file_path", "/notebook_path", "/path"]
+            .iter()
+            .find_map(|pointer| envelope.input.pointer(pointer).and_then(Value::as_str));
+        return Some(vec![
+            named.map_or_else(|| start.to_path_buf(), |path| start.join(path)),
+        ]);
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut current = start.to_path_buf();
+    let mut operands = Vec::new();
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            let dir = placed_cd(segment, handed, &current)?;
+            operands.push(dir.clone());
+            // FOLLOWED ONLY ACROSS `&&` OR `;`: `placed_cd` has already refused
+            // a grouped or substituted `cd`, so the separator alone decides.
+            if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                current = dir;
+            }
+            continue;
+        }
+        operands.extend(git_dir_operands(handed, &current));
+    }
+    // The directory in effect, after every followed `cd`, judges first: `cd B
+    // && x` acts in B, while a trailing `cd B` only names B.
+    Some(std::iter::once(current).chain(operands).collect())
+}
+
+/// One `git checkout`/`git restore` program: the directory it runs in and the
+/// pathspecs it names, as written (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathspecCall {
+    /// The directory the program runs in: the call's directory after every
+    /// followed `cd`, joined with each `-C`.
+    pub dir: std::path::PathBuf,
+    /// The pathspecs, relative to `dir`.
+    pub pathspecs: Vec<String>,
+}
+
+/// What a call's checkout and restore programs name (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pathspecs {
+    /// The call runs no checkout or restore.
+    Absent,
+    /// One of them cannot be placed: an unfollowed `cd`, an expansion, a
+    /// `--git-dir`/`--work-tree`, a `--pathspec-from-file`, or a `.` checkout
+    /// with no `--` (argv cannot tell a ref from a path).
+    Unplaceable,
+    /// Every one of them, placed.
+    Placed(Vec<PathspecCall>),
+}
+
+/// The checkout and restore programs of a call, walked from `base` through
+/// each followed `cd` with CLOUD-2672's resolver. A pipe-fed restore still
+/// discards, so no stage is skipped.
+#[must_use]
+pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return Pathspecs::Absent;
+    };
+    let mut current = base.to_path_buf();
+    let mut calls = Vec::new();
+    let (mut found, mut unplaceable) = (false, false);
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            match placed_cd(segment, handed, &current) {
+                // As in `call_targets`: `placed_cd` refused a grouped or
+                // substituted `cd`, so the separator alone decides.
+                Some(dir) => {
+                    if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                        current = dir;
+                    }
+                }
+                None => unplaceable = true, // an unfollowed cd: unplaceable
+            }
+            continue;
+        }
+        match git_pathspecs(handed, &current) {
+            Pathspecs::Absent => {}
+            Pathspecs::Unplaceable => (found, unplaceable) = (true, true),
+            Pathspecs::Placed(mut placed) => {
+                found = true;
+                calls.append(&mut placed);
+            }
+        }
+    }
+    match (found, unplaceable) {
+        (false, _) => Pathspecs::Absent,
+        (true, true) => Pathspecs::Unplaceable,
+        (true, false) => Pathspecs::Placed(calls),
+    }
+}
+
+/// One segment's checkout or restore, if it runs one.
+fn git_pathspecs(tokens: &[&str], current: &Path) -> Pathspecs {
+    let expands = |word: &str| word.contains(['$', '`']);
+    let Some(program) = effective_program(tokens) else {
+        return Pathspecs::Absent;
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Pathspecs::Absent;
+    }
+    let arguments = &tokens[program + 1..];
+    let Some(verb) = subcommand_index(arguments, &GIT_VALUE_OPTIONS) else {
+        return Pathspecs::Absent;
+    };
+    let subcommand = arguments[verb];
+    if !matches!(subcommand, "checkout" | "restore") {
+        return Pathspecs::Absent;
+    }
+    let mut dir = current.to_path_buf();
+    for (index, word) in arguments[..verb].iter().enumerate() {
+        if word.starts_with("--git-dir") || word.starts_with("--work-tree") {
+            return Pathspecs::Unplaceable;
+        }
+        if *word == "-C" {
+            let Some(value) = arguments.get(index + 1).filter(|value| !expands(value)) else {
+                return Pathspecs::Unplaceable;
+            };
+            dir = shell_resolved(value, Some(&dir)).unwrap_or(dir);
+        }
+    }
+    let rest = &arguments[verb + 1..];
+    if rest
+        .iter()
+        .any(|word| word.starts_with("--pathspec-from-file"))
+    {
+        return Pathspecs::Unplaceable;
+    }
+    let dash = rest.iter().position(|word| *word == "--");
+    let after = dash.map_or(&[][..], |at| &rest[at + 1..]);
+    let mut pathspecs: Vec<&str> = Vec::new();
+    if subcommand == "checkout" {
+        if dash.is_none() && rest.contains(&".") {
+            return Pathspecs::Unplaceable;
+        }
+    } else {
+        let before = &rest[..dash.unwrap_or(rest.len())];
+        let mut index = 0;
+        while index < before.len() {
+            let word = before[index];
+            if matches!(word, "-s" | "--source") {
+                index += 2;
+                continue;
+            }
+            if !word.starts_with('-') {
+                pathspecs.push(word);
+            }
+            index += 1;
+        }
+    }
+    pathspecs.extend(after.iter().copied());
+    if pathspecs.iter().any(|word| expands(word)) {
+        return Pathspecs::Unplaceable;
+    }
+    Pathspecs::Placed(vec![PathspecCall {
+        dir,
+        pathspecs: pathspecs.into_iter().map(str::to_owned).collect(),
+    }])
+}
+
+/// A segment whose program, read through `command`, `builtin` and the
+/// keywords that may stand before it, is `cd` or `pushd`.
+fn is_cd_segment(tokens: &[&str]) -> bool {
+    tokens
+        .iter()
+        .find(|word| {
+            !matches!(
+                **word,
+                "command" | "builtin" | "if" | "then" | "do" | "{" | "!"
+            )
+        })
+        .is_some_and(|word| matches!(*word, "cd" | "pushd"))
+}
+
+/// The directory a `cd`/`pushd` segment names, or `None` where it cannot be
+/// placed: a prefix before it, a flag, `-`, an expansion or a glob, or a
+/// group or substitution around it.
+fn placed_cd(segment: &Segment, tokens: &[&str], current: &Path) -> Option<std::path::PathBuf> {
+    if segment.grouped || segment.nested || segment.construct.is_some() {
+        return None;
+    }
+    let [verb, target] = tokens else {
+        return None;
+    };
+    if !matches!(*verb, "cd" | "pushd")
+        || !placeable(target)
+        || target.starts_with('-')
+        || target.contains(['*', '?', '['])
+    {
+        return None;
+    }
+    shell_resolved(target, Some(current))
+}
+
+/// The directories a git program's own options point it at: `-C <dir>`, and
+/// `--git-dir`/`--work-tree` in either spelling. A `.git` directory names its
+/// checkout.
+fn git_dir_operands(tokens: &[&str], current: &Path) -> Vec<std::path::PathBuf> {
+    let Some(program) = effective_program(tokens) else {
+        return Vec::new();
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Vec::new();
+    }
+    let arguments = &tokens[program + 1..];
+    let end = subcommand_index(arguments, &GIT_VALUE_OPTIONS).unwrap_or(arguments.len());
+    let mut operands = Vec::new();
+    let mut index = 0;
+    while index < end {
+        let word = arguments[index];
+        let value = match word {
+            "-C" | "--git-dir" | "--work-tree" => arguments.get(index + 1).copied(),
+            _ => word
+                .strip_prefix("--git-dir=")
+                .or_else(|| word.strip_prefix("--work-tree=")),
+        };
+        if let Some(dir) = value.and_then(|value| shell_resolved(value, Some(current))) {
+            let named_git_dir = dir.file_name().is_some_and(|name| name == ".git");
+            operands.push(if named_git_dir {
+                dir.parent().map_or(dir.clone(), Path::to_path_buf)
+            } else {
+                dir
+            });
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    operands
 }
 
 /// A shell word naming a path, resolved against the directory in effect, or
@@ -7271,6 +8759,69 @@ fn disposed_at(severity: RuleSeverity, refusal: Refusal) -> Decision {
 ///
 /// Pointer-only (rule 4): the refusal names the rule and the path. The matched
 /// bytes are not carried, and `Refusal` has no field one could occupy.
+/// The first budgeted set this write breaches and grows past (CLOUD-2661).
+fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
+    let crate::facts::Look::Is(measures) = facts.budgeted else {
+        return None;
+    };
+    for measure in measures {
+        if let Some((count, max)) = crate::budget::breach(measure) {
+            return Some(budget_refusal(&measure.name, count, max));
+        }
+    }
+    None
+}
+
+/// The id the budget gate's refusal leads with (CLOUD-2661): one native id, so
+/// `policy explain` resolves it whatever the set is called; the set itself is
+/// the first subject.
+pub const BUDGET_CALL: &str = "budget-call";
+
+/// The first ratchet row this write would breach (CLOUD-2692), refused under
+/// the row's own id so a waiver keyed on it answers the call as it answers
+/// `check`. Could-not-look admits: the write is judged by `check` regardless.
+fn ratchet_rules(facts: &Facts<'_>) -> Option<Refusal> {
+    let crate::facts::Look::Is(moved) = facts.ratcheted else {
+        return None;
+    };
+    moved.first().map(|found| {
+        Refusal::declared(
+            found.rule.clone(),
+            crate::verdict::Native::CeilingExceeded,
+            &[
+                crate::verdict::Subject::Path {
+                    path: found.path.clone(),
+                },
+                crate::verdict::Subject::Count {
+                    count: found.was as u64,
+                },
+                crate::verdict::Subject::Count {
+                    count: found.now as u64,
+                },
+            ],
+            Fix::declared(None),
+        )
+    })
+}
+
+/// A budget refusal: the set and both counts, pointer-only.
+fn budget_refusal(name: &str, count: usize, max: usize) -> Refusal {
+    Refusal::declared(
+        BUDGET_CALL,
+        crate::verdict::Native::CeilingExceeded,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: format!("budget.{name}"),
+            },
+            crate::verdict::Subject::Count {
+                count: count as u64,
+            },
+            crate::verdict::Subject::Count { count: max as u64 },
+        ],
+        Fix::declared(None),
+    )
+}
+
 fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &ProspectiveFacts) -> Decision {
     let crate::facts::Look::Is(content) = prospective else {
         return Decision::Allow;
@@ -7380,8 +8931,13 @@ pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> O
     // that would be a lie: that projection opens `Refused by`, and nothing here
     // refuses. The id, the cause and the remedy all travel, so the fix clause is
     // present exactly as that contract insists.
-    let (_, refusal) = policy_refusal(policy, envelope, facts)?;
-    Some(refusal)
+    //
+    // EVERY GRADE BUT A TRIAL SPEAKS HERE (CLOUD-2707). Stop cannot refuse, so a
+    // `deny` or `advise` module's nudge is its whole voice; a `record` module's
+    // violation is written to the store through [`nonblocking_findings`] and
+    // never spoken.
+    let (severity, refusal) = policy_refusal(policy, envelope, facts)?;
+    (severity != RuleSeverity::Record).then_some(refusal)
 }
 
 /// The policy gate: hand every registered module the call's facts and read back
@@ -7411,10 +8967,9 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     // said otherwise. `blocks` is the same predicate every typed rule kind here
     // consults, so the two now answer one question.
     //
-    // A NON-BLOCKING VIOLATION IS NOT DISCARDED, it is demoted — `policy_advice`
-    // renders the same refusal as text, and `run_hook` puts it on the advisory
-    // channel. A sensor with no reader is the defect this row exists inside, so
-    // the demotion and the delivery land together or neither does.
+    // A NON-BLOCKING VIOLATION IS NOT DISCARDED (CLOUD-1131, CLOUD-2707):
+    // `nonblocking_findings` returns it at its grade, and `run_hook` SPEAKS an
+    // `advise` one on the call and RECORDS a `record` one in the findings store.
     match policy_refusal(policy, envelope, facts) {
         Some((severity, refusal)) if blocks(severity, policy.fail_on_warning) => {
             Decision::Deny(refusal)
@@ -7423,34 +8978,67 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     }
 }
 
-/// The advisory half of [`policy_rules`]: every NON-blocking, non-`allow` module
-/// violation, one per bundle (CLOUD-1131, CLOUD-1470).
+/// Every nonblocking finding this call raised, each at its row's grade
+/// (CLOUD-1131, CLOUD-1470, CLOUD-2707): module violations one per bundle,
+/// native gates, receipt rows and every other call gate's rows graded
+/// `advise` or `record`. The boundary SPEAKS an `advise` finding on the call
+/// and RECORDS a `record` one in the findings store; neither is dropped.
 ///
-/// Empty for silence, for a blocking violation — that one is the caller's
-/// `Decision` and saying it twice would put one finding on two channels — and at
-/// `Stop`, where [`stop_advice`] stays the sole module producer (CLOUD-888's
-/// one-nudge bound). Every advisory is returned rather than the strongest,
-/// because two pointers on one call are two things a reader needs, and keeping
-/// only the first-declared shed the second silently.
-///
-/// Returned as [`Refusal`]s so the renderer is the caller's choice.
-//MUTANT stop-advice-multiplied|s@^    let turn_end = envelope.event == Event::Stop;$@    let turn_end = false;@|a_stop_carries_one_module_nudge_whatever_the_warn_count
+/// Empty for silence and for a blocking violation, which is the caller's
+/// `Decision`. At `Stop` it holds only a `record` module's end-of-turn
+/// violation: [`stop_advice`] speaks every other grade there. Every finding is
+/// returned rather than the strongest, because two pointers on one call are two
+/// things a reader needs.
 #[must_use]
-pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+pub fn nonblocking_findings(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<Graded> {
     let turn_end = envelope.event == Event::Stop;
     if turn_end {
-        return Vec::new();
+        // A nonblocking module's end-of-turn violation, for the RECORD:
+        // [`stop_advice`] is what speaks at Stop (an `advise` one, never a
+        // `record` one), so the boundary speaks none of these here.
+        return policy_refusal(policy, envelope, facts)
+            .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
+            .into_iter()
+            .collect();
     }
-    // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
-    // Under the chain's own conditions, so the warn side runs exactly where the
-    // deny side does.
-    let mut advice = if event_decides(envelope.event).is_none() && !policy.is_empty() {
-        native_advice(policy, facts)
+    // A compiled gate graded `advise` or `record` reports here, beside the
+    // modules (CLOUD-2291). Under the chain's own conditions, so the nonblocking
+    // side runs exactly where the deny side does.
+    let mut found = if event_decides(envelope.event).is_none()
+        && (!policy.is_empty() || reach_refusal(facts.reach).is_some())
+    {
+        native_nonblocking(policy, envelope, facts)
     } else {
         Vec::new()
     };
-    advice.extend(policy_advisories(policy, envelope, facts));
-    advice
+    found.extend(policy_advisories(policy, envelope, facts));
+    if event_decides(envelope.event).is_none() {
+        found.extend(receipt_nonblocking(policy, envelope, facts.receipts));
+        found.extend(gate_nonblocking(policy, envelope, facts));
+    }
+    found
+}
+
+/// The harness this process adjudicates for, bound once by the hook entry
+/// (CLOUD-2709): the envelope is the normalized shape every harness decodes to,
+/// so the one fact that differs per harness — where it runs — is read here.
+static HARNESS: std::sync::OnceLock<Harness> = std::sync::OnceLock::new();
+
+/// Bind the harness this process answers for. The first binding stands.
+pub fn bind_harness(harness: Harness) {
+    let _ = HARNESS.set(harness);
+}
+
+/// The exact `input` document every policy row receives for this call
+/// (CLOUD-2696): [`call_document`] itself, never a reconstruction, so what
+/// `adjudicate --show-input` shows is what the bundles were handed.
+#[must_use]
+pub fn policy_input(envelope: &Envelope, facts: &Facts<'_>) -> Option<serde_json::Value> {
+    serde_json::from_str(&call_document(envelope, facts).ok()?).ok()
 }
 
 /// The STRONGEST violation any enabled bundle raises, with the severity its
@@ -7474,7 +9062,6 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 /// An `allow` row is OFF and is skipped (CLOUD-1470): it never blocks, so this
 /// changes no decision, and it stops [`stop_advice`] nudging for a rule the
 /// consumer switched off.
-//MUTANT allow-row-nudged|s@^            if severity == RuleSeverity::Allow {$@            if false {@|an_allow_row_nudges_nothing_at_stop
 fn policy_refusal(
     policy: &Policy,
     envelope: &Envelope,
@@ -7560,9 +9147,7 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
-//MUTANT advice-strongest-only|s@^    advised$@    advised.into_iter().take(1).collect()@|two_warn_advisories_on_one_call_both_arrive
-//MUTANT allow-row-advised|s@^        if severity == RuleSeverity::Allow {$@        if false {@|an_allow_row_advises_nothing
-fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     if policy.bundles.is_empty() {
         return Vec::new();
     }
@@ -7584,12 +9169,15 @@ fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         if severity == RuleSeverity::Allow {
             continue;
         }
-        advised.push(Refusal::from_class(
-            bundle.attribute(violation),
-            &policy.verdicts,
-            &violation.verdict,
-            &violation.subjects,
-            Fix::None,
+        advised.push((
+            severity,
+            Refusal::from_class(
+                bundle.attribute(violation),
+                &policy.verdicts,
+                &violation.verdict,
+                &violation.subjects,
+                Fix::None,
+            ),
         ));
     }
     advised
@@ -7624,7 +9212,6 @@ pub fn policy_preapproval(
 
 /// A module's grant as `call grant now`, under the rule id that granted it
 /// (CLOUD-2078): a module finding id `policy explain` resolves.
-//MUTANT preapproval-misclassed|s@^    let class = crate::verdict::Native::CallGrantNow;$@    let class = crate::verdict::Native::CallFixSilent;@|a_preapproval_reason_labels_its_rule_and_verdict
 fn preapproval_refusal(id: &str) -> Refusal {
     let class = crate::verdict::Native::CallGrantNow;
     Refusal::declared(id.to_owned(), class, &[], Fix::None)
@@ -7789,6 +9376,28 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             }),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.
+            // THE ENTRIES OR `null` (CLOUD-2684): no checkout/restore, or one
+            // this cannot place, and the preset leaves the call to the host.
+            // COUNTS, NEVER CONTENT (CLOUD-2661): each selected set and whether
+            // this write breaches a ceiling it grows past.
+            crate::facts::Fact::Budgeted => Some(match facts.budgeted {
+                crate::facts::Look::Is(measures) => serde_json::json!(measures
+                    .iter()
+                    .map(|measure| serde_json::json!({
+                        "name": measure.name,
+                        "breach": crate::budget::breach(measure).is_some(),
+                    }))
+                    .collect::<Vec<_>>()),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
+            crate::facts::Fact::PathspecStatus => Some(match facts.pathspec_status {
+                crate::facts::Look::Is(status) => status.clone(),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
@@ -8070,7 +9679,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             projected_facts.insert(fact.as_str().to_owned(), value);
         }
     }
-    serde_json::to_string(&serde_json::json!({
+    let mut document = serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
             "operation": envelope.operation.as_str(),
@@ -8100,6 +9709,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // bounded and the projection cheap.
             "final-message": envelope.last_message,
             "transcript": envelope.transcript,
+            // CLOUD-2689: a forge event's tokens, `null` on every host event.
+            "forge": envelope.forge,
             // A FACT ABOUT THE CALL, NOT ABOUT THE COMMAND (CLOUD-613).
             //
             // The same class `segments` below is: something the engine already
@@ -8173,6 +9784,9 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 .map(|segment| {
                     serde_json::json!({
                         "words": segment.words,
+                        // CLOUD-2670: the redirection tokens, the suffix of
+                        // `words`, which keeps its meaning for its readers.
+                        "redirects": segment.redirects,
                         "raw": segment.raw,
                         // The operator that FOLLOWED this span, spelled as the
                         // shell spells it so a module reads what an author
@@ -8237,7 +9851,27 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "permission-mode": envelope.mode,
         },
         "facts": projected_facts,
-    }))
+    });
+    // WHERE THE CALL STANDS AND WHAT IT REACHES (CLOUD-2672), inserted after the
+    // build for `extend_call_schema`'s reason: one more key inline exceeds the
+    // macro's recursion limit.
+    if let Some(call) = document.get_mut("call").and_then(Value::as_object_mut) {
+        call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
+        call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
+        call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
+        // THE KIND OF MACHINE (CLOUD-2709), the one fact only the environment
+        // can state (`environment`, CLOUD-1383): a practice that differs between
+        // a disposable container and a developer's machine branches on it, where
+        // a committed preset can only apply the same answer to both.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!(
+                crate::environment::host(HARNESS.get().and_then(|harness| harness.host_signal()))
+                    .as_str()
+            ),
+        );
+    }
+    serde_json::to_string(&document)
 }
 
 /// The program a token names, with any path it was reached through dropped.
@@ -8339,9 +9973,6 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 ///
 /// PURE, so it is tested without a process environment — a test cannot set one
 /// under `unsafe_code = "forbid"`.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT background-max-unclamped|s@\.clamp(7_200_000, 2_147_483_647)@.max(7_200_000)@|background_max_mirrors_the_host
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
         raw.and_then(|text| text.trim().parse::<u64>().ok())
@@ -8377,8 +10008,33 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
         .flat_map(|segment| segment.lines.iter())
         .filter_map(|line| {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
-            let index = effective_program(&tokens)?;
-            let program = program_token(tokens[index]);
+            // A REDIRECTION IS NEVER HANDED TO THE PROGRAM (CLOUD-2670): the
+            // line's redirect tokens are the suffix of its words, so the argv
+            // is what precedes them. A line that is only redirects runs no
+            // program and so yields no entry.
+            let handed = tokens.len().saturating_sub(line.redirects.len());
+            let argv = &tokens[..handed];
+            let index = effective_program(argv)?;
+            let program = program_token(argv[index]);
+            let arguments: Vec<&str> = argv[index + 1..]
+                .iter()
+                .map(|token| program_token(token))
+                .collect();
+            // THE SUBCOMMAND, PROJECTED ONCE (CLOUD-2354): the first bare word
+            // past the program's own value-taking options, by the resolver the
+            // verdict matcher uses. Four presets each carried a Rego copy of
+            // git's option table, and they disagreed with git: `git -C -c reset`
+            // read `-c` as an option. `null` for a program with no table.
+            let options = global_value_options(program_name(program));
+            let verb = subcommand_index(&arguments, options);
+            let (subcommand, global_options) = if options.is_empty() {
+                (serde_json::Value::Null, serde_json::Value::Null)
+            } else {
+                (
+                    serde_json::json!(verb.map(|at| arguments[at])),
+                    serde_json::json!(&arguments[..verb.unwrap_or(arguments.len())]),
+                )
+            };
             Some(serde_json::json!({
                 "program": program,
                 // THE NAME AS WELL AS THE TOKEN, because they are different
@@ -8407,13 +10063,15 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // predicate is decided on. `(git push origin main --force)` was
                 // allowed with `--force)` here while the same flag written
                 // earlier denied.
-                "arguments": tokens[index + 1..]
-                    .iter()
-                    .map(|token| program_token(token))
-                    .collect::<Vec<_>>(),
+                "arguments": arguments,
+                // The words before `subcommand`, verbatim, so a module can judge
+                // what they do (`-c core.pager=sh` runs a program) without
+                // parsing them. The whole argv where there is no subcommand.
+                "subcommand": subcommand,
+                "global-options": global_options,
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
-                    &tokens[..index],
+                    &argv[..index],
                 ),
                 // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
                 // say without running it (CLOUD-1949). Each is a table this
@@ -8428,7 +10086,7 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // leading `{` the shell passes through literally, so
                 // `batten lease acquire {--help` would read as `--help` here
                 // while batten receives a positional and writes (CLOUD-2206).
-                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
+                "batten-effect": batten_effect(program_name(program), &argv[index + 1..]),
             }))
         })
         .collect()
@@ -8515,8 +10173,21 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 /// supposed to fire.
 fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
+    // THE EVENT-KEYED ROWS (CLOUD-2662), before the walk, on every route.
+    let shape_event = call_event(envelope);
+    if shape_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind == RuleKind::Shape
+                && rule.on == shape_event
+                && blocks(rule.severity(), policy.fail_on_warning)
+                && modifier_admits(rule, envelope)
+            {
+                matched.push(rule);
+            }
+        }
+    }
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE (CLOUD-1287). A shape row keyed on a program is evaded outright by
     // writing an innocuous first line: `words` concatenates across the newline, so
@@ -8528,6 +10199,16 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
+        // The argv the program was handed (CLOUD-2669): its redirections are the
+        // exact suffix of `words` (CLOUD-2670), so a redirect target is no word.
+        // `get` answers `None` for a reversed range, so a program inside its own
+        // redirections (`> f`) reads as an empty argv rather than a panic.
+        let spoken = tokens.len().saturating_sub(line.redirects.len());
+        let argv: &[&str] = tokens
+            .get(..spoken)
+            .and_then(|handed| handed.get(program_index..))
+            .and_then(<[&str]>::split_first)
+            .map_or(&[][..], |(_, argv)| argv);
         // Subcommand words with flags dropped. A value-taking flag leaves its
         // value behind, but the blocked words are adjacent, so that never hides
         // a real match (`gh -R o/r pr merge` still matches; `gh pr view
@@ -8537,11 +10218,12 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         // LAST token — which is a matched operand whenever the command takes no
         // trailing argument, so `(gh pr merge)` would not match where
         // `(gh pr merge 42)` did.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        //
+        // ANCHORED AT THE SUBCOMMAND (CLOUD-2666): `verdict_words` steps past
+        // the program's global value options to the subcommand, so `git -C d
+        // push` is `push`, and `git stash push` is `stash push`, which a row
+        // keyed on `git push` must not match.
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             // Kind-filtered, not scope-filtered: `receipt` rows are
             // `mediated_call`-scoped too and carry a `pattern`, so without this
@@ -8614,10 +10296,186 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             {
                 continue;
             }
+            // Whole words of THIS LINE's argv (CLOUD-2669), in both polarities.
+            // Fail closed either way: an expression that does not compile (load
+            // already refused it) fires the deny and grants no exemption.
+            if let Some(word) = rule.word.as_deref()
+                && !has_word(argv, word).unwrap_or(true)
+            {
+                continue;
+            }
+            if let Some(exemption) = rule.unless_word.as_deref()
+                && has_word(argv, exemption).unwrap_or(false)
+            {
+                continue;
+            }
             matched.push(rule);
         }
     }
     matched
+}
+
+/// The event this call raises, on any route the engine knows (CLOUD-2662).
+pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        shell_event(envelope)
+    }
+}
+
+/// [`call_event`] on the structured route only: `None` for any shell call.
+fn structured_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        None
+    }
+}
+
+/// Whether `rule` is keyed on `event`, which it must name.
+fn on_selects(rule: &Rule, event: Option<CallEvent>) -> bool {
+    rule.on.is_some() && rule.on == event
+}
+
+/// A JSON draft flag, as a bool or its exact string spelling.
+fn draft_flag(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The forge connector's routes: a create that is not a draft (absent counts
+/// as ready, the forge's default), and an update that undrafts or reopens.
+fn connector_event(envelope: &Envelope) -> Option<CallEvent> {
+    let raw = &envelope.raw_tool;
+    let draft = Field::InputDraft.read(envelope);
+    if crate::rules::selects_tool_name("create_pull_request", raw) {
+        let drafted = draft.as_deref() == Some("true");
+        return (!drafted).then_some(CallEvent::PullRequestReady);
+    }
+    if crate::rules::selects_tool_name("update_pull_request", raw) {
+        let undrafts = draft.as_deref() == Some("false");
+        let reopens = draft.as_deref() != Some("true")
+            && Field::InputState
+                .read(envelope)
+                .is_some_and(|state| comparable(&state) == "open");
+        return (undrafts || reopens).then_some(CallEvent::PullRequestReady);
+    }
+    None
+}
+
+/// The shell routes, per line over the line's own unquoted words with its
+/// redirections dropped, split into operands and flags.
+fn shell_event(envelope: &Envelope) -> Option<CallEvent> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    per_line(&parsed)
+        .into_iter()
+        .any(|(_, _, line)| line_readies(line))
+        .then_some(CallEvent::PullRequestReady)
+}
+
+fn line_readies(line: &SegmentLine) -> bool {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+    let Some(program) = effective_program(handed) else {
+        return false;
+    };
+    if program_name(program_token(handed[program])) != "gh" {
+        return false;
+    }
+    let (flags, operands) = gh_flags_and_operands(&handed[program + 1..]);
+    match operands.as_slice() {
+        ["pr", "ready", ..] => !flagged(&flags, "--undo"),
+        ["pr", "create", ..] => !drafted_flag(&flags),
+        ["pr", "reopen", ..] => true,
+        ["api", ..] => api_readies(&operands[1..], &flags),
+        _ => false,
+    }
+}
+
+/// gh's options that take the next word as their value. A value is an operand
+/// whatever it spells: `--title "--draft"` names a title, not the flag.
+const GH_VALUE_FLAGS: [&str; 22] = [
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-B",
+    "--base",
+    "-H",
+    "--head",
+    "-a",
+    "--assignee",
+    "-l",
+    "--label",
+    "-m",
+    "--milestone",
+    "-r",
+    "--reviewer",
+    "-R",
+    "--repo",
+    "-X",
+    "--method",
+];
+
+/// A gh argv split into flags and operands, a value flag's value an operand.
+fn gh_flags_and_operands<'a>(arguments: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+    let (mut flags, mut operands) = (Vec::new(), Vec::new());
+    let mut value_next = false;
+    for token in arguments {
+        let word = program_token(token);
+        if value_next || !word.starts_with('-') {
+            operands.push(word);
+            value_next = false;
+        } else {
+            flags.push(word);
+            value_next = GH_VALUE_FLAGS.contains(&word);
+        }
+    }
+    (flags, operands)
+}
+
+fn flagged(flags: &[&str], flag: &str) -> bool {
+    flags
+        .iter()
+        .any(|word| *word == flag || *word == format!("{flag}=true"))
+}
+
+fn drafted_flag(flags: &[&str]) -> bool {
+    flagged(flags, "--draft") || flags.contains(&"-d")
+}
+
+/// `gh api` raises the event when it names the ready mutation, the REST ready
+/// route, or a GraphQL query the hook cannot read (from a file).
+fn api_readies(operands: &[&str], flags: &[&str]) -> bool {
+    operands
+        .iter()
+        .any(|word| word.contains("markPullRequestReadyForReview"))
+        || operands.iter().any(|word| {
+            word.split('?')
+                .next()
+                .is_some_and(|path| path.ends_with("/ready_for_review"))
+        })
+        || (operands.contains(&"graphql")
+            && (flags.iter().any(|flag| flag.starts_with("--input"))
+                || operands.iter().any(|word| word.contains("=@"))))
+}
+
+/// Whether any word of `argv`, normalised by [`program_token`], matches `shape`
+/// anchored as `^(?:shape)$` (CLOUD-2669). `None` when `shape` does not compile.
+fn has_word(argv: &[&str], shape: &str) -> Option<bool> {
+    let anchored = regex::Regex::new(&format!("^(?:{shape})$")).ok()?;
+    Some(
+        argv.iter()
+            .any(|word| anchored.is_match(program_token(word))),
+    )
 }
 
 /// The id the derived protected-path gate denies under.
@@ -8796,7 +10654,6 @@ fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> D
 ///
 /// The path and the declared remedy. Never a byte of the file, which for a
 /// memory is exactly the content a read gate must not become a mirror of.
-//MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = envelope.reads.as_deref() else {
         return Decision::Allow;
@@ -9108,8 +10965,6 @@ fn script_texts(program: &str, arguments: &[&str], stdin: &[String]) -> Vec<Stri
 
 /// The first protected path a script names, split on the characters that
 /// cannot be part of a path a program spells as a literal.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-text-unread|s@^    .find(\x7cword\x7c protects(policy, word))$@    .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
 fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     text.split(|c: char| {
         c.is_whitespace()
@@ -9444,7 +11299,9 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
 /// `deny` mean the same thing at the mediation channel as in the checks
 /// pipeline. One interpretation, two surfaces.
 fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
-    severity::promote(severity::row_for_rule(severity).report, fail_on_warning) == ReportLevel::Fail
+    // Through `report_for`, which owns the trial carve-out (CLOUD-2707): a
+    // `record` row never blocks, `--fail-on-warning` included.
+    severity::report_for(severity, fail_on_warning) == ReportLevel::Fail
 }
 
 /// Compose a shape row's refusal: the rule that refused, why, and what to run.
@@ -9464,9 +11321,6 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
     // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
@@ -9553,6 +11407,9 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
 struct Segment {
     /// The span's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// The redirection tokens, exactly the suffix of `words` (CLOUD-2670):
+    /// what `program_reach` strips before it reads what a program was handed.
+    redirects: Vec<String>,
     /// The span exactly as written, quotes and all.
     raw: String,
     /// The operator that FOLLOWED this span, or `None` where the command ended.
@@ -9587,6 +11444,10 @@ struct Segment {
     /// write to a registered policy module through exactly that shape was
     /// admitted while `python3 /dev/null <module>` was refused.
     stdin_text: Vec<String>,
+    /// Each word that is exactly a `cat` heredoc substitution, as `words`
+    /// spells it, with the heredoc's body (CLOUD-2683). Keyed by spelling, not
+    /// index: index alignment between `words` and the parse broke once.
+    cat_bodies: Vec<(String, String)>,
     /// Each CONSTITUENT command's own words, where a newline joined several into
     /// this one segment.
     ///
@@ -9661,6 +11522,8 @@ struct Segment {
 struct SegmentLine {
     /// This command's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// This line's redirection tokens, the suffix of its `words` (CLOUD-2670).
+    redirects: Vec<String>,
     /// This command's own span, exactly as written.
     raw: String,
 }
@@ -9703,6 +11566,26 @@ impl Separator {
             Self::Background => "&",
         }
     }
+}
+
+/// What bash runs of a call it cannot parse whole: the longest prefix of whole
+/// lines that parses, as [`segments`] reads it (CLOUD-2707's suite, measured on
+/// `rable` 0.2.2).
+///
+/// `bash -c` executes each complete command before the line it cannot parse,
+/// so that prefix is what reaches the system, and judging it is strictly
+/// tighter than abstaining on the whole call. Only a call whose first line
+/// already fails abstains. Bounded: each step is one line shorter, and the
+/// recursion into [`segments`] is only ever over a prefix that parsed.
+fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
+    let lines: Vec<&str> = command.split_inclusive('\n').collect();
+    for end in (1..lines.len()).rev() {
+        let prefix = lines[..end].concat();
+        if rable::parse(&prefix, false).is_ok() {
+            return segments(&prefix);
+        }
+    }
+    crate::facts::Look::CouldNotLook
 }
 
 /// Split a command into shell-separated segments, over a real bash PARSE.
@@ -9752,7 +11635,6 @@ impl Separator {
 /// at all on the next becomes a discarded status — which is a decision about
 /// that rule's reach and not about this parser. Changing it here would have been
 /// a behaviour change smuggled inside a substrate change.
-//MUTANT newline-node-unsequenced|s@        if position + 1 < reading.len()@        if false \&\& position + 1 < reading.len()@|a_commit_followed_by_a_newline_has_its_status_replaced
 fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // `extglob` off: this is a pre-execution gate over what an agent wrote, and
     // the shell that will run it is not guaranteed to have the option set.
@@ -9760,8 +11642,15 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // THE ARM THE CHARACTER WALK COULD NOT HAVE. A refusal here would block
         // a call on a parse failure, which the exit table forbids (`3` never
         // blocks); a clean `Vec` would be the silent under-denial the row is
-        // about. Abstention is the third answer, and it is recorded.
-        return crate::facts::Look::CouldNotLook;
+        // about.
+        //
+        // BUT BASH DOES NOT ABSTAIN (measured, `rable` 0.2.2): `bash -c` runs
+        // every complete command BEFORE the line it cannot parse, then exits
+        // 2. `echo ran\n| tail -1` prints `ran`. So a whole-call abstention let
+        // `rm <protected>` followed by any unparseable line run unjudged. What
+        // bash runs is the longest prefix of whole lines that parses, and that
+        // prefix is judged; only a call with no such prefix abstains.
+        return runnable_prefix(command);
     };
     // AND A PARSE THAT SUCCEEDED IS NOT YET A PARSE THAT READ EVERYTHING.
     //
@@ -9862,6 +11751,7 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 if !segment.nested {
                     line_readings.push(SegmentLine {
                         words: segment.words,
+                        redirects: segment.redirects,
                         raw: segment.raw,
                     });
                 }
@@ -10151,20 +12041,31 @@ fn flatten_command(
     let mut segment = Segment {
         lines: Vec::new(),
         words: command_words(assignments, words, redirects, source),
+        redirects: redirects
+            .iter()
+            .flat_map(|redirect| redirect_words(redirect, source))
+            .collect(),
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
         stdin_text: redirects.iter().filter_map(stdin_text).collect(),
+        cat_bodies: Vec::new(),
         construct,
         nested: false,
         grouped: false,
     };
+    for word in words {
+        if let Some(body) = cat_heredoc_body(word) {
+            segment.cat_bodies.push((unquote(&word_text(word)), body));
+        }
+    }
     let mut nested = nested_commands(words, redirects, source);
     if segment.words.iter().any(String::is_empty) {
         segment.words.retain(|word| !word.is_empty());
     }
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
+        redirects: segment.redirects.clone(),
         raw: segment.raw.clone(),
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`
@@ -10343,6 +12244,49 @@ fn word_text(word: &rable::Node) -> String {
     }
 }
 
+/// The body of a word that is exactly `$(cat <<EOF … EOF)`, bare or in double
+/// quotes (CLOUD-2683): one substitution, whose command is a lone `cat` with no
+/// assignment and one complete heredoc. Anything else is `None`.
+fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
+    let rable::NodeKind::Word { parts, .. } = &word.kind else {
+        return None;
+    };
+    let quote = |node: &rable::Node| matches!(&node.kind, rable::NodeKind::WordLiteral { value } if value == "\"");
+    let substitution = match parts.as_slice() {
+        [only] => only,
+        [open, only, close] if quote(open) && quote(close) => only,
+        _ => return None,
+    };
+    let rable::NodeKind::CommandSubstitution { command, .. } = &substitution.kind else {
+        return None;
+    };
+    let rable::NodeKind::Command {
+        assignments,
+        words,
+        redirects,
+    } = &command.kind
+    else {
+        return None;
+    };
+    let [cat] = words.as_slice() else {
+        return None;
+    };
+    let [heredoc] = redirects.as_slice() else {
+        return None;
+    };
+    if !assignments.is_empty() || word_text(cat) != "cat" {
+        return None;
+    }
+    match &heredoc.kind {
+        rable::NodeKind::HereDoc {
+            content,
+            complete: true,
+            ..
+        } => Some(content.clone()),
+        _ => None,
+    }
+}
+
 /// Append a segment for every command hiding inside a word.
 ///
 /// `$(...)`, `` `...` `` and `<(...)` each carry a parsed command, and each of
@@ -10481,8 +12425,14 @@ pub(crate) fn unquote(word: &str) -> String {
 /// nine days after the first was measured — a shared authority is what stops
 /// the twin recurring. The cases stay per-matcher (`rules::validate` and the
 /// tests below), because sharing the decision must not also share the evidence.
+///
+/// **A PREFIX OF THE SUBCOMMAND WORDS, NEVER A WINDOW ANYWHERE (CLOUD-2666).**
+/// The words start at the subcommand ([`verdict_words`]), so `git push` matches
+/// `git -C d push` and not `git stash push`, `git log push` or `git checkout
+/// push`. Matching anywhere was the workaround for not knowing which options
+/// take values, and it over-matched every subcommand that takes an operand.
 fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
-    wanted.is_empty() || words.windows(wanted.len()).any(|window| window == wanted)
+    words.starts_with(wanted)
 }
 
 /// Did the call reach its program through the mediator a row requires?
@@ -10521,6 +12471,79 @@ const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
 #[must_use]
 pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
+/// Each look-through wrapper's options whose VALUE is the next word, as each
+/// tool's own manual spells them (CLOUD-2687). An attached value (`-ux`,
+/// `--user=x`) is one word and needs no entry; only the separated form does.
+const WRAPPER_VALUE_OPTIONS: [(&str, &[&str]); 7] = [
+    (
+        "sudo",
+        &[
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-C",
+            "--close-from",
+            "-h",
+            "--host",
+            "-p",
+            "--prompt",
+            "-U",
+            "--other-user",
+            "-r",
+            "--role",
+            "-t",
+            "--type",
+            "-D",
+            "--chdir",
+            "-R",
+            "--chroot",
+            "-T",
+            "--command-timeout",
+        ],
+    ),
+    ("doas", &["-u", "-C"]),
+    ("timeout", &["-s", "--signal", "-k", "--kill-after"]),
+    ("nice", &["-n", "--adjustment"]),
+    (
+        "env",
+        &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+    ),
+    (
+        "stdbuf",
+        &["-i", "--input", "-o", "--output", "-e", "--error"],
+    ),
+    (
+        "xargs",
+        &[
+            "-I",
+            "--replace",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-L",
+            "--max-lines",
+            "-s",
+            "--max-chars",
+            "-d",
+            "--delimiter",
+            "-E",
+            "--eof",
+            "-a",
+            "--arg-file",
+        ],
+    ),
+];
+
+/// Does `flag`, written as its own word, take the next word as its value?
+fn wrapper_option_takes_value(wrapper: &str, flag: &str) -> bool {
+    WRAPPER_VALUE_OPTIONS
+        .iter()
+        .find(|(name, _)| *name == wrapper)
+        .is_some_and(|(_, options)| options.contains(&flag))
 }
 
 /// Programs the boundary knows to leave their operands alone (CLOUD-1804).
@@ -10665,6 +12688,51 @@ fn subcommand_index(arguments: &[&str], value_options: &[&str]) -> Option<usize>
 const MISE_VALUE_OPTIONS: [&str; 10] = [
     "-C", "--cd", "-E", "--env", "-j", "--jobs", "-s", "--shell", "-t", "--tool",
 ];
+
+/// The words a verdict row's `subcommands` are matched against: the
+/// subcommand, then the nested verb and what follows it, flags dropped.
+///
+/// NORMALISED first, and the operand window with it: a grouped command's
+/// closing paren lands on the LAST token, which is a matched operand whenever
+/// the command takes no trailing argument, so `(mise run land)` would otherwise
+/// not match where `(mise run land x)` did.
+///
+/// PAST THE PROGRAM'S OWN LEADING OPTIONS (CLOUD-2666), at both the subcommand
+/// and the nested verb: dropping `-`-prefixed tokens left `-C`'s value as the
+/// subcommand, so `git -C /tmp push | tail` and `gh pr -R o/r comment | tail`
+/// matched no verdict row at all. `None` where the argv holds no bare word.
+fn verdict_words<'a>(tokens: &[&'a str], program_index: usize) -> Option<Vec<&'a str>> {
+    let argv: Vec<&str> = tokens[program_index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .collect();
+    let options = global_value_options(program_token(tokens[program_index]));
+    let start = subcommand_index(&argv, options)?;
+    let rest = &argv[start + 1..];
+    let nested_at = subcommand_index(rest, options).unwrap_or(rest.len());
+    Some(
+        std::iter::once(argv[start])
+            .chain(rest[nested_at..].iter().copied())
+            .filter(|token| !token.starts_with('-'))
+            .collect(),
+    )
+}
+
+/// `gh`'s options that consume the next word and may precede the subcommand or
+/// the nested verb (CLOUD-2666): `gh -R o/r pr comment` and `gh pr -R o/r
+/// comment` are one call. A declared stopgap, as [`GIT_VALUE_OPTIONS`] is.
+const GH_VALUE_OPTIONS: [&str; 2] = ["-R", "--repo"];
+
+/// The value-taking options `program` accepts ahead of its subcommand, for
+/// [`subcommand_index`]. Empty for a program this file has no list for.
+fn global_value_options(program: &str) -> &'static [&'static str] {
+    match program {
+        "git" => &GIT_VALUE_OPTIONS,
+        "mise" => &MISE_VALUE_OPTIONS,
+        "gh" => &GH_VALUE_OPTIONS,
+        _ => &[],
+    }
+}
 
 /// The singleton task this call would start a second copy of (CLOUD-438).
 ///
@@ -10957,6 +13025,12 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                         || is_env_assignment(program_token(tokens[i]))
                         || program_token(tokens[i]).starts_with(|c: char| c.is_ascii_digit()))
                 {
+                    // A FLAG WHOSE VALUE IS THE NEXT WORD takes that word with it
+                    // (CLOUD-2687): `sudo -u x git` resolved to `x`, so every
+                    // module finding git through `programs` allowed it.
+                    if wrapper_option_takes_value(wrapper, program_token(tokens[i])) {
+                        i += 1;
+                    }
                     i += 1;
                 }
             }
@@ -11235,7 +13309,6 @@ pub fn encode_ask(
 /// # Errors
 ///
 /// Serialization of this fixed shape cannot practically fail.
-//MUTANT rewrite-ungated|s@^    if !harness.capabilities().rewrites_tool_output.is_capturable() {$@    if false {@|the_tool_output_rewrite_is_emitted_only_where_measured
 pub fn encode_tool_output(
     harness: Harness,
     event: &str,
@@ -11760,6 +13833,10 @@ mod tests {
                 sourced: &None,
                 singleton: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
+                commit_subject: &crate::facts::Look::CouldNotLook,
+                reach: &NO_REACH,
+                budgeted: &crate::facts::Look::CouldNotLook,
+                ratcheted: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -11771,6 +13848,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                pathspec_status: &crate::facts::Look::CouldNotLook,
             },
         )
     }
@@ -11782,6 +13860,10 @@ mod tests {
         live
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per `Rule` column, which has no `Default` on purpose"
+    )]
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
         Rule {
             review: Vec::new(),
@@ -11811,6 +13893,9 @@ mod tests {
             requires_field: None,
             contains: contains.map(ToOwned::to_owned),
             unless_contains: None,
+            word: None,
+            unless_word: None,
+            on: None,
             require_via: None,
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
@@ -11829,6 +13914,7 @@ mod tests {
             retires_with: None,
             conserves: None,
             admits_with: None,
+            per_file: false,
             format: None,
             node: None,
             derives: None,
@@ -11936,6 +14022,9 @@ mod tests {
     /// The same fixture with a declared `[[redirect]]` table (CLOUD-280).
     fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -11999,6 +14088,9 @@ mod tests {
     /// ones out per case would bury the one field under test.
     fn ceiling_policy(rows: Vec<Rule>) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12070,6 +14162,9 @@ mod tests {
 
     fn gh_policy() -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12125,6 +14220,7 @@ mod tests {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -12169,6 +14265,7 @@ mod tests {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -12514,6 +14611,55 @@ mod tests {
         }
     }
 
+    /// CLOUD-2666's over-match. A row keyed on a subcommand matches from the
+    /// subcommand, past the program's global value options, and nowhere else:
+    /// `git stash push` is not `git push`, and `gh pr view merge` is not
+    /// `gh pr merge`.
+    #[test]
+    fn a_shape_row_matches_its_subcommand_and_never_an_operand() {
+        let push = ceiling_policy(vec![shape("no-push", "git push", None)]);
+        let decide = |policy: &Policy, command: &str| {
+            adjudicate(
+                policy,
+                &envelope(command),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for refused in [
+            "git push",
+            "git push origin main",
+            "git -C d push",
+            "git -c a=b push",
+        ] {
+            assert!(
+                matches!(decide(&push, refused), Decision::Deny(_)),
+                "{refused} is a push"
+            );
+        }
+        for admitted in ["git stash push -m x", "git log push", "git checkout push"] {
+            assert!(
+                matches!(decide(&push, admitted), Decision::Allow),
+                "{admitted} is not a push"
+            );
+        }
+        for refused in [
+            "gh pr merge 1",
+            "gh -R o/r pr merge 1",
+            "gh pr -R o/r merge 1",
+        ] {
+            assert!(
+                matches!(adjudicate_command(refused), Decision::Deny(_)),
+                "{refused} is a merge"
+            );
+        }
+        assert!(matches!(
+            adjudicate_command("gh pr view merge"),
+            Decision::Allow
+        ));
+    }
+
     fn adjudicate_command(command: &str) -> Decision {
         adjudicate(
             &gh_policy(),
@@ -12592,6 +14738,34 @@ mod tests {
         assert!(is_deny("FOO=bar gh pr merge"));
     }
 
+    /// CLOUD-2687: a wrapper option whose value is the next word takes that word
+    /// with it. Fails by: the value read as the program, which hid `git` from
+    /// every module that finds it through `programs`.
+    #[test]
+    fn a_wrapper_options_separate_value_is_not_the_program() {
+        for command in [
+            "sudo -u x git commit -n",
+            "sudo -u x -g y git commit -n",
+            "timeout -s KILL 5 git commit -n",
+            "timeout -k 2 5 git commit -n",
+            "nice -n 5 git commit -n",
+            "env -u HOME git commit -n",
+            "stdbuf -o L git commit -n",
+            "xargs -I {} git commit -n",
+            "doas -u x git commit -n",
+        ] {
+            let tokens: Vec<&str> = command.split_whitespace().collect();
+            let found = effective_program(&tokens).map(|index| tokens[index]);
+            assert_eq!(found, Some("git"), "{command}");
+        }
+        // An attached value is one word and still resolves.
+        let tokens = ["sudo", "-ux", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
+        // And a value-less flag takes nothing with it.
+        let tokens = ["sudo", "-E", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
+    }
+
     /// One program-only `shape` row and nothing else (CLOUD-401).
     ///
     /// Deliberately NOT shared with the receipt cases further down, and not
@@ -12600,6 +14774,9 @@ mod tests {
     /// one site must leave the other site's cases red.
     fn program_only_shape_policy() -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12767,6 +14944,9 @@ mod tests {
         let mut rule = shape("no-bare-cargo", "cargo", None);
         rule.require_via = Some(crate::rules::RequireVia::Mise);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13280,6 +15460,9 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13313,10 +15496,13 @@ mod tests {
     #[test]
     fn a_warn_shape_rule_blocks_only_once_promotion_is_on() {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13348,6 +15534,9 @@ mod tests {
         );
 
         let promoted = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13387,6 +15576,9 @@ mod tests {
         // to bottom, and any cleverer precedence would be a rule about rules the
         // config never states.
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13438,6 +15630,9 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.policy_url = Some("https://example.invalid/policy".to_owned());
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13503,6 +15698,9 @@ mod tests {
         rule.reason = Some("run verify then linear-check, or just land".to_owned());
         rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13580,6 +15778,9 @@ mod tests {
             })
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             // A module fixture, so it protects nothing and has no membership
             // question for a root to change the answer to.
@@ -13633,6 +15834,99 @@ mod tests {
     ///
     /// Fails by: dropping a `Some(...)` arm to `None`, or inventing a `facts`
     /// key that no `Fact` variant names.
+    /// Fails by: a forge envelope's tokens not projected, or projected on an
+    /// event that is not a forge event (CLOUD-2689).
+    #[test]
+    fn a_forge_envelope_projects_its_tokens_and_no_other_event_does() {
+        let project = |envelope: &Envelope| -> serde_json::Value {
+            let document = call_document(
+                envelope,
+                &Facts::none(
+                    &crate::stop::StopFacts::default(),
+                    &crate::waiver::Live::new(),
+                ),
+            )
+            .expect("the document serializes");
+            serde_json::from_str(&document).expect("the document parses")
+        };
+        let forge = crate::forge_event::normalize_webhook(
+            "pull_request",
+            &serde_json::json!({
+                "action": "opened",
+                "pull_request": {"id": 1, "number": 2, "updated_at": "t"},
+                "repository": {"full_name": "o/r"}
+            }),
+        )
+        .expect("a catalog event");
+        let call = project(&forge);
+        assert_eq!(
+            call.pointer("/call/forge/event"),
+            Some(&serde_json::json!("pull_request"))
+        );
+        assert_eq!(
+            call.pointer("/call/forge/action"),
+            Some(&serde_json::json!("opened"))
+        );
+        let key = call
+            .pointer("/call/forge/key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(
+            project(&envelope("git status")).pointer("/call/forge"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    /// Fails by: a redirection handed to the program as an argument, or a
+    /// redirect-only line read as a program (CLOUD-2670).
+    #[test]
+    fn program_reach_hands_no_redirection_to_the_program() {
+        let reach = program_reach("git config --get core.hooksPath 2>/dev/null");
+        assert_eq!(
+            reach[0]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+        assert_eq!(program_reach("> /tmp/f"), Vec::<serde_json::Value>::new());
+    }
+
+    /// Fails by: a joined line's redirections lost, so the line after reads
+    /// its own redirect as an argument (CLOUD-2670).
+    #[test]
+    fn a_joined_lines_redirects_stay_with_their_own_line() {
+        let reach =
+            program_reach("cd /tmp 2>/dev/null\ngit config --get core.hooksPath 2>/dev/null");
+        assert_eq!(reach[0]["arguments"], serde_json::json!(["/tmp"]));
+        assert_eq!(
+            reach[1]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+    }
+
+    /// Fails by: a segment's redirections not projected, or `words` losing
+    /// them (CLOUD-2670).
+    #[test]
+    fn the_call_document_projects_a_segments_redirections() {
+        let document = call_document(
+            &envelope("cargo build > /tmp/log 2>&1"),
+            &Facts::none(
+                &crate::stop::StopFacts::default(),
+                &crate::waiver::Live::new(),
+            ),
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value = serde_json::from_str(&document).expect("it parses");
+        assert_eq!(
+            parsed["call"]["segments"][0]["redirects"],
+            serde_json::json!([">", "/tmp/log", "2>&1"])
+        );
+        assert_eq!(
+            parsed["call"]["segments"][0]["words"],
+            serde_json::json!(["cargo", "build", ">", "/tmp/log", "2>&1"])
+        );
+    }
+
     #[test]
     fn every_hook_resolvable_fact_is_projected_under_its_own_token() {
         let document = call_document(
@@ -14083,6 +16377,9 @@ deny contains "refused by themodule" if {
         rule.reason = Some("pipe the issue payload to `mise run claim-check`".to_owned());
         rule.checks = Some(vec!["claim".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14378,6 +16675,9 @@ deny contains "refused by themodule" if {
         rule.reason = Some("prove the toolchain first".to_owned());
         rule.checks = Some(vec!["toolchain".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15922,6 +18222,9 @@ deny contains "refused by themodule" if {
             Decision::Allow
         );
         let no_paths = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15995,6 +18298,9 @@ deny contains "refused by themodule" if {
         // hardcoded path could not produce that.
         let verbs = vec![verb("rm", None)];
         let guarding = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16015,6 +18321,9 @@ deny contains "refused by themodule" if {
             redirects: Vec::new(),
         };
         let elsewhere = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16571,6 +18880,19 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
+    fn moments_is_every_event_but_unrecognized() {
+        // CLOUD-2674: the const is derived, so this pins the derivation and the
+        // one row that reads it.
+        let expected: Vec<Event> = Event::ALL
+            .iter()
+            .copied()
+            .filter(|event| *event != Event::Unrecognized)
+            .collect();
+        assert_eq!(Event::MOMENTS, expected.as_slice());
+        assert_eq!(Harness::ExitCode.capabilities().events, Event::MOMENTS);
+    }
+
+    #[test]
     fn task_completed_is_claude_only_and_degrades_to_the_stop_family() {
         // The one Claude-exclusive capability that is load-bearing for Batten's
         // completion-signal thesis.
@@ -16581,11 +18903,14 @@ deny contains "refused by themodule" if {
         );
         for harness in Harness::ALL {
             let capabilities = harness.capabilities();
-            if *harness == Harness::ClaudeCode {
+            // Exit-code is Batten's envelope, not a surveyed host: it carries
+            // every moment, so it watches TaskCompleted exactly (CLOUD-2674).
+            if matches!(harness, Harness::ClaudeCode | Harness::ExitCode) {
                 assert_eq!(
                     capabilities.degrade(Event::TaskCompleted),
                     Some(Event::TaskCompleted),
-                    "the host that has it watches it"
+                    "{}: the adapter that has it watches it",
+                    harness.as_str()
                 );
                 continue;
             }
@@ -16613,6 +18938,15 @@ deny contains "refused by themodule" if {
         // event would be worse than admitting the gap.
         for harness in Harness::ALL {
             if *harness == Harness::ClaudeCode {
+                continue;
+            }
+            // Batten's own envelope carries every moment (CLOUD-2674).
+            if *harness == Harness::ExitCode {
+                assert_eq!(
+                    harness.capabilities().degrade(Event::ConfigChange),
+                    Some(Event::ConfigChange),
+                    "exit-code carries ConfigChange itself"
+                );
                 continue;
             }
             assert_eq!(
@@ -16714,9 +19048,12 @@ deny contains "refused by themodule" if {
             // event rather than failing, which is right at runtime and wrong to
             // leave unnoticed.
             let capabilities = harness.capabilities();
+            // ADMITS, not registrations: an emitted event need not be registered
+            // by default, but it must be nameable (CLOUD-2581).
+            let admitted = wiring.admits(harness);
             for event in Event::ALL.iter().filter(|e| capabilities.emits(**e)) {
                 assert!(
-                    registrations.iter().any(|(named, _)| named == event),
+                    admitted.iter().any(|(named, _)| named == event),
                     "{} emits {event:?} but its wiring names no spelling for it, so the \
                      registration would be silently dropped",
                     harness.as_str()
@@ -17065,7 +19402,7 @@ deny contains "refused by themodule" if {
 
         // A row the severity policy cannot reach buys nothing either: the gate
         // skips it, so counting it here is a file read for an unreachable verdict.
-        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Warn);
+        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Advise);
         assert!(
             !policy.reads_prospective(&write),
             "a row `blocks` says nothing about must not buy a read"
@@ -17659,6 +19996,7 @@ deny contains "refused by themodule" if {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         };
         assert!(
             policy.required_checks_for(&read).is_empty(),
@@ -18129,9 +20467,24 @@ deny contains "refused by themodule" if {
             };
             for (_, spelling) in wiring.registrations(*harness) {
                 rendered_any = true;
+                // Where the host's entry shape puts the command (CLOUD-2694).
+                let command = match harness.entry_shape() {
+                    EntryShape::Flat { write, .. } => &hooks[spelling][0][write],
+                    EntryShape::Nested => &hooks[spelling][0]["hooks"][0]["command"],
+                };
+                // The registration's own command: `--event` where the host's
+                // payload names none (CLOUD-2700).
                 assert_eq!(
-                    hooks[spelling][0]["hooks"][0]["command"],
-                    Value::String(wiring_command(*harness)),
+                    *command,
+                    Value::String(registration_command(*harness, spelling)),
+                    "{}: {spelling}",
+                    harness.as_str()
+                );
+                assert_eq!(
+                    command
+                        .as_str()
+                        .is_some_and(|text| text.ends_with(&format!("--event {spelling}"))),
+                    harness.names_event_on_argv(spelling),
                     "{}: {spelling}",
                     harness.as_str()
                 );
@@ -18344,10 +20697,197 @@ deny contains "refused by themodule" if {
         for (raw, event) in [
             ("afterFileEdit", Event::PostTool),
             ("stop", Event::Stop),
-            ("subagentStop", Event::Stop),
+            // Its own moment, not the Stop family (CLOUD-2695).
+            ("subagentStop", Event::SubagentStop),
             ("sessionStart", Event::SessionStart),
+            ("postToolUseFailure", Event::PostToolFailure),
+            ("sessionEnd", Event::SessionEnd),
+            ("subagentStart", Event::SubagentStart),
+            ("preCompact", Event::PreCompact),
         ] {
             assert_eq!(normalize_event(Harness::Cursor, raw), event, "{raw}");
+        }
+    }
+
+    /// Gemini's model events and Copilot's two camelCase-only events normalize
+    /// to their concepts (CLOUD-2700).
+    ///
+    /// Fails by: dropping any arm, which reads the spelling as unrecognized.
+    #[test]
+    fn gemini_and_copilot_renamed_events_normalize() {
+        for (harness, raw, event) in [
+            (Harness::GeminiCli, "BeforeModel", Event::ModelRequest),
+            (Harness::GeminiCli, "AfterModel", Event::ModelResponse),
+            (Harness::CopilotCli, "subagentStart", Event::SubagentStart),
+            (
+                Harness::CopilotCli,
+                "userPromptTransformed",
+                Event::UserPromptExpansion,
+            ),
+        ] {
+            assert_eq!(normalize_event(harness, raw), event, "{raw}");
+        }
+    }
+
+    fn parsed(command: &str) -> Vec<Segment> {
+        let crate::facts::Look::Is(parsed) = segments(command) else {
+            panic!("`{command}` parses");
+        };
+        parsed
+    }
+
+    /// A glued `-m` message is read, and a backgrounded `wait` waits on
+    /// nothing after it, so it is itself detached.
+    #[test]
+    fn a_glued_message_is_read_and_a_backgrounded_wait_waits_on_nothing() {
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -mfix")[0], None),
+            Some(CommitMessage::Text(String::from("fix")))
+        );
+        // Fails by: a glued `-F` path refused unless empty.
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -Fmsg.txt")[0], Some(Path::new("/w"))),
+            Some(CommitMessage::File(PathBuf::from("/w/msg.txt")))
+        );
+        assert!(!waited_on(&parsed("wait &"), 0, 1));
+    }
+
+    /// Fails by: a `_`-led or `_`-holding variable refused, a name with a
+    /// non-identifier character accepted, or `%` and a non-number accepted.
+    #[test]
+    fn an_own_job_reference_names_only_the_calls_job() {
+        for (word, own) in [
+            ("%1", true),
+            ("%", true),
+            ("%x", false),
+            ("$_x", true),
+            ("${a_1}", true),
+            ("$x-y", false),
+            ("${1x}", false),
+            ("12", false),
+        ] {
+            assert_eq!(own_job_ref(word), own, "{word}");
+        }
+    }
+
+    /// A `cd` is placed only bare, literal and alone; `pushd` too.
+    #[test]
+    fn a_cd_is_placed_only_bare_and_literal() {
+        let base = Path::new("/r");
+        let placed = |command: &str| {
+            let segments = parsed(command);
+            let segment = segments
+                .iter()
+                .find(|segment| segment.words.iter().any(|w| w == "cd" || w == "pushd"))
+                .unwrap_or_else(|| panic!("`{command}` has a cd"));
+            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+            placed_cd(segment, &tokens, base)
+        };
+        assert_eq!(placed("cd sub"), Some(PathBuf::from("/r/sub")));
+        assert_eq!(placed("pushd sub"), Some(PathBuf::from("/r/sub")));
+        for refused in [
+            "(cd sub)",
+            "echo $(cd sub)",
+            "command cd",
+            "cd -",
+            "cd s*",
+            "cd $D",
+        ] {
+            assert_eq!(placed(refused), None, "{refused}");
+        }
+    }
+
+    /// A `cd` moves the directory later programs run in only across `&&` or
+    /// `;`, and a git program's `-C` with no subcommand still names its dir.
+    #[test]
+    fn a_cd_is_followed_only_across_and_or_semicolon() {
+        let targets = |command: &str| {
+            call_targets(&envelope_at(Event::PreTool, command), Path::new("/r")).unwrap()
+        };
+        let at = |dirs: &[&str]| dirs.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(targets("cd sub"), at(&["/r", "/r/sub"]));
+        assert_eq!(targets("cd sub && true"), at(&["/r/sub", "/r/sub"]));
+        assert_eq!(targets("git -C sub"), at(&["/r", "/r/sub"]));
+    }
+
+    /// Fails by: a piped `cd` followed, `-C` misread, a `--work-tree` placed,
+    /// a `--` checkout of `.` refused, or `-s <tree>` read as a pathspec.
+    #[test]
+    fn a_pathspec_is_placed_through_each_option_and_separator() {
+        let calls =
+            |command: &str| pathspec_calls(&envelope_at(Event::PreTool, command), Path::new("/r"));
+        let placed = |dir: &str, specs: &[&str]| {
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from(dir),
+                pathspecs: specs.iter().map(|spec| (*spec).to_owned()).collect(),
+            }])
+        };
+        assert_eq!(calls("cd sub | true; git restore f"), placed("/r", &["f"]));
+        assert_eq!(calls("cd sub; git restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git -C sub restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git --work-tree=w restore f"), Pathspecs::Unplaceable);
+        assert_eq!(calls("git checkout -- ."), placed("/r", &["."]));
+        assert_eq!(calls("git checkout main"), placed("/r", &[]));
+        assert_eq!(calls("git restore -s HEAD f"), placed("/r", &["f"]));
+    }
+
+    /// Only a word that is wholly a `cat` heredoc substitution, bare or
+    /// quoted, is read as its body.
+    #[test]
+    fn only_a_whole_word_cat_heredoc_is_read_as_its_body() {
+        let bodies = |command: &str| {
+            parsed(command)
+                .into_iter()
+                .flat_map(|segment| segment.cat_bodies)
+                .map(|(_, body)| body.trim_end().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bodies("git commit -m $(cat <<'EOF'\nbare\nEOF\n)"),
+            vec!["bare"]
+        );
+        assert_eq!(
+            bodies("git commit -m \"$(cat <<'EOF'\nquoted\nEOF\n)\""),
+            vec!["quoted"]
+        );
+        for refused in [
+            "git commit -m x$(cat <<'EOF'\nglued\nEOF\n)y",
+            "git commit -m \"$(tac <<'EOF'\nother\nEOF\n)\"",
+            "git commit -m \"$(X=1 cat <<'EOF'\nassigned\nEOF\n)\"",
+            // Fails by: a word quoted on one side only read as the quoted form.
+            "git commit -m \"$(cat <<'EOF'\nhalf\nEOF\n)\"y",
+            "git commit -m y\"$(cat <<'EOF'\nhalf\nEOF\n)\"",
+        ] {
+            assert!(bodies(refused).is_empty(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn mise_reads_its_value_options_ahead_of_the_subcommand() {
+        assert_eq!(
+            subcommand_index(&["-C", "d", "run", "x"], global_value_options("mise")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn prompt_submit_is_derived_only_where_a_deny_reaches_the_host() {
+        // CLOUD-2695: Codex and Gemini honour Batten's exit-2 deny at prompt
+        // submit; Cursor reads a field Batten does not write, and Copilot
+        // documents no block, so deriving it there would fail open.
+        for (harness, derived) in [
+            (Harness::ClaudeCode, true),
+            (Harness::CodexCli, true),
+            (Harness::GeminiCli, true),
+            (Harness::Cursor, false),
+            (Harness::CopilotCli, false),
+        ] {
+            assert_eq!(
+                harness.capabilities().emits(Event::UserPromptSubmit),
+                derived,
+                "{}",
+                harness.as_str()
+            );
         }
     }
 
@@ -18779,10 +21319,14 @@ deny contains "refused by themodule" if {
         use crate::facts::Look;
         let gates = |discards| {
             with_native_facts(&discards, &Look::CouldNotLook, |f| {
-                native_fired(f)
-                    .into_iter()
-                    .map(|(gate, _)| gate)
-                    .collect::<Vec<_>>()
+                native_fired(
+                    &Policy::declaring_nothing(Harness::ExitCode),
+                    &envelope(""),
+                    f,
+                )
+                .into_iter()
+                .map(|(gate, _)| gate)
+                .collect::<Vec<_>>()
             })
         };
         assert_eq!(
@@ -18804,13 +21348,17 @@ deny contains "refused by themodule" if {
         let at = |rows: Vec<Rule>| {
             let policy = ceiling_policy(rows);
             with_native_facts(&Look::CouldNotLook, &unread(), |f| {
-                (native_denial(&policy, f), native_advice(&policy, f).len())
+                let call = envelope("");
+                (
+                    native_denial(&policy, &call, f),
+                    native_nonblocking(&policy, &call, f).len(),
+                )
             })
         };
         let (denial, advice) = at(Vec::new());
         assert!(matches!(denial, Some(Decision::Deny(_))), "{denial:?}");
         assert_eq!(advice, 0);
-        let (denial, advice) = at(vec![history_graded(RuleSeverity::Warn)]);
+        let (denial, advice) = at(vec![history_graded(RuleSeverity::Advise)]);
         assert_eq!(denial, None);
         assert_eq!(advice, 1);
         let (denial, advice) = at(vec![history_graded(RuleSeverity::Allow)]);
@@ -18950,11 +21498,21 @@ deny contains "refused by themodule" if {
             matched_ids(&ceiling_policy(vec![tool_receipt_row()]), &call),
             ["issue-receipt"]
         );
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+        // A nonblocking row is SELECTED too (CLOUD-2707), so its receipt is
+        // resolved for the record; an `allow` row, configured off, is not.
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &call).is_empty());
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &call),
+            ["issue-receipt"]
+        );
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
+            ..tool_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![off]), &call).is_empty());
         let conditioned = Rule {
             when_absent: Some(Field::SessionId),
             ..tool_receipt_row()
@@ -18964,19 +21522,29 @@ deny contains "refused by themodule" if {
         assert!(matched_ids(&ceiling_policy(vec![conditioned]), &in_session).is_empty());
     }
 
-    /// On the command walk, a receipt row that does not block, or that is
+    /// On the command walk, a receipt row configured off, or one that is
     /// triggered by a write, is not matched by its command; and the program's
     /// own name is never one of its operands.
     ///
     /// Fails by: the trigger or blocking test conjoined with the next one,
     /// or the operand words starting at the program.
     #[test]
-    fn the_command_walk_matches_only_a_blocking_command_triggered_row() {
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+    fn the_command_walk_matches_only_a_live_command_triggered_row() {
+        // Nonblocking rows are selected for the record (CLOUD-2707); only a
+        // row configured off is not.
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
             ..ready_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &envelope("gh pr ready")).is_empty());
+        assert!(matched_ids(&ceiling_policy(vec![off]), &envelope("gh pr ready")).is_empty());
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        };
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &envelope("gh pr ready")),
+            ["ready-receipt"]
+        );
         let write_triggered = Rule {
             trigger: Some(ReceiptTrigger::Write),
             ..ready_receipt_row()
@@ -19034,6 +21602,67 @@ deny contains "refused by themodule" if {
         crate::facts::Look::Is(resolved(entries))
     }
 
+    /// CLOUD-2707: a `warn` receipt row with its receipt missing is recorded at the
+    /// call and never denies; a `deny` row denies and is never also recorded.
+    ///
+    /// Fails by: the selection dropping `warn` rows again (no record), the deny
+    /// loop losing its blocking test (a `warn` row denies), or the record
+    /// losing its own (a `deny` row also recorded).
+    #[test]
+    fn a_warn_receipt_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("gh pr ready");
+        let missing = receipts(&[]);
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        }]);
+        assert_eq!(receipt_rules(&warned, &call, &missing), Decision::Allow);
+        assert_eq!(receipt_nonblocking(&warned, &call, &missing).len(), 1);
+        let (stop, waived) = (
+            crate::stop::StopFacts::default(),
+            crate::waiver::Live::new(),
+        );
+        let facts = Facts {
+            receipts: &missing,
+            ..Facts::none(&stop, &waived)
+        };
+        assert_eq!(nonblocking_findings(&warned, &call, &facts).len(), 1);
+        let denied = ceiling_policy(vec![ready_receipt_row()]);
+        assert!(matches!(
+            receipt_rules(&denied, &call, &missing),
+            Decision::Deny(_)
+        ));
+        assert!(receipt_nonblocking(&denied, &call, &missing).is_empty());
+    }
+
+    /// CLOUD-2707: a `warn` shape row is recorded at the call and allows it; the
+    /// same row at `deny` denies and is not also recorded.
+    ///
+    /// Fails by: the record pass not promoting `warn` rows (lost again), or
+    /// taking blocking rows too (a deny also recorded).
+    #[test]
+    fn a_warn_shape_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("git push origin main");
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..shape("push-warned", "git push", None)
+        }]);
+        assert_eq!(
+            no_facts(|f| super::adjudicate(&warned, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&warned, &call, f)).len(),
+            1
+        );
+        let denied = ceiling_policy(vec![shape("push-denied", "git push", None)]);
+        assert!(matches!(
+            no_facts(|f| super::adjudicate(&denied, &call, f)),
+            Decision::Deny(_)
+        ));
+        assert!(no_facts(|f| gate_nonblocking(&denied, &call, f)).is_empty());
+    }
+
     /// The tool receipt gate denies a selecting receipt row whose receipt is
     /// missing, and nothing else.
     ///
@@ -19053,7 +21682,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(shaped, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19151,6 +21780,29 @@ deny contains "refused by themodule" if {
         assert_eq!(reach[0]["arguments"], serde_json::json!(["--flag", "x"]));
     }
 
+    /// A git, gh or mise entry carries its first verb past the program's own
+    /// value-taking options, and the words before it verbatim (CLOUD-2354).
+    ///
+    /// Fails by: an empty option table (`/repo` becomes the subcommand), an
+    /// empty `global-options`, or either key projected for a program with no
+    /// table.
+    #[test]
+    fn each_git_entry_carries_its_subcommand_past_global_options() {
+        let entry = |command: &str| program_reach(command).remove(0);
+        let pushed = entry("git -C /repo push origin");
+        assert_eq!(pushed["subcommand"], "push");
+        assert_eq!(pushed["global-options"], serde_json::json!(["-C", "/repo"]));
+        let version = entry("git --version");
+        assert_eq!(version["subcommand"], serde_json::Value::Null);
+        assert_eq!(version["global-options"], serde_json::json!(["--version"]));
+        let viewed = entry("gh -R o/r pr view 1");
+        assert_eq!(viewed["subcommand"], "pr");
+        assert_eq!(viewed["global-options"], serde_json::json!(["-R", "o/r"]));
+        let read = entry("cat f");
+        assert_eq!(read["subcommand"], serde_json::Value::Null);
+        assert_eq!(read["global-options"], serde_json::Value::Null);
+    }
+
     /// A redirect into a file is a write; into a descriptor or `/dev/null`
     /// it is not.
     ///
@@ -19214,7 +21866,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..task_tool_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19276,7 +21928,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..row.clone()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19361,7 +22013,7 @@ deny contains "refused by themodule" if {
         let mixed = graded_modules(
             "mixed",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
                 ("refused by beta", RuleSeverity::Deny),
             ],
             "",
@@ -19374,8 +22026,8 @@ deny contains "refused by themodule" if {
         let ties = graded_modules(
             "ties",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
-                ("refused by beta", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
+                ("refused by beta", RuleSeverity::Advise),
             ],
             "",
         );
@@ -19384,33 +22036,57 @@ deny contains "refused by themodule" if {
         assert_eq!(strongest.verdict(), Some("refused by alpha"));
     }
 
-    /// A `warn` module allows the call and speaks as advice, except at
-    /// `Stop`, where it nudges once and only while no nudge is active.
+    /// CLOUD-2707: an `advise` module allows the call and is reported at its
+    /// grade, and nudges at `Stop`; a `record` module is reported at a call and
+    /// at `Stop` and never nudges; a `deny` module nudges at `Stop`. Each nudge
+    /// fires once, only while no nudge is active.
     ///
-    /// Fails by: denying at `warn`, losing the advice, advising at `Stop`, or
-    /// either stop guard inverted.
+    /// Fails by: denying at `advise`, losing a finding, speaking a `record`
+    /// module at `Stop` or silencing an `advise` one, or either stop guard
+    /// inverted.
     #[test]
-    fn a_warn_module_advises_and_nudges_at_stop() {
-        let warned = graded_modules("warned", &[("refused by alpha", RuleSeverity::Warn)], "");
+    fn an_advise_module_speaks_and_a_record_module_is_only_recorded() {
+        let module = |severity| graded_modules("graded", &[("refused by alpha", severity)], "");
         let call = envelope("forbidden");
+        let stop = envelope_at(Event::Stop, "forbidden");
+        let advised = module(RuleSeverity::Advise);
         assert_eq!(
-            no_facts(|f| policy_rules(&warned, &call, f)),
+            no_facts(|f| policy_rules(&advised, &call, f)),
             Decision::Allow
         );
-        assert_eq!(no_facts(|f| policy_advice(&warned, &call, f)).len(), 1);
-        let stop = envelope_at(Event::Stop, "forbidden");
-        assert!(no_facts(|f| policy_advice(&warned, &stop, f)).is_empty());
-        assert!(no_facts(|f| stop_advice(&warned, &stop, f)).is_some());
+        let found = no_facts(|f| nonblocking_findings(&advised, &call, f));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, RuleSeverity::Advise);
+        assert!(no_facts(|f| stop_advice(&advised, &stop, f)).is_some());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&advised, &stop, f)).len(),
+            1
+        );
+        let recorded = module(RuleSeverity::Record);
+        assert_eq!(
+            no_facts(|f| policy_rules(&recorded, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &call, f))[0].0,
+            RuleSeverity::Record
+        );
+        assert!(no_facts(|f| stop_advice(&recorded, &stop, f)).is_none());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &stop, f)).len(),
+            1
+        );
+        let denied = module(RuleSeverity::Deny);
+        assert!(no_facts(|f| stop_advice(&denied, &stop, f)).is_some());
         let active = Envelope {
             stop_active: Some(true),
             ..envelope_at(Event::Stop, "forbidden")
         };
-        assert!(no_facts(|f| stop_advice(&warned, &active, f)).is_none());
-        assert!(no_facts(|f| stop_advice(&warned, &call, f)).is_none());
-        let off = graded_modules("off", &[("refused by alpha", RuleSeverity::Allow)], "");
-        assert!(no_facts(|f| policy_advice(&off, &call, f)).is_empty());
+        assert!(no_facts(|f| stop_advice(&denied, &active, f)).is_none());
+        assert!(no_facts(|f| stop_advice(&denied, &call, f)).is_none());
+        let off = module(RuleSeverity::Allow);
+        assert!(no_facts(|f| nonblocking_findings(&off, &call, f)).is_empty());
     }
-
     /// A native gate graded `warn` advises on a moment the chain decides, and
     /// not on one it does not.
     ///
@@ -19419,12 +22095,12 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_warned_native_gate_advises_where_the_chain_decides() {
         use crate::facts::Look;
-        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Warn)]);
+        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Advise)]);
         let advice = |event| {
             with_native_facts(
                 &Look::CouldNotLook,
                 &Look::Is(vec![String::from("row")]),
-                |f| policy_advice(&policy, &envelope_at(event, "ls"), f).len(),
+                |f| nonblocking_findings(&policy, &envelope_at(event, "ls"), f).len(),
             )
         };
         assert_eq!(advice(Event::PreTool), 1);
@@ -19822,7 +22498,7 @@ deny contains "refused by themodule" if {
             Decision::Deny(_)
         ));
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..head()
         };
         assert_eq!(piped(warned, "mise run ci | head"), Decision::Allow);
@@ -20012,5 +22688,54 @@ deny contains "refused by themodule" if {
             matching_shape_rows(&policy, &envelope("echo echo")).len(),
             1
         );
+    }
+
+    /// Fails by: Claude Code's session-owner variable unnamed or misnamed, or
+    /// one claimed for a host never surveyed.
+    #[test]
+    fn only_claude_code_names_a_session_owner_variable() {
+        assert_eq!(
+            Harness::ClaudeCode.session_owner_email_var(),
+            Some("CLAUDE_CODE_USER_EMAIL")
+        );
+        assert_eq!(Harness::Cursor.session_owner_email_var(), None);
+    }
+
+    /// Fails by: a githooks(5) name not recognised, or any name recognised.
+    #[test]
+    fn a_git_hook_name_is_recognised_and_no_other() {
+        assert!(is_git_hook("pre-commit"));
+        assert!(!is_git_hook("pre-cmmit"));
+    }
+
+    /// Fails by: Gemini's pre-compaction left unmapped (CLOUD-2695).
+    #[test]
+    fn geminis_pre_compress_is_pre_compact() {
+        assert_eq!(
+            normalize_event(Harness::GeminiCli, "PreCompress"),
+            Event::PreCompact
+        );
+    }
+
+    /// Fails by: a budget set selected by a write that is not at `PreTool`
+    /// (CLOUD-2661).
+    #[test]
+    fn only_a_pre_tool_write_selects_a_budget_set() {
+        let mut policy = Policy::declaring_nothing(Harness::ExitCode);
+        policy.budget = Some(crate::budget::Budget(std::collections::BTreeMap::from([(
+            "always".to_owned(),
+            crate::budget::BudgetSet {
+                files: vec!["CLAUDE.md".to_owned()],
+                max_tokens: 1,
+                max_lines: None,
+                max_bytes_per_file: None,
+                embedded: vec![],
+            },
+        )])));
+        let write = write_envelope("Write", "CLAUDE.md");
+        assert_eq!(policy.budget_sets_for(&write), vec!["always"]);
+        let mut after = write_envelope("Write", "CLAUDE.md");
+        after.event = Event::PostTool;
+        assert!(policy.budget_sets_for(&after).is_empty());
     }
 }

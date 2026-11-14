@@ -56,7 +56,7 @@ pub fn run(inputs: &Inputs<'_>, session: &Session, err: &mut dyn Write) -> Resul
         writeln!(err, "mcp posture: no {settings} — nothing to check")?;
         return Ok(ExitCode::Success);
     }
-    let text = std::fs::read_to_string(inputs.settings)?;
+    let text = crate::fsio::read_to_string(inputs.settings)?;
     let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
         anyhow::bail!(
             "mcp posture: {settings} is not readable JSON, so nothing about it was judged"
@@ -75,8 +75,6 @@ pub fn run(inputs: &Inputs<'_>, session: &Session, err: &mut dyn Write) -> Resul
 ///
 /// One finding per governed name, with a count. A name whose wiring this host
 /// did not inject answers nothing — no generated config means no verdict.
-//MUTANT-SUITE crates/batten/tests/it/mcp_attach.rs
-//MUTANT unenforceable-finding-dropped|s@^        if bound.unenforceable == 0 {$@        if true {@|an_allow_rule_whose_tool_the_connector_sets_to_ask_is_unenforceable
 fn unenforceable(inputs: &Inputs<'_>, settings: &str) -> Vec<String> {
     let mut findings = Vec::new();
     for alias in &inputs.config.permission_aliases {
@@ -130,7 +128,6 @@ const LOG_DIR_PREFIX: &str = "mcp-logs-";
 /// routine stderr chatter, not an outcome. A missing log ROOT is not a live
 /// session and answers nothing; a root missing one server's directory is the
 /// defect.
-//MUTANT absent-root-judged|s@^    let Some(root) = session.logs.as_deref().filter(.root. root.is_dir()) else@    let Some(root) = session.logs.as_deref() else@|a_missing_log_root_is_not_a_live_session
 fn unattached(document: &Node, session: &Session, err: &mut dyn Write) -> Result<Vec<String>> {
     let servers: Vec<String> = match document.at("enabledMcpjsonServers") {
         Look::Is(Node::List(items)) => items
@@ -194,7 +191,7 @@ fn newest_log(dir: &Path) -> Option<(String, String)> {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
         })
         .max()?;
-    let text = std::fs::read_to_string(dir.join(&newest)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(&newest)).ok()?;
     Some((newest, text))
 }
 
@@ -203,7 +200,6 @@ fn newest_log(dir: &Path) -> Option<(String, String)> {
 /// A line that is not a JSON record is skipped rather than ending the read: a
 /// log the host was still writing ends in a torn line, and the outcomes before
 /// it are still the session's.
-//MUTANT last-outcome-ignored|s@^        .next_back()$@        .next()@|a_failure_followed_by_a_reconnect_passes
 fn last_outcome(log: &str) -> Option<Outcome> {
     log.lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -244,11 +240,8 @@ const AFTER_ATTEMPT: i64 = 35;
 /// Its silence means something only once it has recorded the server at all, so
 /// an absent ledger, or one that never saw this server, is `unrecorded` and
 /// never `never-spawned` — a verdict from nothing.
-//MUTANT spawn-window-ignored|s@ && (start - BEFORE_ATTEMPT..=start + AFTER_ATTEMPT).contains(.at)$@@|a_timeout_with_no_spawn_record_for_that_attempt_reads_as_never_spawned
-//MUTANT launch-failure-read-as-unresponsive|s@^    if let Some(line) = failed {$@    if let Some(line) = failed.filter(\x7c_\x7c false) {@|a_launch_the_spawn_could_not_exec_reads_as_launch_failed
-//MUTANT ledger-wiring-inverted|s@^    if !records.iter().any(@    if records.iter().any(@|a_timeout_with_a_matching_spawn_record_reads_as_spawned_and_unresponsive
 fn spawn_verdict(server: &str, log_name: &str, spawns: Option<&Path>) -> String {
-    let Some(text) = spawns.and_then(|path| std::fs::read_to_string(path).ok()) else {
+    let Some(text) = spawns.and_then(|path| crate::fsio::read_to_string(path).ok()) else {
         return String::from(
             "unrecorded (no spawn ledger; launch the server through `batten mcp spawn` to tell a \
              launch that never happened from one that hung)",

@@ -65,10 +65,6 @@ pub struct Pass {
     pub held: Held,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-//MUTANT held-lock-unreported|s@^                .map(\x7clock\x7c format!("disk-held {}", lock.display())),$@                .filter(\x7c_\x7c false).map(\x7clock\x7c format!("disk-held {}", lock.display())),@|a_held_profile_is_reported_by_its_lock
 impl Collected {
     /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`,
     /// the unlink cost (CLOUD-1945's figure), then one `disk-held <lock>` per
@@ -152,8 +148,6 @@ pub enum Kept {
 /// A PROGRAM THE TABLE NAMES ONLY BY NAME IS KEPT BY NAME. macOS gives each
 /// process's path only through `kern.procargs2`, which no safe crate reaches
 /// (see [`processes`]), so there a running program is [`Kept::Named`].
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT running-program-collected|s@^        .chain(table.iter().filter_map(\x7cprocess\x7c process.exe.clone()))$@@|a_unit_a_running_program_executes_is_never_collected#[must_use]
 #[must_use]
 pub fn engine_kept() -> Vec<Kept> {
     let table = processes().unwrap_or_default();
@@ -243,7 +237,7 @@ fn processes() -> Option<Vec<Process>> {
         let table = pids
             .filter_map(|dir| {
                 let exe = std::fs::read_link(dir.join("exe")).ok()?;
-                let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
+                let stat = crate::fsio::read_to_string(dir.join("stat")).ok()?;
                 let since_boot = proc_stat::start_ticks(&stat)?;
                 Some(Process {
                     name: program_name(&exe.to_string_lossy()),
@@ -300,7 +294,7 @@ fn processes() -> Option<Vec<Process>> {
 /// either could not be read.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
-    let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
+    let boot = proc_stat::boot_seconds(&crate::fsio::read_to_string("/proc/stat").ok()?)?;
     let ticks = rustix::param::clock_ticks_per_second().max(1);
     let pids = std::fs::read_dir("/proc")
         .ok()?
@@ -318,12 +312,6 @@ fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
 
 /// The `/proc` layouts [`processes`] and [`group_orphaned`] read, as pure
 /// functions so every platform's suite checks them.
-//MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
-//MUTANT began-before-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_stat_line_began_before_only_strictly_before
-//MUTANT orphan-leader-ignored|s@if pid == group \x7c\x7c pid == registrant {@if pid == registrant {@|an_orphan_needs_its_leader_and_registrant_gone
-//MUTANT orphan-registrant-ignored|s@if pid == group \x7c\x7c pid == registrant {@if pid == group {@|an_orphan_needs_its_leader_and_registrant_gone
-//MUTANT orphan-unread-pid-absent|s@let Some(pid) = process_id(stat) else {@let Some(pid) = process_id(stat).or(Some(0)) else {@|an_orphan_needs_its_leader_and_registrant_gone
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod proc_stat {
     /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
@@ -426,14 +414,13 @@ mod proc_stat {
 ///
 /// Where there is no `/proc` to read a group's members from, none is ever proven
 /// the orphan's and nothing is reaped. Only the read is under `cfg` (CLOUD-2509).
-//MUTANT-SUITE crates/batten/tests/it/process_group.rs
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let Some((boot, ticks, pids)) = proc_table() else {
             return false;
         };
-        let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
+        let stats = pids.filter_map(|dir| crate::fsio::read_to_string(dir.join("stat")).ok());
         orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -483,10 +470,6 @@ fn orphaned_in<S: AsRef<str>>(
 
 /// The Darwin layout [`processes`] reads, as a pure function so every
 /// platform's suite checks it; only the `sysctl` call is macOS's own.
-//MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT kinfo-pid-misread|s@^                let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);$@                let pid = i32::from_le_bytes(entry.get(0..4)?.try_into().ok()?);@|a_kinfo_table_yields_each_process
-//MUTANT kinfo-start-misread|s@^                    i64::from_le_bytes(entry.get(P_STARTTIME..P_STARTTIME + 8)?.try_into().ok()?);$@                    i64::from_le_bytes(entry.get(P_PID..P_PID + 8)?.try_into().ok()?);@|a_kinfo_table_yields_each_start
-//MUTANT kinfo-comm-misread|s@^                let comm = entry.get(P_COMM..P_COMM + MAXCOMLEN)?;$@                let comm = entry.get(P_COMM - 1..P_COMM - 1 + MAXCOMLEN)?;@|a_kinfo_table_yields_each_process
 #[cfg(any(target_os = "macos", test))]
 mod darwin {
     use super::Process;
@@ -543,8 +526,6 @@ mod darwin {
 const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + \"`t\" + $_.StartTime.ToFileTimeUtc() } catch {} }";
 
 /// The listing's layout, as a pure function so every platform's suite checks it.
-//MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT filetime-epoch-ignored|s@^                    .checked_sub(FILETIME_TO_UNIX)?;$@                    ;@|a_powershell_listing_yields_each_process
 #[cfg(any(windows, test))]
 mod windows_table {
     use super::Process;
@@ -578,8 +559,12 @@ mod windows_table {
 }
 
 /// The programs whose process is a build: cargo and what it runs.
-const BUILD_PROGRAMS: [&str; 6] = [
+const BUILD_PROGRAMS: [&str; 7] = [
     "cargo",
+    // A SWEEP IS A BUILD for as long as it runs: it stages a copy (see
+    // [`mutant_copies`]) and builds and tests in it, and its copy is live from
+    // the moment it is made.
+    "cargo-mutants",
     "cargo-nextest",
     "cargo-clippy",
     "clippy-driver",
@@ -613,8 +598,6 @@ pub fn live_since(trees: &[PathBuf]) -> Option<SystemTime> {
 
 /// The earliest start among `processes` that are builds: a [`BUILD_PROGRAMS`]
 /// program, or an executable under one of `trees` (a test binary it runs).
-//MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT root-takes-any-process|s@^        .filter(\x7cprocess\x7c is_build(process, \&trees))$@        .filter(\x7c_\x7c true)@|the_earliest_build_is_the_root
 #[must_use]
 pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<SystemTime> {
     let trees: Vec<PathBuf> = trees
@@ -626,6 +609,71 @@ pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<
         .filter(|process| is_build(process, &trees))
         .map(|process| process.started)
         .min()
+}
+
+/// The earliest start among running TEST BINARIES under `trees`: what a
+/// scratch fixture's liveness is rooted in (#1276).
+///
+/// MEASURED ON #1276: a `land` lap's passes each logged `disk-live` and freed
+/// nothing while 6.8GB of fixtures that a FINISHED suite wrote sat in
+/// `target/tmp`, until the mutation stage filled the volume. Every one of them
+/// was written after the lap's own `cargo run` started, and that process lives
+/// as long as the lap. A fixture is written by a suite, so a suite still running
+/// is what keeps it — never a cargo, and never the engine's own build, which
+/// runs from the same tree for the whole lap ([`is_kept`] over `kept`).
+#[must_use]
+pub fn fixtures_since(trees: &[PathBuf], kept: &[Kept]) -> Option<SystemTime> {
+    match processes() {
+        Some(table) => earliest_fixture_writer(&table, trees, kept),
+        None => Some(SystemTime::UNIX_EPOCH),
+    }
+}
+
+/// A liveness window that never opens after `scanned`: whatever a pass finds
+/// written since it began is in use, with or without a live writer named.
+#[must_use]
+pub fn no_later_than(window: Option<SystemTime>, scanned: SystemTime) -> SystemTime {
+    window.map_or(scanned, |since| since.min(scanned))
+}
+
+/// The earliest start among `processes` whose executable is a test harness under one of
+/// `trees` and is not a kept file.
+#[must_use]
+pub fn earliest_fixture_writer(
+    processes: &[Process],
+    trees: &[PathBuf],
+    kept: &[Kept],
+) -> Option<SystemTime> {
+    let trees: Vec<PathBuf> = trees
+        .iter()
+        .map(|tree| crate::git::canonical(tree))
+        .collect();
+    // A TABLE THAT NAMES NO EXECUTABLE (macOS's) CANNOT TELL A SUITE FROM A
+    // BUILD, so it falls back to the build window: wider, never narrower.
+    if processes.iter().all(|process| process.exe.is_none()) {
+        return earliest_build_start(processes, &trees);
+    }
+    processes
+        .iter()
+        .filter(|process| {
+            process.exe.as_ref().is_some_and(|exe| {
+                is_test_harness(exe)
+                    && trees.iter().any(|tree| exe.starts_with(tree))
+                    && !is_kept(exe, kept)
+            })
+        })
+        .map(|process| process.started)
+        .min()
+}
+
+/// A test harness: cargo links every one into its profile's `deps/`, where a
+/// `cargo run` binary sits at the profile's top. MEASURED ON #1276: the lap's
+/// own `target/debug/batten land lap`, unkept and alive for hours, rooted 6.8GB
+/// of finished suites' fixtures until the volume filled.
+fn is_test_harness(exe: &Path) -> bool {
+    exe.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|dir| dir == "deps")
 }
 
 /// A build: a [`BUILD_PROGRAMS`] name (each under `p_comm`'s 16 bytes, so macOS
@@ -690,12 +738,13 @@ struct Unit {
     /// A scratch entry or the staged copy, taken whole: a live run reads it
     /// with no build lock held.
     whole: bool,
+    /// A test suite's scratch fixture, whose writer is a test binary rather
+    /// than a build: judged live by [`Request::fixtures_since`].
+    fixture: bool,
 }
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
 /// target triples and build trees included.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT scratch-unit-ranked|s@^        .filter(\x7cfingerprints\x7c !wholes.iter().any(\x7cwhole\x7c fingerprints.starts_with(whole)))$@        .filter(\x7c_\x7c true)@|a_build_inside_fresh_scratch_is_never_collected
 fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<Unit> {
     let mut units = Vec::new();
     // SCRATCH IS ONE UNIT EACH, RANKED BY [`whole_units`]: a test suite builds
@@ -733,6 +782,7 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
                 profile: profile.clone(),
                 fingerprint,
                 whole: false,
+                fixture: false,
             });
         }
     }
@@ -749,8 +799,6 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
 /// class. Ranked with the units by last use, behind the same profile lock and
 /// the same working set, so the edit loop's own cache is never the one taken —
 /// the defect the retired escalation had, dropping `incremental` first.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT incremental-unranked|s@^        units.extend(caches_in(tree, \&profile));$@@|a_stale_incremental_cache_is_collected_and_a_fresh_one_kept
 fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
     let Ok(entries) = std::fs::read_dir(profile.join("incremental")) else {
         return Vec::new();
@@ -765,6 +813,7 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
             fingerprint: entry.path(),
             artifacts: Vec::new(),
             whole: false,
+            fixture: false,
         })
         .collect()
 }
@@ -772,8 +821,6 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
 /// Does a live run read this unit with no build lock held: the test scratch it
 /// writes, or an executable it may launch (a file with no extension, or `.exe`)?
 /// Libraries, metadata and caches are read only by a compile, under the lock.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT run-root-ignores-executables|s@artifact.is_file() \&\& artifact.extension().is_none_or(\x7cext\x7c ext == "exe")@false@|a_test_binary_a_live_run_built_is_never_collected
 fn read_by_a_run(unit: &Unit) -> bool {
     unit.whole
         || unit.artifacts.iter().any(|artifact| {
@@ -798,9 +845,6 @@ const STAGED: &str = "mutate";
 /// dependencies of the profiles the next lap built. A build tree is a
 /// fingerprint directory's grandparent — `replay` for `replay/debug` — and its
 /// `tmp/` is the scratch cargo gave that build's suites.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT nested-scratch-unseen|s@^                .filter_map(\x7cfound\x7c Some(found.parent()?.parent()?.join(SCRATCH))),$@                .filter_map(\x7c_\x7c None::<PathBuf>),@|a_nested_build_trees_stale_scratch_is_collected
-//MUTANT staged-copy-unranked|s@^    if staged.is_dir() {$@    if false \&\& staged.is_dir() {@|an_idle_staged_copy_goes_before_a_built_profiles_units
 fn wholes_in(tree: &Path, fingerprints: &[PathBuf]) -> Vec<PathBuf> {
     let mut scratch: Vec<PathBuf> = std::iter::once(tree.join(SCRATCH))
         .chain(
@@ -848,6 +892,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                 fingerprint: whole.clone(),
                 artifacts: Vec::new(),
                 whole: true,
+                fixture: false,
             });
             continue;
         }
@@ -867,10 +912,74 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                     fingerprint: entry.path(),
                     artifacts: Vec::new(),
                     whole: true,
+                    fixture: true,
                 }),
         );
     }
     units
+}
+
+/// How cargo-mutants names the copy it stages a sweep in, inside the temp
+/// directory: `cargo-mutants-<crate>-<random>.tmp`. The engine's own runner's
+/// spelling, never a consumer's (rule 1).
+const MUTANT_COPY: (&str, &str) = ("cargo-mutants-", ".tmp");
+
+/// Whether `repo` IS a cargo-mutants copy: its own directory named as
+/// [`MUTANT_COPY`] names.
+///
+/// A COPY IS COLLECTED WHOLE OR NOT AT ALL. It carries `.git`, so a hook or a
+/// compile inside it resolved the copy as a repository and collected its
+/// `target/` unit by unit between two mutants, when no cargo lock is held.
+/// MEASURED ON #1276: 28 of 83 mutants rebuilt every dependency (341-370
+/// crates, ~5 min each) where the other 55 rebuilt one crate in ~18 s.
+///
+/// THE ROOT ALONE, NEVER AN ANCESTOR: a suite run inside the copy makes its
+/// fixture repositories under the copy's `target/tmp`, and reading any
+/// ancestor refused their passes too, so a case asserting a pass ran failed
+/// the copy's baseline and no mutant was tested.
+fn within_mutant_copy(repo: &Path) -> bool {
+    let (prefix, suffix) = MUTANT_COPY;
+    repo.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+}
+
+/// Each copy cargo-mutants staged in `dir`, as one unit taken whole.
+///
+/// MEASURED ON #1276: a sweep that is killed leaves its copy behind — the copy
+/// is a temporary directory cargo-mutants removes only on a clean exit — and the
+/// next lap began 4.5GB down, beside its own live 12GB copy, on a volume the
+/// collector measured and could not reach: every tree it ranked was under the
+/// checkout. A copy is dated by its newest write at ANY depth, the staged copy's
+/// rule: a live sweep writes deep, and so does nothing else.
+///
+/// A LIVE SWEEP'S COPY IS ITS ROOT: cargo-mutants is a [`BUILD_PROGRAMS`] entry,
+/// so a running sweep's start is at or before [`live_since`] and every write to
+/// its copy is after it.
+fn mutant_copies(dir: &Path) -> Vec<Unit> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let (prefix, suffix) = MUTANT_COPY;
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+        })
+        .map(|entry| Unit {
+            tree: dir.to_path_buf(),
+            profile: entry.path(),
+            last_use: newest_write_within(&entry.path()),
+            fingerprint: entry.path(),
+            artifacts: Vec::new(),
+            whole: true,
+            fixture: false,
+        })
+        .collect()
 }
 
 /// The newest mtime anywhere under `path`, never following a link.
@@ -923,8 +1032,6 @@ fn newest_write(path: &Path) -> SystemTime {
 /// freshest build ranked least recently used: measured on #1132, a collection
 /// right after `cargo test` built removed the test binary nextest was about to
 /// run, and 2,087 cases failed to exec it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT rebuild-ranked-stale|s@^            let meta = entry.metadata().ok()?;$@            let meta = entry.metadata().ok().filter(\x7c_\x7c false)?;@|a_unit_just_rebuilt_is_not_least_recently_used
 fn last_use(fingerprint: &Path) -> SystemTime {
     std::fs::read_dir(fingerprint)
         .into_iter()
@@ -944,8 +1051,6 @@ fn last_use(fingerprint: &Path) -> SystemTime {
 type ArtifactIndex = std::collections::HashMap<String, Vec<PathBuf>>;
 
 /// List a profile's `deps/`, `examples/` and top-level files once.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT artifacts-unindexed|s@^                        .push(entry.path());$@                        .clear();@|a_collected_unit_takes_its_artifacts
 fn artifact_index(profile: &Path) -> ArtifactIndex {
     let mut index = ArtifactIndex::new();
     for dir in [
@@ -989,8 +1094,6 @@ fn artifacts_of(index: &ArtifactIndex, profile: &Path, name: &str, hash: &str) -
 
 /// Remove `path`, file or tree, counting a file's blocks only when this was its
 /// last name. Returns the bytes actually freed.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT shared-inode-counted-freed|s@^    if links == 1 { allocated } else { 0 }$@    allocated@|a_shared_inode_is_not_counted_until_its_last_name_goes
 fn remove_counted(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
@@ -1044,8 +1147,6 @@ fn allocation(path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
 
 /// Whether `path` is one of the kept files: by device and inode, or by a
 /// [`Kept::Named`] its file name begins with.
-//MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT kept-name-unmatched|s@^            .is_some_and(\x7cfile\x7c file.starts_with(name.as_str())),$@            .is_some_and(\x7cfile\x7c file == name.as_str()),@|a_program_named_only_keeps_every_file_its_name_begins
 fn is_kept(path: &Path, kept: &[Kept]) -> bool {
     let named = kept.iter().any(|kept| match kept {
         Kept::Named(name) => path
@@ -1085,8 +1186,6 @@ fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
 
 /// Set every fingerprint file's atime to its mtime under `tree`, so the next
 /// read by cargo records a fresh atime despite `relatime`.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT rearm-skipped|s@^                let _ = rearm_file(\&entry.path());$@@|a_collection_re_arms_the_survivors
 pub fn rearm(tree: &Path) {
     for fingerprints in crate::prune::directories_named(tree, ".fingerprint") {
         let Ok(units) = std::fs::read_dir(&fingerprints) else {
@@ -1125,6 +1224,28 @@ pub struct Request<'a> {
     pub wait: bool,
     /// Every unit used at or after this instant is live: [`live_since`].
     pub live_since: Option<SystemTime>,
+    /// The directory cargo-mutants stages its copies in — the temp directory, its
+    /// own default — whose copies a pass takes whole: [`mutant_copies`]. `None`
+    /// reads no such directory, which every bounded pass and every case asks for:
+    /// a case run INSIDE a sweep would otherwise collect that sweep's own copy.
+    pub copies: Option<&'a Path>,
+    /// Every scratch FIXTURE written at or after this instant is live: the
+    /// earliest test binary still running ([`fixtures_since`]). A fixture's
+    /// writer is a suite, never cargo, so [`Request::live_since`] — rooted by
+    /// any live cargo, the `cargo run` that hosts a whole lap included — kept
+    /// every fixture a lap's finished suites wrote until the lap ended.
+    pub fixtures_since: Option<SystemTime>,
+}
+
+impl Request<'_> {
+    /// The window that judges `unit` live: a fixture's writers, or a build's.
+    fn live_window(&self, unit: &Unit) -> Option<SystemTime> {
+        if unit.fixture {
+            self.fixtures_since
+        } else {
+            self.live_since
+        }
+    }
 }
 
 /// The live units and scratch, in the order a pass takes them.
@@ -1141,9 +1262,6 @@ pub struct Request<'a> {
 ///
 /// Scratch is not a profile: each fixture keeps its own time, so one fresh
 /// fixture does not shield every stale one beside it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT scratch-unranked|s@^    live.extend(scratch);$@    drop(scratch);@|a_stale_test_scratch_entry_is_collected
-//MUTANT profile-unranked|s@^            built.get(\&unit.profile).copied().unwrap_or(unit.last_use),$@            unit.last_use,@|an_idle_profiles_units_go_before_a_built_profiles_older_ones
 fn ranked(mut live: Vec<Unit>, scratch: Vec<Unit>) -> Vec<Unit> {
     let mut built: std::collections::HashMap<PathBuf, SystemTime> =
         std::collections::HashMap::new();
@@ -1175,11 +1293,6 @@ pub fn collect(request: &Request<'_>) -> Pass {
 
 /// [`collect`]'s pass and its `disk-pass` trace line, composed whether or not
 /// the trace is asked for, so a case reads the counts the trace reports.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT reachability-pass-skipped|s@^        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations);$@        let (units, bytes) = (0, 0);@|a_superseded_unit_goes_before_an_older_live_one
-//MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
-//MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
-//MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
 fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
     let mut held = Held::default();
@@ -1211,6 +1324,9 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         scratch.extend(whole_units(tree, &wholes));
         units.extend(units_in(tree, fingerprints, &wholes));
     }
+    if let Some(dir) = request.copies {
+        scratch.extend(mutant_copies(dir));
+    }
     let live = ranked(units, scratch);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
@@ -1241,7 +1357,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
             Err(lock) => {
                 why.held += 1;
                 why.live |= request
-                    .live_since
+                    .live_window(&unit)
                     .is_some_and(|since| unit.last_use >= since);
                 if !held.locks.contains(&lock) {
                     held.locks.push(lock);
@@ -1250,7 +1366,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
             }
         };
         if request
-            .live_since
+            .live_window(&unit)
             .is_some_and(|since| unit.last_use >= since)
             && read_by_a_run(&unit)
         {
@@ -1337,8 +1453,6 @@ pub fn collect_if_pressed(
 /// The trees a collection ranks together: the checkout's `[prune] root` and
 /// each linked worktree's. Measured 2026-10-11: a sibling worktree's `target/`
 /// filled the volume, and nothing the main checkout collected could see it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT worktree-targets-unseen|s@^        .chain(crate::git::linked_worktree_dirs(repo))$@        .chain(Vec::<PathBuf>::new())@|a_sibling_worktrees_units_are_ranked_with_the_checkouts
 #[must_use]
 pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
     std::iter::once(repo.to_path_buf())
@@ -1353,10 +1467,6 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 /// The watcher ([`crate::disk_watch::watch`]) calls this below the minimum, on
 /// its own collection thread; the hook calls it through [`collect_if_pressed`].
 /// `None` where the band is undeclared.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-//MUTANT checkout-build-collected|s@^    kept.extend(crate::engine::checkout_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_checkout_build_is_never_collected
-//MUTANT own-build-collected|s@^    kept.extend(crate::engine::own_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_followed_build_is_never_collected
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,
@@ -1366,6 +1476,9 @@ pub fn collect_toward_max(
     deadline: Option<Instant>,
     wait: bool,
 ) -> Option<Collected> {
+    if within_mutant_copy(repo) {
+        return None;
+    }
     let (_, max) = prune.free_band()?;
     let started = Instant::now();
     let trees = trees(repo, prune);
@@ -1385,14 +1498,24 @@ pub fn collect_toward_max(
     let mut kept = kept.to_vec();
     kept.extend(crate::engine::checkout_build(repo).and_then(|build| identity(&build)));
     kept.extend(crate::engine::own_build(repo).and_then(|build| identity(&build)));
+    // THE COPIES ARE READ BY AN UNBOUNDED PASS ONLY: dating a copy walks it
+    // whole, and a hook or a compile is bounded by a deadline that walk would
+    // spend before a single unit went.
+    let temp = std::env::temp_dir();
+    // ANYTHING WRITTEN SINCE THIS PASS BEGAN IS IN USE, whatever the process
+    // table said: a window of `None` (no writer alive at the scan) let a pass
+    // remove a fixture a suite created after it looked.
+    let scanned = std::time::SystemTime::now();
     let pass = collect(&Request {
+        copies: deadline.is_none().then_some(temp.as_path()),
         trees: &trees,
         keep_generations: prune.keep,
         kept: &kept,
         need_bytes,
         deadline,
         wait,
-        live_since: live_since(&trees),
+        live_since: Some(no_later_than(live_since(&trees), scanned)),
+        fixtures_since: Some(no_later_than(fixtures_since(&trees, &kept), scanned)),
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -1663,6 +1786,101 @@ mod tests {
         );
     }
 
+    /// A COPY IS NEVER COLLECTED FROM INSIDE (#1276): the copy's own root is
+    /// one; a fixture repository under it, a sibling whose name only begins like
+    /// one, or the temp directory itself, is not.
+    ///
+    /// Fails by: a pass inside a copy evicting the dependencies the next
+    /// mutant rebuilds from scratch; a lookalike name refused.
+    #[test]
+    fn a_pass_rooted_in_a_mutant_copy_collects_nothing() {
+        let copy = Path::new("/tmp/cargo-mutants-batten-cwEUjS.tmp");
+        assert!(super::within_mutant_copy(copy));
+        // A fixture repository the copy's own suite made is its own tree.
+        assert!(!super::within_mutant_copy(&copy.join("target/tmp/fixture")));
+        assert!(!super::within_mutant_copy(Path::new("/tmp")));
+        assert!(!super::within_mutant_copy(Path::new(
+            "/tmp/cargo-mutants-notes"
+        )));
+        assert!(!super::within_mutant_copy(Path::new("/home/u/repo.tmp")));
+    }
+
+    /// A WINDOW NEVER OPENS AFTER THE SCAN (#1276): with no writer alive it is
+    /// the scan itself, and an earlier writer's start stays earlier.
+    ///
+    /// Fails by: `None` reading as "nothing is live", which removed a state
+    /// root a suite created after the pass looked; a later writer pushing the
+    /// window past the scan.
+    #[test]
+    fn a_window_never_opens_after_the_scan() {
+        let scanned = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let earlier = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(40);
+        let later = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(160);
+        assert_eq!(super::no_later_than(None, scanned), scanned);
+        assert_eq!(super::no_later_than(Some(earlier), scanned), earlier);
+        assert_eq!(super::no_later_than(Some(later), scanned), scanned);
+    }
+
+    /// A FIXTURE'S WRITER IS A SUITE (#1276): a test binary under a tree roots
+    /// the fixture window; a cargo — the `cargo run` hosting a whole lap — and
+    /// the engine's own build, running from the same tree all lap, do not. A
+    /// table that names no executable falls back to the build window.
+    ///
+    /// Fails by: a cargo or the kept engine rooting fixtures, which keeps every
+    /// fixture a lap's finished suites wrote; no fallback where no executable is
+    /// named, which leaves a running suite's fixtures unprotected.
+    #[test]
+    fn a_fixture_is_rooted_by_a_running_suite_alone() {
+        let tree = scratch("fixture-writers").join("target");
+        let engine = tree.join("debug").join("batten");
+        let suite = tree.join("debug").join("deps").join("it-0123");
+        std::fs::create_dir_all(suite.parent().expect("deps")).expect("mkdir");
+        std::fs::write(&engine, b"engine").expect("write the engine");
+        std::fs::write(&suite, b"suite").expect("write the suite");
+        let kept = super::kept(std::slice::from_ref(&engine));
+        let tree = crate::git::canonical(&tree);
+        let process = |exe: &Path, secs| Process {
+            exe: Some(exe.to_path_buf()),
+            name: super::program_name(&exe.to_string_lossy()),
+            started: at(secs),
+        };
+        let cargo = Path::new("/home/u/.rustup/toolchains/x/bin/cargo");
+        // The lap's host: under the tree, unkept, and not a test harness.
+        let host = process(&tree.join("release/host"), 40);
+        let lap = [
+            process(cargo, 50),
+            process(&tree.join("debug/batten"), 60),
+            host.clone(),
+        ];
+        assert_eq!(
+            super::earliest_fixture_writer(&lap, std::slice::from_ref(&tree), &kept),
+            None,
+            "a lap with no suite running roots no fixture"
+        );
+        let running = [
+            process(cargo, 50),
+            process(&tree.join("debug/batten"), 60),
+            process(&tree.join("debug/deps/it-0123"), 300),
+            host,
+        ];
+        assert_eq!(
+            super::earliest_fixture_writer(&running, std::slice::from_ref(&tree), &kept),
+            Some(at(300)),
+            "a running suite roots what it writes from its start"
+        );
+        let named = |name: &str, secs| Process {
+            exe: None,
+            name: name.to_owned(),
+            started: at(secs),
+        };
+        let macos = [named("cargo", 70), named("batten", 50)];
+        assert_eq!(
+            super::earliest_fixture_writer(&macos, &[tree], &kept),
+            Some(at(70)),
+            "with no executable named, the build window stands"
+        );
+    }
+
     /// A PROGRAM KNOWN ONLY BY NAME KEEPS EVERY FILE ITS NAME BEGINS (macOS's
     /// `p_comm`, cut to 16 bytes), and nothing else.
     #[test]
@@ -1762,6 +1980,8 @@ mod tests {
             deadline: None,
             wait: false,
             live_since: None,
+            copies: None,
+            fixtures_since: None,
         }
     }
 
@@ -2199,5 +2419,23 @@ mod tests {
         assert_eq!(done.free_after_mb, 5);
         assert!(!older.exists());
         assert!(!newer.exists());
+    }
+
+    /// This very test binary is a running harness under its own profile
+    /// directory, so the fixtures it writes are live: a window is answered,
+    /// never `None`, which would let a collector take them.
+    #[test]
+    fn a_running_suite_holds_its_fixtures_live() {
+        // A process table names executables on Linux; elsewhere the window is
+        // the build's, which this case does not assert.
+        if !cfg!(any(target_os = "linux", target_os = "android")) {
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let profile = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
+        assert!(
+            super::fixtures_since(&[profile], &[]).is_some(),
+            "this suite is running"
+        );
     }
 }

@@ -56,7 +56,7 @@ fn batten_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .state_home(home)
         .args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten")
 }

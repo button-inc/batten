@@ -68,6 +68,8 @@ row here, so a new module lands with its line.
 - `traversal.rs` — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
 - `register.rs` — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
 - `propose.rs` — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
+- `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
+- `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
@@ -96,6 +98,9 @@ row here, so a new module lands with its line.
 - `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
 - `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.
+- `cover.rs` (under `mutate/`) — what the schema sweep shares for running cases under nextest (CLOUD-2253): exact-case filtersets, target flags, a wrapped case's binary and name, the reach-recorder nextest config, the pristine source snapshot. The LLVM coverage map and the `$CARGO` stand-in it fed are retired (#1276).
+- `schema.rs` (under `mutate/`) — mutant schemata (CLOUD-2253), what `batten mutate cargo` judges Rust by: renders every listed cargo-mutants mutant into one build, each behind `crate::__batten_mutant(N)` (`BATTEN_MUTANT`), records per-case reach in one suite run (`BATTEN_MUTANT_RECORD`), and judges each mutant by its reaching cases, journaling every verdict as decided (crash-only, reused under a content key). A `const fn` drops its `const` unless a const caller needs it; what it cannot switch goes back to cargo-mutants by name.
+- `mutation_markers.rs` — the scanner `build.rs` includes to refuse a hand-rolled Rust mutation marker, or a cargo-mutants argv built outside its one site; compiled into the library only for its own tests.
 - `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
 - `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table, its `Subject` pointers and its closed `Route` list.

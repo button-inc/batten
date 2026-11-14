@@ -129,8 +129,6 @@ fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
 /// ends `\s+(?!\S)|\s+`; the DFA has `\s+` alone, so a whitespace run with no
 /// newline, two or more characters long and followed by a non-space, gives up
 /// its last character to the next piece — exactly what the lookahead does.
-//MUTANT-SUITE crates/batten/src/o200k.rs
-//MUTANT lookahead-untrimmed|s@^                .is_some_and(\x7cnext\x7c !next.is_whitespace())$@                .is_some_and(\x7c_\x7c false)@|counts_match_tiktoken
 fn pieces<'a>(
     dfa: &'a regex_automata::dfa::sparse::DFA<&'static [u8]>,
     text: &'a str,
@@ -186,6 +184,59 @@ fn pieces<'a>(
     })
 }
 
+/// The window [`Chunked`] counts in.
+const WINDOW: usize = 64 * 1024;
+
+/// `o200k_base` tokens over a byte stream, counted in consecutive 64 KiB
+/// windows (CLOUD-2284), so the count is a function of the bytes alone and not
+/// of how reads split them. A window ends on a character: an incomplete tail
+/// waits for the next.
+#[derive(Debug, Default)]
+pub struct Chunked {
+    window: Vec<u8>,
+    counted: u64,
+}
+
+impl Chunked {
+    /// Add `bytes` to the stream.
+    pub fn feed(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let room = WINDOW.saturating_sub(self.window.len()).max(1);
+            let (take, rest) = bytes.split_at(room.min(bytes.len()));
+            self.window.extend_from_slice(take);
+            bytes = rest;
+            if self.window.len() >= WINDOW {
+                self.flush();
+            }
+        }
+    }
+
+    /// Count the window up to its last whole character, keeping the rest.
+    fn flush(&mut self) {
+        let whole = match std::str::from_utf8(&self.window) {
+            Err(cut) if cut.error_len().is_none() && cut.valid_up_to() > 0 => cut.valid_up_to(),
+            _ => self.window.len(),
+        };
+        let rest = self.window.split_off(whole);
+        self.counted += tokens(&String::from_utf8_lossy(&self.window));
+        self.window = rest;
+    }
+
+    /// Every token fed so far, the open window included.
+    #[must_use]
+    pub fn counted(&self) -> u64 {
+        self.counted + tokens(&String::from_utf8_lossy(&self.window))
+    }
+}
+
+/// [`Chunked`] over one slice: the same count a stream of these bytes gets.
+#[must_use]
+pub fn chunked_tokens(bytes: &[u8]) -> u64 {
+    let mut chunked = Chunked::default();
+    chunked.feed(bytes);
+    chunked.counted()
+}
+
 /// How many `o200k_base` tokens `text` is.
 ///
 /// A DFA that cannot load (it is a build-time constant, so this does not
@@ -238,5 +289,44 @@ mod tests {
                 "counts diverge on {text:?}"
             );
         }
+    }
+
+    /// A stream is counted in 64 KiB windows that end on a whole character,
+    /// whatever sizes its reads come in; a window holding an invalid byte is
+    /// counted whole.
+    ///
+    /// Fails by: a window never counted until the end, a cut inside a
+    /// character, a window cut at an invalid byte, or the counts not summed.
+    #[test]
+    fn a_stream_counts_in_windows_ending_on_a_character() {
+        use super::{Chunked, WINDOW, chunked_tokens, tokens};
+        // 9 bytes a repeat, so a window's end falls inside the 3-byte `€`.
+        let text = "words€ ".repeat(30_000);
+        let mut expected = 0;
+        let mut at = 0;
+        while at < text.len() {
+            let mut end = (at + WINDOW).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            expected += tokens(&text[at..end]);
+            at = end;
+        }
+        assert_ne!(expected, tokens(&text), "the windows are the measure");
+        for piece in [text.len(), 7, WINDOW + 1] {
+            let mut chunked = Chunked::default();
+            for part in text.as_bytes().chunks(piece) {
+                chunked.feed(part);
+            }
+            assert_eq!(chunked.counted(), expected, "fed {piece} bytes at a time");
+        }
+        let mut bytes = b"a ".repeat(500);
+        bytes.push(0xFF);
+        bytes.extend(b"b ".repeat(40_000));
+        let lossy: u64 = bytes
+            .chunks(WINDOW)
+            .map(|window| tokens(&String::from_utf8_lossy(window)))
+            .sum();
+        assert_eq!(chunked_tokens(&bytes), lossy);
     }
 }

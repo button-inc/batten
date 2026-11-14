@@ -1,43 +1,124 @@
 {
+  "version": 1,
   "hooks": {
     "preToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "afterFileEdit": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "sessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "workspaceOpen": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeTabFileRead": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterTabFileEdit": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ]
   }

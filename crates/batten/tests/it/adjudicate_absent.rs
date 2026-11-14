@@ -236,6 +236,61 @@ fn on_claude_code_the_refusal_is_the_document_rather_than_the_number() {
 }
 
 #[test]
+fn the_unloaded_refusal_reason_reaches_the_harness() {
+    // CLOUD-2595 §2f, measured in a consumer's session: the first deny of a
+    // session carried the cause, and EVERY LATER ONE read only `batten deny
+    // engine-cannot-adjudicate` — the pointer arm of a refusal with no subjects
+    // and no routes. The session never learned why its config would not load.
+    // So the reason must survive the second firing of one session.
+    let dir = fixture("adjudicate-reason-repeats", FAILS_VALIDATION);
+    let in_session = "{\"session_id\":\"cloud-2595-reason\",\"hook_event_name\":\"PreToolUse\",\
+                      \"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hello\"}}";
+    let args = ["adjudicate", "--harness", "claude-code"];
+    let first = run_with_stdin(dir.as_path(), &args, in_session);
+    let second = run_with_stdin(dir.as_path(), &args, in_session);
+    for (which, output) in [("first", &first), ("second", &second)] {
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            rendered.contains(r#""permissionDecision":"deny""#),
+            "the {which} firing refuses: {rendered}"
+        );
+        assert!(
+            rendered.contains("could not load the rules"),
+            "the {which} firing of one session still says why: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn a_repeated_load_refusal_still_names_its_cause_and_repair() {
+    // CLOUD-2603. The case above holds only the fixed preamble, so it stays green
+    // if the CAUSE or the REPAIR falls out of the repeat, which is the field
+    // symptom: the second firing read `batten deny engine-cannot-adjudicate` and
+    // nothing else. `DENIES_THE_READ` with its reason one character over the 240
+    // cap, so the config fails on that alone, and a `Bash` call so the read floor
+    // does not admit it. Not byte-identity across firings: the first alone carries
+    // the once-per-window legend line.
+    let over_cap = DENIES_THE_READ.replace("the fixture refuses this read", &"x".repeat(241));
+    let dir = fixture("adjudicate-cause-repeats", &over_cap);
+    let in_session = "{\"session_id\":\"cloud-2603-cause\",\"hook_event_name\":\"PreToolUse\",\
+                      \"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hello\"}}";
+    let args = ["adjudicate", "--harness", "claude-code"];
+    let first = run_with_stdin(dir.as_path(), &args, in_session);
+    let second = run_with_stdin(dir.as_path(), &args, in_session);
+    for (which, output) in [("first", &first), ("second", &second)] {
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            rendered.contains("rule[0].reason"),
+            "the {which} firing names the row that would not load: {rendered}"
+        );
+        assert!(
+            rendered.contains("engine install"),
+            "the {which} firing names the admitted repair: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn the_declaration_that_would_not_parse_is_named_without_quoting_it() {
     // Non-negotiable rule 4, and the row asks for this clause by name: the reason
     // carries the parse position, never the config's contents. The fixture's body

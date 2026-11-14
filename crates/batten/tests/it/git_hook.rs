@@ -287,3 +287,181 @@ fn the_gates_exit_status_is_the_hooks() {
     let output = fixture.run("pre-commit", &[], &[]);
     assert_eq!(output.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// The binary as the hook (CLOUD-2339)
+// ---------------------------------------------------------------------------
+//
+// `batten wiring gate` with no body links every githooks(5) name to the
+// binary, which dispatches on argv[0] through `[hook.git]`. These cases run
+// the built binary through a link named like the hook, exactly as git does,
+// against a recorder the row names: what it logs is what git's hook received.
+
+/// A repository whose `[hook.git]` rows run a recorder, which logs its
+/// arguments, whether the exported marker is a live pid, and its stdin.
+struct Dispatch {
+    dir: PathBuf,
+    log: PathBuf,
+}
+
+impl Dispatch {
+    fn new(case: &str, rows: &[(&str, &str)]) -> Self {
+        let dir = common::scratch(&format!("git-dispatch-{case}"));
+        let log = dir.join("recorded");
+        let recorder = dir.join("record");
+        fs::write(
+            &recorder,
+            format!(
+                "#!/bin/sh\n\
+                 if [ -n \"${{BATTEN_GATE_PID:-}}\" ] && kill -0 \"$BATTEN_GATE_PID\" 2>/dev/null; then m=alive; else m=dead; fi\n\
+                 printf '%s|%s|%s\\n' \"$*\" \"$m\" \"$(cat)\" >>'{}'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&recorder, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = serde_json::to_string(recorder.to_str().unwrap()).unwrap();
+        let mut declared = String::new();
+        for (name, tag) in rows {
+            use std::fmt::Write as _;
+            writeln!(declared, "{name} = [{program}, \"{tag}\"]").unwrap();
+        }
+        common::write(
+            &dir,
+            "batten.toml",
+            &format!("version = 1\n\n[hook.git]\n{declared}"),
+        );
+        common::init_repo(&dir);
+        Self { dir, log }
+    }
+
+    /// Run the binary through a link named `hook`, with `args`, `stdin`, and
+    /// `marker` as the inherited `BATTEN_GATE_PID`.
+    fn run(&self, hook: &str, args: &[&str], stdin: &str, marker: Option<&str>) -> Output {
+        use std::io::Write as _;
+        let links = self.dir.join("links");
+        fs::create_dir_all(&links).unwrap();
+        let link = links.join(hook);
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_batten"), &link).unwrap();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays — CLOUD-2339: git runs a hook as a program named for it, so the dispatch is only observable through a spawn of the link"
+        )]
+        let mut command = std::process::Command::new(&link);
+        command
+            .args(args)
+            .current_dir(&self.dir)
+            .env_remove("BATTEN_GATE_PID")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(marker) = marker {
+            command.env("BATTEN_GATE_PID", marker);
+        }
+        let mut child = command.spawn().expect("the link runs");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().expect("the link exits")
+    }
+
+    fn recorded(&self) -> String {
+        fs::read_to_string(&self.log).unwrap_or_default()
+    }
+}
+
+#[test]
+fn a_live_gate_marker_is_refused_as_hook_reentry() {
+    let fixture = Dispatch::new("live", &[("pre-commit", "pc")]);
+    let live = std::process::id().to_string();
+    let output = fixture.run("pre-commit", &[], "", Some(&live));
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        common::stderr(&output).contains("hook-reentry-refused"),
+        "{}",
+        common::stderr(&output)
+    );
+    assert_eq!(fixture.recorded(), "", "a refused re-entry spends nothing");
+}
+
+#[test]
+fn a_dead_gate_marker_does_not_refuse_the_binary() {
+    let fixture = Dispatch::new("dead", &[("pre-commit", "pc")]);
+    let output = fixture.run("pre-commit", &[], "", Some(&dead_pid()));
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert_eq!(
+        fixture.recorded(),
+        "pc|alive|\n",
+        "the gate ran, exporting a LIVE marker"
+    );
+}
+
+#[test]
+fn the_link_invoked_as_commit_msg_runs_the_commit_msg_row() {
+    let fixture = Dispatch::new("commit-msg", &[("pre-commit", "pc"), ("commit-msg", "cm")]);
+    let output = fixture.run("commit-msg", &[".git/COMMIT_EDITMSG"], "", None);
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert_eq!(fixture.recorded(), "cm .git/COMMIT_EDITMSG|alive|\n");
+}
+
+#[test]
+fn a_declared_pre_push_receives_gits_arguments_and_stdin() {
+    let fixture = Dispatch::new("pre-push", &[("pre-push", "pp")]);
+    let refs = "refs/heads/main 1111 refs/heads/main 0000";
+    let output = fixture.run(
+        "pre-push",
+        &["origin", "https://example.invalid/r"],
+        refs,
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert_eq!(
+        fixture.recorded(),
+        format!("pp origin https://example.invalid/r|alive|{refs}\n")
+    );
+}
+
+/// Fails by: a failing hook command's own words stored and never shown, so
+/// the person committing sees only that it failed, not why (CLOUD-2284).
+#[test]
+fn a_failing_hook_commands_output_reaches_the_caller() {
+    let fixture = Dispatch::new("failing", &[]);
+    common::write(
+        &fixture.dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-commit = [\"sh\", \"-c\", \"echo why-it-failed >&2; exit 3\"]\n",
+    );
+    let output = fixture.run("pre-commit", &[], "", None);
+    assert_ne!(output.status.code(), Some(0));
+    let said = common::stderr(&output);
+    assert!(said.contains("why-it-failed"), "{said}");
+    assert!(said.contains("hook-command-failed"), "{said}");
+}
+
+#[test]
+fn an_undeclared_hook_name_exits_zero_and_runs_nothing() {
+    let fixture = Dispatch::new("undeclared", &[("pre-commit", "pc")]);
+    let output = fixture.run("post-checkout", &["a", "b", "1"], "", None);
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert_eq!(fixture.recorded(), "");
+}
+
+#[test]
+fn an_unknown_hook_git_key_refuses_the_config() {
+    let fixture = Dispatch::new("unknown-key", &[("pre-comit", "typo")]);
+    let output = common::batten()
+        .current_dir(&fixture.dir)
+        .arg("check")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        common::stderr(&output).contains("pre-comit"),
+        "{}",
+        common::stderr(&output)
+    );
+}

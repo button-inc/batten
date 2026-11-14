@@ -1273,8 +1273,6 @@ impl Body {
 // existed because `schema: tomorrow` contains `": "` and reaches the match arm —
 // two spellings of one case taking different branches, and the test picked the
 // branch that already worked.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT empty-schema-reads-as-oldest|s@                    "schema" => schema = Some(None),@                    "schema" => {}@|a_body_carrying_an_empty_major_is_refused
 #[must_use]
 pub fn parse_body(object: &[u8]) -> Option<Body> {
     let text = String::from_utf8_lossy(object);
@@ -1427,8 +1425,6 @@ pub enum Lease<'a> {
     },
 }
 
-//MUTANT released-classified-live|s@^            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },$@            Self::Held { sha, body } if body.released() => Lease::Live { sha, body },@|each_body_is_classified_into_exactly_one_state
-//MUTANT expired-classified-live|s@^            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },$@            Self::Held { sha, body } if body.expired(now) => Lease::Live { sha, body },@|an_expired_lease_places_no_bet
 impl Observed {
     /// The one classification. Released before expired: the tombstone's expiry
     /// is zero, so it is also expired, and a release is the more specific fact.
@@ -2450,8 +2446,6 @@ pub fn outranks(ours: &str, theirs: &str) -> bool {
 ///
 /// A released or expired body is not excluded here and does not need to be: the
 /// caller only reaches this on `Turn::Wait`, which those states never produce.
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT notice-ignores-the-writer|s@    outranks(\&writer_version(), \&body.writer)@    true@|a_waiter_asks_only_a_strictly_older_holder_to_stand_down
 #[must_use]
 pub fn worth_asking(body: &Body, asker: &str) -> bool {
     outranks(&writer_version(), &body.writer)
@@ -2531,7 +2525,7 @@ impl Local {
     /// the two-holders bug arriving through the identity rather than the CAS.
     pub fn holder(&self) -> Result<String> {
         let path = self.dir.join("holder");
-        if let Ok(existing) = std::fs::read_to_string(&path) {
+        if let Ok(existing) = crate::fsio::read_to_string(&path) {
             let existing = existing.trim();
             if !existing.is_empty() {
                 return Ok(existing.to_owned());
@@ -2596,7 +2590,7 @@ impl Local {
     /// would resurrect the assumption the tab exists to remove.
     #[must_use]
     pub fn poisoned(&self) -> Option<(String, String)> {
-        let record = std::fs::read_to_string(self.dir.join("poisoned")).ok()?;
+        let record = crate::fsio::read_to_string(self.dir.join("poisoned")).ok()?;
         // Neither half can be empty: the record is trimmed first, so a tab it
         // still carries has a non-blank byte on each side of it.
         let (tracking, at) = record.trim().split_once('\t')?;
@@ -2626,7 +2620,7 @@ impl Local {
     #[must_use]
     pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
         let path = self.dir.join(name);
-        let seen = std::fs::read_to_string(&path).unwrap_or_default();
+        let seen = crate::fsio::read_to_string(&path).unwrap_or_default();
         let mut fields = seen.split_whitespace();
         let previous = fields.next().unwrap_or_default();
         let since: Option<i64> = fields.next().and_then(|at| at.parse().ok());
@@ -2793,9 +2787,6 @@ pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) 
 // Each rival clause, dropped. Either alone clears the measured self-deadlock,
 // so each is pinned by its own assertion: a lapsed rival nobody is beating, and
 // this clone's own live lease (CLOUD-2248).
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT cooling-waits-on-a-dead-holder|s@!body.expired(now) \&\& body.holder != holder;@body.holder != holder;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
-//MUTANT cooling-waits-on-itself|s@ \&\& body.holder != holder;@;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
 #[must_use]
 pub fn cooling_for(
     poisoned_at: Option<&str>,
@@ -2873,7 +2864,8 @@ impl Progress {
 /// be inventing the finding.
 #[must_use]
 pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
-    let text = std::fs::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
+    let text =
+        crate::fsio::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
     let field = |name: &str| -> i64 {
         text.lines()
             .find_map(|line| line.strip_prefix(&format!("{name}: ")))
@@ -2908,8 +2900,6 @@ pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
 /// `None` wherever there is nothing to read, which [`progress_of`] documents as
 /// the honest answer for a lap whose bookkeeping never registered rather than as
 /// evidence of a stall.
-//MUTANT-SUITE crates/batten/tests/it/lease_health.rs
-//MUTANT progress-never-published|s@    progress_of(git_dir, pid).map(Progress::token)@    None@|a_land_publishes_its_own_progress_token
 #[must_use]
 pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
     progress_of(git_dir, pid).map(Progress::token)
@@ -2987,7 +2977,7 @@ pub fn bail(
 #[must_use]
 #[cfg(target_os = "linux")]
 pub fn holder_alive(pid: u32, marker: &str) -> bool {
-    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+    let Ok(raw) = crate::fsio::read(format!("/proc/{pid}/cmdline")) else {
         return false;
     };
     let command = String::from_utf8_lossy(&raw).replace('\0', " ");
@@ -3272,7 +3262,6 @@ pub fn push(
 /// (CLOUD-2066). Raised as an internal error it reached `land replay origin/main`
 /// as exit 3 with a backtrace, which tells a caller the binary is broken. Failing
 /// to reach the remote at all stays an internal error, in [`advertise`].
-//MUTANT unadvertised-ref-is-internal|s@Err(crate::error::UsageError::raise(format!(@Err(anyhow::anyhow!(format!(@|an_unadvertised_ref_is_a_usage_error
 fn advertised_head<'a>(
     advertisement: &'a Advertisement,
     remote: &str,
@@ -3609,7 +3598,6 @@ pub enum Carries {
 ///
 /// [`crate::rest::Answer::is_reading`] is the one test, and this file's own
 /// siblings already take it.
-//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 #[must_use]
 fn forge_read(path: &str) -> String {
     crate::rest::get(path, None).map_or_else(String::new, |answer| {
@@ -4002,7 +3990,7 @@ mod tests {
         let dir = crate::scratch::scratch(&format!("lease-{name}"));
         crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
         let config = dir.join(".git").join("config");
-        let text = std::fs::read_to_string(&config).expect("config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
         std::fs::write(
             &config,
             format!("{text}[remote \"origin\"]\n\turl = {REMOTE}\n"),
@@ -4971,7 +4959,7 @@ mod tests {
         // being reported as a failure nobody could act on.
         let mine = std::process::id();
         let raw =
-            std::fs::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
+            crate::fsio::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
         let command = String::from_utf8_lossy(&raw).replace('\0', " ");
         let word = command.split_whitespace().next().expect("argv0").to_owned();
         assert!(holder_alive(mine, &word));

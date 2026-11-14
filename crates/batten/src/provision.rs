@@ -183,6 +183,16 @@ pub struct Provision {
     /// What the artifact is, and therefore how to get the binary out of it.
     #[serde(default)]
     pub unpack: Unpack,
+    /// Leading path components dropped from every archive entry, as `tar
+    /// --strip-components` (CLOUD-2682). Requires [`Provision::bin`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip: Option<usize>,
+    /// The binary's path inside the archive after `strip` (CLOUD-2682). Set,
+    /// the whole archive is extracted to `<entry>/tree/` and the binary is
+    /// `tree/<bin>`, beside the files it reads; unset, one file is matched by
+    /// name, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
     /// The binary's name inside the artifact, and the name it is cached under.
     pub binary: String,
     /// A directory to ALSO place the binary in, so it reaches `PATH`.
@@ -422,9 +432,35 @@ pub struct Artifact {
     pub url: String,
     /// The SHA-256 of the artifact, lowercase hex.
     pub sha256: String,
+    /// This platform's archive format, when it is not the entry's.
+    ///
+    /// A tool commonly ships a tarball for every Unix target and a zip for
+    /// Windows (uv, zizmor and actionlint all do), so one entry-wide
+    /// [`Provision::unpack`] could not pin all five platforms. Absent means the
+    /// entry's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpack: Option<Unpack>,
+    /// This platform's [`Provision::strip`], when it is not the entry's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip: Option<usize>,
+    /// This platform's [`Provision::bin`], when it is not the entry's: Node's
+    /// Linux tarball has `bin/node`, its Windows zip `node.exe` at the top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
 }
 
 impl Provision {
+    /// The name the binary is cached and linked under on this host.
+    ///
+    /// [`Provision::binary`] plus the platform's executable suffix: `.exe` on
+    /// Windows, where a file without it is not a program, and nothing elsewhere,
+    /// so every Unix path is the one it always was. It is also the archive
+    /// entry an unpack looks for, since a Windows build names its binary so.
+    #[must_use]
+    pub fn cached_name(&self) -> String {
+        format!("{}{}", self.binary, std::env::consts::EXE_SUFFIX)
+    }
+
     /// The artifact this host should install.
     ///
     /// # Errors
@@ -449,6 +485,9 @@ impl Provision {
             return Ok(Artifact {
                 url: url.clone(),
                 sha256: sha256.clone(),
+                unpack: None,
+                strip: None,
+                bin: None,
             });
         }
         self.platforms.get(platform).cloned().ok_or_else(|| {
@@ -488,9 +527,11 @@ pub enum Unpack {
     /// The artifact *is* the binary.
     #[default]
     None,
-    /// A gzipped tarball; the entry whose file name is [`Provision::binary`] is
-    /// extracted and everything else ignored.
+    /// A gzipped tarball; the entry whose file name is
+    /// [`Provision::cached_name`] is extracted and everything else ignored.
     TarGz,
+    /// A zip archive, read the same way as [`Unpack::TarGz`].
+    Zip,
 }
 
 /// Why an entry is not fresh. Three states rather than a boolean, because
@@ -643,15 +684,48 @@ pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
 /// installed, it alone provisions the host. The cache is the repository's own,
 /// so a build of it still fills it — the scanner a gate needs stays reachable.
 #[must_use]
-//MUTANT-SUITE crates/batten/src/provision.rs
-//MUTANT checkout-build-links-host|s@^    !exe.starts_with(repo_root)$@    true@|a_build_of_the_checkout_never_links_the_host
 pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }
 
+/// The directory a subtree entry is extracted into, under its entry dir.
+const TREE_DIR: &str = "tree";
+
+/// A subtree entry's effective `strip` and `bin` on this host (CLOUD-2682).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Subtree {
+    strip: usize,
+    bin: PathBuf,
+}
+
+/// This host's [`Subtree`], or `None` for a single-file entry. A platform row's
+/// `strip` and `bin` override the entry's, as its `unpack` does.
+fn subtree_of(entry: &Provision, artifact: &Artifact) -> Option<Subtree> {
+    let bin = artifact.bin.as_deref().or(entry.bin.as_deref());
+    let strip = artifact.strip.or(entry.strip).unwrap_or(0);
+    bin.map(|bin| Subtree {
+        strip,
+        bin: PathBuf::from(bin),
+    })
+}
+
+/// Where `entry`'s binary is cached under `dir`: `tree/<bin>` for a subtree,
+/// `bin/<name>` otherwise. One answer for `install`, freshness and
+/// [`binary_path`].
+fn cached_binary(dir: &Path, entry: &Provision) -> PathBuf {
+    match entry
+        .artifact()
+        .ok()
+        .and_then(|artifact| subtree_of(entry, &artifact))
+    {
+        Some(subtree) => dir.join(TREE_DIR).join(subtree.bin),
+        None => dir.join(BIN_DIR).join(entry.cached_name()),
+    }
+}
+
 fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
-    let binary = dir.join(BIN_DIR).join(&entry.binary);
+    let binary = cached_binary(&dir, entry);
     if !binary.is_file() {
         return Ok(Freshness::Missing);
     }
@@ -672,7 +746,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Resul
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
     if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        let linked = expand_home(dest)?.join(&entry.binary);
+        let linked = expand_home(dest)?.join(entry.cached_name());
         if !linked.is_file() {
             return Ok(Freshness::Missing);
         }
@@ -696,11 +770,23 @@ fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Resul
         // the manifest USED to declare. That is the same second-run shape the
         // link check above records: the change never appears on the run that
         // makes it.
-        if !launcher_declares(&linked, entry) {
+        //
+        // ONLY OF A LAUNCHER (CLOUD-2210): `link_onto_path` writes a PLAIN COPY
+        // when the entry declares no env and no subtree, and a copy carries no
+        // launcher body, so asking it for one read every such entry `Missing`
+        // forever and `apply` never converged. The writer's predicate is asked
+        // here too, through `links_a_launcher`, so the two cannot disagree; and a
+        // copy entry still holding a LAUNCHER is stale, since that launcher
+        // injects an environment the manifest no longer declares.
+        if links_a_launcher(entry) {
+            if !launcher_declares(&linked, entry, &binary) {
+                return Ok(Freshness::Missing);
+            }
+        } else if is_a_launcher(&linked) {
             return Ok(Freshness::Missing);
         }
     }
-    let cached = match fs::read(dir.join(ARTIFACT)) {
+    let cached = match crate::fsio::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Freshness::Missing),
         Err(err) => return Err(err).context("read the cached artifact"),
@@ -773,8 +859,17 @@ pub fn apply(
     // is, so a tampered cache is a mismatch rather than a shortcut past the
     // checksum.
     let artifact = entry.artifact()?;
+    let unpack = artifact.unpack.unwrap_or(entry.unpack);
+    let subtree = subtree_of(entry, &artifact);
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes, links_host)?;
+        install(
+            entry,
+            unpack,
+            subtree.as_ref(),
+            cache_root,
+            &bytes,
+            links_host,
+        )?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -796,23 +891,50 @@ pub fn apply(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, cache_root, &bytes, links_host)?;
+    install(
+        entry,
+        unpack,
+        subtree.as_ref(),
+        cache_root,
+        &bytes,
+        links_host,
+    )?;
     Ok(Applied::Installed)
 }
 
 /// Write the verified artifact and its binary into the cache.
 ///
-/// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool) -> Result<()> {
+/// Called only after the checksum matched. `unpack` is this platform's
+/// ([`Artifact::unpack`], else the entry's).
+fn install(
+    entry: &Provision,
+    unpack: Unpack,
+    subtree: Option<&Subtree>,
+    cache_root: &Path,
+    bytes: &[u8],
+    links_host: bool,
+) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
+    // A SUBTREE ENTRY (CLOUD-2682): the tree, then the link, then the artifact
+    // last, the same crash order as the single file below.
+    if let Some(subtree) = subtree {
+        let cached = install_tree(&dir, unpack, subtree, bytes)?;
+        if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
+            link_onto_path(entry, dest, &cached, &[], Some(subtree))?;
+        }
+        crate::durable::replace(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
+        return Ok(());
+    }
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
 
-    let binary = match entry.unpack {
+    let name = entry.cached_name();
+    let binary = match unpack {
         Unpack::None => bytes.to_vec(),
-        Unpack::TarGz => extract(bytes, &entry.binary)?,
+        Unpack::TarGz => extract(bytes, &name)?,
+        Unpack::Zip => extract_zip(bytes, &name)?,
     };
-    let cached = bin_dir.join(&entry.binary);
+    let cached = bin_dir.join(&name);
     // **STAGED AND RENAMED, NEVER WRITTEN IN PLACE** (CLOUD-1586), which is
     // [`link_onto_path`]'s discipline applied to the site that needed it just as
     // much. Writing over this path returns `ETXTBSY` — "Text file busy" — the
@@ -832,7 +954,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     //
     // Keyed on the pid and dot-prefixed for `link_onto_path`'s reasons exactly —
     // two provisions running at once must not write each other's staging file.
-    let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
+    let staged = bin_dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = crate::durable::replace(&staged, &binary)
         .context("write the provisioned binary")
         .and_then(|()| make_executable(&staged));
@@ -849,7 +971,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     // never landed would be the silent half-install this ordering exists to
     // rule out.
     if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        link_onto_path(entry, dest, &cached, &binary)?;
+        link_onto_path(entry, dest, &cached, &binary, None)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -868,7 +990,7 @@ fn cached_artifact_matching_pin(
     cache_root: &Path,
     pinned: &str,
 ) -> Option<Vec<u8>> {
-    let bytes = fs::read(entry_dir(cache_root, entry).join(ARTIFACT)).ok()?;
+    let bytes = crate::fsio::read(entry_dir(cache_root, entry).join(ARTIFACT)).ok()?;
     digest(&bytes).eq_ignore_ascii_case(pinned).then_some(bytes)
 }
 
@@ -907,20 +1029,29 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// running process keeps its own open inode — so the temp file is made
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
-fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
+fn link_onto_path(
+    entry: &Provision,
+    dest: &str,
+    cached: &Path,
+    binary: &[u8],
+    subtree: Option<&Subtree>,
+) -> Result<()> {
     let dir = expand_home(dest)?;
     fs::create_dir_all(&dir).context("create the linked binary's directory")?;
-    let path = dir.join(&entry.binary);
+    let name = entry.cached_name();
+    let path = dir.join(&name);
     // Keyed on the PID so two provisions running at once cannot write each
     // other's staging file, and dot-prefixed so a directory listing of `PATH`
     // does not offer it as a command.
-    let staged = dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
-    let written = if entry.env.is_empty() {
-        crate::durable::replace(&staged, binary).context("write the linked binary")
-    } else {
+    let staged = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // A SUBTREE IS LAUNCHED, NEVER COPIED (CLOUD-2682): its binary reads the
+    // files beside its real path, and a copy on `PATH` has none beside it.
+    let written = if launches(entry, subtree.is_some()) {
         launcher(entry, cached).and_then(|bytes| {
             crate::durable::replace(&staged, bytes).context("write the linked launcher")
         })
+    } else {
+        crate::durable::replace(&staged, binary).context("write the linked binary")
     };
     if let Err(err) = written.and_then(|()| make_executable(&staged)) {
         let _ = fs::remove_file(&staged);
@@ -1016,7 +1147,7 @@ struct Launch {
 /// not apply, and answering `false` there would make every ordinary linked
 /// binary permanently stale.
 fn relaunches_a_present_interpreter(linked: &Path) -> bool {
-    let Ok(bytes) = fs::read(linked) else {
+    let Ok(bytes) = crate::fsio::read(linked) else {
         // Unreadable is not this predicate's finding: the `is_file` check above
         // already answered presence, and a read failure here is a permissions or
         // races question that re-linking would not fix.
@@ -1037,6 +1168,42 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
     }
 }
 
+/// Whether `entry`'s link is a launcher rather than a plain copy (CLOUD-2210):
+/// it declares environment rows, or it links a subtree (CLOUD-2682). The ONE
+/// predicate both the writer (`link_onto_path`) and the reader (`freshness_of`)
+/// ask, the reader through [`links_a_launcher`].
+const fn launches(entry: &Provision, subtree: bool) -> bool {
+    !entry.env.is_empty() || subtree
+}
+
+/// [`launches`] for an entry whose subtree is read off this host's artifact.
+/// An entry with no artifact for this host links nothing here, so the answer
+/// only matters where one exists.
+fn links_a_launcher(entry: &Provision) -> bool {
+    let subtree = entry
+        .artifact()
+        .is_ok_and(|artifact| subtree_of(entry, &artifact).is_some());
+    launches(entry, subtree)
+}
+
+/// Whether the file at `linked` is a launcher: its `#!` line ends in
+/// [`LAUNCHER_VERB`]. Unreadable answers `false`; presence was answered by the
+/// caller, and re-linking does not fix a permissions failure.
+fn is_a_launcher(linked: &Path) -> bool {
+    let Ok(bytes) = crate::fsio::read(linked) else {
+        return false;
+    };
+    let first = bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    std::str::from_utf8(first)
+        .ok()
+        .and_then(|line| line.strip_prefix("#!"))
+        .and_then(|shebang| shebang.rsplit_once(' '))
+        .is_some_and(|(_, verb)| verb == LAUNCHER_VERB)
+}
+
 /// Does the launcher at `linked` carry the environment rules `entry` declares?
 ///
 /// The rules only, never the whole file: the `#!` line names the batten that ran
@@ -1048,8 +1215,8 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
 /// answered above, and re-linking does not fix a permissions failure. A body
 /// that will not parse is `false`, because that is precisely the launcher
 /// [`exec_launcher`] refuses and tells the operator to rewrite.
-fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
-    let Ok(bytes) = fs::read(linked) else {
+fn launcher_declares(linked: &Path, entry: &Provision, cached: &Path) -> bool {
+    let Ok(bytes) = crate::fsio::read(linked) else {
         return true;
     };
     let Some(body) = bytes.split_once_newline() else {
@@ -1061,7 +1228,14 @@ fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
     let Ok(declared) = serde_json::to_value(&entry.env) else {
         return false;
     };
-    carried.get("env") == Some(&declared)
+    // AND THE BINARY IT NAMES (CLOUD-2682): switching an entry between a single
+    // file and a subtree moves the cached binary, and a launcher naming the old
+    // one must re-link rather than read fresh.
+    let exec_matches = carried
+        .get("exec")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|exec| Path::new(exec) == cached);
+    carried.get("env") == Some(&declared) && exec_matches
 }
 
 /// Become the tool a launcher stands for, with the environment its row declares.
@@ -1081,7 +1255,7 @@ pub fn exec_launcher(
     script: &Path,
     args: &[std::ffi::OsString],
 ) -> Result<std::convert::Infallible> {
-    let bytes = fs::read(script).with_context(|| {
+    let bytes = crate::fsio::read(script).with_context(|| {
         format!(
             "read the launcher at {} — `batten provision apply` rewrites it",
             script.display()
@@ -1160,7 +1334,7 @@ const SYSTEM_TRUST_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// operator can see, and the cost of a wrong `true` is traffic silently leaving
 /// a path they chose.
 fn trust_names(org: &str) -> bool {
-    let Ok(text) = fs::read_to_string(trust_bundle()) else {
+    let Ok(text) = crate::fsio::read_to_string(trust_bundle()) else {
         return false;
     };
     bundle_names(&text, org)
@@ -1206,11 +1380,9 @@ pub fn organisation_of(pem: &str) -> Option<String> {
 
     x509_cert::Certificate::from_pem(pem)
         .ok()?
-        .tbs_certificate
-        .subject
-        .0
+        .tbs_certificate()
+        .subject()
         .iter()
-        .flat_map(|name| name.0.iter())
         .find(|attribute| attribute.oid == ORGANISATION_NAME)
         .and_then(|attribute| attribute_text(&attribute.value))
 }
@@ -1274,8 +1446,18 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
 /// gave it.
 fn credential_declaration() -> std::result::Result<CredentialProbe, String> {
     let cwd = std::env::current_dir().map_err(|err| format!("no working directory: {err}"))?;
-    let root = crate::git::repo_root(&cwd)
-        .map_err(|err| format!("{} is in no repository: {err}", cwd.display()))?;
+    credential_declaration_in(&cwd)
+}
+
+/// [`credential_declaration`] for a call made at `start`.
+///
+/// **The worktree's authority, not the shared root's** (CLOUD-2532). From a
+/// linked worktree `repo_root` is the MAIN checkout, so `land` → `verify` in a
+/// worktree reported `<main checkout>/batten.toml will not load` over a branch
+/// whose own file loaded fine.
+fn credential_declaration_in(start: &Path) -> std::result::Result<CredentialProbe, String> {
+    let root = crate::config::authority_root(start)
+        .map_err(|err| format!("{} is in no repository: {err}", start.display()))?;
     // The FILE, not the directory. `load` takes a path to `batten.toml`, and
     // handing it the root read as `Is a directory (os error 21)` — swallowed by
     // the `.ok()` chain this function used to be, and reported to the operator
@@ -1332,7 +1514,7 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
             .modified()
             .and_then(|at| at.elapsed().map_err(std::io::Error::other))
         && age.as_secs() < CREDENTIAL_MAX_AGE
-        && let Ok(body) = std::fs::read_to_string(&receipt)
+        && let Ok(body) = crate::fsio::read_to_string(&receipt)
     {
         return body.starts_with("live");
     }
@@ -1874,6 +2056,283 @@ fn expand_home(dest: &str) -> Result<PathBuf> {
     Ok(expanded)
 }
 
+/// Extract a subtree archive into `<dir>/tree/` and return the cached binary
+/// (CLOUD-2682).
+///
+/// Staged beside and renamed in, never written in place: a running process
+/// keeps its open files, and a failed extraction leaves the old tree and the
+/// artifact as they were.
+fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> Result<PathBuf> {
+    fs::create_dir_all(dir).context("create the provision cache directory")?;
+    let pid = std::process::id();
+    let staged = dir.join(format!(".tree.{pid}.tmp"));
+    let _ = fs::remove_dir_all(&staged);
+    fs::create_dir_all(&staged).context("create the staged tree")?;
+    let extracted = match unpack {
+        Unpack::TarGz => extract_tree_tar(bytes, &staged, subtree),
+        Unpack::Zip => extract_tree_zip(bytes, &staged, subtree),
+        _ => Err(UsageError::raise(
+            "a subtree needs an archive, and this row unpacks none".to_owned(),
+        )),
+    }
+    .and_then(|()| staged_bin(&staged, subtree));
+    if let Err(err) = extracted {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(err);
+    }
+    let tree = dir.join(TREE_DIR);
+    let aside = dir.join(format!(".tree.{pid}.old"));
+    if fs::symlink_metadata(&tree).is_ok() {
+        fs::rename(&tree, &aside).context("move the old tree aside")?;
+    }
+    if let Err(err) = fs::rename(&staged, &tree) {
+        let _ = fs::rename(&aside, &tree);
+        let _ = fs::remove_dir_all(&staged);
+        return Err(err).context("move the extracted tree into place");
+    }
+    let _ = fs::remove_dir_all(&aside);
+    Ok(tree.join(&subtree.bin))
+}
+
+/// The staged tree's binary must be a file, and is made executable.
+fn staged_bin(staged: &Path, subtree: &Subtree) -> Result<()> {
+    let bin = &subtree.bin;
+    if !staged.join(bin).is_file() {
+        return Err(UsageError::raise(format!(
+            "the archive has no file at `bin = \"{}\"` after `strip = {}`",
+            bin.display(),
+            subtree.strip
+        )));
+    }
+    make_executable(&staged.join(bin))
+}
+
+/// What one archive entry is, for [`place`].
+enum Kind {
+    Dir,
+    File { executable: bool },
+    Symlink(PathBuf),
+}
+
+/// An entry that would land outside the tree: refused, never skipped.
+fn climbs_out(path: &Path) -> anyhow::Error {
+    UsageError::raise(format!(
+        "the archive entry {} climbs out of the tree, so nothing was installed",
+        path.display()
+    ))
+}
+
+/// `path` with its first `strip` components dropped, `None` when nothing is
+/// left; a root, prefix or `..` component is refused.
+fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part),
+            std::path::Component::CurDir => {}
+            _ => return Err(climbs_out(path)),
+        }
+    }
+    Ok((parts.len() > strip).then(|| parts[strip..].iter().collect()))
+}
+
+/// Whether `link`, read from the directory `parent` (both relative to the tree
+/// root), stays inside the tree.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn lexically_inside(parent: &Path, link: &Path) -> bool {
+    let mut depth = parent
+        .components()
+        .filter(|part| matches!(part, std::path::Component::Normal(_)))
+        .count();
+    for part in link.components() {
+        match part {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => match depth.checked_sub(1) {
+                Some(up) => depth = up,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Write one archive entry under `tree` (CLOUD-2682), the one rule set the tar
+/// and zip loops share.
+fn place(
+    tree: &Path,
+    strip: usize,
+    bin: &Path,
+    raw: &Path,
+    kind: Kind,
+    reader: &mut dyn Read,
+) -> Result<()> {
+    let Some(rel) = stripped(raw, strip)? else {
+        return Ok(());
+    };
+    let target = tree.join(&rel);
+    let root = crate::git::canonical(tree);
+    let Some(parent) = target.parent() else {
+        return Err(climbs_out(raw));
+    };
+    fs::create_dir_all(parent).context("create an archive entry's directory")?;
+    let parent = crate::git::canonical(parent);
+    if !parent.starts_with(&root) {
+        return Err(climbs_out(raw));
+    }
+    let Some(name) = target.file_name() else {
+        return Err(climbs_out(raw));
+    };
+    let target = parent.join(name);
+    // A later entry never writes through an earlier link.
+    if fs::symlink_metadata(&target).is_ok_and(|meta| !meta.is_dir()) {
+        fs::remove_file(&target).context("replace an archive entry")?;
+    }
+    match kind {
+        Kind::Dir => fs::create_dir_all(&target).context("create an archive directory")?,
+        Kind::File { executable } => {
+            // stream: an archive entry, committed by the staged tree's rename
+            let mut out = fs::File::create(&target).context("write an archive file")?; // stream: tree rename
+            std::io::copy(reader, &mut out).context("write an archive file")?;
+            set_mode(&target, executable || rel.as_path() == bin)?;
+        }
+        Kind::Symlink(link) => {
+            let inside = rel.parent().unwrap_or_else(|| Path::new(""));
+            place_symlink(inside, &target, &link, raw)?;
+        }
+    }
+    Ok(())
+}
+
+/// A symlink whose target stays inside the tree (CLOUD-2682): relative, and
+/// resolved lexically from its own directory. A host without symlinks refuses
+/// the entry.
+///
+/// ONE FUNCTION, BOTH HOSTS: two `#[cfg]` twins listed a mutant in the body no
+/// build on this host compiles, which no test here could ever kill.
+fn place_symlink(parent: &Path, target: &Path, link: &Path, raw: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, target, link);
+        return Err(UsageError::raise(format!(
+            "the archive entry {} is a symlink, which this host's tree does not admit",
+            raw.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        let link_target = link.to_path_buf();
+        if !lexically_inside(parent, &link_target) {
+            return Err(climbs_out(raw));
+        }
+        std::os::unix::fs::symlink(&link_target, target).context("write an archive link")
+    }
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, executable: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if executable { 0o755 } else { 0o644 };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .context("set an archive file's mode")
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _executable: bool) -> Result<()> {
+    Ok(())
+}
+
+/// Extract a gzipped tarball as a subtree (CLOUD-2682).
+fn extract_tree_tar(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    for entry in archive.entries().context("read the tar archive")? {
+        let mut entry = entry.context("read a tar entry")?;
+        let raw = entry
+            .path()
+            .context("decode a tar entry path")?
+            .into_owned();
+        let kind = entry.header().entry_type();
+        let kind = match kind {
+            tar::EntryType::Directory => Kind::Dir,
+            tar::EntryType::Symlink => Kind::Symlink(
+                entry
+                    .link_name()
+                    .context("decode a tar link target")?
+                    .ok_or_else(|| climbs_out(&raw))?
+                    .into_owned(),
+            ),
+            tar::EntryType::XHeader
+            | tar::EntryType::XGlobalHeader
+            | tar::EntryType::GNULongName
+            | tar::EntryType::GNULongLink => continue,
+            other if other.is_file() => Kind::File {
+                executable: entry.header().mode().is_ok_and(|mode| mode & 0o111 != 0),
+            },
+            other => {
+                return Err(UsageError::raise(format!(
+                    "the archive entry {} is a {other:?}, which a provision tree does not admit",
+                    raw.display()
+                )));
+            }
+        };
+        place(tree, subtree.strip, &subtree.bin, &raw, kind, &mut entry)?;
+    }
+    Ok(())
+}
+
+/// Extract a zip archive as a subtree (CLOUD-2682).
+fn extract_tree_zip(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).context("read a zip entry")?;
+        let Some(raw) = entry.enclosed_name() else {
+            return Err(climbs_out(Path::new(&*entry.name().unwrap_or_default())));
+        };
+        let kind = if entry.is_dir() {
+            Kind::Dir
+        } else if entry.is_symlink() {
+            let mut link = String::new();
+            entry
+                .read_to_string(&mut link)
+                .context("read a zip link target")?;
+            Kind::Symlink(PathBuf::from(link))
+        } else {
+            Kind::File {
+                executable: entry.unix_mode().is_some_and(|mode| mode & 0o111 != 0),
+            }
+        };
+        place(tree, subtree.strip, &subtree.bin, &raw, kind, &mut entry)?;
+    }
+    Ok(())
+}
+
+/// Extract the entry named `binary` from a zip archive, by file name as
+/// [`extract`] does for a tarball.
+fn extract_zip(bytes: &[u8], binary: &str) -> Result<Vec<u8>> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).context("read a zip entry")?;
+        let named = entry
+            .enclosed_name()
+            .and_then(|path| path.file_name().map(|name| name == binary))
+            .unwrap_or(false);
+        if !named || entry.is_dir() {
+            continue;
+        }
+        let mut out = Vec::new();
+        entry
+            .read_to_end(&mut out)
+            .context("read the binary out of the archive")?;
+        return Ok(out);
+    }
+    Err(UsageError::raise(format!(
+        "the artifact contains no entry named {binary}"
+    )))
+}
+
 /// Extract the entry named `binary` from a gzipped tarball.
 ///
 /// Matches on the archive path's **file name**, so a release tarball that nests
@@ -1933,7 +2392,7 @@ fn make_executable(_path: &Path) -> Result<()> {
 /// pinned artifact over a channel that can be rewritten in flight.
 fn fetch(url: &str) -> Result<Vec<u8>> {
     if let Some(path) = url.strip_prefix("file://") {
-        return fs::read(path).with_context(|| format!("fetch {url}"));
+        return crate::fsio::read(path).with_context(|| format!("fetch {url}"));
     }
     if url.starts_with("https://") {
         return fetch_https(url);
@@ -2022,6 +2481,64 @@ pub fn validate(entries: &[Provision]) -> Result<()> {
         seen.push(&entry.name);
 
         validate_artifact_spelling(entry)?;
+        validate_subtree(entry)?;
+    }
+    Ok(())
+}
+
+/// `strip` and `bin`, on the entry and on each platform row (CLOUD-2682).
+///
+/// Refused at load: either key where nothing is unpacked; `strip` without
+/// `bin`; a `bin` that is empty, absolute or climbs with `..`; and `bin` with
+/// `link` where the launcher, a `#!` file, cannot run.
+fn validate_subtree(entry: &Provision) -> Result<()> {
+    let mut rows: Vec<(&str, Unpack, Option<usize>, Option<&str>)> = Vec::new();
+    if entry.platforms.is_empty() {
+        rows.push(("the entry", entry.unpack, entry.strip, entry.bin.as_deref()));
+    }
+    for (key, artifact) in &entry.platforms {
+        rows.push((
+            key.as_str(),
+            artifact.unpack.unwrap_or(entry.unpack),
+            artifact.strip.or(entry.strip),
+            artifact.bin.as_deref().or(entry.bin.as_deref()),
+        ));
+    }
+    let refuse = |row: &str, why: &str| {
+        Err(UsageError::raise(format!(
+            "provision {}: {row}: {why}",
+            entry.name
+        )))
+    };
+    for (row, unpack, strip, bin) in rows {
+        if (strip.is_some() || bin.is_some()) && unpack == Unpack::None {
+            return refuse(
+                row,
+                "`strip` and `bin` extract from an archive, and this row unpacks none",
+            );
+        }
+        if strip.is_some() && bin.is_none() {
+            return refuse(row, "`strip` shapes a subtree, and only `bin` asks for one");
+        }
+        let Some(bin) = bin else {
+            continue;
+        };
+        let path = Path::new(bin);
+        let climbs = path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)));
+        if bin.trim().is_empty() || path.is_absolute() || climbs {
+            return refuse(
+                row,
+                "`bin` is a relative path inside the archive, with no `..`",
+            );
+        }
+        if entry.link.is_some() && cfg!(not(unix)) {
+            return refuse(
+                row,
+                "a subtree's `link` is a `#!` launcher, which this host cannot run",
+            );
+        }
     }
     Ok(())
 }
@@ -2187,9 +2704,10 @@ fn check_sha256(name: &str, where_: &str, sha256: &str) -> Result<()> {
 /// Propagates [`cache_root`]'s failure to resolve the out-of-tree state
 /// directory.
 pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
-    Ok(entry_dir(&cache_root(repo_root)?, entry)
-        .join(BIN_DIR)
-        .join(&entry.binary))
+    Ok(cached_binary(
+        &entry_dir(&cache_root(repo_root)?, entry),
+        entry,
+    ))
 }
 
 #[cfg(test)]
@@ -2563,6 +3081,8 @@ mod tests {
             sha256: Some(sha.to_owned()),
             platforms: BTreeMap::new(),
             unpack: Unpack::None,
+            strip: None,
+            bin: None,
             binary: "tool".to_owned(),
             link: None,
             env: Vec::new(),
@@ -2603,21 +3123,25 @@ mod tests {
         .expect("write the launcher");
 
         assert!(
-            launcher_declares(&linked, &declared),
+            launcher_declares(&linked, &declared, Path::new("/cache/bin/tool")),
             "the launcher this entry just wrote carries this entry's environment"
         );
 
         let mut edited = declared.clone();
         edited.env = vec![rule("OTHER_TOKEN")];
         assert!(
-            !launcher_declares(&linked, &edited),
+            !launcher_declares(&linked, &edited, Path::new("/cache/bin/tool")),
             "an edited row must reach the tool, and it only can if the cache reports stale"
         );
 
         // A body that will not parse is the launcher `exec_launcher` refuses and
         // tells the operator to rewrite, so it is stale rather than fresh.
         std::fs::write(&linked, b"#!/x provision-exec\nnot json\n").expect("write a broken one");
-        assert!(!launcher_declares(&linked, &declared));
+        assert!(!launcher_declares(
+            &linked,
+            &declared,
+            Path::new("/cache/bin/tool")
+        ));
     }
 
     /// THE RE-LINK MUST SURVIVE A TARGET THAT IS IN USE, which is what making
@@ -2663,7 +3187,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let dest = dir.display().to_string();
-        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[]).expect("first link");
+        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[], None)
+            .expect("first link");
 
         let linked = dir.join("tool");
         let inode = |path: &Path| {
@@ -2675,7 +3200,8 @@ mod tests {
 
         let mut relinked = declared.clone();
         relinked.env = vec![rule("OTHER_TOKEN")];
-        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[]).expect("the re-link");
+        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[], None)
+            .expect("the re-link");
         assert_ne!(
             before,
             inode(&linked),
@@ -2683,7 +3209,7 @@ mod tests {
              executed would have refused them with ETXTBSY"
         );
         assert!(
-            launcher_declares(&linked, &relinked),
+            launcher_declares(&linked, &relinked, Path::new("/cache/bin/tool")),
             "and the file on PATH carries what the re-link declared"
         );
 
@@ -2712,6 +3238,9 @@ mod tests {
                     Artifact {
                         url: format!("file:///dev/null/{platform}"),
                         sha256: (*sha).to_owned(),
+                        unpack: None,
+                        strip: None,
+                        bin: None,
                     },
                 )
             })
@@ -2921,6 +3450,66 @@ mod tests {
         assert_eq!(stale.stale_lines(), vec!["b 1.0 missing".to_owned()]);
     }
 
+    /// Run `git` in `dir`, hermetically, asserting it succeeded.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the fixture is built by the reference implementation, as `git.rs`'s own fixtures are"
+    )]
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    /// CLOUD-2532: from a linked worktree, the probe is declared by the
+    /// WORKTREE's `batten.toml`, never the main checkout's. Measured: `land` →
+    /// `verify` in a worktree reported `<main checkout>/batten.toml will not
+    /// load` over a branch whose own file loaded fine.
+    #[test]
+    fn the_credential_declaration_in_a_worktree_is_the_worktrees() {
+        let dir = scratch("credential-worktree");
+        let main = dir.join("main");
+        let linked = dir.join("linked");
+        fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        fs::write(main.join("README.md"), "base\n").unwrap();
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-q", "-m", "base"]);
+        // The main checkout's authority will not load at all: an unknown key.
+        fs::write(main.join("batten.toml"), "version = 1\nnot_a_key = true\n").unwrap();
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "own",
+                linked.to_str().unwrap(),
+            ],
+        );
+        fs::write(
+            linked.join("batten.toml"),
+            "version = 1\n\n[credential]\nprobe_url = \"https://probe.invalid/\"\n",
+        )
+        .unwrap();
+        let nested = linked.join("src");
+        fs::create_dir_all(&nested).unwrap();
+
+        let probe = credential_declaration_in(&nested).expect(
+            "a worktree whose own batten.toml declares a probe answers with it, \
+             not with the main checkout's load failure",
+        );
+        assert_eq!(probe.probe_url.as_deref(), Some("https://probe.invalid/"));
+    }
+
     /// An artifact fetched over `file://` installs a runnable binary, reads as
     /// fresh, reinstalls from the cache once the binary is gone, and a pin that
     /// does not match is refused rather than installed.
@@ -2945,7 +3534,7 @@ mod tests {
             Applied::Installed
         );
         let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
-        assert_eq!(fs::read(&binary).unwrap(), body);
+        assert_eq!(crate::fsio::read(&binary).unwrap(), body);
         if cfg!(unix) {
             let ran = crate::exec::piped_argv(
                 &dir,
@@ -2969,7 +3558,7 @@ mod tests {
             apply(&entry, &cache, false, false).unwrap(),
             Applied::Installed
         );
-        assert_eq!(fs::read(&binary).unwrap(), body);
+        assert_eq!(crate::fsio::read(&binary).unwrap(), body);
 
         // The binary present and the cached artifact gone is a cache miss.
         fs::remove_file(entry_dir(&cache, &entry).join(ARTIFACT)).unwrap();
@@ -3017,7 +3606,9 @@ mod tests {
         );
         let linked = bin.join("tool");
         assert!(
-            fs::read_to_string(&linked).unwrap().contains(LAUNCHER_VERB),
+            crate::fsio::read_to_string(&linked)
+                .unwrap()
+                .contains(LAUNCHER_VERB),
             "an entry with an environment links a launcher"
         );
         assert_eq!(freshness(&entry), Freshness::Fresh);
@@ -3026,7 +3617,7 @@ mod tests {
         other.env[0].prepend_list = vec!["/opt/elsewhere".to_owned()];
         assert_eq!(freshness(&other), Freshness::Missing, "other rules");
 
-        let launcher = fs::read_to_string(&linked).unwrap();
+        let launcher = crate::fsio::read_to_string(&linked).unwrap();
         let rest = launcher.split_once('\n').unwrap().1;
         fs::write(
             &linked,
@@ -3037,6 +3628,53 @@ mod tests {
 
         fs::remove_file(&linked).unwrap();
         assert_eq!(freshness(&entry), Freshness::Missing, "no link");
+    }
+
+    /// CLOUD-2210 / CLOUD-2476: an entry with a `link` and NO env rows links a
+    /// plain copy, which carries no launcher body. It reads `Fresh` after one
+    /// `apply`, and the second `apply` converges to `AlreadyFresh`; a stale
+    /// launcher left on that path (env rows since removed) is not fresh.
+    ///
+    /// Fails by: the launcher check asked of a copy again (never fresh, never
+    /// converges), or a leftover launcher read as a fresh copy.
+    #[test]
+    fn a_linked_copy_with_no_env_is_fresh_and_converges() {
+        let dir = scratch("linked-copy");
+        let artifact = dir.join("tool.sh");
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        fs::write(&artifact, &body).unwrap();
+        let mut entry = entry("tool", &digest(&body));
+        entry.url = Some(format!("file://{}", artifact.display()));
+        let bin = dir.join("bin");
+        entry.link = Some(bin.to_string_lossy().into_owned());
+        let cache = dir.join("cache");
+        let freshness = |entry: &Provision| {
+            status(std::slice::from_ref(entry), &cache).unwrap().entries[0].freshness
+        };
+
+        assert_eq!(
+            apply(&entry, &cache, false, true).unwrap(),
+            Applied::Installed
+        );
+        let linked = bin.join("tool");
+        assert_eq!(crate::fsio::read(&linked).unwrap(), body, "a plain copy");
+        assert_eq!(freshness(&entry), Freshness::Fresh);
+        assert_eq!(
+            apply(&entry, &cache, false, true).unwrap(),
+            Applied::AlreadyFresh,
+            "the second apply converges"
+        );
+
+        fs::write(
+            &linked,
+            format!("#!/usr/bin/batten {LAUNCHER_VERB}\n{{}}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            freshness(&entry),
+            Freshness::Missing,
+            "a leftover launcher on a copy entry's path is stale"
+        );
     }
 
     #[test]
@@ -3143,7 +3781,7 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
             named.map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from),
             "a variable that is set decides, else the system store"
         );
-        match fs::read_to_string(trust_bundle()) {
+        match crate::fsio::read_to_string(trust_bundle()) {
             Ok(text) => {
                 let carried = text
                     .split_inclusive(PEM_FOOTER)
@@ -3173,6 +3811,32 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         fs::write(&receipt, "unusable\n").unwrap();
         assert!(!credential_usable(&value, probe));
         let _ = fs::remove_file(&receipt);
+    }
+
+    /// A receipt exactly [`CREDENTIAL_MAX_AGE`] old has aged out: the verdict is
+    /// re-proved, and a probe nobody can reach is not usable whatever the
+    /// receipt said.
+    ///
+    /// Fails by: the age compared with `<=`, so a `live` receipt is trusted for
+    /// one second past its bound.
+    #[test]
+    fn a_credential_receipt_at_its_age_bound_is_proved_again() {
+        let credential = format!("batten-provision-test-aged-{}", std::process::id());
+        let value = Secret::new(credential);
+        let receipt = credential_receipt_path(&value).expect("tests run inside a checkout");
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, "live\n").unwrap();
+        let aged =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(CREDENTIAL_MAX_AGE);
+        fs::File::options()
+            .write(true)
+            .open(&receipt)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        let usable = credential_usable(&value, "https://batten-provision-test.invalid/");
+        let _ = fs::remove_file(&receipt);
+        assert!(!usable, "an aged-out receipt is not believed");
     }
 
     #[test]
@@ -3258,8 +3922,180 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         );
         assert_eq!(route_honours_credentials(probe, &real, unreachable), None);
     }
+
+    /// A component a strip may drop is a normal one or `.`; nothing is left
+    /// when the strip takes every one.
+    #[test]
+    fn a_strip_drops_leading_components_and_refuses_a_climb() {
+        assert_eq!(
+            stripped(Path::new("./tool/bin/x"), 1).unwrap(),
+            Some(PathBuf::from("bin/x"))
+        );
+        assert_eq!(stripped(Path::new("tool"), 1).unwrap(), None);
+        assert!(stripped(Path::new("../x"), 0).is_err());
+    }
+
+    /// A link stays inside while its `..` never climbs above the tree root.
+    #[test]
+    fn a_link_is_inside_while_it_never_climbs_past_the_root() {
+        if !cfg!(unix) {
+            return;
+        }
+        assert!(lexically_inside(Path::new("a"), Path::new("../b")));
+        assert!(!lexically_inside(Path::new("a"), Path::new("../../b")));
+        assert!(lexically_inside(Path::new(""), Path::new("./x")));
+        assert!(lexically_inside(Path::new("a"), Path::new("x/../../y")));
+        assert!(!lexically_inside(Path::new("a/b"), Path::new("/etc")));
+    }
+
+    /// An entry is written with the mode its archive gave it, the declared
+    /// binary always executable; a later entry replaces a link rather than
+    /// writing through it; an in-tree link is made.
+    #[test]
+    fn an_entry_is_placed_with_its_mode_and_never_through_a_link() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-place");
+        let bin = Path::new("bin/tool");
+        let mode = |path: &str| mode_of(&tree.join(path));
+        let put = |raw: &str, kind: Kind, body: &[u8]| {
+            place(&tree, 0, bin, Path::new(raw), kind, &mut &body[..]).unwrap();
+        };
+        put("bin/tool", Kind::File { executable: false }, b"t");
+        put("lib/data", Kind::File { executable: false }, b"d");
+        put("lib/run", Kind::File { executable: true }, b"r");
+        assert_eq!(mode("bin/tool"), 0o755, "the declared binary");
+        assert_eq!(mode("lib/data"), 0o644);
+        assert_eq!(mode("lib/run"), 0o755);
+        put("lib/link", Kind::Symlink(PathBuf::from("data")), b"");
+        assert_eq!(
+            fs::read_link(tree.join("lib/link")).unwrap(),
+            Path::new("data")
+        );
+        put("lib/link", Kind::File { executable: false }, b"new");
+        assert!(
+            !fs::symlink_metadata(tree.join("lib/link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(tree.join("lib/data")).unwrap(),
+            b"d",
+            "not written through"
+        );
+    }
+
+    /// A file's permission bits; `0` off unix, whose cases return before
+    /// they read one.
+    fn mode_of(path: &Path) -> u32 {
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::metadata(path).unwrap().permissions().mode() & 0o777
+        };
+        #[cfg(not(unix))]
+        let mode = {
+            let _ = path;
+            0
+        };
+        mode
+    }
+
+    fn tarball(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, kind, mode, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_size(bytes.len() as u64);
+            header.set_mode(*mode);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *bytes).unwrap();
+        }
+        let tar = builder.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gz, &tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    /// A tar entry is executable only where its mode says so, and an entry
+    /// that is neither a file, a directory nor a link is refused.
+    #[test]
+    fn a_tar_tree_keeps_each_mode_and_refuses_a_device() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-tar-tree");
+        let subtree = Subtree {
+            strip: 0,
+            bin: PathBuf::from("bin/tool"),
+        };
+        let bytes = tarball(&[
+            ("bin/tool", tar::EntryType::Regular, 0o644, b"t"),
+            ("lib/run", tar::EntryType::Regular, 0o755, b"r"),
+            ("lib/data", tar::EntryType::Regular, 0o644, b"d"),
+        ]);
+        extract_tree_tar(&bytes, &tree, &subtree).unwrap();
+        let mode = |path: &str| mode_of(&tree.join(path));
+        assert_eq!((mode("lib/run"), mode("lib/data")), (0o755, 0o644));
+        let fifo = tarball(&[("lib/pipe", tar::EntryType::Fifo, 0o644, b"")]);
+        assert!(extract_tree_tar(&fifo, &tree, &subtree).is_err());
+    }
+
+    #[test]
+    fn a_zip_tree_keeps_each_mode() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-zip-tree");
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, mode) in [("lib/run", 0o755), ("lib/data", 0o644)] {
+            let options = zip::write::SimpleFileOptions::default().unix_permissions(mode);
+            writer.start_file(path, options).unwrap();
+            std::io::Write::write_all(&mut writer, b"x").unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let subtree = Subtree {
+            strip: 0,
+            bin: PathBuf::from("bin/tool"),
+        };
+        extract_tree_zip(&bytes, &tree, &subtree).unwrap();
+        let mode = |path: &str| mode_of(&tree.join(path));
+        assert_eq!((mode("lib/run"), mode("lib/data")), (0o755, 0o644));
+    }
+
+    /// A launcher is a file whose `#!` line ends in the launcher verb.
+    #[test]
+    fn a_launcher_is_known_by_the_verb_its_shebang_ends_in() {
+        let dir = crate::scratch::scratch("provision-is-launcher");
+        let file = |name: &str, body: &str| {
+            let path = dir.join(name);
+            fs::write(&path, body).unwrap();
+            path
+        };
+        let verb = format!("#!/opt/batten {LAUNCHER_VERB}\nexec tool\n");
+        assert!(is_a_launcher(&file("launcher", &verb)));
+        assert!(!is_a_launcher(&file("other", "#!/opt/batten other\n")));
+        assert!(!is_a_launcher(&file("shell", "#!/bin/sh\n")));
+        assert!(!is_a_launcher(&dir.join("missing")));
+    }
+
+    /// A `bin` is a relative path with no `..`: blank, absolute or climbing
+    /// is refused, each on its own.
+    #[test]
+    fn a_subtree_bin_is_a_relative_path_inside_the_archive() {
+        let with_bin = |bin: &str| Provision {
+            unpack: Unpack::TarGz,
+            bin: Some(bin.to_owned()),
+            ..entry("tool", "0")
+        };
+        assert!(validate_subtree(&with_bin("bin/tool")).is_ok());
+        for bin in [" ", "/opt/tool", "bin/../../tool"] {
+            assert!(validate_subtree(&with_bin(bin)).is_err(), "{bin:?}");
+        }
+    }
 }
 
 // The launcher and probe suite over the compiled binary: its subprocess cases
 // reach the credential verdicts and the HTTPS fetch no unit case can.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs

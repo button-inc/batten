@@ -168,6 +168,12 @@ const SHAPE_PERMITS: &[&str] = &[
     // precondition row, where the same bytes would silently stop demanding a
     // receipt.
     "unless_contains",
+    // CLOUD-2669: one whole argv word, by anchored expression. `unless_word`
+    // switches a deny off, so it is `shape` only for `unless_contains`'s reason.
+    "word",
+    "unless_word",
+    // CLOUD-2662: an event the engine resolves on every route it knows.
+    "on",
     "require_via",
     "requires_key",
     "base",
@@ -187,6 +193,8 @@ const SHAPE_PERMITS: &[&str] = &[
 const RECEIPT_PERMITS: &[&str] = &[
     "pattern",
     "tool",
+    // CLOUD-2662: the third selector, an event rather than a spelling.
+    "on",
     "checks",
     "checks_any",
     "key",
@@ -219,6 +227,17 @@ const RECEIPT_PERMITS: &[&str] = &[
     "severity",
     "no_retry_reason",
 ];
+
+/// An event a call raises, which the engine resolves on every route it knows
+/// (CLOUD-2662). A row names the event, never the routes: `gh pr ready`, a
+/// non-draft `gh pr create`, a reopen, the ready mutation through `gh api`, and
+/// the forge connector's create and undraft all raise `pull-request-ready`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallEvent {
+    /// A call that can leave a pull request open and not a draft.
+    PullRequestReady,
+}
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
 ///
@@ -452,6 +471,15 @@ token_enum! {
         /// A config row changed by a context that has not read its history
         /// (CLOUD-2144).
         History => "history",
+        /// A `&` job nothing in the same call waits on, where the harness has a
+        /// supported background option instead (CLOUD-2667).
+        Detach => "detach",
+        /// A mediated `git commit` whose message subject breaks
+        /// `[commit].subject_pattern` (CLOUD-2683).
+        CommitSubject => "commit-subject",
+        /// A call that reaches a repository other than its session's home
+        /// (CLOUD-2672). Opt-in: armed only where the home declares a row.
+        RepositoryReach => "repository-reach",
     }
 }
 
@@ -470,7 +498,19 @@ pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
         .filter(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
         .map(Rule::severity)
         .max()
-        .unwrap_or(RuleSeverity::Deny)
+        .unwrap_or(absent_grade(gate))
+}
+
+/// The grade of a gate no row names: `deny`, so no addition lowers a gate it
+/// does not name, EXCEPT `repository-reach` (CLOUD-2672), which is `allow` until
+/// a row arms it. A session spanning several repositories is the ordinary case
+/// on every host that documents one, so a default-on gate would refuse it in
+/// every consumer.
+fn absent_grade(gate: NativeGate) -> RuleSeverity {
+    match gate {
+        NativeGate::RepositoryReach => RuleSeverity::Allow,
+        _ => RuleSeverity::Deny,
+    }
 }
 
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
@@ -994,6 +1034,12 @@ impl RuleKind {
                 // trees — see the column's own doc for why that asymmetry is
                 // forced rather than chosen.
                 "admits_with",
+                // CLOUD-2663: the token measure `policy budget` uses, as the
+                // counted unit in place of `pattern` or `regex`; exactly one of the
+                // three is refused in `validate_forbid_predicate`.
+                "counts",
+                // CLOUD-2663: each matched file judged against its own base count.
+                "per_file",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -1832,6 +1878,25 @@ pub struct Rule {
     /// is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unless_contains: Option<String>,
+    /// Narrow a [`RuleKind::Shape`] deny to a line whose argv carries a WORD
+    /// matching this expression (CLOUD-2669), anchored as `^(?:…)$`.
+    ///
+    /// The words are this line's argv after the effective program, minus its
+    /// redirections, unquoted by the segmenter: `-m "never use --no-verify"` is
+    /// one word and holds no `--no-verify` word, where `contains` sees one. A
+    /// regex rather than a literal so a bundled short flag (`-anm`) is
+    /// expressible; anchoring is what keeps it a word test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<String>,
+    /// The exempting polarity of [`Rule::word`]: a line whose argv carries a
+    /// matching word does not fire. Line-scoped, like `unless_contains`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unless_word: Option<String>,
+    /// Select a `shape` or `receipt` row by the event a call raises rather than
+    /// by its spelling (CLOUD-2662). One selector of `pattern`, `content`,
+    /// `tool` and `on` per row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<CallEvent>,
     /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
     /// **without** the named mediator (CLOUD-271).
     ///
@@ -2111,6 +2176,17 @@ pub struct Rule {
     /// against two trees, since "newly added" means "absent from base".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admits_with: Option<String>,
+    /// Judge a ratchet per matched file rather than on the sum (CLOUD-2663).
+    ///
+    /// Each path present at `base` is held to its OWN base count, so one file
+    /// shrinking can no longer pay for another growing. A path absent at base is
+    /// not judged: a per-file ceiling is that file's count at base, and a file
+    /// the branch creates has none. A path deleted since base counts `0`.
+    ///
+    /// Refused with `retires_with` and `conserves`, which both buy an AGGREGATE
+    /// decrease that a per-file row does not have.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub per_file: bool,
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
@@ -3669,6 +3745,20 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "word",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "unless_word",
+        declares: Declares::NotFactBearing(
+            "a condition over a fact another column declared, in the exempting polarity",
+        ),
+    },
+    ColumnCensus {
+        field: "on",
+        declares: Declares::NotFactBearing("selects by an event the engine resolves"),
+    },
+    ColumnCensus {
         field: "require_via",
         declares: Declares::NotFactBearing("narrows how a requirement may be met"),
     },
@@ -3740,6 +3830,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
     ColumnCensus {
         field: "admits_with",
         declares: Declares::NotFactBearing("an admission's shape on the other side of the count"),
+    },
+    ColumnCensus {
+        field: "per_file",
+        declares: Declares::NotFactBearing("the grain a ratchet's count is judged at"),
     },
     ColumnCensus {
         field: "format",
@@ -4132,6 +4226,18 @@ impl Rule {
         if self.kind != RuleKind::Shape {
             return Ok(());
         }
+        // CLOUD-2669: compiled at load, anchored as the matcher anchors them, so
+        // an unparseable word expression never reaches adjudication.
+        for (field, shape) in [("word", &self.word), ("unless_word", &self.unless_word)] {
+            if let Some(shape) = shape.as_deref() {
+                Regex::new(&format!("^(?:{shape})$")).map_err(|err| {
+                    UsageError::raise(format!(
+                        "rule {}: `{field}` is not a valid regular expression: {err}",
+                        self.id
+                    ))
+                })?;
+            }
+        }
         // THREE KEYING COLUMNS NOW, EXACTLY ONE OF WHICH A ROW CARRIES
         // (CLOUD-924). Counted rather than matched as a tuple: a 2x2 match was
         // already at its readable limit and a 2x2x2 one would spell six
@@ -4140,6 +4246,7 @@ impl Rule {
             ("pattern", self.pattern.is_some()),
             ("content", self.content.is_some()),
             ("tool", self.tool.is_some()),
+            ("on", self.on.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, present)| present.then_some(name))
@@ -4152,6 +4259,10 @@ impl Rule {
                 self.id,
                 keys.join(" and ")
             )));
+        }
+        if self.on.is_some() {
+            self.validate_on_columns()?;
+            return self.validate_ceiling();
         }
         if let Some(selector) = self.tool.as_deref() {
             // Refused at load rather than at adjudication, where an empty
@@ -4364,9 +4475,10 @@ impl Rule {
     ///
     /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
     /// because the argument is identical one column over, and stating it twice is
-    /// how the two would drift when a sixth modifier lands. Each of the five
+    /// how the two would drift when an eighth modifier lands. Each of the seven
     /// names a COMMAND: `contains` and `unless_contains` are substring tests over
-    /// an argv in the two polarities, `require_via` is a via-shape test over the
+    /// an argv in the two polarities, `word` and `unless_word` the same over its
+    /// whole words, `require_via` is a via-shape test over the
     /// same argv, `requires_key` asks whether the work is keyed before a
     /// command may run, and `base` exists only to tell `requires_key` which
     /// commits to read. A write and a structured call carry no argv for any of
@@ -4377,19 +4489,59 @@ impl Rule {
     ///
     /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
     fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+        self.refuse_argv_modifiers(keyed_on)?;
         for (field, present) in [
-            ("contains", self.contains.is_some()),
-            ("unless_contains", self.unless_contains.is_some()),
-            ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("base", self.base.is_some()),
         ] {
             if present {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"shape\" keyed on `{keyed_on}` cannot carry `{field}`; \
-                     that column narrows a command line, and this row names none",
-                    self.id
-                )));
+                return Err(self.modifier_refused(keyed_on, field));
+            }
+        }
+        Ok(())
+    }
+
+    /// The modifiers that read the command's ARGV (CLOUD-2662): refused on a
+    /// row keyed by anything that names none, which an `on` row does not either,
+    /// since its routes include structured calls.
+    fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+        for (field, present) in [
+            ("contains", self.contains.is_some()),
+            ("unless_contains", self.unless_contains.is_some()),
+            ("word", self.word.is_some()), // the argv's own words
+            ("unless_word", self.unless_word.is_some()), // the argv's own words, exempting
+            ("require_via", self.require_via.is_some()),
+        ] {
+            if present {
+                return Err(self.modifier_refused(keyed_on, field));
+            }
+        }
+        Ok(())
+    }
+
+    fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error {
+        UsageError::raise(format!(
+            "rule {}: kind \"{}\" keyed on `{keyed_on}` cannot carry `{field}`; \
+             that column narrows a command line, and this row names none",
+            self.id,
+            self.kind.as_str()
+        ))
+    }
+
+    /// The columns an `on` row may not carry (CLOUD-2662): the argv modifiers,
+    /// and the per-call projections, which differ per route (`input-draft` is
+    /// absent on every shell call) and so would silently drop whole routes.
+    /// `requires_key`, `base` and the branch modifiers read the branch, which
+    /// every route has, and stay.
+    fn validate_on_columns(&self) -> anyhow::Result<()> {
+        self.refuse_argv_modifiers("on")?;
+        for (field, present) in [
+            ("when_absent", self.when_absent.is_some()),
+            ("when_present", self.when_present.is_some()),
+            ("when_value", self.when_value.is_some()),
+        ] {
+            if present {
+                return Err(self.modifier_refused("on", field));
             }
         }
         Ok(())
@@ -4454,14 +4606,11 @@ impl Rule {
         }
     }
 
-    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Receipt {
-            return Ok(());
-        }
-        // `key = "branch"` was refused from this same spot until the
-        // branch-keyed store existed; every refusal here has that one's
-        // reasoning — a column that reads as configured and decides nothing is
-        // the defect this kind was added to close.
+    /// A receipt row's selectors (CLOUD-2662): exactly one of `pattern`, `tool`
+    /// and `on` on a command-triggered row, and no command selector on a
+    /// write-triggered one. Split from [`Rule::validate_receipt_columns`], whose
+    /// line budget the third selector spent.
+    fn validate_receipt_selectors(&self) -> anyhow::Result<()> {
         match self.receipt_trigger() {
             // A command-triggered row selecting on NOTHING matches every
             // mediated call, turning a precondition into a universal gate.
@@ -4469,7 +4618,9 @@ impl Rule {
             // (CLOUD-924): both name what the row is about, one by command line
             // and one by the tool a structured call names — and CLOUD-312's rows
             // 1-3 are precisely the second shape.
-            ReceiptTrigger::Command if self.pattern.is_none() && self.tool.is_none() => {
+            ReceiptTrigger::Command
+                if self.pattern.is_none() && self.tool.is_none() && self.on.is_none() =>
+            {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` (the command whose precondition this is) or `tool` (the tool a structured call names)",
                     self.id
@@ -4478,7 +4629,17 @@ impl Rule {
             // Both columns key on one call, and a row carrying both is two
             // selectors where a reader can see one — `validate_shape_columns`'
             // argument, on the kind that shares the columns.
-            ReceiptTrigger::Command if self.pattern.is_some() && self.tool.is_some() => {
+            ReceiptTrigger::Command
+                if [
+                    self.pattern.is_some(),
+                    self.tool.is_some(),
+                    self.on.is_some(),
+                ]
+                .into_iter()
+                .filter(|present| *present)
+                .count()
+                    > 1 =>
+            {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" carries both `pattern` and `tool`; a row is keyed on a command line or on the tool a call names, never on both",
                     self.id
@@ -4489,6 +4650,12 @@ impl Rule {
             // refused here: a write tool has a name, and keying a write-triggered
             // row to one is how a precondition narrows from every write to the
             // writes a particular tool makes.
+            ReceiptTrigger::Write if self.on.is_some() => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"receipt\" with `trigger = \"write\"` cannot carry `on`; the event is a call, not a write",
+                    self.id
+                )));
+            }
             ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
@@ -4497,6 +4664,21 @@ impl Rule {
             }
             _ => {}
         }
+        if self.on.is_some() {
+            self.validate_on_columns()?;
+        }
+        Ok(())
+    }
+
+    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Receipt {
+            return Ok(());
+        }
+        // `key = "branch"` was refused from this same spot until the
+        // branch-keyed store existed; every refusal here has that one's
+        // reasoning — a column that reads as configured and decides nothing is
+        // the defect this kind was added to close.
+        self.validate_receipt_selectors()?;
         // THE `named` KEY AND ITS PROJECTION TRAVEL TOGETHER (CLOUD-987), and
         // both halves are refused because each is a different silent failure.
         //
@@ -5009,7 +5191,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 59] {
+    fn columns(&self) -> [(&'static str, bool); 63] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -5041,6 +5223,9 @@ impl Rule {
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
             ("unless_contains", self.unless_contains.is_some()),
+            ("word", self.word.is_some()),
+            ("unless_word", self.unless_word.is_some()),
+            ("on", self.on.is_some()),
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
@@ -5053,6 +5238,7 @@ impl Rule {
             ("retires_with", self.retires_with.is_some()),
             ("conserves", self.conserves.is_some()),
             ("admits_with", self.admits_with.is_some()),
+            ("per_file", self.per_file),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
@@ -5936,8 +6122,45 @@ impl Rule {
         }
     }
 
+    /// A ratchet's `counts` and `per_file` columns (CLOUD-2663).
+    fn validate_ratchet_measure(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Ratchet {
+            return Ok(());
+        }
+        if let Some(unit) = self.counts {
+            if unit != CeilingUnit::Tokens {
+                return Err(UsageError::raise(format!(
+                    "rule {}: a ratchet counts `tokens` or a literal; `counts = {unit:?}` \
+                     measures a call, not a file",
+                    self.id
+                )));
+            }
+            if self.pattern.is_some() || self.regex.is_some() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `counts`, `pattern` and `regex` are alternatives; a ratchet \
+                     counts exactly one",
+                    self.id
+                )));
+            }
+        }
+        if self.per_file && (self.retires_with.is_some() || self.conserves.is_some()) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `per_file` judges each file on its own, and `retires_with` and \
+                 `conserves` buy an aggregate decrease a per-file row does not have",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
         if !matches!(self.kind, RuleKind::Forbid | RuleKind::Ratchet) {
+            return Ok(());
+        }
+        self.validate_ratchet_measure()?;
+        if self.kind == RuleKind::Ratchet && self.counts.is_some() {
+            // The token measure stands in for both literal columns, and
+            // `validate_ratchet_measure` has refused it beside either.
             return Ok(());
         }
         match (self.pattern.is_some(), self.regex.is_some()) {
@@ -6078,6 +6301,9 @@ impl Rule {
             .map(String::as_str)
     }
 }
+// CLOUD-2669: `refuse_command_modifiers` above, which a row inside the `impl`
+// cannot sit beside at column 0.
+// CLOUD-2662's `validate_on_columns`, in the same `impl`.
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
 ///
@@ -6453,7 +6679,6 @@ pub struct Finding {
 /// `batten <severity> <id> at <path>[:<line>][ <reason>]`. The head names the
 /// source inside a task's interleaved output, where the command a reader ran
 /// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
-//MUTANT check-line-unheaded|s@^        let head = crate::refusal::head(self.severity.finding_severity(), \&self.rule);$@        let head = self.rule.clone();@|a_check_finding_line_labels_its_rule
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
         let head = crate::refusal::head(self.severity.finding_severity(), &self.rule);
@@ -7774,7 +7999,7 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
     let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return BTreeMap::new();
     };
     text.lines()
@@ -7792,9 +8017,6 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
 // The second replaces the declaration with a hardcoded name, which is the
 // ambient sweep this table exists to refuse — it passes the present case and
 // only a case asserting that an UNDECLARED family stays unprojected can see it.
-//MUTANT-SUITE crates/batten/tests/it/record_families.rs
-//MUTANT declared-family-unprojected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@@|a_declared_family_reaches_the_module_that_reads_it
-//MUTANT undeclared-family-projected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@        .chain(std::iter::once("measured"))@|an_undeclared_family_is_not_projected_whatever_the_store_holds
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
@@ -7858,7 +8080,7 @@ fn recorder_records(
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value
         // is the empty list — "nothing was recorded" rather than "nothing looked".
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
@@ -8389,7 +8611,7 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
     // work is actually spent, and the `UnknownFormat` arm above deliberately
     // costs nothing and is deliberately not counted.
     DOCUMENTS_ACQUIRED.fetch_add(1, Ordering::Relaxed);
-    let bytes = match fs::read(root.join(rel_path)) {
+    let bytes = match crate::fsio::read(root.join(rel_path)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Acquired::No(NotAcquired::Absent);
@@ -9717,8 +9939,6 @@ fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_
 /// ask, so [`crate::facts::Look::CouldNotLook`] is the arm. Both project `null`
 /// today, which is exactly why the distinction has to be right here rather than
 /// in whichever arm happens to render the same.
-//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-//MUTANT mediated-spawn-permitted|s@^    let admitted = \x7cclass: crate::facts::Class\x7c class.resolvable_on(surface);$@    let admitted = \x7cclass: crate::facts::Class\x7c { let _ = (class, surface); true };@|the_mediated_verb_spawns_nothing_on_any_event
 fn effect_facts(
     rules: &[Rule],
     root: &Path,
@@ -10107,7 +10327,9 @@ pub(crate) fn tree_document(
             // CLOUD-1978: hook-surface; its question is about a call's argument.
             | crate::facts::Fact::DispatchCleared
             // CLOUD-2270: hook-surface; its question is about a push.
-            | crate::facts::Fact::RedHead => continue,
+            | crate::facts::Fact::RedHead
+            | crate::facts::Fact::PathspecStatus
+            | crate::facts::Fact::Budgeted => continue,
         };
         tree.insert(key.to_owned(), value);
     }
@@ -10231,7 +10453,7 @@ fn ejected_behind(
         (None, None) => return,
     };
     for path in paths {
-        let Ok(source) = std::fs::read_to_string(root.join(&path)) else {
+        let Ok(source) = crate::fsio::read_to_string(root.join(&path)) else {
             continue;
         };
         let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
@@ -10257,7 +10479,7 @@ fn ejected_behind(
             )],
             owner: Some(rule.id.clone()),
             rule: MODULE_PIN_STALE.to_owned(),
-            severity: RuleSeverity::Warn,
+            severity: RuleSeverity::Advise,
             path,
             line: Some(1),
             identity: identity_of(rule, identity::FindingKind::Code, default),
@@ -10581,7 +10803,6 @@ fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Optio
 }
 
 /// Every subject but the one [`first_pointer`] chose, rendered (CLOUD-2213).
-//MUTANT carried-subjects-dropped|s@^        .filter(\x7c(index, _)\x7c Some(\*index) != skip)$@        .filter(\x7c(index, _)\x7c Some(*index) != skip \&\& false)@|a_policy_findings_other_subjects_ride_its_line
 fn carried_subjects(subjects: &[crate::verdict::Subject]) -> Vec<String> {
     let skip = pointer_index(subjects);
     subjects
@@ -10622,6 +10843,612 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
     }
 }
 
+/// What one file counts under a ratchet row.
+///
+/// # Errors
+///
+/// Returns an error when `regex` does not compile; `validate` has refused that
+/// at load, so this is the belt to its suspenders.
+fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + '_> {
+    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
+    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
+    // so the `None` arm is unreachable and counts nothing.
+    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
+    // Or the token measure `policy budget` takes per file (CLOUD-2663): the same
+    // function over the same loaded text, so the ratchet and the budget cannot
+    // disagree about one file.
+    // NEITHER A LITERAL NOR AN EXPRESSION IS THE TOKEN MEASURE: `validate`
+    // admits exactly one of the three, and refuses any ratchet `counts` but
+    // `tokens` (`validate_ratchet_measure`).
+    Ok(
+        move |text: &str| match (&expression, rule.pattern.as_deref()) {
+            (Some(expression), _) => expression.find_iter(text).count(),
+            (None, Some(pattern)) => text.matches(pattern).count(),
+            (None, None) => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
+        },
+    )
+}
+
+/// One ratchet row a mediated write would move the banned way (CLOUD-2692).
+///
+/// `was` and `now` are the written file's own count before and after the write:
+/// the pointer a reader needs to find what moved. The row is the subject, so a
+/// waiver keyed on its id answers it at the call as it does in `check`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct CallRatchet {
+    /// The row's id.
+    pub rule: String,
+    /// The written path.
+    pub path: String,
+    /// The path's count before the write.
+    pub was: usize,
+    /// The path's count after it.
+    pub now: usize,
+}
+
+/// Whether `rule` is a ratchet a mediated write can be judged against
+/// (CLOUD-2692).
+///
+/// Every ratchet but the two whose admission reads subject facts: `retires_with`
+/// asks whether a declared subject died, and `conserves` maps case names across
+/// the whole set, and neither is a single-file question. Those stay `check`'s.
+#[must_use]
+pub fn judged_at_call(rule: &Rule) -> bool {
+    rule.kind == RuleKind::Ratchet
+        && rule.severity() != RuleSeverity::Allow
+        && rule.direction.is_some()
+        && rule.base.is_some()
+        && rule.glob.is_some()
+        && rule.retires_with.is_none()
+        && rule.conserves.is_none()
+}
+
+/// The cache format; bump when [`BlobCounts`], [`FileCounts`] or a key's
+/// inputs change.
+const CALL_RATCHET_FORMAT: &str = "batten-call-ratchet-4";
+
+/// What a row counts, as cache-key bytes: two rows with the same counter share
+/// their counts, and a row whose counter changed reads none of its old ones.
+fn counter_key(rule: &Rule) -> Vec<u8> {
+    format!(
+        "{}\0{}\0{:?}",
+        rule.pattern.as_deref().unwrap_or_default(),
+        rule.regex.as_deref().unwrap_or_default(),
+        rule.counts
+    )
+    .into_bytes()
+}
+
+/// One persisted count table under the cache's `ratchet-counts` directory,
+/// keyed by `name` within this repository and counter.
+fn count_entry(
+    cache: Option<&Path>,
+    root: &Path,
+    counter: &[u8],
+    name: &str,
+) -> Option<(std::path::PathBuf, String)> {
+    cache.map(|dir| {
+        let at = dir.join("ratchet-counts").join(
+            blake3::hash(
+                &[
+                    root.display().to_string().as_bytes(),
+                    b"\0",
+                    name.as_bytes(),
+                    b"\0",
+                    counter,
+                ]
+                .concat(),
+            )
+            .to_hex()
+            .as_str(),
+        );
+        (
+            at,
+            crate::cache::key(CALL_RATCHET_FORMAT, &[name.as_bytes(), counter]),
+        )
+    })
+}
+
+/// Each committed blob's count under one counter, by blob id, persisted
+/// (CLOUD-2692).
+///
+/// **A count is a pure function of a blob's content and the counter**, so it is
+/// cached by content: a blob is read and counted once, ever. The blobs asked
+/// for are the merge base's, which every branch and session shares, so after
+/// the first call on a base they are all held.
+struct BlobCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, usize>,
+    added: bool,
+}
+
+impl BlobCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "blobs");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    fn missing<'a>(&self, ids: &[&'a str]) -> Vec<&'a str> {
+        ids.iter()
+            .copied()
+            .filter(|id| !self.counts.contains_key(*id))
+            .collect()
+    }
+
+    fn get(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.counts.get(id)).copied().unwrap_or(0)
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// What a working file's count is keyed by: the file's identity and the stat
+/// fields any write moves, git's index heuristic. A file whose key is unchanged
+/// is not read again.
+type Stamp = (u64, u64, u64, i128);
+
+/// Each working file's count under one counter, by path, keyed by its
+/// [`Stamp`], persisted (CLOUD-2692).
+///
+/// **The working side is read from the files, never from HEAD's blobs**: the
+/// sum the row asks about is the tree as it stands, which a file read answers
+/// directly, uncompressed, and an uncommitted edit to a changed path is counted
+/// where a HEAD read would have missed it. A file is re-read only when its
+/// stamp moved.
+struct FileCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, (Stamp, usize)>,
+    added: bool,
+}
+
+impl FileCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "files");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    /// The held count of `path`, when it was taken at `stamp`.
+    fn fresh(&self, path: &str, stamp: Stamp) -> Option<usize> {
+        self.counts
+            .get(path)
+            .filter(|(held, _)| *held == stamp)
+            .map(|(_, count)| *count)
+    }
+
+    fn put(&mut self, path: &str, stamp: Stamp, count: usize) {
+        self.counts.insert(path.to_owned(), (stamp, count));
+        self.added = true;
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// A file's [`Stamp`]: device, inode, size and modification time in
+/// nanoseconds. Off unix the identity half is zero and size and time decide.
+fn stamp(meta: &fs::Metadata) -> Stamp {
+    #[cfg(unix)]
+    let (dev, ino) = {
+        use std::os::unix::fs::MetadataExt as _;
+        (meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let (dev, ino) = (0, 0);
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| {
+            i128::try_from(since.as_nanos()).unwrap_or(i128::MAX)
+        });
+    (dev, ino, meta.len(), modified)
+}
+
+/// A count as a signed quantity, for the movement arithmetic.
+fn signed(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// Judge the ratchet rows a mediated write to `target` selects (CLOUD-2692):
+/// each row the write moves the banned way past its base.
+///
+/// `current` is the target's text now (`None` for a new file) and `projected`
+/// its text after the write. Cheapest first:
+///
+/// * **The write's own move**, with no read at all: a write that holds or
+///   moves the file's count the allowed way is never refused, so a repair of a
+///   standing breach goes through, and a rise the row's `admits_with` token
+///   declares in the written text is admitted, as `check` admits it.
+/// * **`per_file`**: the projected file against its own count at the merge
+///   base. A path absent at the base has no ceiling and is not judged.
+/// * **Aggregate**: the sum's movement from the merge base, over the paths the
+///   branch changed, plus the target: each path's count in the WORKING TREE
+///   (the target's projected) less its count at the base. A path the tree diff
+///   does not name holds the same count on both sides, so it cannot move the
+///   sum, and is never read.
+///
+/// **Every read is put in flight before any is made**: readahead is submitted
+/// for every changed working file, and for the packs when a base count is not
+/// yet held, so a cold page cache returns all the bytes at the device's queue
+/// depth rather than one fault at a time. Working counts are keyed by each
+/// file's stat and base counts by blob id, so a warm call reads nothing but the
+/// target.
+///
+/// **Uncommitted edits to files no commit changed are not read**: the one
+/// primitive that sees them, the worktree status, measured 91 ms here. `check`
+/// still judges the whole tree.
+///
+/// # Errors
+///
+/// When a row's counter does not compile, or git cannot read the repository.
+pub fn ratchets_at_call(
+    rules: &[&Rule],
+    root: &Path,
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Vec<CallRatchet>> {
+    let moving = moving_rows(rules, target, current, projected)?;
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut counters = counter_states(&moving, root, cache)?;
+    let sets = changed_sets(&moving, root, target, cache)?;
+    let stamps = working_stamps(&sets, root, target);
+    count_base(&sets, &mut counters, root)?;
+    count_working(&stamps, &mut counters, root);
+    let found = moving
+        .into_iter()
+        .filter_map(|row| judge(row, &sets, &counters, &stamps, target))
+        .collect();
+    for state in counters.values() {
+        state.blobs.save();
+        state.files.save();
+    }
+    Ok(found)
+}
+
+/// A row this write moves in its banned direction: the row, its direction, base
+/// and glob, and the target's count before and after the write.
+type Moving<'a> = (&'a Rule, Direction, &'a str, &'a str, usize, usize);
+
+/// The rows the write's own move breaches, with no IO: everything later reads
+/// only for these.
+fn moving_rows<'a>(
+    rules: &[&'a Rule],
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+) -> anyhow::Result<Vec<Moving<'a>>> {
+    let mut moving = Vec::new();
+    for rule in rules {
+        let (Some(direction), Some(base), Some(glob)) =
+            (rule.direction, rule.base.as_deref(), rule.glob.as_deref())
+        else {
+            continue;
+        };
+        if !judged_at_call(rule) || !glob_match(glob, target) {
+            continue;
+        }
+        let tally = ratchet_tally(rule)?;
+        let was = current.map_or(0, &tally);
+        let now = tally(projected);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        // A RISE, said by the direction: a violated row moved, so a
+        // non-increasing one rose and a non-decreasing one fell.
+        if direction == Direction::NonIncreasing
+            && let Some(token) = rule.admits_with.as_deref()
+            && !declared_subject(projected, token).is_empty()
+        {
+            continue;
+        }
+        moving.push((*rule, direction, base, glob, was, now));
+    }
+    Ok(moving)
+}
+
+/// ONE COUNTER PER DISTINCT DEFINITION, each with its own persisted tables, so
+/// every blob and file is read once and counted for all of them.
+fn counter_states<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<Vec<u8>, CounterState<'a>>> {
+    let mut counters: BTreeMap<Vec<u8>, CounterState<'a>> = BTreeMap::new();
+    for (rule, ..) in moving {
+        if let std::collections::btree_map::Entry::Vacant(slot) = counters.entry(counter_key(rule))
+        {
+            let key = slot.key().clone();
+            slot.insert(CounterState {
+                tally: Box::new(ratchet_tally(rule)?),
+                blobs: BlobCounts::load(&key, root, cache),
+                files: FileCounts::load(&key, root, cache),
+            });
+        }
+    }
+    Ok(counters)
+}
+
+/// THE CHANGED SET per (base, glob), keyed by (HEAD, base, glob): two id
+/// lookups through one open, so a warm call walks no commit graph and diffs no
+/// tree.
+fn changed_sets<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<(&'a str, &'a str), Changed>> {
+    let refs: Vec<&str> = std::iter::once("HEAD")
+        .chain(moving.iter().map(|(_, _, base, ..)| *base))
+        .collect();
+    let ids = crate::git::rev_ids(root, &refs)?;
+    let head = ids.first().cloned().flatten().unwrap_or_default();
+    let mut sets: BTreeMap<(&str, &str), Changed> = BTreeMap::new();
+    for (index, (_, _, base, glob, ..)) in moving.iter().enumerate() {
+        if sets.contains_key(&(*base, *glob)) {
+            continue;
+        }
+        let base_id = ids.get(index + 1).cloned().flatten().unwrap_or_default();
+        let changed = changed_set(root, &head, base, &base_id, glob, target, cache)?;
+        sets.insert((*base, *glob), changed);
+    }
+    Ok(sets)
+}
+
+/// Each changed working file's stat, the target excepted (its count is the
+/// projected one).
+fn working_stamps<'s>(
+    sets: &'s BTreeMap<(&str, &str), Changed>,
+    root: &Path,
+    target: &str,
+) -> BTreeMap<&'s str, Option<Stamp>> {
+    let mut stamps: BTreeMap<&str, Option<Stamp>> = BTreeMap::new();
+    for changed in sets.values() {
+        for (path, _) in &changed.paths {
+            if path != target {
+                stamps
+                    .entry(path.as_str())
+                    .or_insert_with(|| fs::metadata(root.join(path)).ok().map(|meta| stamp(&meta)));
+            }
+        }
+    }
+    stamps
+}
+
+/// The base side: each blob no counter holds, inflated once and in parallel,
+/// counted for every counter inside its reader. EVERY READ IN FLIGHT BEFORE
+/// ANY IS MADE (operator ruling, 2026-11-11): the packs are prefetched first.
+fn count_base(
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) -> anyhow::Result<()> {
+    let base_ids: BTreeSet<&str> = sets
+        .values()
+        .flat_map(|changed| changed.paths.iter().filter_map(|(_, id)| id.as_deref()))
+        .collect();
+    let base_ids: Vec<&str> = base_ids.into_iter().collect();
+    let unread: BTreeSet<&str> = counters
+        .values()
+        .flat_map(|state| state.blobs.missing(&base_ids))
+        .collect();
+    if unread.is_empty() {
+        return Ok(());
+    }
+    let _ = crate::git::prefetch_packs(root);
+    let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
+        counters.values().map(|state| &*state.tally).collect();
+    let unread: Vec<&str> = unread.into_iter().collect();
+    let counted = crate::git::map_blobs(root, &unread, &|text: &str| {
+        tallies
+            .iter()
+            .map(|tally| tally(text))
+            .collect::<Vec<usize>>()
+    })?;
+    for (index, state) in counters.values_mut().enumerate() {
+        for id in &unread {
+            let count = counted.get(*id).map_or(0, |counts| counts[index]);
+            state.blobs.counts.insert((*id).to_owned(), count);
+        }
+        state.blobs.added = true;
+    }
+    Ok(())
+}
+
+/// The working side: every file a counter does not hold at its stamp, read in
+/// one completion batch and counted once for every counter.
+fn count_working(
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) {
+    let stale: Vec<&str> = stamps
+        .iter()
+        .filter_map(|(path, stamped)| {
+            let stamped = (*stamped)?;
+            counters
+                .values()
+                .any(|state| state.files.fresh(path, stamped).is_none())
+                .then_some(*path)
+        })
+        .collect();
+    let sized: Vec<(std::path::PathBuf, u64)> = stale
+        .iter()
+        .map(|path| {
+            let size = stamps
+                .get(path)
+                .copied()
+                .flatten()
+                .map_or(0, |(_, _, size, _)| size);
+            (root.join(path), size)
+        })
+        .collect();
+    let texts: Vec<Option<String>> = crate::fsio::read_many(&sized)
+        .into_iter()
+        .map(|bytes| bytes.and_then(|bytes| String::from_utf8(bytes).ok()))
+        .collect();
+    for (path, text) in stale.iter().zip(texts) {
+        let Some(Some(stamped)) = stamps.get(path) else {
+            continue;
+        };
+        let text = text.unwrap_or_default();
+        for state in counters.values_mut() {
+            state.files.put(path, *stamped, (state.tally)(&text));
+        }
+    }
+}
+
+/// One moving row's verdict: a per-file row against the target's base blob, an
+/// aggregate as the summed movement over every changed path.
+fn judge(
+    (rule, direction, base, glob, was, now): Moving<'_>,
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &BTreeMap<Vec<u8>, CounterState<'_>>,
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    target: &str,
+) -> Option<CallRatchet> {
+    let changed = &sets[&(base, glob)];
+    let state = counters.get(&counter_key(rule))?;
+    let breached = if rule.per_file {
+        changed
+            .paths
+            .iter()
+            .find(|(path, _)| path == target)
+            .and_then(|(_, id)| id.as_deref())
+            .is_some_and(|id| direction.violated(state.blobs.get(Some(id)), now))
+    } else {
+        let mut movement = 0_i64;
+        for (path, id) in &changed.paths {
+            let working = if path == target {
+                now
+            } else {
+                stamps
+                    .get(path.as_str())
+                    .copied()
+                    .flatten()
+                    .map_or(0, |stamped| state.files.fresh(path, stamped).unwrap_or(0))
+            };
+            movement += signed(working) - signed(state.blobs.get(id.as_deref()));
+        }
+        match direction {
+            Direction::NonDecreasing => movement < 0,
+            Direction::NonIncreasing => movement > 0,
+        }
+    };
+    breached.then(|| CallRatchet {
+        rule: rule.id.clone(),
+        path: target.to_owned(),
+        was,
+        now,
+    })
+}
+
+/// One counter's tally and its two persisted tables, for one call.
+struct CounterState<'a> {
+    tally: Box<dyn Fn(&str) -> usize + Sync + 'a>,
+    blobs: BlobCounts,
+    files: FileCounts,
+}
+
+/// The paths a branch changed under one glob since its merge base, each with
+/// its blob id at the base (`None` where it is absent there), the target always
+/// among them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Changed {
+    paths: Vec<(String, Option<String>)>,
+}
+
+/// [`Changed`] for (`head`, `base_id`, `glob`), from the cache when this HEAD
+/// was diffed against this base before: the merge base and the tree diff are
+/// taken only when HEAD or the base ref moved.
+fn changed_set(
+    root: &Path,
+    head: &str,
+    base: &str,
+    base_id: &str,
+    glob: &str,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Changed> {
+    let entry = cache.map(|dir| {
+        let at = dir.join("ratchet-changed").join(
+            blake3::hash(format!("{}\0{base}\0{glob}", root.display()).as_bytes())
+                .to_hex()
+                .as_str(),
+        );
+        let key = crate::cache::key(
+            CALL_RATCHET_FORMAT,
+            &[head.as_bytes(), base_id.as_bytes(), glob.as_bytes()],
+        );
+        (at, key)
+    });
+    let cached = entry
+        .as_ref()
+        .and_then(|(at, key)| crate::cache::read(at, key))
+        .and_then(|body| serde_json::from_slice::<(String, Changed)>(&body).ok());
+    let (merge_base, mut set) = if let Some(cached) = cached {
+        cached
+    } else {
+        // As `ratchet_rule` reads it (CLOUD-405), falling back to the
+        // declared ref exactly where it does.
+        let merge_base = crate::git::merge_base(root, base)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| base.to_owned());
+        let set = Changed {
+            paths: crate::git::blobs_changed_between(root, &merge_base, head, glob)?
+                .into_iter()
+                .map(|(path, at_base, _)| (path, at_base))
+                .collect(),
+        };
+        if let Some((at, key)) = &entry
+            && let Ok(body) = serde_json::to_vec(&(&merge_base, &set))
+        {
+            crate::cache::write(at, key, &body);
+        }
+        (merge_base, set)
+    };
+    // The target is always judged, committed or not.
+    if !set.paths.iter().any(|(path, _)| path == target) {
+        let at_base = crate::git::blob_ids_at(root, &merge_base, &[target])?.remove(target);
+        set.paths.push((target.to_owned(), at_base));
+    }
+    Ok(set)
+}
+
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
 /// tree, and report if the aggregate moved the banned way.
 ///
@@ -10634,7 +11461,6 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 /// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
-//MUTANT ratchet-regex-uncounted|s@^        (Some(expression), _) => expression.find_iter(text).count(),$@        (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -10652,15 +11478,7 @@ fn ratchet_rule(
         // Unreachable: the census requires both for this kind.
         return Ok(());
     };
-    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
-    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
-    // so the `None` arm is unreachable and counts nothing.
-    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
-    let tally = |text: &str| match (&expression, rule.pattern.as_deref()) {
-        (Some(expression), _) => expression.find_iter(text).count(),
-        (None, Some(pattern)) => text.matches(pattern).count(),
-        (None, None) => 0,
-    };
+    let tally = ratchet_tally(rule)?;
 
     // THE COUNT IS TAKEN AT THE MERGE BASE, NOT AT THE DECLARED REF'S TIP
     // (CLOUD-405). The question a ratchet asks is "did THIS change move the
@@ -10734,7 +11552,7 @@ fn ratchet_rule(
     let admits_with = rule.admits_with.as_deref();
     let mut working_declared: BTreeSet<&str> = BTreeSet::new();
     for path in matched {
-        let text = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(text.len());
         let count = tally(&text);
         working_count += count;
@@ -10790,6 +11608,21 @@ fn ratchet_rule(
         &subjects,
         findings,
     );
+
+    // PER FILE, NO AGGREGATE (CLOUD-2663): each path is judged on its own base
+    // count, and the sum is never asked, so one file shrinking cannot pay for
+    // another growing.
+    if rule.per_file {
+        per_file_findings(
+            rule,
+            direction,
+            &base_counts,
+            &working_counts,
+            &working_declared,
+            findings,
+        );
+        return Ok(());
+    }
 
     if !direction.violated(base_count, working_count) {
         return Ok(());
@@ -11094,6 +11927,46 @@ fn ratchet_finding(
     });
 }
 
+/// One finding per path whose own count moved the banned way (CLOUD-2663).
+///
+/// Judged over the union of base and working paths. A path absent at base has
+/// no ceiling and is skipped; a path absent now counts `0`, so a deletion is a
+/// fall exactly as the aggregate reads it. A rising path that declares the
+/// `admits_with` token is admitted, and one that does not is refused with the
+/// same blocker an aggregate row prints.
+fn per_file_findings(
+    rule: &Rule,
+    direction: Direction,
+    base_counts: &BTreeMap<String, usize>,
+    working_counts: &BTreeMap<&str, usize>,
+    working_declared: &BTreeSet<&str>,
+    findings: &mut Vec<Finding>,
+) {
+    let paths: BTreeSet<&str> = base_counts
+        .keys()
+        .map(String::as_str)
+        .chain(working_counts.keys().copied())
+        .collect();
+    for path in paths {
+        let Some(&was) = base_counts.get(path) else {
+            continue;
+        };
+        let now = working_counts.get(path).copied().unwrap_or(0);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        let mut blockers = BTreeSet::new();
+        // A RISE, said by the direction: the row was violated, so it moved.
+        if rule.admits_with.is_some() && direction == Direction::NonIncreasing {
+            if working_declared.contains(path) {
+                continue;
+            }
+            blockers.insert(format!("{GROWTH_UNDECLARED} {path}"));
+        }
+        ratchet_finding(rule, path, was, now, &blockers, findings);
+    }
+}
+
 /// Which files grew without declaring a reason (CLOUD-929).
 ///
 /// The mirror of `retires_with`'s admission, and deliberately the weaker half.
@@ -11298,7 +12171,7 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
     }
     let mut claimed = ClaimedCases::default();
     for path in files.iter().filter(|path| selector.matches(path)) {
-        let Ok(text) = fs::read_to_string(root.join(path)) else {
+        let Ok(text) = crate::fsio::read_to_string(root.join(path)) else {
             continue;
         };
         count_read(text.len());
@@ -11705,7 +12578,7 @@ fn conserve_case_names(
         // The head copy, if the file survived. A PARTIAL deletion owes a mapping
         // for the cases it dropped and nothing for the ones still standing, so
         // the surviving names have to be read rather than assumed absent.
-        let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let survivors = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(survivors.len());
         let mapping = Mapping {
             conserves,
@@ -12781,10 +13654,7 @@ fn run_once(
 pub fn any_blocking(findings: &[Finding], fail_on_warning: bool, rules: &[Rule]) -> bool {
     findings.iter().any(|finding| {
         decidability_of(finding, rules).may_block()
-            && severity::promote(
-                severity::row_for_rule(finding.severity).report,
-                fail_on_warning,
-            ) == ReportLevel::Fail
+            && severity::report_for(finding.severity, fail_on_warning) == ReportLevel::Fail
     })
 }
 
@@ -12908,7 +13778,7 @@ fn forbid_in_files(
     let mode = span_mode(rule);
     for rel_path in paths {
         let rel_path = rel_path.as_str();
-        let contents = match fs::read(root.join(rel_path)) {
+        let contents = match crate::fsio::read(root.join(rel_path)) {
             Ok(bytes) => bytes,
             // A path the walk listed and the read cannot find is a tree that
             // moved under us, not a finding — the same silence as before, per
@@ -14271,7 +15141,7 @@ mod tests {
                 if path.extension() != Some(std::ffi::OsStr::new("rs")) {
                     continue;
                 }
-                let source = std::fs::read_to_string(&path).unwrap();
+                let source = crate::fsio::read_to_string(&path).unwrap();
                 sources.push((path, source));
             }
         }
@@ -14755,7 +15625,7 @@ mod tests {
         let root = std::env::temp_dir();
         let emitted = emitted_tree_keys(&root);
 
-        let source = std::fs::read_to_string(
+        let source = crate::fsio::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("src")
                 .join("policy.rs"),
@@ -14920,6 +15790,43 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+        // CLOUD-2663: `counts = "tokens"` stands in for the literal, alone.
+        let tokens = Rule {
+            pattern: None,
+            counts: Some(CeilingUnit::Tokens),
+            ..base.clone()
+        };
+        assert!(tokens.validate().is_ok());
+        for refused in [
+            Rule {
+                pattern: Some("#[test]".to_owned()),
+                ..tokens.clone()
+            },
+            Rule {
+                counts: Some(CeilingUnit::TrackedArtifacts),
+                ..tokens.clone()
+            },
+            Rule {
+                per_file: true,
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            },
+            Rule {
+                per_file: true,
+                conserves: Some(ledger_vocabulary()),
+                ..base.clone()
+            },
+        ] {
+            assert!(refused.validate().is_err(), "{refused:?}");
+        }
+        assert!(
+            Rule {
+                per_file: true,
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
         );
         // Same for the other half of §9's duality: a ratchet runs nothing.
         assert!(
@@ -15415,121 +16322,21 @@ mod tests {
         traversals: serde_json::Value::Null,
     };
 
-    // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
-    // fixture that spreads one would stop naming the columns it leaves empty,
-    // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`], which keeps this literal
-    // under the length ceiling without an escape.
+    // The row a config would carry with only `id` and `kind` written: every
+    // other column at its serde default, exactly as a consumer's blank row
+    // loads. Built through serde rather than a literal listing every column,
+    // which had outgrown the function-length lint; the census a new column owes
+    // is `Rule::columns` and its classification test, not this fixture. The
+    // three columns whose blank value depends on the kind are filled by
+    // [`per_kind`].
     fn blank(id: &str, kind: RuleKind) -> Rule {
-        per_kind(Rule {
-            review: Vec::new(),
-            id: id.to_owned(),
-            kind,
-            glob: None,
-            // Filled by `per_kind`.
-            severity: None,
-            scope: kind.scopes()[0],
-            pattern: None,
-            regex: None,
-            exclude: None,
-            content: None,
-            tool: None,
-            measures: None,
-            counts: None,
-            max: None,
-            resolves: Vec::new(),
-            when_absent: None,
-            when_present: None,
-            when_value: None,
-            while_marker: None,
-            while_unpushed: false,
-            key_from: None,
-            key_base: None,
-            key_shape: None,
-            max_age: None,
-            requires_field: None,
-            contains: None,
-            unless_contains: None,
-            require_via: None,
-            requires_key: None,
-            reason: None,
-            policy_url: None,
-            bypass_env: None,
-            check: None,
-            fix: None,
-            produces: None,
-            exclude_paths: Vec::new(),
-            symbols: false,
-            run: None,
-            verbatim: None,
-            identity_key: None,
-            direction: None,
-            base: None,
-            retires_with: None,
-            conserves: None,
-            admits_with: None,
-            format: None,
-            node: None,
-            derives: None,
-            cites: None,
-            reads: None,
-            module: None,
-            bundle: None,
-            preset: None,
-            // No preset, so nothing here reads a CI provider (CLOUD-1625).
-            provider: None,
-            except: Vec::new(),
-            gate: None,
-            documents: Vec::new(),
-            requires_path: Vec::new(),
-            sources: Vec::new(),
-            lines: Vec::new(),
-            line_sources: Vec::new(),
-            invocations: Vec::new(),
-            invocation_sources: Vec::new(),
-            uses: Vec::new(),
-            use_sources: Vec::new(),
-            git: Vec::new(),
-            refs: Vec::new(),
-            ranges: Vec::new(),
-            commits: Vec::new(),
-            staged: Vec::new(),
-            history: Vec::new(),
-            tags: Vec::new(),
-            git_config: Vec::new(),
-            index: Vec::new(),
-            state: Vec::new(),
-            forge: Vec::new(),
-            tools: Vec::new(),
-            plan: Vec::new(),
-            minted: Vec::new(),
-            captured: Vec::new(),
-            tasks: Vec::new(),
-            extract: Vec::new(),
-            landing: Vec::new(),
-            delta_sources: Vec::new(),
-            external: Vec::new(),
-            predicate_severity: None,
-            criteria: None,
-            tier: None,
-            // Both filled by `per_kind`.
-            no_fix_reason: None,
-            checks: None,
-            // Left `None` even where the kind permits it, unlike `checks` above:
-            // a receipt fixture needs SOME receipt named to be valid, and
-            // `checks` above already supplies one. Filling both would make every
-            // blank receipt row carry an alternation no case asked for, and a
-            // fixture that quietly exercises a column is how a test passes for a
-            // reason its author did not choose.
-            checks_any: None,
-            key: None,
-            trigger: None,
-            verdict: None,
-            filters: None,
-            substitutes: None,
-            interprets: None,
-            no_retry_reason: None,
-        })
+        let row: Rule = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "scope": kind.scopes()[0],
+        }))
+        .expect("an id, a kind and a scope are a whole blank row");
+        per_kind(row)
     }
 
     /// The columns whose blank value depends on `rule.kind`, each filled only for
@@ -17931,10 +18738,10 @@ mod tests {
         let dir = temp_dir("rules-warn-reports");
         write(&dir, "a.rs", "TODO\n");
         let mut rule = forbid("no-todo", "**/*.rs", "TODO");
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, RuleSeverity::Warn);
+        assert_eq!(findings[0].severity, RuleSeverity::Advise);
         // THE TABLE IS PASSED, not `&[]`. `any_blocking` resolves each finding's
         // owning row to classify it (CLOUD-331), so a fixture that supplied no
         // table would be asserting over a classification path this test does not
@@ -18309,7 +19116,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             if !resolved.is_file() {
                 return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
             }
-            if !std::fs::read(&resolved)
+            if !crate::fsio::read(&resolved)
                 .unwrap_or_default()
                 .starts_with(b"MZ")
             {
@@ -20840,6 +21647,87 @@ violation contains {
         dir
     }
 
+    /// Two rows count the same only when their counters match: pattern,
+    /// regex and what is counted all key the persisted tables.
+    ///
+    /// Fails by: a constant key, which shares one row's counts with another's.
+    #[test]
+    fn rows_share_counts_only_when_their_counters_match() {
+        let row = |pattern: Option<&str>, regex: Option<&str>| Rule {
+            pattern: pattern.map(String::from),
+            regex: regex.map(String::from),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let base = counter_key(&row(Some("x"), None));
+        assert_eq!(base, counter_key(&row(Some("x"), None)));
+        assert_ne!(base, counter_key(&row(Some("y"), None)));
+        assert_ne!(base, counter_key(&row(None, Some("x"))));
+    }
+
+    /// A write moves only the rows judged at the call whose glob holds the
+    /// target: a row `check` alone judges, or one over other paths, is not
+    /// read.
+    ///
+    /// Fails by: a row admitted when either condition holds rather than both.
+    #[test]
+    fn only_a_call_judged_row_over_the_target_moves() {
+        let judged = Rule {
+            base: Some(String::from("origin/main")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let retiring = Rule {
+            retires_with: Some(String::from("# subject:")),
+            ..judged.clone()
+        };
+        let elsewhere = Rule {
+            glob: Some(String::from("*.md")),
+            ..judged.clone()
+        };
+        let rows = [&judged, &retiring, &elsewhere];
+        let moving = moving_rows(&rows, "t.bats", Some(""), ONE_CASE).expect("counts");
+        assert_eq!(moving.len(), 1, "only the judged row over *.bats moves");
+        assert!(std::ptr::eq(moving[0].0, std::ptr::from_ref(&judged)));
+    }
+
+    /// The changed set follows its base ref: moving the base while HEAD stays
+    /// put is a different set, not the cached one.
+    ///
+    /// Fails by: the set's cache keyed on another row's ref (HEAD's id), which
+    /// answers the old set after the base moved.
+    #[test]
+    fn a_moved_base_is_a_new_changed_set_with_head_unmoved() {
+        let dir = ratchet_repo("rules-changed-base-moved", &[("a.bats", ONE_CASE)], &[]);
+        let head = || {
+            crate::git::rev_ids(&dir, &["HEAD"]).expect("ids")[0]
+                .clone()
+                .expect("HEAD resolves")
+        };
+        let point_base = |id: String| {
+            fs::write(dir.join(".git/refs/heads/base"), format!("{id}\n")).expect("ref");
+        };
+        point_base(head());
+        write(&dir, "b.bats", ONE_CASE);
+        // A commit's tree is the paths it is handed, so `a.bats` is carried.
+        let both = [String::from("a.bats"), String::from("b.bats")];
+        crate::gitwrite::commit_paths(&dir, &both, "second").expect("commit");
+        let cache = temp_dir("rules-changed-base-moved-cache");
+        let row = Rule {
+            base: Some(String::from("base")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let moving = [(&row, Direction::NonIncreasing, "base", "*.bats", 0, 1)];
+        let paths = |sets: BTreeMap<(&str, &str), Changed>| {
+            sets.into_values()
+                .flat_map(|set| set.paths.into_iter().map(|(path, _)| path))
+                .collect::<Vec<_>>()
+        };
+        let before = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(before), ["b.bats", "t.bats"]);
+        point_base(head());
+        let after = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(after), ["t.bats"], "the base now carries b.bats");
+    }
+
     fn ratchet_row(direction: Direction) -> Rule {
         Rule {
             glob: Some(String::from("*.bats")),
@@ -20887,6 +21775,125 @@ violation contains {
         assert_eq!(
             ratchet_run(ratchet_row(Direction::NonDecreasing), &held),
             (Vec::new(), Vec::new())
+        );
+    }
+
+    fn md_row(per_file: bool) -> Rule {
+        Rule {
+            glob: Some(String::from("docs/*.md")),
+            counts: Some(CeilingUnit::Tokens),
+            direction: Some(Direction::NonIncreasing),
+            base: Some(String::from("HEAD")),
+            per_file,
+            ..blank("r", RuleKind::Ratchet)
+        }
+    }
+
+    /// A token ratchet counts exactly what `policy budget` counts per file, over
+    /// loaded text: growth inside an HTML comment is not growth.
+    ///
+    /// Fails by: the tokens arm counting nothing.
+    #[test]
+    fn a_token_ratchet_counts_what_the_budget_counts() {
+        let base_text = "# Title\n\nSome body text here.\n";
+        let n = crate::budget::estimate_tokens(&crate::budget::loaded(base_text));
+        assert!(n > 0);
+        let grown = format!("{base_text}12345678");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-grew",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &grown)],
+        );
+        assert_eq!(
+            ratchet_run(md_row(false), &dir),
+            (vec![format!("docs/*.md {n}->{}", n + 2)], Vec::new())
+        );
+        let commented = format!("{base_text}<!-- a long comment the loader drops -->\n");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-comment",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &commented)],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// One file shrinking does not pay for another growing on a per-file row.
+    ///
+    /// Fails by: the per-file branch skipped, judging the sum.
+    #[test]
+    fn a_per_file_ratchet_refuses_growth_another_file_paid_for() {
+        let a = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbb";
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file",
+            &[("docs/a.md", a), ("docs/b.md", b)],
+            &[("docs/a.md", &a[..16]), ("docs/b.md", &format!("{b}bbbb"))],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+        assert_eq!(
+            ratchet_run(md_row(true), &dir),
+            (vec![String::from("docs/b.md 4->5")], Vec::new())
+        );
+    }
+
+    /// A file the branch creates has no ceiling on a per-file row.
+    ///
+    /// Fails by: judging a new path against a base count of zero.
+    #[test]
+    fn a_per_file_ratchet_does_not_judge_a_path_new_at_base() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-new",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/new.md", "nnnnnnnnnnnnnnnn")],
+        );
+        assert_eq!(ratchet_run(md_row(true), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// A deleted file is a fall to zero on a per-file row.
+    ///
+    /// Fails by: skipping a path absent from the working tree.
+    #[test]
+    fn a_per_file_non_decreasing_ratchet_refuses_a_deleted_file() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-deleted",
+            &[("t.bats", TWO_CASES), ("u.bats", ONE_CASE)],
+            &[("t.bats", "")],
+        );
+        let rule = Rule {
+            per_file: true,
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        assert_eq!(
+            ratchet_run(rule, &dir),
+            (vec![String::from("t.bats 2->0")], Vec::new())
+        );
+    }
+
+    /// A per-file rise that declares the `admits_with` token is admitted; a silent
+    /// one is refused with the aggregate's blocker.
+    #[test]
+    fn a_per_file_ratchet_admits_a_declared_rise_only() {
+        let declared = ratchet_repo(
+            "rules-ratchet-per-file-declared",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nadmits: x\n")],
+        );
+        let rule = || Rule {
+            admits_with: Some(String::from("admits:")),
+            ..md_row(true)
+        };
+        assert_eq!(ratchet_run(rule(), &declared), (Vec::new(), Vec::new()));
+        let silent = ratchet_repo(
+            "rules-ratchet-per-file-silent",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nmore text\n")],
+        );
+        assert_eq!(
+            ratchet_run(rule(), &silent),
+            (
+                vec![format!("docs/a.md 2->4 [{GROWTH_UNDECLARED} docs/a.md]")],
+                Vec::new()
+            )
         );
     }
 

@@ -361,10 +361,6 @@ pub struct Refusal {
 /// Rule 4 is untouched: this binds only what the refusal already renders, and
 /// `bindings` is `skip_serializing`, so `-J` output and `schema/*.json` do not
 /// move.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT printed-spelling-dropped|s@^    let mut spellings = vec!\[bound_subject(&render_subjects(subjects))\];$@    let mut spellings: Vec<String> = Vec::new();@|a_subject_copied_from_the_refusal_line_admits_the_write
-//MUTANT path-spelling-dropped|s@^    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);$@    let path: Option<String> = None;@|a_spent_admission_admits_the_write_it_was_taken_for
-//MUTANT class-spelling-raw|s@^        return vec!\[bound_subject(token)\];$@        return vec![token.to_owned()];@|a_refusal_naming_nothing_binds_its_class_as_a_request_spells_it
 fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<String> {
     use crate::verdict::{bound_subject, render_subjects};
     if subjects.is_empty() {
@@ -474,7 +470,6 @@ pub const LEGEND: &str = "`batten policy explain <class>` prints any finding's d
 const LEGEND_KEY: &str = "legend";
 
 /// Whether this context's epoch still owes the legend, marking it delivered.
-//MUTANT legend-every-firing|s@^    first_sighting(root, context, LEGEND_KEY, LEGEND)$@    true@|the_first_finding_of_an_epoch_carries_the_legend
 #[must_use]
 pub fn legend_due(root: &Path, context: &str) -> bool {
     first_sighting(root, context, LEGEND_KEY, LEGEND)
@@ -490,14 +485,12 @@ pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
 }
 
 /// The directory one context's sightings live in.
-//MUTANT sighting-context-ignored|s@^    Some(store.join(crate::provision::digest(context.as_bytes())))$@    Some(store.join(crate::provision::digest(b"")))@|two_contexts_in_one_clone_each_get_the_full_text
 fn context_dir(root: &Path, context: &str) -> Option<std::path::PathBuf> {
     let store = crate::git::git_dir(root).ok()?.join(STORE);
     Some(store.join(crate::provision::digest(context.as_bytes())))
 }
 
 /// Which arm this firing of `refusal` gets in `context`, marking it seen.
-//MUTANT sight-always-first|s@^    if !first_sighting(root, context, \&key, \&full) {$@    if false {@|a_warn_advisory_is_full_once_then_a_pointer
 #[must_use]
 pub fn sight(root: &Path, context: &str, refusal: &Refusal) -> Arm {
     let full = refusal.render_finding(Arm::Full);
@@ -528,7 +521,6 @@ pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
 
 /// Forget every item this ONE context has seen (CLOUD-2075). Other contexts in
 /// the clone are never touched.
-//MUTANT forget-sightings-noop|s@^        let _ = std::fs::remove_dir_all(dir);$@        let _ = dir;@|a_session_start_forgets_only_that_contexts_sightings
 pub fn forget_sightings(root: &Path, context: &str) {
     if let Some(dir) = context_dir(root, context) {
         let _ = std::fs::remove_dir_all(dir);
@@ -538,7 +530,6 @@ pub fn forget_sightings(root: &Path, context: &str) {
 /// An item's identity: the rule, the class, and a digest of its DEFINITION, so
 /// an edit to a gloss, route, precondition or reason mid-cycle is a new item
 /// that renders in full again (CLOUD-1582, absorbed).
-//MUTANT sighting-key-ignores-definition|s@^    let digest = crate::provision::digest(definition.as_bytes());$@    let digest = crate::provision::digest(b"");@|an_edited_definition_is_a_new_item_mid_cycle
 fn key_of(rule: &str, class: Option<&str>, definition: &str) -> String {
     let digest = crate::provision::digest(definition.as_bytes());
     format!("{rule}\u{1f}{}\u{1f}{digest}", class.unwrap_or_default())
@@ -710,7 +701,6 @@ fn read_body(line: &str, rule: String, verdict: Option<String>) -> Parsed {
 /// leaving every other line byte-identical (CLOUD-2075 §D). `mark(key, full)`
 /// consults and marks the reader's store and answers whether this is the first
 /// sighting.
-//MUTANT boundary-collapse-skipped|s@^        let rewritten = if arm == Arm::Pointer { pointer } else { body };$@        let rewritten = body;@|collapse_cuts_a_marked_full_arm_to_its_pointer_prefix
 pub fn collapse(text: &str, mut mark: impl FnMut(&str, &str) -> bool) -> String {
     let mut lines: Vec<&str> = Vec::new();
     for body in text.split('\n') {
@@ -892,14 +882,6 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
 /// line rather than truncating one.
-//MUTANT full-arm-reason-dropped|s@^    let remedy = refusal.remedy();$@    let remedy = None::<\&str>;@|a_first_sighting_carries_the_rows_reason_and_both_labels
-//MUTANT reason-replaces-do-dropped|s@^        Some(remedy) => vec!\[remedy\],$@        Some(_) => refusal.doc.act.iter().map(String::as_str).collect(),@|a_rule_reason_replaces_the_class_do
-//MUTANT repeat-carries-definition|s@^    let repeat = arm == Arm::Pointer;$@    let repeat = false;@|the_repeat_carries_every_pointer_and_no_definition
-//MUTANT repeat-drops-routes|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_repeat_carries_every_pointer_and_no_definition
-//MUTANT named-by-rule|s@^    let name = refusal.verdict().unwrap_or(refusal.rule());$@    let name = if refusal.rule().is_empty() { refusal.verdict().unwrap_or_default() } else { refusal.rule() };@|a_finding_is_named_by_its_violation_class
-//MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
-//MUTANT raising-row-dropped|s@^    if raised_by {$@    if false {@|a_first_sighting_names_the_row_that_raised_it
-//MUTANT severity-unprinted|s@^    let mut line = head(refusal.severity, name);$@    let mut line = head(Severity::Deny, name);@|an_advisory_finding_carries_its_severity
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     // THE VIOLATION'S NAME (CLOUD-2145): the class, whose definition is the one
     // a reader holds and looks up, and which explains the pointers below. Only a
@@ -1013,8 +995,6 @@ pub fn override_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) ->
 }
 
 /// One route's text, or `None` where it does not render.
-//MUTANT override-route-unrendered|s@^    if route.kind == RouteKind::Override {$@    if route.kind == RouteKind::Override \&\& false {@|the_override_route_on_the_line_is_the_request_that_admits
-//MUTANT route-reader-unnamed|s@^        Some(reader) => format!("{text} via {reader}"),$@        Some(_) => text,@|a_document_route_into_a_read_redirected_path_names_its_reader
 fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String> {
     use crate::verdict::RouteKind;
     if route.kind == RouteKind::Override {
@@ -1047,8 +1027,6 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
 /// other error is `verb run broken` with its chain as subjects, outermost first.
 /// A finding is ONE line, so each message's first line is the subject and the
 /// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
-//MUTANT usage-failure-misclassed|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = usage.verdict.unwrap_or(Native::RunBroken);@|every_cli_failure_renders_its_verdict_label
-//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
 #[must_use]
 pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     if failure
@@ -1098,8 +1076,6 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
 /// subject: every finding of the rule is already its own line, so a count here
 /// would say twice what the reader holds. `None` where the row declares neither
 /// a fix nor a reason and is no class: such a line would say nothing.
-//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
-//MUTANT fix-route-unrendered|s@^        Fix::Run(command) => refusal.with_command_route(\&command),$@        Fix::Run(_) => refusal,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
 #[must_use]
 pub fn of_rule(
     rule: &str,
@@ -1132,9 +1108,6 @@ pub fn of_rule(
     })
 }
 
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
-//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
@@ -1223,6 +1196,19 @@ impl Refusal {
             precondition: None,
         });
         self
+    }
+
+    /// [`Refusal::with_document_route`] as the ONLY route, and no fix (CLOUD-2284).
+    ///
+    /// For a pointer whose store is not a JSON document: the class's own
+    /// `--field` route refuses there, so every route it printed failed. The fix
+    /// is cleared too, or `remedy` would print that command once it is no
+    /// longer a route target.
+    #[must_use]
+    pub fn with_only_document_route(mut self, path: &str) -> Refusal {
+        self.routes.clear();
+        self.fix = Fix::None;
+        self.with_document_route(path)
     }
 
     /// Mark this refusal's subjects as separate tree findings at `paths`, so

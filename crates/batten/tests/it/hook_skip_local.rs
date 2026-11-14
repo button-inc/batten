@@ -110,7 +110,7 @@ fn allowed_backgrounded(command: &str) {
 #[test]
 fn a_local_step_skip_is_refused() {
     // The measured command, as it was actually run on this branch.
-    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
+    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
     denied_by_this_row("HK_SKIP_STEPS=batten-check,test:cargo git commit --amend --no-edit");
 }
 
@@ -119,8 +119,8 @@ fn a_step_skip_behind_a_compound_command_is_still_reached() {
     // `input.call.segments`, not the first word of the line (CLOUD-857). A real
     // agent command is compound most of the time, and `git add -A && <skip> git
     // commit` is the exact shape this session ran.
-    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
-    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'x'");
+    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
+    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'fix: x'");
 }
 
 #[test]
@@ -146,9 +146,9 @@ fn the_carve_with_a_step_appended_is_refused() {
 fn an_ordinary_command_is_allowed() {
     // ANTI-VACUITY. Without these the denies above are satisfied by a build that
     // refuses every command, which would name this row every time.
-    allowed("git commit -m 'an ordinary commit'");
+    allowed("git commit -m 'fix: an ordinary commit'");
     allowed_backgrounded("mise run ci");
-    allowed("RUST_LOG=debug git commit -m 'another variable is not this one'");
+    allowed("RUST_LOG=debug git commit -m 'fix: another variable is not this one'");
 }
 
 #[test]

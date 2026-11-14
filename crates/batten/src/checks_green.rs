@@ -163,6 +163,55 @@ impl Run {
     }
 }
 
+/// Whether the fan-in's failure in `runs` was MANUFACTURED by its siblings not
+/// answering, and so is no verdict on the commit (CLOUD-363, CLOUD-900).
+///
+/// [`decide`] already reads it this way for a cancelled matrix; the recorder
+/// did not, so a draft run — every sibling `skipped`, the fan-in red by design
+/// since CLOUD-2317 — was written as a verdict, and `forge check red` refused
+/// every head pushed as a draft, wedging the landing it is upstream of (#1276).
+/// One predicate for the recorder, so it reads a run as `decide` does.
+///
+/// Manufactured means: the fan-in's newest run concluded in an answered failure,
+/// no sibling concluded in an answered failure (a real one judges the tree, and
+/// CLOUD-900 keeps it the verdict), every sibling has concluded, and at least
+/// one sibling's conclusion is a non-answer.
+#[must_use]
+pub fn fanin_failure_manufactured(runs: &[Run], answered: &[String], fanin: &str) -> bool {
+    let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
+    for run in runs {
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let latest: BTreeMap<&str, &Run> = grouped
+        .into_iter()
+        .filter_map(|(name, group)| winner(&group, answered).map(|run| (name, run)))
+        .collect();
+    let is_answer = |run: &Run| answered.iter().any(|word| word == &run.conclusion);
+    let Some(fan) = latest.get(fanin) else {
+        return false;
+    };
+    if !fan.completed() || fan.passes_gate() || !is_answer(fan) {
+        return false;
+    }
+    let mut unanswered = false;
+    for (name, run) in &latest {
+        if *name == fanin {
+            continue;
+        }
+        if !run.completed() {
+            return false;
+        }
+        if is_answer(run) {
+            if !run.passes_gate() {
+                return false;
+            }
+        } else {
+            unanswered = true;
+        }
+    }
+    unanswered
+}
+
 /// The roster and its two qualifiers, all of them the consumer's.
 ///
 /// None of these is a literal in this crate: a tracker's or a forge's vocabulary
@@ -272,7 +321,6 @@ fn rank(run: &Run, answered: &[String]) -> u8 {
 /// "restore clock-ordering" — the shape CLOUD-1662's Done block requires the
 /// suite to refuse. Verified killed: it reddens the arm that can only be decided
 /// by conclusion.
-//MUTANT skip-outranks-a-concurrent-failure|s@run.completed_at.clone(),@String::new(),@|a_concurrent_skip_does_not_bury_the_failure_it_raced
 fn key(run: &Run) -> (bool, String, String, u64) {
     (
         run.completed_at.is_empty() && !run.completed(),
@@ -328,8 +376,6 @@ fn key(run: &Run) -> (bool, String, String, u64) {
 /// than the predicate because a row's script may carry no `|` of its own, and
 /// because a guard commented out would also redden the two arms that must keep
 /// their old behaviour, telling us less about which clause the cases pin.
-//MUTANT-SUITE crates/batten/src/checks_green.rs
-//MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
 ///
 /// `pub(crate)` because `record forge --fetch` records one conclusion per name
 /// and must choose the SAME run this does (CLOUD-843): two orderings over one
@@ -471,10 +517,6 @@ pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
 /// So each conjunct is caught, and the middle row is the one worth reading: one
 /// case, one mirror, nothing else in 5,587 noticing. That is what a mirror is
 /// for, and it is also why removing either would be invisible without it.
-//MUTANT-SUITE crates/batten/src/checks_green.rs
-//MUTANT wait-is-never-a-dead-end|s@        if pending == 0 && unregistered.is_empty() {@        if false {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
-//MUTANT dead-end-ignores-running|s@        if pending == 0 && unregistered.is_empty() {@        if unregistered.is_empty() {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
-//MUTANT dead-end-ignores-unregistered|s@        if pending == 0 && unregistered.is_empty() {@        if pending == 0 {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
 pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
     if roster.required.is_empty() {
         return Err(RosterError::NoRequiredChecks);
@@ -915,6 +957,58 @@ mod tests {
         let Ok(Verdict::DeadEnd(_)) = decide(&reading, &roster()) else {
             panic!("a manufactured fan-in failure is not a verdict");
         };
+    }
+
+    /// Fails by: a draft run's red fan-in read as a verdict, which wedged every
+    /// head pushed as a draft (#1276); or a real sibling failure, a green
+    /// fan-in, or a sibling still running read as manufactured.
+    #[test]
+    fn a_draft_runs_red_fanin_is_manufactured_and_a_real_failure_is_not() {
+        let answered: Vec<String> = roster().answered;
+        let draft = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(fanin_failure_manufactured(&draft, &answered, "final"));
+        let real = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&real, &answered, "final"));
+        let green = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&green, &answered, "final"));
+        let running = vec![
+            run("in_progress", "", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&running, &answered, "final"));
+        let all_answered = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(
+            &all_answered,
+            &answered,
+            "final"
+        ));
+        // The fan-in's own state decides first: one not completed, whatever its
+        // conclusion field says, and one that passed, are no manufactured red.
+        let unfinished = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("in_progress", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&unfinished, &answered, "final"));
+        let passed = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&passed, &answered, "final"));
     }
 
     #[test]

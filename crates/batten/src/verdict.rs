@@ -536,8 +536,6 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
 /// against `finding.path` verbatim, and a path like `docs/a b.md` rejoined would
 /// name nothing any finding carries. Idempotent: a `/`-bearing text comes back
 /// trimmed, and any other text has no whitespace left after the join.
-//MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
-//MUTANT path-subject-split|s@^    if trimmed.contains('/') {$@    if false {@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
 #[must_use]
 pub fn bound_subject(text: &str) -> String {
     let trimmed = text.trim();
@@ -665,8 +663,6 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 /// is about, and it lives in this function. Dropping the `document` arm restores
 /// the exact defect — a class whose only route is a document renders no way out —
 /// so `refusal_ceiling`'s first-sighting case is what must redden.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
-//MUTANT document-route-dropped|s@        RouteKind::Document => "read",@        RouteKind::Document => return None,@|a_first_sighting_carries_the_gloss_and_its_route_by_kind
 #[must_use]
 pub(crate) fn render_route(route: &Route) -> Option<String> {
     let verb = match route.kind {
@@ -976,9 +972,6 @@ pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String
 }
 
 /// The per-entry half of [`validate`].
-//MUTANT-SUITE crates/batten/src/verdict.rs
-//MUTANT route-check-dropped|s@^    if verdict.routes.is_empty() \&\& id != Native::CallGrantNow.id() {$@    if false {@|a_class_with_no_route_is_refused_unless_it_is_the_grant
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn validate_one(
     verdict: &DeclaredVerdict,
     grammar: Option<&Vocabulary>,
@@ -1542,6 +1535,13 @@ pub enum Native by id {
     ProvisionPinOther => "provision pin other",
     /// The Stop ladder's unlanded rung.
     CommitShipMissing => "commit ship missing",
+    /// The Stop ladder's unlanded rung, on a clone too shallow to look.
+    CommitShipUnknown => "commit ship unknown",
+    /// The Stop ladder's unlanded rung, where a person merges and the work is
+    /// not pushed.
+    CommitPushMissing => "commit push missing",
+    /// The Stop ladder's unlanded rung, where a person merges what is pushed.
+    CommitMergeHeld => "commit merge held",
     /// The Stop ladder's filed-set rung.
     IssueListUnclear => "issue list unclear",
     /// A `[[hook.handler]]` reported on this call.
@@ -1586,6 +1586,9 @@ pub enum Native by id {
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
     ScriptRunLoose => "script run loose",
+    /// A call reached a repository other than its session's home, where the
+    /// home arms the reach gate (CLOUD-2672). Appended last, as above.
+    CallReachLoose => "call reach loose",
 }
 }
 
@@ -1698,7 +1701,6 @@ pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     }
 }
 
-//MUTANT write-admission-dropped|s@^        kind: RouteKind::Override,$@        kind: RouteKind::Document,@|every_class_routed_only_into_a_protected_path_is_admissible
 /// An `override`-kind route, which is the only kind whose precondition is
 /// REQUIRED rather than optional.
 ///
@@ -1726,8 +1728,6 @@ pushed",
 );
 
 /// CLOUD-1806's route: the recorded way through every plain `shape` row.
-//MUTANT shape-class-inadmissible|s@^const SHAPE_ADMIT_ROUTE: VendoredRoute = admit($@const SHAPE_ADMIT_ROUTE: VendoredRoute = run(@|a_shape_deny_is_admissible_through_its_class_override
-//MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
 const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
     "articulate the call",
     "the remedy `batten policy explain` prints for this row cannot perform the change this call \
@@ -1750,7 +1750,6 @@ makes, and you can name what the call changes and where a reviewer will see its 
 /// themselves: a class here may describe a PRACTICE and may never name a path, a
 /// task, a tracker key or an entity. `presets_are_inside_the_rule_one_glob`
 /// covers this file, because it is under `crates/**`.
-//MUTANT missing-receipt-route-dropped|s@^            STALE_RECEIPT_ROUTE,$@@|a_spent_admission_clears_a_missing_receipt
 const VENDORED: &[VendoredVerdict] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredVerdict {
@@ -2163,7 +2162,7 @@ status. `&&` is fine -- it short-circuits, so a failure still propagates.",
     },
     VendoredVerdict {
         id: "turn watch dropped",
-        gloss: "detaching a verdict-bearing command orphans it from the tool call",
+        gloss: "detaching a command orphans it from the tool call",
         class: "`nohup` or a trailing `&` returns the call at once, the harness records it \
 complete, and the session loses the wake-up it would get when the work actually exits. \
 Backgrounding the tool call is the supported shape and keeps the notification; detaching \
@@ -2706,6 +2705,37 @@ operator's own words (CLOUD-2332).",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "commit ship unknown",
+        gloss: "the clone is shallow, so where these commits are cannot be computed",
+        class: "A shallow clone stops every history walk at its boundary, so whether the \
+turn's commits are on the landing target could not be computed; that is could-not-look, \
+never landed. Said once per claim until the operator speaks again (CLOUD-2655).",
+        routes: &[run("unshallow run first", "git fetch --unshallow")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit push missing",
+        gloss: "the claim's commits exist only in this clone",
+        class: "This repository declares `landed_by = \"person\"`: a person merges what the \
+agent pushed, so the agent's last step is the push. These commits are not on the branch's \
+upstream, or the branch tracks none, and a container reclaim loses them. The second subject \
+names which (CLOUD-2656).",
+        routes: &[
+            run("push run first", "git push"),
+            run("upstream set first", "git push -u <remote> HEAD"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit merge held",
+        gloss: "the work is pushed and a person merges it",
+        class: "This repository declares `landed_by = \"person\"`, and the claim's commits \
+are on the branch's upstream: the merge is a person's step, not this session's. Said once; \
+the Stop is not refused (CLOUD-2656).",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "issue list unclear",
         gloss: "every row this branch filed, for a by-number answer: independent, or a punt",
         class: "A row filed while doing a task is either independent work or part of the \
@@ -2783,7 +2813,7 @@ replay --resolve`, which re-runs the replay from its base with your bytes for th
         gloss: "the configured gate refused this head",
         class: "`land` verifies a head before it pushes, with the gate the repository \
 declares. A refusal names its cause; nothing was pushed.",
-        routes: &[run("land verify first", "batten land verify")],
+        routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2792,7 +2822,7 @@ declares. A refusal names its cause; nothing was pushed.",
         class: "`land` waits on the required checks of the head it pushed, and stops on the \
 first failure. The subjects name the head and each failing check; the same checks run \
 locally.",
-        routes: &[run("land verify first", "batten land verify")],
+        routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2839,10 +2869,10 @@ are in the journal and the subjects count them.",
 store is one line of JSON, so the read route is the view: the same document laid out field by \
 field, each subject naming a field, the view lines holding it and its size. Read only the lines \
 you need; the raw connector returns the same bytes into the window again.",
-        routes: &[run(
-            "field show first",
-            "batten capture show <handle> --field /<name>",
-        )],
+        // THE VIEW, NOT `--field` (CLOUD-2284): `--field` alone prints only a
+        // size header, and a spilled leaf is no JSON document at all, so the
+        // command never reached the content the note pointed at.
+        routes: &[read("output read first", "the view the note names")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2854,6 +2884,21 @@ is never touched, and the engine's own unit survives. The subjects are the bytes
 removed and the free space after. The call was admitted either way; the next build of a removed unit \
 rebuilds it.",
         routes: &[run("space read first", "batten target prune --dry-run")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "call reach loose",
+        gloss: "the call acts on a repository other than the session's home, which arms the reach gate",
+        class: "A session is homed in the first repository it stood in that carries an authority, and a \
+visit never moves the home (CLOUD-2672). Where the home declares a `repository-reach` native row, a \
+call whose targets (a structured call's path; a shell call's directories, `cd`/`pushd` operands and \
+`git -C`/`--git-dir`/`--work-tree` operands) place in another repository is refused, and so is one \
+whose targets cannot be placed at all. A directory in no repository passes. The subjects are the \
+home and the root reached, never a file's contents.",
+        routes: &[run(
+            "override request first",
+            "batten override request --rule repository-reach",
+        )],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2961,6 +3006,29 @@ const NATIVE_RULES: &[(&str, &str)] = &[
          call naming every row, mints the read.",
     ),
     (
+        "repository-reach",
+        "The reach gate: this call acts on a repository other than the session's home, which \
+         arms the gate; work there in its own session, or request an override to cross.",
+    ),
+    (
+        "budget-call",
+        "The budget gate: this write would grow a `[budget.*]` set past a ceiling it \
+         declares, measured as `policy budget` measures it; shrink the write, or raise the \
+         set's ceiling in a separate change.",
+    ),
+    (
+        "detached-call",
+        "The detach gate: a `&` job this call does not wait on returns before its work \
+         does, and the session's wake-up with it; set the host's background option on the \
+         call, or `wait` for the job in the same call.",
+    ),
+    (
+        "commit-subject",
+        "The commit-subject gate: the message this commit names has a subject \
+         `[commit].subject_pattern` refuses, judged before the commit exists; reword the \
+         subject to match the pattern.",
+    ),
+    (
         "singleton-held",
         "The singleton gate: a live process already holds this task's lock, and a second run \
          would race it; `batten task alive` reports what the holder is doing.",
@@ -2996,7 +3064,6 @@ const NATIVE_RULE_PREFIXES: &[(&str, &str)] = &[(
 
 /// The sentence `policy explain` answers for an engine rule id, or `None` where
 /// the name is not one (CLOUD-2142).
-//MUTANT native-table-empty|s@^    NATIVE_RULES$@    [("", ""); 0]@|a_native_rule_id_has_a_definition
 #[must_use]
 pub fn native_definition(name: &str) -> Option<&'static str> {
     NATIVE_RULES
@@ -3044,8 +3111,6 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
     }
 }
 
-//MUTANT protected-route-unread|s@protects(&route[.]target)@protects("")@|every_class_routed_only_into_a_protected_path_is_admissible
-//MUTANT own-override-ignored|s@ !declares_override(entry))$@ !entry.id.is_empty())@|every_class_routed_only_into_a_protected_path_is_admissible
 fn declares_override(entry: &DeclaredVerdict) -> bool {
     entry
         .routes
@@ -3065,7 +3130,7 @@ fn declares_override(entry: &DeclaredVerdict) -> bool {
 ///   because the kind cannot tell a read from an edit. That reading is safe:
 ///   this refuses nothing, and its only discharge is an admission that exists.
 /// - `command` and `issue` routes count as unblocked — whether running one
-///   clears the refusal is a model verdict (rule 3), which
+///   clears the refusal is a gated-model verdict (rule 3), which
 ///   `policy/verdict-routes-resolve.rego` disclaims too.
 /// - There is no load-time arm. The blocker is vendored and a consumer cannot
 ///   redeclare it, so the predicate over `consumer ∪ vendored()` is empty
@@ -3660,5 +3725,20 @@ mod tests {
             },
         ]);
         assert_eq!(rendered, "a.rs b.rs:3 4 ntia-check");
+    }
+
+    /// Fails by: a red head's class routed to the loop's inner gate, so a
+    /// stopped lap is followed by a standalone `verify` and then the lap that
+    /// runs the same gate again, instead of by the lap alone (CLOUD-2707).
+    #[test]
+    fn a_red_head_routes_back_to_the_lap_not_its_inner_gate() {
+        let registry = vendored();
+        for class in ["check run red", "job run red"] {
+            assert_eq!(
+                command_routes(&registry, class),
+                vec!["batten land lap"],
+                "{class}"
+            );
+        }
     }
 }

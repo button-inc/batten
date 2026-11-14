@@ -33,6 +33,20 @@ fn main() -> ExitCode {
     if let Some(code) = batten::rustc_wrapped(std::env::args_os()) {
         return code;
     }
+    // A SCHEMA SWEEP OVER A LISTING FILE (CLOUD-2253), and AS NEXTEST'S
+    // `run-wrapper` while the sweep records reach: everything after the marker
+    // is the listing, or the case's argv.
+    if let Some(code) = batten::mutate::schema::ran(std::env::args_os()) {
+        return code;
+    }
+    if let Some(code) = batten::mutate::schema::recorded(std::env::args_os()) {
+        return code;
+    }
+    // AS A GIT HOOK (CLOUD-2339): every git hook links to this binary, and
+    // everything after a hook name in argv[0] is git's.
+    if let Some(code) = batten::githook::dispatched(std::env::args_os()) {
+        return code.into();
+    }
     // Resolved before parsing, and from the raw argument list, because a *usage*
     // error must still be reported — and at that point `clap` has refused to
     // produce any parsed value to read the mode from.

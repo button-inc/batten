@@ -86,7 +86,6 @@ pub fn root() -> PathBuf {
 /// sibling reaps it mid-seed. Given a parent of its own the case asserts both
 /// the collection and the returned path, and deleting the reap below reddens
 /// it — which calling `reap_the_dead` from the case directly did not.
-//MUTANT reap-not-on-acquire|s@^    reap_the_dead(parent);$@@|a_dead_processes_scratch_is_collected_and_a_live_ones_is_not
 fn root_in(parent: &Path) -> PathBuf {
     reap_the_dead(parent);
     parent.join(std::process::id().to_string())
@@ -113,7 +112,6 @@ pub fn scratch(name: &str) -> PathBuf {
 /// not a pid is left alone rather than parsed loosely, and a directory that will
 /// not remove is left for the next caller. This deletes what it can prove is
 /// dead and nothing else.
-//MUTANT reaper-liveness-guard-dropped|s@^        if !pid_is_live(pid) {$@        if true {@|a_dead_processes_scratch_is_collected_and_a_live_ones_is_not
 fn reap_the_dead(root: &Path) {
     let Ok(listing) = std::fs::read_dir(root) else {
         return;

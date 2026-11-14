@@ -13,8 +13,9 @@
 //! a tool call's `name` and `input`, a result's `is_error` boolean, and a hook
 //! decision's `exitCode`. That last one matters most: a host records its hook
 //! runs structurally, so "was this call denied" is `exit_code == 2` against the
-//! one §7 table — not a substring match on an error message. A predicate built
-//! on prose would be a classifier wearing a gate's clothes.
+//! one §7 table — not a substring match on an error message. This module
+//! reduces events; text read anywhere in the engine leaves it only as a typed
+//! fact, never as a span (`rules/policy-modules.md`).
 //!
 //! The free-text payload is **never interpreted and never emitted**. A
 //! transcript is the single richest source of secrets the engine can be pointed
@@ -721,7 +722,6 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
 /// [`tally_appended`] with its entry under the cache partition `cache`. No
 /// partition is a whole read, never could-not-look: a cache that cannot be
 /// kept must not cost a readable transcript its answer.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<Tally> {
     use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
@@ -860,7 +860,6 @@ impl Summary for Tally {
     }
 }
 
-//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {
@@ -1221,7 +1220,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         TranscriptShape::Unsurveyed(owes) => return Capability::Unsurveyed(owes),
     };
     let path = root.join(relative);
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         // Unopenable and absent are one answer on purpose: both mean the file
         // yielded nothing, and distinguishing a missing file from a permission
         // failure would report an access problem as a parse failure. A file that
@@ -1606,8 +1605,6 @@ fn collect(
 /// [`crate::refusal::parse_finding`] — the same grammar parse
 /// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
 /// line of which parses is still one refusal, with no findings.
-//MUTANT-SUITE crates/batten/src/transcript.rs
-//MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
     let parsed: Vec<crate::refusal::Parsed> = emitted
@@ -1747,7 +1744,7 @@ pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
-            let Ok(body) = std::fs::read_to_string(&path) else {
+            let Ok(body) = crate::fsio::read_to_string(&path) else {
                 continue;
             };
             // THE FIRST AUTHORED ID IN THE FILE IDENTIFIES IT; a file with none

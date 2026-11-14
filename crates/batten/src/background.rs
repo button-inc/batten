@@ -60,6 +60,11 @@ pub struct Pending {
     pub input: serde_json::Value,
     /// When it was deferred, in Unix seconds.
     pub at: u64,
+    /// The commit HEAD named when the call launched (CLOUD-2677). A mint over
+    /// the call is replayed only if HEAD is still there when the task exits;
+    /// `None`, written by a binary that minted at launch, never replays one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// The task id a result names, when it names one.
@@ -171,8 +176,6 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// An answered entry is removed whether or not its output could be read: the
 /// task has ended, so waiting longer cannot change the answer. An unanswered one
 /// is kept until [`STALE_AFTER`].
-//MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
-//MUTANT background-output-unfollowed|s@^                    resolved.push((pending, text));$@@|a_backgrounded_fetch_records_its_output_when_the_task_exits
 #[must_use]
 pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pending, String)> {
     let dir = git_dir.join(DIR);
@@ -190,7 +193,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
         else {
             continue;
         };
-        let Some(pending) = std::fs::read(&path)
+        let Some(pending) = crate::fsio::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Pending>(&bytes).ok())
         else {
@@ -204,7 +207,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
     }
     let wanted: HashSet<String> = waiting.keys().cloned().collect();
     let answered = transcript
-        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|path| crate::fsio::read_to_string(path).ok())
         .map(|text| exits(&text, &wanted))
         .unwrap_or_default();
     let mut resolved = Vec::new();
@@ -213,7 +216,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
             Some(exit) => {
                 let _ = std::fs::remove_file(&path);
                 if exit.completed
-                    && let Ok(text) = std::fs::read_to_string(&exit.output)
+                    && let Ok(text) = crate::fsio::read_to_string(&exit.output)
                 {
                     resolved.push((pending, text));
                 }
@@ -269,6 +272,7 @@ mod tests {
             tool: String::from("Bash"),
             input: serde_json::json!({}),
             at,
+            head: None,
         };
         defer(&git_dir, "kept", &pending(now - 86_400)).expect("defer the kept entry");
         defer(&git_dir, "dropped", &pending(now - 86_401)).expect("defer the dropped entry");

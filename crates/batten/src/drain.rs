@@ -591,7 +591,6 @@ struct Group<'a> {
 /// a drain the size of what changed. A count that ROSE is news again, which is
 /// CLOUD-82's re-raise; a count that fell is not, because re-raising on a fix
 /// punishes the fix.
-//MUTANT told-relisted|s@^    let told = previous.get(\&surfaced.record.identity.fingerprint.to_hex());$@    let told = None::<\&u64>;@|a_finding_told_earlier_is_counted_not_relisted
 fn already_told(surfaced: &Surfaced<'_>, previous: &BTreeMap<String, u64>) -> bool {
     let told = previous.get(&surfaced.record.identity.fingerprint.to_hex());
     match (told, surfaced.instance.occurrences) {
@@ -715,8 +714,6 @@ fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> Strin
 /// how many are new and how many were told earlier — and then the command that
 /// returns exactly that rule's set. Everything listed and nothing told is the
 /// locations alone, the count being their number.
-//MUTANT drain-severity-from-tier|s@^    let severity = group.severity.finding_severity();$@    let severity = crate::refusal::Severity::of_tier(group.tier);@|every_line_is_a_pointer_and_never_a_payload
-//MUTANT location-cap-unread|s@^    let listed = group.fresh.len().min(cap);$@    let listed = group.fresh.len();@|a_rule_past_its_location_cap_points_at_the_rest
 fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -> (String, usize) {
     let listed = group.fresh.len().min(cap);
     // THE RULE'S OWN SEVERITY (CLOUD-2145), never the advisory tier's: one rule
@@ -760,9 +757,6 @@ fn told_line(groups: &[&Group<'_>]) -> String {
 /// budget, with the class's own route to the rest. Rendered through the one
 /// projection, so it is headed like every finding and is the ONLY line saying
 /// so — the definition is a lookup the legend names.
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT drain-cut-unreported|s@^        crate::verdict::Native::DrainFitBroken,$@        crate::verdict::Native::CallGrantNow,@|an_over_budget_payload_is_cut_and_points_at_the_journal
-//MUTANT-SUITE crates/batten/src/drain.rs
 fn budget_summary(withheld: usize, budget: usize) -> String {
     crate::refusal::Refusal::engine(
         crate::verdict::Native::DrainFitBroken,
@@ -1003,10 +997,6 @@ struct Clamped {
 /// **What is anchored is what was told.** A listed identity and a told one
 /// anchor the next drain's delta; an elided or cut one does not, so it is news
 /// again next time — which is how the list pages as the agent fixes it.
-//MUTANT backlog-relisted|s@^        if group.fresh.is_empty() {$@        if false {@|a_drain_s_size_follows_the_turn_not_the_backlog
-//MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&candidates.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
-//MUTANT budget-first-line-exempt|s@^        let fits = cut == 0 \&\& room;$@        let fits = cut == 0 \&\& (room \x7c\x7c lines.is_empty());@|a_drain_never_renders_past_its_token_budget
-//MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(cut, config.token_budget));$@        let _ = cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
 fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
     let mut candidates: Vec<String> = Vec::new();
     let mut owners: Vec<Option<(usize, usize)>> = Vec::new();
@@ -1116,7 +1106,7 @@ fn wake_path(store_dir: &Path, session: &str) -> PathBuf {
 /// file the reason findings stop being surfaced.
 #[must_use]
 pub fn load_wake(store_dir: &Path, session: &str) -> WakeState {
-    let Ok(text) = std::fs::read_to_string(wake_path(store_dir, session)) else {
+    let Ok(text) = crate::fsio::read_to_string(wake_path(store_dir, session)) else {
         return WakeState::default();
     };
     serde_json::from_str::<WakeState>(&text)
@@ -2435,7 +2425,7 @@ mod tests {
         // A future schema reads as fresh rather than as an error.
         let path = wake_path(&dir, "session-1");
         let mut future: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            serde_json::from_str(&crate::fsio::read_to_string(&path).unwrap()).unwrap();
         future["schema"] = serde_json::json!(WAKE_SCHEMA + 1);
         std::fs::write(&path, future.to_string()).unwrap();
         assert_eq!(load_wake(&dir, "session-1"), WakeState::default());

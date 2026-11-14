@@ -80,6 +80,14 @@ test_a_plan_mode_edit_is_refused if {
 	v.rule == "plan write refused"
 }
 
+test_a_plan_mode_write_tool_is_refused if {
+	some v in violation with input as {"call": {
+		"event": "pre-tool", "permission-mode": "plan", "tool": "Write",
+		"arguments": {"file_path": "/repo/README.md"},
+	}}
+	v.rule == "plan write refused"
+}
+
 # A writer later in a list is still a writer: `git status` first does not make
 # `git commit` second a read.
 test_a_writer_after_a_reader_is_refused if {
@@ -88,8 +96,8 @@ test_a_writer_after_a_reader_is_refused if {
 		"command": "git status && git commit -m x",
 		"segments": [{"words": ["git", "status"], "terminator": "&&"}, {"words": ["git", "commit", "-m", "x"]}],
 		"programs": [
-			{"name": "git", "arguments": ["status"], "reads-only": false},
-			{"name": "git", "arguments": ["commit", "-m", "x"], "reads-only": false},
+			{"name": "git", "arguments": ["status"], "subcommand": "status", "global-options": [], "reads-only": false},
+			{"name": "git", "arguments": ["commit", "-m", "x"], "subcommand": "commit", "global-options": [], "reads-only": false},
 		],
 	}}
 	v.rule == "plan write refused"
@@ -101,7 +109,7 @@ test_the_refusal_names_the_program_that_did_not_read if {
 		"command": "git status && python3 x.py --secret",
 		"segments": [{"words": ["git", "status"], "terminator": "&&"}, {"words": ["python3", "x.py", "--secret"]}],
 		"programs": [
-			{"name": "git", "arguments": ["status"], "reads-only": false},
+			{"name": "git", "arguments": ["status"], "subcommand": "status", "global-options": [], "reads-only": false},
 			{"name": "python3", "arguments": ["x.py", "--secret"], "reads-only": false},
 		],
 	}}

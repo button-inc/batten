@@ -46,7 +46,6 @@
 //! with no `batten.toml` is could-not-look, for exactly `--config-from`'s reason.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -112,6 +111,17 @@ pub enum Strictness {
     Standard,
     /// Everything `Standard` fails on, plus anything advisory.
     Strict,
+}
+
+/// Who takes the last step to the landing target (CLOUD-2656).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LandedBy {
+    /// The agent lands its own work with `batten land`.
+    #[default]
+    Agent,
+    /// A person merges what the agent pushed.
+    Person,
 }
 
 /// A parsed, validated `batten.toml`.
@@ -574,6 +584,12 @@ pub struct Config {
     /// them together would give one key two meanings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// Who takes the last step to the landing target (CLOUD-2656): the agent
+    /// (`land`), or a person who merges what the agent pushed. Absent is
+    /// `"agent"`, today's behaviour. A fact about the repository's process, so
+    /// authority-only: neither value is a raise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_by: Option<LandedBy>,
     /// Side effects this repository attaches to hook events (CLOUD-91), the
     /// house-style §9 extension surface: `[[hook.action]]` names an event and a
     /// command already on the operator's PATH, so repo-specific cleanup or
@@ -1321,7 +1337,6 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// The outer shape here is lenient so no row is built; [`crate::rest::Forge`]
 /// stays strict, so a `[forge]` key this build predates declares nothing rather
 /// than half a table.
-//MUTANT forge-declared-by-full-parse|s@^    let Ok(only) = toml::from_str::<ForgeOnly>(\&text) else {$@    let Ok(only) = parse_ungated(\&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
 pub fn declare_for_process(dir: &Path) {
     /// The one table this read needs. No `deny_unknown_fields`: every other
     /// key in the authority is some other reader's.
@@ -1730,7 +1745,7 @@ pub fn parse_base(text: &str, source: &str) -> Result<Config> {
 /// cannot disagree.
 ///
 /// `deny_unknown_fields` is what makes the refusal total and free: every
-/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,
+/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`, `landed_by`,
 /// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
 /// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
@@ -1828,7 +1843,6 @@ pub struct OverrideConfig {
 /// `version`, a table that fails its own validator, or **any key outside the
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
-//MUTANT text-meter-override-unwired|s@^    under(Native::ProseColumnRefused, meter_text(\&config))?;$@    under(Native::ProseColumnRefused, Ok(()))?;@|an_override_column_over_its_cap_is_refused_too
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // THE SAME PRUNE THE AUTHORITY GETS, for the same measured reason. A key
     // this build predates in `batten.local.toml` used to fail the whole
@@ -2017,8 +2031,6 @@ pub const TEXT_CENSUS: &[TextColumn] = &[
 /// The cap a column's values are held to: its census row, else [`TEXT_MAX`].
 ///
 /// A loop rather than a closure, because a `//MUTANT` anchor may not hold `|`.
-//MUTANT text-tier-flattened|s@^            return column.cap;$@            return TEXT_MAX;@|a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads
-//MUTANT text-ceiling-census-only|s@^    TEXT_MAX$@    usize::MAX@|an_unlisted_string_column_is_held_to_the_text_ceiling
 fn text_cap(path: &str) -> usize {
     for column in TEXT_CENSUS {
         if column.path == path {
@@ -2829,6 +2841,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     if let Some(hook) = &config.hook {
         crate::action::validate(&hook.actions)?;
         crate::handler::validate(&hook.handlers)?;
+        crate::githook::validate(&hook.git)?;
     }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
@@ -2909,8 +2922,6 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 /// # Errors
 ///
 /// As [`validate_tables`].
-//MUTANT text-meter-unwired|s@^        under(Native::ProseColumnRefused, meter_text(config))?;$@        under(Native::ProseColumnRefused, Ok(()))?;@|every_config_fault_names_its_table_s_declared_class
-//MUTANT text-meter-judges-the-base|s@^    if grammar == Grammar::Enforced {$@    if grammar == grammar {@|an_over_cap_base_ref_is_compared_not_refused
 fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // The verb-written record families (CLOUD-1810). HERE rather than beside the
     // recorder table one function up, and the placement is forced rather than
@@ -2969,8 +2980,8 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     if let Some(prune) = &config.prune {
         prune.validate()?;
     }
-    // Same reason: a `[task] program_root` that names no directory corroborates
-    // no live task, so it would read every pid alive and hide each crash.
+    // Same reason: a `[task] program_root` that names no directory is refused
+    // where the error can name the key.
     if let Some(task) = &config.task {
         task.validate()?;
     }
@@ -3103,11 +3114,6 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 ///
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
-//MUTANT-SUITE crates/batten/tests/it/config_skew.rs
-//MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
-//MUTANT the-schema-is-derived-before-the-read|s@^    let Ok(committed) = fs::read_to_string(\&at) else {$@    let _eager = schema(); let Ok(committed) = fs::read_to_string(\&at) else {@|a_failing_load_with_no_committed_schema_derives_nothing
-//MUTANT the-schema-is-derived-every-call|s@^    if let Some(derived) = DERIVED.get() {$@    if let Some(derived) = None::<\&String> {@|the_schema_is_derived_once_per_process
-//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
     // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).
@@ -3300,7 +3306,7 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     // READ, THEN DERIVE (CLOUD-1876). A tuple evaluates both arms, so this paid
     // a whole-schema derivation to answer `false` for every source with no
     // sibling artifact — which is every consumer tree, every time.
-    let Ok(committed) = fs::read_to_string(&at) else {
+    let Ok(committed) = crate::fsio::read_to_string(&at) else {
         return false;
     };
     let Ok(derived) = schema() else {
@@ -3397,7 +3403,6 @@ enum Header<'a> {
     Table(&'a str),
 }
 
-//MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 impl<'a> Header<'a> {
     /// The declared name, dots and all.
     fn name(self) -> &'a str {
@@ -3832,7 +3837,6 @@ fn drop_empty_ancestors(table: &mut toml::Table, path: Option<&str>) {
 /// root that is a row anywhere makes the dotted header un-droppable and the
 /// caller falls back to the owning element, so a misread here costs a wider unit
 /// rather than a wrong blank.
-//MUTANT every-dotted-row-droppable|s@    !nests_in_a_row(text, header.root())@    true@|a_dotted_row_nested_in_an_array_element_still_charges_its_owner
 fn addressable_row(text: &str, header: Header<'_>) -> bool {
     if !header.is_row() {
         return false;
@@ -4160,7 +4164,6 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
 type Blank = fn(&mut String, usize, usize);
 
 /// [`prune_unresolvable`], blanking with `blank`.
-//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 fn prune_with<T: serde::de::DeserializeOwned>(
     source: &str,
     behind: bool,
@@ -4384,7 +4387,6 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 
 /// [`parse_remembered`] with the on-disk parse cache switched by `persist`, so a
 /// case can switch it without the process-wide flag every other case reads.
-//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
 fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Config> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
@@ -4425,7 +4427,6 @@ type LastParse = Option<(std::sync::Arc<String>, String, Config)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
 /// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
-//MUTANT config-parse-unremembered|s@^    same.then(\x7c\x7c with(config))$@    None@|one_authority_is_parsed_once_per_process
 fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;
@@ -4541,7 +4542,6 @@ fn shared_text(text: &str) -> Option<std::sync::Arc<String>> {
 /// The digest [`read_text`] took of `text`, when `text` IS the allocation it
 /// last handed out and it was read from `named` (CLOUD-2608) — so a digest is
 /// never lent to bytes it was not taken of.
-//MUTANT held-digest-ignores-path|s@(path == named \&\& same_allocation(held, text))@(same_allocation(held, text))@|a_text_read_from_another_path_is_hashed
 fn held_digest(text: &str, named: &str) -> Option<[u8; 32]> {
     let last = LAST_DIGEST.lock().ok()?;
     let (path, digest, held) = last.as_ref()?;
@@ -4566,8 +4566,6 @@ fn digest_key(named: &str) -> String {
 }
 
 /// The digest recorded for `named` beside exactly these stamp `fields`.
-//MUTANT authority-digest-never-believed|s@^    if held != fields {$@    if true {@|an_unchanged_authority_is_keyed_by_its_recorded_digest
-//MUTANT authority-digest-ignores-stamp|s@^    if held != fields {$@    if false {@|an_edited_authority_is_hashed_again
 fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
     let body = crate::cache::read(&digest_path(named)?, &digest_key(named))?;
     let text = std::str::from_utf8(&body).ok()?;
@@ -4602,8 +4600,6 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
 ///
 /// The stamp only decides whether a recorded digest is BELIEVED; it never
 /// enters a key, which stays a function of the bytes as `crate::cache` requires.
-//MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(at)@@|an_authority_read_in_its_racy_window_records_no_digest
-//MUTANT authority-digest-believed-while-moving|s@^    let believed = still \&\& cfg!(unix);$@    let believed = cfg!(unix);@|a_file_changed_across_its_read_is_hashed
 fn text_digest(
     path: &Path,
     named: &str,
@@ -4651,7 +4647,7 @@ static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 /// text out of the `String` the read produced, the first moves it.
 pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
-        return fs::read_to_string(path).map(std::sync::Arc::from);
+        return crate::fsio::read_to_string(path).map(std::sync::Arc::from);
     };
     if let Ok(last) = LAST_TEXT.lock()
         && let Some((held, at, text)) = last.as_ref()
@@ -4660,7 +4656,7 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
-    let text = std::sync::Arc::new(fs::read_to_string(path)?);
+    let text = std::sync::Arc::new(crate::fsio::read_to_string(path)?);
     // THE DIGEST THE PARSE KEY TAKES, ONLY WHILE THE PARSE CACHE IS ON (CLOUD-2608):
     // the hook re-hashed this 956 KB text on every call to key its parse entry.
     // Off the cache, nothing here touches a cache directory.
@@ -4679,7 +4675,6 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
 
 /// Whether the file read as `held` at `at` is the one `now` describes, by git's
 /// racy rule.
-//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
 fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
     held == now.fields && !now.racily_clean(at)
 }
@@ -4725,7 +4720,6 @@ fn canonical_source(source: &str) -> String {
 /// The text enters by its BLAKE3, which names it as the text would: the digest
 /// [`read_text`] took where `text` is provably that read ([`held_digest`]),
 /// else one taken here (CLOUD-2608).
-//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[named.as_bytes(), \&digest\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[named.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
 fn parse_cache_key(text: &str, source: &str) -> String {
     let named = canonical_source(source);
     let digest =
@@ -4909,7 +4903,6 @@ pub(crate) fn report(text: &str) {
 /// compiled-in type, and every failing config load used to pay for it again.
 /// Across processes it is still recomputed, so a stale committed artifact still
 /// disagrees with the derivation the next run makes.
-//MUTANT text-schema-uncapped|s@^    cap_text_leaves(\&mut derived)?;$@    let _uncapped = 0;@|every_text_leaf_in_both_schemas_carries_its_census_cap
 pub fn schema() -> Result<String> {
     static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     if let Some(derived) = DERIVED.get() {
@@ -5035,6 +5028,7 @@ impl Config {
             outcome: Vec::new(),
             hook_output: None,
             must_land_on: None,
+            landed_by: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an
             // unreadable config might have declared is the one outcome nobody
@@ -5213,6 +5207,9 @@ fn default_rules() -> Vec<Rule> {
         requires_field: None,
         contains: None,
         unless_contains: None,
+        word: None,
+        unless_word: None,
+        on: None,
         require_via: None,
         requires_key: None,
         reason: None,
@@ -5251,6 +5248,7 @@ fn default_rules() -> Vec<Rule> {
         retires_with: None,
         conserves: None,
         admits_with: None,
+        per_file: false,
         format: None,
         node: None,
         derives: None,
@@ -5364,6 +5362,35 @@ pub struct AuthoritySite {
     pub required: bool,
 }
 
+/// The directory whose `batten.toml` is the authority for a call made at
+/// `start` (CLOUD-2532).
+///
+/// **The working tree's, then the repository's.** A linked worktree is the
+/// isolation unit for an agent's branch, and its own `batten.toml` is that
+/// branch's authority — so it answers first, from any depth inside the worktree.
+/// [`crate::git::repo_root`] resolves a linked worktree to the MAIN checkout
+/// (the shared common dir), which is right for per-repository state (CLOUD-164)
+/// and was wrong for config: from a worktree subdirectory a call was judged,
+/// claimed and probed by whatever branch the main checkout had out, and a fix
+/// written into the worktree's own file could not unblock it.
+///
+/// A worktree that carries no `batten.toml` still falls through to the
+/// repository's, which is what `hook_worktree_root.rs`'s bare-worktree case
+/// requires: a branch that predates the authority is still governed by it.
+///
+/// # Errors
+///
+/// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
+/// layout with no working tree to root.
+pub fn authority_root(start: &Path) -> Result<PathBuf> {
+    if let Ok(worktree) = crate::git::worktree_root(start)
+        && worktree.join(CONFIG_FILE).is_file()
+    {
+        return Ok(worktree);
+    }
+    crate::git::repo_root(start)
+}
+
 /// Locate the one committed authority for a run anchored at `anchor`.
 ///
 /// `config_in` is `--config-in <dir>`, when passed. It names a **directory**,
@@ -5418,7 +5445,7 @@ pub fn load_override(path: &Path) -> Result<OverrideConfig> {
 /// Read a config file, mapping a missing file to a [`UsageError`] and any other
 /// I/O failure to an internal error (→ exit `3`).
 fn read(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
+    match crate::fsio::read_to_string(path) {
         Ok(text) => Ok(text),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Err(UsageError::raise(format!(
             "no config found at {}",
@@ -5434,6 +5461,7 @@ mod tests {
 
     use super::*;
     use crate::error::UsageError;
+    use std::fs;
 
     // --- `[perf]` and the version floor --------------------------------------
 
@@ -7401,7 +7429,7 @@ mod tests {
     #[test]
     fn one_config_survives_the_parse_cache_unchanged() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-        let text = fs::read_to_string(&path).unwrap();
+        let text = crate::fsio::read_to_string(&path).unwrap();
         let parsed = parse_ungated(&text, "batten.toml").unwrap();
         let dir = crate::scratch::scratch("config-parse-cache-roundtrip");
         let entry = dir.join("entry.cfg");
@@ -7624,7 +7652,7 @@ mod tests {
         assert_eq!(config.rules.len(), 1);
         assert_eq!(
             config.rules[0].severity(),
-            crate::severity::RuleSeverity::Warn
+            crate::severity::RuleSeverity::Advise
         );
         assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
     }

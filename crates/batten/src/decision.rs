@@ -11,7 +11,7 @@
 //!
 //! # Two planes, and this is the observability one
 //!
-//! A gate's *verdict* is a computable predicate, never a model judgement
+//! A gate's *verdict* is a computable predicate, never a gated-model judgement
 //! (CLOUD-93 / CLOUD-131). Recording **who called** — which model, through which
 //! harness, in which session — is provenance, not judgement. Nothing here
 //! participates in any verdict; the record is written after one is reached.
@@ -594,7 +594,7 @@ pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
 
     let mut all = Vec::new();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .with_context(|| format!("read the decision shard {}", path.display()))?;
         all.extend(
             text.lines()

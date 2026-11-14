@@ -345,7 +345,6 @@ impl Bet {
 /// [`Settle::Pending`] and the waiter laps, and [`Live::Unreadable`] still
 /// decides as `No`, which keeps the fail-CLOSED posture where both readings are
 /// gone.
-//MUTANT poisoned-base-kept|s@^    if bet.poisoned.is_some() \&\& bet.poisoned == bet.base {$@    if false {@|a_poisoned_base_settles_lost_and_is_unwound
 #[must_use]
 pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live) -> Settle {
     let Some(_) = bet.base.as_deref() else {
@@ -469,11 +468,6 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// (the ref moved, the worktree refused, say on another process's index lock) has
 /// its ref put back on `bet_head`, so the branch and [`BASE_REF`] still agree and
 /// [`recover`] can adopt the bet.
-//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
-//MUTANT signal-leaves-borrowed-range|s@^            Ok(_) => {$@            Ok(_) if false => {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
-//MUTANT signal-keeps-base-ref|s@^                let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
-//MUTANT signal-keeps-live-ref|s@^                let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
-//MUTANT signal-discards-new-work|s@^        if !untouched {$@        if false {@|a_sigterm_after_new_work_leaves_the_branch_alone
 pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
     let (at, name, unwind_to, left) = (
         root.to_path_buf(),
@@ -504,8 +498,6 @@ pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
 }
 
 /// The bet settled, so a signal has nothing left to unwind.
-//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
-//MUTANT disarm-inert|s@^    crate::exec::clear_on_terminate();$@@|a_sigterm_after_the_bet_settled_leaves_the_branch_alone
 pub fn disarm() {
     crate::exec::clear_on_terminate();
 }
@@ -626,8 +618,6 @@ pub fn bettable<'a>(
 // because the branch comparison beside it already looks like the whole
 // predicate. Dropping it restores the measured defect exactly: our own hold on
 // another branch becomes bettable again.
-//MUTANT-SUITE crates/batten/src/speculation.rs
-//MUTANT self-speculation-admitted|s@    if hold_holder == our_holder {@    if false {@|our_own_hold_on_another_branch_is_not_bettable
 
 #[cfg(test)]
 // Panicking on a failed assertion is how a test fails loudly; these are the

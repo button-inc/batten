@@ -238,7 +238,7 @@ fn json_records_the_promoted_disposition_and_is_byte_stable() {
     assert_eq!(unset.status.code(), Some(0));
     let unset_json: serde_json::Value = serde_json::from_str(&stdout(&unset)).expect("valid JSON");
     assert_eq!(unset_json["fail_on_warning"], false);
-    assert_eq!(unset_json["findings"][0]["severity"], "warn");
+    assert_eq!(unset_json["findings"][0]["severity"], "advise");
     assert_eq!(unset_json["findings"][0]["report"], "warn");
     assert_eq!(unset_json["findings"][0]["rule"], "no-todo");
     assert_eq!(unset_json["findings"][0]["path"], "lib.rs");
@@ -271,7 +271,7 @@ fn json_records_the_promoted_disposition_and_is_byte_stable() {
         serde_json::from_str(&stdout(&promoted)).expect("valid JSON");
     assert_eq!(promoted_json["fail_on_warning"], true);
     assert_eq!(
-        promoted_json["findings"][0]["severity"], "warn",
+        promoted_json["findings"][0]["severity"], "advise",
         "the rule's own rating is unchanged by the promotion"
     );
     assert_eq!(

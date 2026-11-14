@@ -224,9 +224,6 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 
 // The reduction's mutation rows, each caught by the compiled case it names in
 // the perf tier, which drives the real writer and reads the record back.
-//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
-//MUTANT pick-any-line|s@^    for line in raw.lines().filter(\x7cline\x7c line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
-//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
 
 /// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
 /// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
@@ -250,7 +247,7 @@ pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<
     // over bytes this producer never read would be a verdict about a file nobody
     // can identify, which is the one thing the digest in the key exists to make
     // impossible.
-    let Ok(bytes) = std::fs::read(&subject) else {
+    let Ok(bytes) = crate::fsio::read(&subject) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -301,7 +298,7 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
         )));
     }
     let root = git::repo_root(Path::new("."))?;
-    let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+    let Ok(bytes) = crate::fsio::read(root.join(&row.input)) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -372,11 +369,9 @@ const RECEIPTS: &str = "batten-tools-asked";
 // THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
 // re-runs a validator whose inputs did not move, and an unkeyed argv replays an
 // answer to a question nobody is asking.
-//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
-//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
 fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
-    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
-    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    let answered_zero = crate::fsio::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = crate::fsio::read_to_string(receipt).is_ok_and(|held| held == asked);
     answered_zero && same_argv
 }
 
@@ -403,12 +398,6 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 // the fixture forge: an unanswered conclusion recorded as a grading
 // (CLOUD-1965), a run other than `checks green`'s latest winning, a record
 // written before the fan-in answers, and a spaced name mangled into the record.
-//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
-//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
-//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
-//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
-//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
-//MUTANT unknown-commit-could-not-look|s@^    if crate::rest::declared_nothing_graded(answer.status) {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
@@ -618,6 +607,20 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
         return Ok(ExitCode::Internal);
     }
     let runs = crate::pr_watch::runs_from_body(&answer.body);
+    // A MANUFACTURED FAN-IN RED IS NO ANSWER (CLOUD-2317 against CLOUD-1831): a
+    // draft's `final` fails because every job it needs skipped, and recording it
+    // as a verdict made `forge check red` refuse every head pushed as a draft,
+    // the push the workflow asks for early and often. Nothing recorded is
+    // could-not-look, which is what a draft's run is about the code.
+    if let Some(fanin) = fetch.fanin.as_deref()
+        && crate::checks_green::fanin_failure_manufactured(&runs, &fetch.answered, fanin)
+    {
+        writeln!(
+            err,
+            "record forge: the fan-in failed only because its siblings did not answer (a draft or cancelled run); nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let answered: Vec<&str> = fetch.answered.iter().map(String::as_str).collect();
     let conclusions = graded(&runs, &answered);
     let Some((body, dropped)) = forge_body(&conclusions, fetch.fanin.as_deref()) else {
@@ -680,7 +683,6 @@ fn profile_or_default(named: Option<String>) -> String {
 /// names a suite this tree does not track — see [`crate::suites::derive`], where
 /// all four are could-not-look and none is an empty corpus. An internal error
 /// when the corpus cannot be written.
-//MUTANT retired-bats-report-shadows-nextest|s@^    if tracked.is_empty() {$@    if !root.join(crate::suites::REPORT).is_file() {@|a_retired_bats_report_does_not_shadow_the_nextest_one
 pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
@@ -1341,9 +1343,6 @@ fn graph_for(
 
 // The resolution's mutation rows. Each is caught by the compiled case it names,
 // which drives a scratch crate through the real `cargo`.
-//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
-//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
-//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
 
 /// Derive one family's record from its input and write it.
 ///
@@ -1478,9 +1477,6 @@ pub enum Decision {
 ///
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
 /// or a tree with no branch to key on; an internal error for an unwritable store.
-//MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-//MUTANT subdirectory-decides|s@^        && !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
-//MUTANT subdirectory-keeps-stale|s@^            remove_stale(&path)?;$@            let _ = \&path;@|a_subdirectory_abstention_clears_a_record_left_at_the_root
 pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
     let inputs = inputs_of("record decide", inputs)?;
     let family = safe_component("family", family)?;
@@ -1588,7 +1584,7 @@ fn turn_reading(
     let Some(path) = crate::turn::transcript_of(&stdin) else {
         return Ok(None);
     };
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Ok(None);
     };
     let vocabulary = crate::turn::Vocabulary {
@@ -1836,8 +1832,10 @@ fn macos_link_reading(
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,
     // whose question is about one package's sub-closure. That is the
-    // only difference between the two callers of this graph.
-    let built = graph.reachable(graph.member_roots());
+    // only difference between the two callers of this graph. LINKED, not merely
+    // reachable: a proc-macro or build-only subgraph runs on the host and links
+    // nothing into the macOS artifact.
+    let built = graph.linked(graph.member_roots());
     let mut lines = format!("scanned {}\n", built.len());
     for (name, id) in graph.named_in_order(&built) {
         match graph.links_of(id) {
@@ -2007,7 +2005,7 @@ pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
 /// read — which is not the same answer as one that is absent.
 pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
     let path = named_path(verb, family)?;
-    match std::fs::read_to_string(&path) {
+    match crate::fsio::read_to_string(&path) {
         Ok(body) => Ok(Some(body)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read the record {}", path.display())),
@@ -2055,7 +2053,7 @@ pub(crate) fn clear_kind<'a>(
         // A FAMILY READ OFF THE RAW CONFIG is held to the grammar validation
         // holds it to, so it can never name a path outside the store.
         let path = named_path(verb, &safe_component("record family", family)?)?;
-        if std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
+        if crate::fsio::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
             remove_stale(&path)?;
         }
     }
@@ -2148,7 +2146,7 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
 /// path a second time beside [`keyed_path`] would be a second spelling of the key
 /// the two verbs share. `family` must already be a single path component.
 pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
-    std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
+    crate::fsio::read_to_string(keyed_path(git_dir, family, key)).ok()
 }
 
 /// Write one keyed record's value whole, through the same store as
@@ -2228,7 +2226,7 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
 pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
-    match std::fs::read_to_string(keyed_path(&git_dir, &family, key)) {
+    match crate::fsio::read_to_string(keyed_path(&git_dir, &family, key)) {
         Ok(value) => {
             writeln!(out, "hit")?;
             write!(out, "{value}")?;

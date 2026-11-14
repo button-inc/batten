@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OverrideConfig",
-  "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,\n`judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard\nparse error here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`]. `hook` is\nauthority-only for a sharper one (CLOUD-91): an action *runs a command*, and\nthere is no reading of §8's raise-only rule under which an uncommitted file\nadding one is a tightening.\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
+  "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`, `landed_by`,\n`judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard\nparse error here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`]. `hook` is\nauthority-only for a sharper one (CLOUD-91): an action *runs a command*, and\nthere is no reading of §8's raise-only rule under which an uncommitted file\nadding one is a tightening.\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
   "type": "object",
   "properties": {
     "engine": {
@@ -129,6 +129,16 @@
           "description": "Answer now: the response is due before the work continues.",
           "type": "string",
           "const": "warning"
+        }
+      ]
+    },
+    "CallEvent": {
+      "description": "An event a call raises, which the engine resolves on every route it knows\n(CLOUD-2662). A row names the event, never the routes: `gh pr ready`, a\nnon-draft `gh pr create`, a reopen, the ready mutation through `gh api`, and\nthe forge connector's create and undraft all raise `pull-request-ready`.",
+      "oneOf": [
+        {
+          "description": "A call that can leave a pull request open and not a draft.",
+          "type": "string",
+          "const": "pull-request-ready"
         }
       ]
     },
@@ -650,6 +660,21 @@
           "description": "A config row changed by a context that has not read its history\n(CLOUD-2144).",
           "type": "string",
           "const": "history"
+        },
+        {
+          "description": "A `&` job nothing in the same call waits on, where the harness has a\nsupported background option instead (CLOUD-2667).",
+          "type": "string",
+          "const": "detach"
+        },
+        {
+          "description": "A mediated `git commit` whose message subject breaks\n`[commit].subject_pattern` (CLOUD-2683).",
+          "type": "string",
+          "const": "commit-subject"
+        },
+        {
+          "description": "A call that reaches a repository other than its session's home\n(CLOUD-2672). Opt-in: armed only where the home declares a row.",
+          "type": "string",
+          "const": "repository-reach"
         }
       ]
     },
@@ -1492,6 +1517,17 @@
           ],
           "maxLength": 1536
         },
+        "on": {
+          "description": "Select a `shape` or `receipt` row by the event a call raises rather than\nby its spelling (CLOUD-2662). One selector of `pattern`, `content`,\n`tool` and `on` per row.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pattern": {
           "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
           "type": [
@@ -1499,6 +1535,10 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "per_file": {
+          "description": "Judge a ratchet per matched file rather than on the sum (CLOUD-2663).\n\nEach path present at `base` is held to its OWN base count, so one file\nshrinking can no longer pay for another growing. A path absent at base is\nnot judged: a per-file ceiling is that file's count at base, and a file\nthe branch creates has none. A path deleted since base counts `0`.\n\nRefused with `retires_with` and `conserves`, which both buy an AGGREGATE\ndecrease that a per-file row does not have.",
+          "type": "boolean"
         },
         "plan": {
           "description": "The adopted gate runner's EFFECTIVE plan, per declared surface\n(CLOUD-949).\n\nEach row becomes an entry of `input.tree.plan` under its own `id`,\ncarrying what the runner said it would run — acquired from the runner\nitself, never re-derived from its config, because the runner owns its\nselector and a second derivation is a second authority on which files a\nstep runs over.\n\n**Acquired fresh rather than read back, which is the difference from\n`tools`.** A verdict is a statement about bytes that have a digest; a plan\nis a statement about a WORKING TREE, whose dirty and index state move\nwithout HEAD. Keying a stored plan would mean comparing every binding\nfield before trusting it, and a comparison a caller can forget is the\nstaleness class this avoids by simply taking the plan now.",
@@ -1794,6 +1834,14 @@
           ],
           "maxLength": 1536
         },
+        "unless_word": {
+          "description": "The exempting polarity of [`Rule::word`]: a line whose argv carries a\nmatching word does not fire. Line-scoped, like `unless_contains`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "use_sources": {
           "description": "The same, glob-selected (CLOUD-762).\n\nA layering rule decides over every module by construction, so the glob is\nthe spelling that matters and it ships with its literal column.",
           "type": "array",
@@ -1868,6 +1916,14 @@
         "while_unpushed": {
           "description": "Fire only while `HEAD` exists in this clone and on no remote-tracking ref\n(CLOUD-843).\n\n**The harm a punt row names, measured rather than proxied.** `turn mint\nahead` refuses because work \"committed nowhere but this container\" dies\nwith a reclaim, and its remedy says a push is what makes stopping safe —\nbut nothing it selected on read a push. Its only lever was a `verify`\nreceipt for `HEAD`, and on a tree that compiles only after edits that\nreceipt cannot be earned without the writes the row refuses: a deadlock\nwhose sole exit, a head-bound admission, every commit voids.\n\nConjoined with the other modifiers, so a row carrying `while_marker` too\nfires while the marker exists AND `HEAD` is unpushed. Could-not-look\nselects the row, the direction `while_marker`'s own unreadable arms take:\nan unknown answer must not switch a refusal off.",
           "type": "boolean"
+        },
+        "word": {
+          "description": "Narrow a [`RuleKind::Shape`] deny to a line whose argv carries a WORD\nmatching this expression (CLOUD-2669), anchored as `^(?:…)$`.\n\nThe words are this line's argv after the effective program, minus its\nredirections, unquoted by the segmenter: `-m \"never use --no-verify\"` is\none word and holds no `--no-verify` word, where `contains` sees one. A\nregex rather than a literal so a bundled short flag (`-anm`) is\nexpressible; anchoring is what keeps it a word test.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
         }
       },
       "additionalProperties": false,
@@ -1983,28 +2039,15 @@
       ]
     },
     "RuleSeverity": {
-      "description": "Config-time rule severity — *what fails a check* (cargo-deny's model,\nCLOUD-61).\n\nDeclared weakest-first: derived [`Ord`] is the severity rank.",
-      "oneOf": [
-        {
-          "description": "The rule is configured off: a match is not a finding at all.",
-          "type": "string",
-          "const": "allow"
-        },
-        {
-          "description": "A match is reported but does not by itself fail the run (it can be\npromoted by `--fail-on-warning`, CLOUD-49).",
-          "type": "string",
-          "const": "warn"
-        },
-        {
-          "description": "A match blocks the call and hands the decision to a human (CLOUD-340).\n\n**A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly\nas `deny` does; what differs is who decides, which is orthogonal to how\nbad the finding is. That is why it maps to `deny`'s row rather than\ngetting one of its own — see the module header, where the bijection this\nbreaks is corrected rather than quietly widened.\n\nMediated-call rules only. A tree-scoped rule has no caller to ask, so\n`ask` there is a config error rather than a silent downgrade, refused by\n`rules::validate`.",
-          "type": "string",
-          "const": "ask"
-        },
-        {
-          "description": "A match fails the run.",
-          "type": "string",
-          "const": "deny"
-        }
+      "description": "Config-time rule severity: `allow` (off), `record` (a trial, recorded and never spoken), `advise` (spoken, never refusing; `warn` is its pre-CLOUD-2707 spelling), `ask` (escalates to a human), `deny` (refuses).",
+      "type": "string",
+      "enum": [
+        "allow",
+        "record",
+        "advise",
+        "ask",
+        "deny",
+        "warn"
       ]
     },
     "Sink": {

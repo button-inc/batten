@@ -1,0 +1,36 @@
+# cargo-mutants' configuration (https://mutants.rs/, CLOUD-2253). Rust mutation
+# is cargo-mutants' alone; `mutant:changed` runs it over the branch's diff.
+
+# `[profile.mutants]` in Cargo.toml: no debug info for a mutant's build.
+profile = "mutants"
+test_tool = "nextest"
+# The suite asks git about its own tree, so each build copy carries `.git`.
+copy_vcs = true
+# Ignored files (`target/` among them) are not copied into a build directory.
+gitignore = true
+# Where `mutant:rust` keeps its verdict files, which `--iterate` reads back.
+output = "target/mutants"
+
+# EQUIVALENT MUTANTS, each with the reason no test can tell it from the
+# original (mutants.rs, "Skipping functions"; Madeyski et al., TSE 2014, on why
+# equivalence is decided by argument and not by a test). A pattern names the
+# function and the mutation, never a line, so it follows the code it was
+# argued for and lapses when that code goes.
+exclude_re = [
+  # A readahead hint to the kernel: what it changes is page-cache timing, which
+  # no assertion can observe. `prefetch_packs` counts what it hinted instead.
+  'replace will_need with \(\)',
+  # The single-thread path and the threaded path read the same blobs into the
+  # same map; `workers == 1` only decides whether a thread is worth spawning.
+  'replace == with != in map_blobs',
+  # Where a ratchet's count table persists between calls. Without one every
+  # count is taken fresh, so the verdict is the same; only the call is slower.
+  'replace count_entry -> ',
+  # `flush` runs only on a full 64 KiB window, and an incomplete trailing UTF-8
+  # sequence is at most three bytes, so the valid prefix is never empty there:
+  # `> 0` and `>= 0` differ only on a window no caller ever flushes.
+  'replace > with >= in Chunked::flush',
+  # `ExitCode` is a fieldless enum: two values with equal codes are the same
+  # value, so which of them `worse` answers on a tie cannot be told apart.
+  'replace > with >= in worse',
+]

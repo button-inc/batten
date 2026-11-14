@@ -467,9 +467,6 @@ pub struct CommandDecl {
     pub flags: &'static [FlagDecl],
 }
 
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT exit-declaration-optional|s@^pub const EXITS_STANDARD: &\[crate::exit::ExitCode\] = &\[$@pub const EXITS_STANDARD: \&[crate::exit::ExitCode] = \&[]; const _UNUSED: \&[crate::exit::ExitCode] = \&[@|every_leaf_verb_declares_its_exit_set
-
 /// What a verb declares when it renders no policy verdict.
 ///
 /// `1` and `3` are on every row that runs at all: clap rejects a malformed
@@ -1602,6 +1599,22 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// The caller reads the clock, which is prior art and stays outside: `date -u
 /// +%s` in whatever wrapper the consumer invokes this through is exactly where
 /// that read belongs.
+/// `adjudicate --event`: the host's event name, for a registration whose
+/// payload names none (CLOUD-2700). The payload's own name wins when present.
+const HOOK_EVENT: FlagDecl = FlagDecl {
+    id: "event",
+    long: Some("event"),
+    short: None,
+    help: "The host's event name, used only when the payload names none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const HOOK_INSTANT: FlagDecl = FlagDecl {
     id: "instant",
     long: Some("instant"),
@@ -1659,57 +1672,6 @@ const SINGLETON_TASK: FlagDecl = FlagDecl::positional(
     "The task's name, which is what the lock is keyed by",
 );
 
-/// `--marker <path>` on `singleton detach`: where a failed run's pointers wait.
-const DETACH_MARKER: FlagDecl = FlagDecl {
-    required: true,
-    ..FlagDecl::valued(
-        "marker",
-        "marker",
-        "Where a failed run's pointers wait, announced and cleared by the next invocation",
-    )
-};
-
-/// `--log <path>` on `singleton detach`: where the run's whole output goes.
-const DETACH_LOG: FlagDecl = FlagDecl {
-    required: true,
-    ..FlagDecl::valued(
-        "log",
-        "log",
-        "Where the background run's whole output is written",
-    )
-};
-
-/// `--pattern <id>` on `singleton detach`: which output lines are pointers.
-///
-/// A `[[pattern]]` ID rather than a regex on argv: what a failure line looks
-/// like is the consumer's fact, declared once in its authority.
-const DETACH_PATTERN: FlagDecl = FlagDecl {
-    required: true,
-    ..FlagDecl::valued(
-        "pattern",
-        "pattern",
-        "The `[[pattern]]` row whose matching output lines are the failure's pointers",
-    )
-};
-
-/// `--attached` on `singleton detach`: this invocation is the background copy.
-///
-/// VISIBLE, though no caller is expected to type it: the announcing invocation
-/// starts the copy with it. Hidden is reserved for the diagnostic rungs
-/// (`only_a_diagnostic_rung_is_hidden`), and a flag that changes what a verb does
-/// is documented rather than tucked away, so its help says who passes it.
-const DETACH_ATTACHED: FlagDecl = FlagDecl::switch(
-    "attached",
-    "attached",
-    "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure",
-);
-
-/// The command `singleton detach` runs in the background, after `--`.
-const DETACH_COMMAND: FlagDecl = FlagDecl::trailing(
-    "command",
-    "The command to run in the background, after `--`",
-);
-
 /// `--recheck-ms <n>` on `singleton acquire`: the pause between the two
 /// sightings a reclaim requires.
 ///
@@ -1732,28 +1694,15 @@ const SINGLETON_RECHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--program-root <dir>` on `task alive`: where the CONSUMER keeps its programs.
-///
-/// Non-negotiable rule 1, as a flag. Corroborating that a live pid is still the
-/// task that registered it means matching the task's own name inside the
-/// process's `cmdline`, and *where a consumer keeps its programs* is a fact about
-/// that consumer — `document_facts::no_artifact_name_reaches_the_core` refuses a
-/// manifest name in this crate for exactly the same reason.
-///
-/// Never defaulted. A default would be one consumer's layout promoted to the
-/// engine's, and it would fail SILENTLY everywhere else: an unmatched
-/// corroboration reads as alive, so a wrong root produces a registry that never
-/// reports a crash and looks like one that has nothing to report.
-///
-/// Optional since CLOUD-2370 and TRANSITIONAL: `[task] program_root` is the one
-/// authority, and this flag answers only where the config declares none, so a
-/// manifest written for a release that predates the table keeps working until
-/// its pin carries it. Neither present is could-not-look.
+/// `task alive --program-root`: ACCEPTED AND UNREAD since CLOUD-1560. Liveness
+/// compares the cmdline digest each registrant recorded, so no program root is
+/// consulted; the flag stays so a manifest written for an older release keeps
+/// parsing, and retires with `[task] program_root` (CLOUD-2463).
 const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     id: "program_root",
     long: Some("program-root"),
     short: None,
-    help: "The directory this consumer keeps its task programs in, matched inside a live process's cmdline",
+    help: "Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -2084,6 +2033,37 @@ const REGISTER_CHECK: FlagDecl = FlagDecl {
     long: Some("check"),
     short: None,
     help: "Exit non-zero if a registration is owed, and write nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--check` on `wiring gate` (CLOUD-2339): decide whether a link is owed.
+const GATE_CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Exit non-zero if a git hook link is owed, and write nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--all` on `wiring register` (CLOUD-2676): also write every harness's
+/// committed surface under the repository, ungated by the disposable home.
+const REGISTER_ALL: FlagDecl = FlagDecl {
+    id: "all",
+    long: Some("all"),
+    short: None,
+    help: "Also register batten on every harness's committed wiring file",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -2479,6 +2459,53 @@ const BENCH_CHECK: FlagDecl = FlagDecl {
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Bool,
+};
+
+/// `forge intake --event <name>` (CLOUD-2690): the `X-GitHub-Event` name a
+/// webhook body on stdin arrived under, because a body does not name itself.
+const INTAKE_EVENT: FlagDecl = FlagDecl {
+    id: "event",
+    long: Some("event"),
+    short: None,
+    help: "The X-GitHub-Event name the webhook body on stdin arrived under",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `forge intake --from wake` (CLOUD-2690): stdin is a harness
+/// user-prompt-submit payload carrying a `<event source="github">` element.
+const INTAKE_FROM: FlagDecl = FlagDecl {
+    id: "from",
+    long: Some("from"),
+    short: None,
+    help: "`wake`: stdin is a harness user-prompt-submit payload carrying the event",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `forge poll --every <seconds>` (CLOUD-2693): loop, registered with `task`.
+const POLL_EVERY: FlagDecl = FlagDecl {
+    id: "every",
+    long: Some("every"),
+    short: None,
+    help: "Poll every this many seconds, registered with `task` as forge-poll",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
 };
 
 const SLOW_BASE: FlagDecl = FlagDecl {
@@ -5290,6 +5317,21 @@ pub const SURFACE: &[CommandDecl] = &[
     // the enforced set and wrote no exemption would make the first greener and
     // the second red, and is indistinguishable from doing the work if only the
     // first runs.
+    // cargo-mutants as a landing gate with no shell in the task body: the
+    // change written as its `--in-diff`, `--jobs` sized from the measured machine
+    // and the tree's declared per-job cost, `--shard` from `$MUTANT_SHARD`, and
+    // its exit read onto §6. `write`: it spawns cargo, which builds and mutates
+    // copies of the tree. Its streamed output is cargo-mutants', and the verdict
+    // files it reads are cargo-mutants' own.
+    CommandDecl {
+        path: "mutate cargo",
+        id: "mutate.cargo",
+        about: "Run cargo-mutants over the change since $MUTANT_CHANGED_SINCE on as many jobs as this machine holds",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "mutate census",
         id: "mutate.census",
@@ -6046,30 +6088,6 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[SINGLETON_TASK],
     },
-    // A BACKGROUND RUN UNDER THE TASK'S LOCK (CLOUD-1731's per-turn check,
-    // retiring `[tasks.cross-turn]` under CLOUD-1991). `unclassified`, for
-    // `exec`'s reason: it runs the command it is handed, so its reach is that
-    // command's. It announces the previous run's failure on stdout — the handler
-    // contract's advisory channel — clears it, starts an attached copy and
-    // returns, so a turn never waits on the command. The attached copy takes the
-    // lock for its own pid: a second copy is refused by the lock, never by a
-    // process probe, and a turn whose copy is still running starts none.
-    CommandDecl {
-        path: "singleton detach",
-        id: "singleton.detach",
-        about: "Run a command in the background under a task's lock, and report the previous run's failure",
-        data_channel: false,
-        exits: EXITS_STANDARD,
-        effect: Effect::Unclassified,
-        flags: &[
-            SINGLETON_TASK,
-            DETACH_MARKER,
-            DETACH_LOG,
-            DETACH_PATTERN,
-            DETACH_ATTACHED,
-            DETACH_COMMAND,
-        ],
-    },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.
     CommandDecl {
@@ -6485,11 +6503,20 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[
             HOOK_INSTANT,
+            HOOK_EVENT,
             FlagDecl::required_enum(
                 "harness",
                 "harness",
                 "The harness whose payload to decode and whose decision channel to answer in",
                 harness_parser,
+            ),
+            // CLOUD-2696: the policy input is otherwise invisible, so a module
+            // that passes its own cases and decides differently live leaves its
+            // author nothing to compare.
+            FlagDecl::switch(
+                "show_input",
+                "show-input",
+                "Store the exact policy input this call produced and print its pointer on stderr",
             ),
         ],
     },
@@ -7305,7 +7332,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[REGISTER_CHECK],
+        flags: &[REGISTER_CHECK, REGISTER_ALL],
     },
     // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
     // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
@@ -7317,18 +7344,23 @@ pub const SURFACE: &[CommandDecl] = &[
     // not a file shared by every checkout on the box, and what it replaces is
     // the link it would write — a committed `[[startup]]` row names it as that
     // directory's repair, which is the authorisation `reclaim` has to ask `-y`
-    // for. The body is an OPERAND: which file is the gate is the consumer's fact.
+    // for. CLOUD-2339: with no operand every git hook links to the batten binary
+    // itself, which dispatches on argv[0] through `[hook.git]`; a body operand
+    // keeps CLOUD-1991's two-hook link until a consumer's pin reads that table.
     CommandDecl {
         path: "wiring gate",
         id: "wiring.gate",
-        about: "Link this clone's two commit hooks to a hook body the repository checks in",
+        about: "Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[FlagDecl::positional(
-            "body",
-            "The hook body to link, relative to the repository root",
-        )],
+        flags: &[
+            FlagDecl::positional_optional(
+                "body",
+                "A hook body to link both commit hooks to, relative to the repository root",
+            ),
+            GATE_CHECK,
+        ],
     },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a
@@ -7635,6 +7667,19 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Write,
+        flags: &[],
+    },
+    // `read`: it compares the working tree with HEAD and HEAD with the
+    // remote-tracking refs, writes nothing, and always exits `0` — it is advice
+    // on stderr, never a refusal, because verifying without landing is
+    // legitimate (CLOUD-2707).
+    CommandDecl {
+        path: "land placed",
+        id: "land.placed",
+        about: "Advise a gate run on a committed, pushed head that land is next and reuses its receipt",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
         flags: &[],
     },
     // `write`, and the write is REMOTE — a comment on somebody else's pull
@@ -8126,6 +8171,43 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[JSON, SLOW_BASE],
     },
+    // CLOUD-2690. THE FORGE'S DOOR: one event payload on stdin, normalized by
+    // `forge_event`, deduplicated by its seen ring, and dispatched through the
+    // same `dispatch_envelope` a harness hook takes. No server (CLOUD-204).
+    CommandDecl {
+        path: "forge",
+        id: "forge",
+        about: "Take forge events into the hook surface",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // unreached: "forge intake" CLOUD-2702 its caller is `forge poll`, in process,
+    // and this clone starts that from `[[forge.source]]` rows the pinned engine
+    // cannot read yet; a consumer's own hook or task is the other caller.
+    CommandDecl {
+        path: "forge intake",
+        id: "forge.intake",
+        about: "Run one forge event payload from stdin through the handlers and rules a harness hook gets",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[INTAKE_EVENT, INTAKE_FROM],
+    },
+    // CLOUD-2693. Where events come from when nothing pushes them: the first
+    // available `[[forge.source]]`, read once or every N seconds.
+    // unreached: "forge poll" CLOUD-2702 this clone registers it as a task once
+    // the engine pin names a release that reads `[[forge.source]]`.
+    CommandDecl {
+        path: "forge poll",
+        id: "forge.poll",
+        about: "Read forge events from the first available declared source and run each through intake",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[POLL_EVERY],
+    },
     CommandDecl {
         path: "artifacts",
         id: "artifacts",
@@ -8489,11 +8571,6 @@ fn has_children(path: &str) -> bool {
     SURFACE.iter().any(|decl| is_child_of(decl.path, path))
 }
 
-//MUTANT info-flag-past-separator|s@if \*argument == "--" {$@if *argument == "-=" {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-value-unskipped|s@skip = consumes_a_value(argument);$@skip = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-before-clap|s@^            if path.is_empty() {$@            if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-unread|s@if \*argument == "help" && has_children(&path) {$@if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-on-a-leaf|s@ && has_children(&path) {$@ {@|an_informational_flag_is_a_read_wherever_clap_answers_it
 /// The effect a `batten` argv runs with: the declared effect of the deepest
 /// subcommand it names, walking the non-flag arguments while each extension is
 /// a declared path, so `batten override spend --rule x` resolves
@@ -8582,7 +8659,6 @@ pub fn is_noun(decl: &CommandDecl) -> bool {
 
 /// Attach every direct child of `prefix` to `parent`, recursively, keeping
 /// only the child named `only` when one is given.
-//MUTANT narrowed-tree-keeps-everything|s@^            .filter(\x7cdecl\x7c only.is_none_or(\x7cname\x7c leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
 //
 // ONE MOVE PER NODE, NOT ONE PER FLAG. `clap`'s builder takes `Command` by
 // value, so folding `.arg` over a row's flags and `.subcommand` over its
@@ -8943,7 +9019,7 @@ mod tests {
         let paths = std::iter::once("").chain(SURFACE.iter().map(|decl| decl.path));
         for path in paths {
             let name = crate::render::page_name("batten", path);
-            let committed = std::fs::read_to_string(dir.join(format!("{name}.1")))
+            let committed = crate::fsio::read_to_string(dir.join(format!("{name}.1")))
                 .unwrap_or_else(|_| panic!("man/{name}.1 is committed"));
             let rendered = crate::render::man(&root, Some(path)).expect("the page renders");
             assert!(rendered == committed, "man/{name}.1 is stale");

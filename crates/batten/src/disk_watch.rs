@@ -83,8 +83,6 @@ impl std::fmt::Debug for DiskWatch<'_> {
 ///
 /// A repository with no declared band returns at once with no lines: the arm is
 /// off, as it is for a consumer with no `[prune]`.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT arm-ends-with-the-gate|s@^        while !stop.load(Ordering::Relaxed) {$@        for _ in 0..1 {@|the_arm_watches_past_the_gate
 pub fn watch<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,
@@ -145,8 +143,17 @@ pub fn watch<'scope>(
                                 .map_err(|_| anyhow::anyhow!("the free-space reader was poisoned"))
                                 .and_then(|mut read| read())
                         };
+                        // THE WATCHER WAITS ITS TURN ON A HELD TREE. It is the one
+                        // collector with no deadline, on a thread of its own, so
+                        // blocking costs nothing; skipping a held tree did. Measured
+                        // on #1276: 292 passes during one `land` lap each logged
+                        // `disk-held ./target` and freed nothing while 6.9GB of
+                        // stale scratch sat in that tree, and the lap died at
+                        // `No space left on device`. The deadline-bounded passes
+                        // every pressed compile runs took the tree in turn and
+                        // ran out their deadline walking it.
                         if let Some(done) = crate::collect::collect_toward_max(
-                            &repo, config, &kept, free, &mut read, None, false,
+                            &repo, config, &kept, free, &mut read, None, true,
                         ) && let Ok(mut lines) = lines.lock()
                         {
                             lines.extend(done.lines());
@@ -266,5 +273,80 @@ mod tests {
             stop.load(Ordering::Relaxed),
             "the guard's drop is what ends the watcher on an unwind"
         );
+    }
+
+    /// A tree another collector holds is WAITED FOR, never skipped: the
+    /// watcher is the one pass with no deadline, so it is the pass that must
+    /// reach the tree (#1276, where 292 skipping passes freed nothing and the
+    /// lap filled the volume).
+    ///
+    /// The other collector's lock is released on the main loop's SECOND
+    /// sample, five seconds after the first started the collection — long
+    /// after a skipping pass has already given up and read the volume as
+    /// recovered.
+    ///
+    /// Fails by: the watcher's pass taking the tree with `try_lock` and
+    /// skipping it when held, which leaves the stale fixture on disk.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn a_held_tree_is_waited_for_not_skipped() {
+        use std::sync::atomic::AtomicUsize;
+        let repo = crate::scratch::scratch("disk-watch-held-tree");
+        let tree = repo.join("target");
+        let stale = tree.join("tmp").join("old-fixture");
+        std::fs::create_dir_all(&stale).expect("create the stale fixture");
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        crate::durable::open_handle(&stale)
+            .expect("open the fixture")
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(then)
+                    .set_modified(then),
+            )
+            .expect("date the fixture");
+        let held = crate::durable::open_handle(&tree).expect("open the tree");
+        held.lock()
+            .expect("hold the tree as another collector would");
+        let held = Arc::new(Mutex::new(Some(held)));
+        let config = crate::prune::Prune {
+            root: "target".to_owned(),
+            keep: 2,
+            warm: None,
+            cold: None,
+            regrowable: None,
+            min_free_mb: Some(10),
+            max_free_mb: Some(11),
+        };
+        // THE THIRD READING IS THE EVENT THE CASE WAITS ON, never a clock. The
+        // first starts the collection; the second, a tick later, releases the
+        // other collector's lock; the third comes after the pass that the release
+        // let through — the collection's own closing read when the watcher waited,
+        // or the next tick when it skipped and left the fixture standing.
+        let (reached, settled) = std::sync::mpsc::channel();
+        let samples = AtomicUsize::new(0);
+        let releaser = Arc::clone(&held);
+        let watch = DiskWatch {
+            repo: repo.clone(),
+            config: &config,
+            free_mb: Box::new(move || {
+                let taken = samples.fetch_add(1, Ordering::SeqCst);
+                if taken == 2 {
+                    let _ = reached.send(());
+                }
+                if taken >= 1 {
+                    if let Ok(mut lock) = releaser.lock() {
+                        drop(lock.take());
+                    }
+                    return Ok(50);
+                }
+                Ok(9)
+            }),
+            kept: Vec::new(),
+        };
+        let ((), lines) = around(Some(watch), || {
+            // Bounded by the event: three of the watcher's ticks at the outside.
+            let _ = settled.recv_timeout(std::time::Duration::from_secs(60));
+        });
+        assert!(!stale.exists(), "the held tree was skipped: {lines:?}");
     }
 }

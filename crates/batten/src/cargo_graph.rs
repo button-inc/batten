@@ -40,10 +40,6 @@
 // Reverting the activation filter to the whole resolve is the defect the first
 // row guards: an optional dependency nobody enabled reads as linked, and the
 // gate refuses a link that succeeds.
-//MUTANT-SUITE crates/batten/src/cargo_graph.rs
-//MUTANT graph-scans-unactivated|s@^                if key.is_some_and(\x7ckey\x7c enabled.contains(key)) {$@                if true {@|the_same_optional_dependency_once_activated_is_reached
-//MUTANT graph-weak-dep-activates|s@^                && !head.ends_with(.?.)$@@|a_weak_reference_is_not_an_activation
-//MUTANT graph-keeps-dev-edges|s@^            if dev_only(dep) && !is_member {$@            if false {@|a_dev_dependency_of_a_dependency_is_not_in_the_built_closure
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -255,6 +251,75 @@ impl Graph {
         seen
     }
 
+    /// Every package id reachable from `roots` along activated edges whose code
+    /// is LINKED into the target artifact.
+    ///
+    /// [`Graph::reachable`] minus the host-only subgraphs: a proc-macro package
+    /// runs inside the compiler and a build-only edge feeds a build script, so
+    /// neither — nor anything only they reach — is linked into what the target
+    /// ships. What a build script compiles INTO its package is declared by that
+    /// package's own `links` key, and the package is still walked, so nothing a
+    /// target links escapes this. The measured case: regorus 0.15 reaches
+    /// `verus_prettyplease`, whose `links` is a version-uniqueness marker, only
+    /// through the proc-macro `verus_builtin_macros`.
+    #[must_use]
+    pub fn linked<I, S>(&self, roots: I) -> BTreeSet<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut seen = BTreeSet::new();
+        let mut frontier: Vec<String> = roots.into_iter().map(Into::into).collect();
+        while let Some(current) = frontier.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            frontier.extend(
+                self.edges(&current)
+                    .into_iter()
+                    .filter(|next| !self.proc_macro(next) && !self.build_only(&current, next)),
+            );
+        }
+        seen
+    }
+
+    /// Whether `id` is a proc-macro package: one whose targets include a
+    /// `proc-macro` kind.
+    fn proc_macro(&self, id: &str) -> bool {
+        self.packages
+            .get(id)
+            .and_then(|package| package.get("targets"))
+            .and_then(Value::as_array)
+            .is_some_and(|targets| {
+                targets.iter().any(|target| {
+                    target
+                        .get("kind")
+                        .and_then(Value::as_array)
+                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "proc-macro"))
+                })
+            })
+    }
+
+    /// Whether every kind on the edge `from` → `to` is `build`.
+    fn build_only(&self, from: &str, to: &str) -> bool {
+        self.nodes
+            .get(from)
+            .and_then(|node| node.get("deps"))
+            .and_then(Value::as_array)
+            .and_then(|deps| {
+                deps.iter()
+                    .find(|dep| dep.get("pkg").and_then(Value::as_str) == Some(to))
+            })
+            .and_then(|dep| dep.get("dep_kinds"))
+            .and_then(Value::as_array)
+            .is_some_and(|kinds| {
+                !kinds.is_empty()
+                    && kinds
+                        .iter()
+                        .all(|kind| kind.get("kind").and_then(Value::as_str) == Some("build"))
+            })
+    }
+
     /// The workspace members the resolve holds nodes for.
     ///
     /// The starting set for a question about everything this tree builds.
@@ -383,6 +448,42 @@ mod tests {
     #[test]
     fn a_required_dependency_is_always_reached() {
         assert!(reaches_leaf(&chain(None, false, &[])));
+    }
+
+    fn links_leaf(meta: &Value) -> bool {
+        let graph = Graph::from_metadata(meta);
+        graph.linked(graph.member_roots()).contains("leaf 1.0.0")
+    }
+
+    /// A proc-macro and a build-only edge run on the host, so neither is
+    /// linked into the target; a normal edge to a library is. Fails by: the
+    /// proc-macro or build-only test dropped, or either applied to a normal
+    /// library edge.
+    #[test]
+    fn only_a_target_linked_edge_is_in_the_linked_closure() {
+        assert!(
+            links_leaf(&chain(None, false, &[])),
+            "a normal library edge"
+        );
+        let build = chain(Some("build"), false, &[]);
+        assert!(reaches_leaf(&build), "built, for the host");
+        assert!(!links_leaf(&build), "and never linked into the target");
+        let mut macro_leaf = chain(None, false, &[]);
+        macro_leaf["packages"][1]["targets"] = json!([{ "kind": ["proc-macro"] }]);
+        assert!(reaches_leaf(&macro_leaf), "built, for the host");
+        assert!(
+            !links_leaf(&macro_leaf),
+            "a proc-macro runs in the compiler"
+        );
+        let mut library_leaf = chain(None, false, &[]);
+        library_leaf["packages"][1]["targets"] = json!([{ "kind": ["lib"] }]);
+        assert!(links_leaf(&library_leaf), "a library target is linked");
+        let both = {
+            let mut meta = chain(None, false, &[]);
+            meta["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = json!([{ "kind": "build" }, {}]);
+            meta
+        };
+        assert!(links_leaf(&both), "an edge that is also normal is linked");
     }
 
     /// THE MEASURED DEFECT: an optional dependency nobody enabled reads as

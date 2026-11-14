@@ -49,6 +49,7 @@ pub mod ci_step;
 pub mod claim;
 pub mod cli;
 pub mod codemod;
+pub use batten_fsio as fsio;
 pub mod collect;
 pub mod commit;
 pub mod completion;
@@ -83,8 +84,10 @@ pub mod findings;
 pub mod forge;
 /// Declared `[[forge.query]]` reads, walked and reduced into a record family a
 /// module decides over (CLOUD-843).
+pub mod forge_event;
 pub mod forge_query;
 pub mod git;
+pub mod githook;
 pub mod gitwrite;
 pub mod graph;
 pub mod handler;
@@ -274,8 +277,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT hook-follow-error-escapes|s@^        Some(Err(why)) if hook_path => {$@        Some(Err(why)) if false => {@|a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -404,15 +405,26 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // behaviour.
         Some(Command::Mcp { command }) => run_mcp(&command, &overrides, out, err),
         Some(Command::Target { command }) => run_target(&command, &overrides, mode, err),
-        Some(Command::Hook { harness, instant }) => run_hook(
+        Some(Command::Hook {
             harness,
-            supplied_instant(instant.as_deref())?,
-            mode,
-            &overrides,
-            pinned.as_ref(),
-            out,
-            err,
-        ),
+            instant,
+            show_input,
+            event,
+        }) => {
+            let _ = SHOW_INPUT.set(show_input);
+            if let Some(event) = event {
+                let _ = hook::NAMED_EVENT.set(event);
+            }
+            run_hook(
+                harness,
+                supplied_instant(instant.as_deref())?,
+                mode,
+                &overrides,
+                pinned.as_ref(),
+                out,
+                err,
+            )
+        }
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
         // whole point is that it costs less than the `jq` process it replaces.
         // `run_hook` loads policy only past its cheap refusals for the same
@@ -669,6 +681,340 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 replay::run(&root, &base, json, out)
             }
         },
+        Some(Command::Forge { command }) => match command {
+            cli::ForgeCommand::Intake { event, from } => {
+                run_forge_intake(event, from.as_deref(), mode, &overrides, out, err)
+            }
+            cli::ForgeCommand::Poll { every } => {
+                run_forge_poll(every.as_deref(), mode, &overrides, out, err)
+            }
+        },
+    }
+}
+
+/// `batten forge intake` (CLOUD-2690): one forge event payload on stdin,
+/// normalized, deduplicated against the seen ring, and dispatched through
+/// [`dispatch_envelope`] as [`hook::Harness::ExitCode`] — the handlers,
+/// actions and rules a harness hook gets, and no second dispatcher.
+///
+/// The `--event` form exits on the exit-code contract: 0 dispatched or seen,
+/// 1 an unknown event or an unreadable payload, 2 a handler or rule refused,
+/// 3 could-not-look. The `--from wake` form runs as a user-prompt-submit
+/// handler, where 2 would deny the operator's prompt, so it ALWAYS exits 0;
+/// its refusal is recorded in the findings store instead, and its faults are
+/// a stderr pointer.
+fn run_forge_intake(
+    event: Option<String>,
+    from: Option<&str>,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let _memos = hook_call_memos();
+    let wake = match from {
+        None => false,
+        Some("wake") => true,
+        Some(other) => {
+            return Err(UsageError::raise(format!(
+                "forge intake: --from {other} is not a form; the one form is `wake`"
+            )));
+        }
+    };
+    // A fault on the wake form is a pointer and exit 0: the operator's prompt
+    // is never what a forge fault refuses.
+    let fault = |code: ExitCode, reason: &str, err: &mut dyn Write| -> Result<ExitCode> {
+        writeln!(err, "forge intake: {reason}")?;
+        Ok(if wake { ExitCode::Success } else { code })
+    };
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return fault(ExitCode::Usage, "stdin is not text", err);
+    }
+    let parsed = if wake {
+        forge_event::wake_event(&raw)
+    } else {
+        let Some(name) = event else {
+            return Err(UsageError::raise(
+                "forge intake: name the event with --event <name>, or read a wake with --from wake"
+                    .to_owned(),
+            ));
+        };
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .map(|body| (name, body))
+    };
+    let Some((name, body)) = parsed else {
+        return fault(ExitCode::Usage, "no readable forge event on stdin", err);
+    };
+    let Some(envelope) = forge_event::normalize_webhook(&name, &body) else {
+        return fault(
+            ExitCode::Usage,
+            &format!("`{name}` is no GitHub webhook event"),
+            err,
+        );
+    };
+    let Ok(root) = git::repo_root(Path::new(".")) else {
+        return fault(ExitCode::Internal, "not a repository", err);
+    };
+    let Ok(common) = git::common_dir(&root) else {
+        return fault(
+            ExitCode::Internal,
+            "the git common dir does not resolve",
+            err,
+        );
+    };
+    let ring = forge_event::ring_path(Path::new(&common));
+    let document = body.to_string();
+    let rendered = match intake_one(
+        &root,
+        &ring,
+        envelope,
+        &document,
+        (mode, overrides),
+        out,
+        err,
+    )? {
+        Intake::Seen => return Ok(ExitCode::Success),
+        Intake::Unreadable => {
+            return fault(ExitCode::Internal, "the seen ring cannot be read", err);
+        }
+        Intake::Dispatched(rendered) => rendered,
+    };
+    wake_exit(rendered, wake, err)
+}
+
+/// THE WAKE FORM NEVER REFUSES THE OPERATOR'S PROMPT: its refusal is the record
+/// and a stderr line, and its exit is 0. The `--event` form keeps every
+/// rendering — a deny's error and a non-zero exit alike.
+fn wake_exit(rendered: Result<ExitCode>, wake: bool, err: &mut dyn Write) -> Result<ExitCode> {
+    match rendered {
+        Ok(_) if wake => Ok(ExitCode::Success),
+        Err(denied) if wake => {
+            writeln!(err, "{denied}")?;
+            Ok(ExitCode::Success)
+        }
+        rendered => rendered,
+    }
+}
+
+/// What one forge event did at the door.
+enum Intake {
+    /// Its key is already in the ring, so nothing was dispatched.
+    Seen,
+    /// The ring could not be read: could-not-look.
+    Unreadable,
+    /// It was dispatched; this is the rendering, exactly as `render` returned it.
+    Dispatched(Result<ExitCode>),
+}
+
+/// One normalized forge event through the seen ring, the dispatcher and the
+/// findings store (CLOUD-2690): the step `forge intake` and `forge poll`
+/// share, so a pushed and a polled copy of one change fire once.
+fn intake_one(
+    root: &Path,
+    ring: &Path,
+    envelope: hook::Envelope,
+    document: &str,
+    (mode, overrides): (Mode, &Overrides),
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Intake> {
+    let key = envelope
+        .forge
+        .as_ref()
+        .map(|forge| forge.key.clone())
+        .unwrap_or_default();
+    match forge_event::unseen(ring, &key) {
+        Ok(true) => {}
+        Ok(false) => return Ok(Intake::Seen),
+        Err(_) => return Ok(Intake::Unreadable),
+    }
+    let recorded = envelope.clone();
+    let instant = std::time::SystemTime::now();
+    let input = HookInput {
+        raw: document,
+        envelope,
+        spilled: &[],
+        ran: None,
+    };
+    let harness = hook::Harness::ExitCode;
+    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;
+    // Appended only AFTER dispatch returns, so a crash replays the event.
+    if forge_event::remember(ring, &key).is_err() {
+        writeln!(err, "forge intake: the seen ring could not be written")?;
+    }
+    if let Some(deny) = dispatched.deny.as_deref() {
+        record_forge_refusal(root, &recorded, deny, err);
+    }
+    Ok(Intake::Dispatched(dispatched.rendered))
+}
+
+/// `batten forge poll [--every <seconds>]` (CLOUD-2693): one round from the
+/// first available `[[forge.source]]`, each event through [`intake_one`], then
+/// the source's cursor saved. One round exits 0/1/2/3 on `--event`'s contract;
+/// `--every` loops, registered with `task` as `forge-poll` and ticking once
+/// per round, and a round's could-not-look is a pointer the loop survives.
+fn run_forge_poll(
+    every: Option<&str>,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let _memos = hook_call_memos();
+    // ZERO IS REFUSED BY THE TYPE, NOT BY A GUARD: a `seconds > 0` guard's
+    // mutants admitted `--every 0`, whose loop then spun forever and timed
+    // the whole mutation sweep out three times over (1253s each).
+    let every = match every.map(str::parse::<std::num::NonZeroU64>) {
+        None => None,
+        Some(Ok(seconds)) => Some(seconds.get()),
+        Some(Err(_)) => {
+            return Err(UsageError::raise(
+                "forge poll: --every takes a whole number of seconds above 0".to_owned(),
+            ));
+        }
+    };
+    let Ok(root) = git::repo_root(Path::new(".")) else {
+        writeln!(err, "forge poll: not a repository")?;
+        return Ok(ExitCode::Internal);
+    };
+    let Some(seconds) = every else {
+        return forge_round(&root, mode, overrides, out, err);
+    };
+    let git_dir = git::git_dir(&root)?;
+    let pid = std::process::id().to_string();
+    let now = boundary_epoch();
+    task::register(&git_dir, "forge-poll", &pid, "polling", now);
+    let (unregister_dir, unregister_pid) = (git_dir.clone(), pid.clone());
+    exec::on_terminate(move || task::unregister(&unregister_dir, &unregister_pid));
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut round: u64 = 0;
+    loop {
+        if let Ok(ExitCode::Internal) = forge_round(&root, mode, overrides, out, err) {
+            writeln!(err, "forge poll: round {round} could not look")?;
+        }
+        round += 1;
+        task::push(
+            &git_dir,
+            &pid,
+            task::Signal::Tick,
+            &round.to_string(),
+            boundary_epoch(),
+        );
+        pr_watch::pause_until(std::time::Duration::from_secs(seconds).as_secs_f64(), &stop);
+    }
+}
+
+/// One poll round: read, dispatch each event, save the cursor.
+fn forge_round(
+    root: &Path,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    use forge_event::write_cursor;
+    let config = resolve::committed(root, overrides)?;
+    let forge = config.forge.unwrap_or_default();
+    let Ok(common) = git::common_dir(root) else {
+        writeln!(err, "forge poll: the git common dir does not resolve")?;
+        return Ok(ExitCode::Internal);
+    };
+    let slug = repo_slug(root).and_then(|slug| {
+        let (owner, repo) = slug.split_once('/')?;
+        Some((owner.to_owned(), repo.to_owned()))
+    });
+    let input = forge_event::RoundInput {
+        root,
+        common_dir: Path::new(&common),
+        mcp: config.mcp.as_ref(),
+        slug: slug.as_ref(),
+    };
+    let forge_event::Round::Read {
+        events,
+        cursor,
+        cursor_path,
+    } = forge_event::read_round(&forge, &input, err)?
+    else {
+        writeln!(err, "forge poll: no source is available")?;
+        return Ok(ExitCode::Internal);
+    };
+    let ring = forge_event::ring_path(Path::new(&common));
+    let mut refused = false;
+    for envelope in events {
+        // A polled event has no webhook body of its own: the handler reads its
+        // tokens (`input.call.forge`'s shape), never a payload (rule 4).
+        let document = serde_json::to_string(&envelope.forge).unwrap_or_default();
+        match intake_one(
+            root,
+            &ring,
+            envelope,
+            &document,
+            (mode, overrides),
+            out,
+            err,
+        )? {
+            Intake::Seen | Intake::Dispatched(Ok(ExitCode::Success)) => {}
+            Intake::Unreadable => {
+                writeln!(err, "forge poll: the seen ring cannot be read")?;
+                return Ok(ExitCode::Internal);
+            }
+            Intake::Dispatched(Ok(_)) => refused = true,
+            Intake::Dispatched(Err(denied)) => {
+                writeln!(err, "{denied}")?;
+                refused = true;
+            }
+        }
+    }
+    write_cursor(&cursor_path, &cursor)?;
+    Ok(if refused {
+        ExitCode::Violation
+    } else {
+        ExitCode::Success
+    })
+}
+
+/// Record a forge refusal in the findings store, where the drain delivers it
+/// at the next batch boundary of any session in this checkout (CLOUD-2690).
+/// `record_ripcord`'s shape and contract: a record that cannot be written is a
+/// stderr pointer and never changes the exit.
+fn record_forge_refusal(root: &Path, envelope: &hook::Envelope, deny: &str, err: &mut dyn Write) {
+    let key = envelope.forge.as_ref().map(|forge| forge.key.as_str());
+    // BOUND HERE, unlike the ripcord's read: `forge intake` is a write verb,
+    // and a refusal no store holds is one the drain can never deliver.
+    let recorded = store::resolve(root)
+        .ok()
+        .and_then(|opened| store::commit(opened).ok())
+        .map(|bound| bound.dir)
+        .zip(git::head_commit(root).ok())
+        .map(|(dir, head)| {
+            let advisory = findings::Advisory {
+                rule: "forge-intake".to_owned(),
+                identity: crate::identity::StoredIdentity::new(
+                    crate::identity::FindingKind::Sequence,
+                    crate::identity::sequence_fingerprint("forge-intake", deny, key),
+                ),
+                tier: crate::severity::AdvisoryTier::Caution,
+                path: format!("forge:{}", envelope.raw_tool),
+                line: None,
+                check: findings::Check::Reevaluate,
+                remediation: findings::Remediation::NoFix(format!(
+                    "a forge event was refused by {deny}; read that rule or handler"
+                )),
+            };
+            findings::record_sequence(
+                &dir,
+                &findings::Context::new(format!("forge/{}", envelope.raw_tool)),
+                &head,
+                None,
+                &advisory,
+                findings::Observation::Observed(1),
+                findings::FINDINGS_SCHEMA,
+            )
+        });
+    if !matches!(recorded, Some(Ok(_))) {
+        let _ = writeln!(err, "forge intake: persisted:false");
     }
 }
 
@@ -687,8 +1033,6 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// does not choose the RELEASE that judges it (CLOUD-31), and a stale binary
 /// still follows the release the ref names. A source pin, the ref's as the
 /// tree's, is still followed to this checkout's own build, as it was before.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT ref-run-follows-tree-pin|s@^    if let Some(judging_ref) = overrides.config_from.as_deref() {$@    if let Some(judging_ref) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
     if let Some(judging_ref) = overrides.config_from.as_deref() {
@@ -710,7 +1054,8 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 /// A source pin is built over the running binary as before, and never on the
 /// hook path.
 ///
-/// **IT WRITES NOTHING, on either branch.** Every non-hook verb is a
+/// **IT WRITES NOTHING BUT THE FOLLOW LINE, and that only to a terminal**
+/// (CLOUD-2595 §2e). Every non-hook verb is a
 /// transparent passthrough whose child inherits this process's own descriptors,
 /// so its bytes never travel through a writer here at all; and the hook branch
 /// no longer spawns, so it has no child's bytes to hold. [`follow_to_pinned`]
@@ -720,13 +1065,6 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
 /// FETCH is not best-effort — a pin that cannot be fetched is reported, since
 /// running anyway would decide under the very engine the pin refuses.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
-//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
-//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
-//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -737,7 +1075,10 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(Followed::Nothing);
     };
-    let Some(text) = pin_text(&root, overrides) else {
+    // THE PIN IS READ FROM THE AUTHORITY, which is the worktree's own file when
+    // it carries one and the repository's otherwise (CLOUD-2532).
+    let authority = config::authority_root(&root).unwrap_or_else(|_| root.clone());
+    let Some(text) = pin_text(&authority, overrides) else {
         return Ok(Followed::Nothing);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
@@ -768,7 +1109,11 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
             // decides the call and admits the one repair verb (CLOUD-2116);
             // a second fall-through here was that rule spelled twice, and it
             // made `run`'s copy unreachable by any case.
-            engine::pinned_release(&cache, &releases_repository(), tag)?
+            // VERIFIED AGAINST THE ROW'S OWN DIGEST when it lists one for this
+            // platform (CLOUD-2595 §2b), the consumer's pin rather than the
+            // release's manifest.
+            let pinned = || engine::followed_digest(&text);
+            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
@@ -792,6 +1137,11 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
         // refusal names it.
         _ => return Ok(Followed::Nothing),
     };
+    let pin_name = pin
+        .release
+        .clone()
+        .or_else(|| pin.source.as_ref().map(|digest| format!("source {digest}")))
+        .unwrap_or_default();
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
@@ -819,7 +1169,23 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
         // which streams it, spills what is over the bound, and owns what a
         // harness sent. Spawning before that read makes the child the reader
         // instead, and a crash then leaves the fall-through nothing to judge.
-        return Ok(Followed::Pinned(FollowTarget { root, argv }));
+        return Ok(Followed::Pinned(FollowTarget {
+            root,
+            argv,
+            pinned: pin_name,
+        }));
+    }
+    // OFF THE HOOK PATH every run is its own session, so the follow says itself
+    // on each (CLOUD-2595 §2e) — TO A PERSON ONLY. `exec --`, `statusline` and
+    // every captured caller read this process's stderr as the pinned engine's
+    // (or the child's), so a line there is bytes the passthrough never produced,
+    // and a closed stderr must never fail the verb before the pin runs.
+    {
+        use std::io::IsTerminal as _;
+        let mut stderr = std::io::stderr();
+        if stderr.is_terminal() {
+            let _ = writeln!(stderr, "{}", follow_line(&pin_name));
+        }
     }
     // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
     // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
@@ -884,6 +1250,46 @@ struct FollowTarget {
     root: PathBuf,
     /// The pinned engine followed by this invocation's own operands.
     argv: Vec<String>,
+    /// What the pin names, for the line the follow says itself in (CLOUD-2595).
+    pinned: String,
+}
+
+/// The line a follow names itself in (CLOUD-2595 §2e): `batten: this binary is
+/// vX; following the pinned vY`.
+///
+/// **THE FOLLOW WAS SILENT,** measured in a consumer: 0.0.217 fetched
+/// and ran 0.0.216 with nothing on stderr, so a reader had no way to tell which
+/// engine judged the session. One line per session says it.
+fn follow_line(pinned: &str) -> String {
+    format!(
+        "batten: this binary is {}; following the pinned {pinned}",
+        engine::release()
+    )
+}
+
+/// Write [`follow_line`] once per reader the payload names (CLOUD-2595 §2e),
+/// marked in the sighting store every once-per-context line shares
+/// ([`refusal::first_sighting`]): created exclusively, so a parallel batch of
+/// one session's calls says it once, and forgotten with the window, so a
+/// compacted session hears it again.
+///
+/// A payload naming no session says the line every time, as a sighting does.
+fn say_follow_once(
+    target: &FollowTarget,
+    value: &serde_json::Value,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let line = follow_line(&target.pinned);
+    let agent = hook::present_str(value, "agent_id");
+    let first = hook::present_str(value, "session_id").is_none_or(|session| {
+        let context = hook::sighting_context(&session, agent.as_deref());
+        // The store `expire_sightings` forgets, so a compacted window hears it again.
+        refusal::first_sighting(hook_authority_root(), &context, "engine-followed", &line)
+    });
+    if first {
+        writeln!(err, "{line}")?;
+    }
+    Ok(())
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -908,17 +1314,10 @@ struct FollowTarget {
 /// the right pin and a re-runnable `engine install`. It is never put back: an
 /// install can fail after it has replaced a binary, and a restored pin would
 /// then disagree with the engine on disk.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-skips-the-bump|s@^        durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
-//MUTANT failed-install-unwrites-the-pin|s@^        durable::replace(&path, &synced)?;$@@|a_failed_install_leaves_the_moved_pin
-//MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
-//MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
-//MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
-//MUTANT update-keeps-the-fresh-record|s@^        cleared = record::clear_kind("engine update", "engine-fresh", families);$@@|an_update_clears_the_engine_fresh_record
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|why| {
+    let text = crate::fsio::read_to_string(&path).map_err(|why| {
         UsageError::raise(format!(
             "engine update: cannot read {} ({why}), so there is no pin to move",
             path.display()
@@ -951,10 +1350,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let repository = releases_repository();
     let latest = engine::ref_release(&repository, "main")?;
     let target = if engine::is_newer(&latest, &current)? {
-        latest
+        latest.clone()
     } else {
-        current
+        current.clone()
     };
+    let moving = target != current;
     // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST: the copy
     // cached beside the release, which `engine gate` judges by too.
     let cache = state::repo_state_dir(&root)?;
@@ -963,7 +1363,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let mut published = std::collections::BTreeSet::new();
     let mut stale = Vec::new();
     for workflow in workflow_files(&root)? {
-        let body = std::fs::read_to_string(root.join(&workflow))?;
+        let body = crate::fsio::read_to_string(root.join(&workflow))?;
         if !body.contains("BATTEN_") {
             continue;
         }
@@ -994,6 +1394,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             source: None,
         }),
     )?;
+    // THE BEHIND BLOCK BEFORE THE PIN MOVES (CLOUD-2660): what the update crosses,
+    // breaking entries first. A changelog that will not answer costs only this.
+    if moving && let Ok(notes) = distance_from(&repository, &current, &latest) {
+        write_distance(out, &repository, &current, &notes)?;
+    }
     let mut cleared: Result<()> = Ok(());
     if synced != text {
         // THE PRINTED PATH IS THE WRITE, AND IT STANDS whatever the install
@@ -1092,18 +1497,27 @@ const NO_UPDATE_NOTICE: &str = "BATTEN_NO_UPDATE_NOTICE";
 struct Distance {
     latest: String,
     newer: Vec<engine::Heading>,
+    /// The ref whose changelog was read (CLOUD-2660), so the pointer and the
+    /// counts come from the same text.
+    read_at: String,
 }
 
 /// The releases between `tag` and `main`'s pin. The changelog is read only
 /// when the pin is behind.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT lagging-release-undated|s@^    let own = engine::ref_changelog(repository, &latest)$@    let own = engine::ref_changelog(repository, "main")@|a_lagging_changelog_dates_main_from_its_own_tag
 fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let latest = engine::ref_release(repository, "main")?;
+    distance_from(repository, tag, &latest)
+}
+
+/// The releases between `tag` and `latest`, already read (CLOUD-2660: `engine
+/// update` has `latest` in hand).
+fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> {
+    let latest = latest.to_owned();
     if !engine::is_newer(&latest, tag)? {
         return Ok(Distance {
             latest,
             newer: Vec::new(),
+            read_at: "main".to_owned(),
         });
     }
     // THE CHANGELOG AT `latest`'S OWN TAG (CLOUD-2418): it carries every release
@@ -1114,12 +1528,46 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let own = engine::ref_changelog(repository, &latest)
         .ok()
         .filter(|headings| headings.iter().any(|heading| heading.version == version));
-    let headings = match own {
-        Some(headings) => headings,
-        None => engine::ref_changelog(repository, "main")?,
+    let (headings, read_at) = if let Some(headings) = own {
+        (headings, latest.clone())
+    } else {
+        let main = "main".to_owned();
+        (engine::ref_changelog(repository, &main)?, main)
     };
     let newer = engine::releases_between(&headings, tag, &latest)?;
-    Ok(Distance { latest, newer })
+    Ok(Distance {
+        latest,
+        newer,
+        read_at,
+    })
+}
+
+/// The behind block (CLOUD-2660): `tag → latest`, one `v<x> <date> breaking
+/// <n>` line per release, breaking releases first and each group oldest first,
+/// then one pointer at their sections. A pointer, never the notes.
+fn write_distance(
+    out: &mut dyn Write,
+    repository: &str,
+    tag: &str,
+    found: &Distance,
+) -> Result<()> {
+    writeln!(out, "{tag} → {}", found.latest)?;
+    let mut rows: Vec<&engine::Heading> = found.newer.iter().collect();
+    rows.sort_by_key(|heading| heading.breaking.unwrap_or(0) == 0);
+    for heading in rows {
+        let breaking = heading
+            .breaking
+            .map_or_else(|| "-".to_owned(), |count| count.to_string());
+        writeln!(
+            out,
+            "v{} {} breaking {breaking}",
+            heading.version,
+            heading.date.as_deref().unwrap_or("-")
+        )?;
+    }
+    let notes = engine::notes_url(repository, &found.read_at, &found.newer);
+    writeln!(out, "{notes}")?;
+    Ok(())
 }
 
 /// [`distance`] bounded by [`NOTICE_LOOKUP`]: `None` for a lookup that failed
@@ -1140,8 +1588,6 @@ fn distance_bounded(repository: &str, tag: &str) -> Option<Distance> {
 /// THE KEY IS READ RAW, by [`engine::top_level`], never through a load: a
 /// notice exists for a pin that is behind, and a config this engine cannot
 /// load must not silence it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT notice-speaks-in-ci|s@^    if var("CI").is_some() {$@    if false {@|the_notice_speaks_once_per_ttl_and_never_in_ci
 fn notice_enabled(root: &Path, text: &str) -> bool {
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     if var("CI").is_some() {
@@ -1151,7 +1597,7 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
         return false;
     }
     let key = |text: &str| engine::top_level(text, "update_notice")?.as_bool();
-    let local = std::fs::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
+    let local = crate::fsio::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
     local
         .as_deref()
         .and_then(key)
@@ -1167,9 +1613,8 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
 /// `engine update`, a hand edit or a checkout — or when its window has passed:
 /// [`NOTICE_RETRY`] after a failed lookup, so an offline session pays at most
 /// once an hour, and [`NOTICE_TTL`] after one that answered.
-//MUTANT notice-ignores-ttl|s@^    last.is_none_or(\x7clast\x7c now.saturating_sub(last) >= window)$@    true@|the_notice_speaks_once_per_ttl_and_never_in_ci
 fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
-    let text = std::fs::read_to_string(stamp).unwrap_or_default();
+    let text = crate::fsio::read_to_string(stamp).unwrap_or_default();
     let mut fields = text.split('\t').map(str::trim);
     let last = fields
         .next()
@@ -1237,7 +1682,7 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
 /// of `engine outdated`; it only reads.
 fn declared_release() -> Result<(std::path::PathBuf, String, Option<engine::Pin>)> {
     let root = git::worktree_root(Path::new("."))?;
-    let text = std::fs::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
     let pin = engine::declared(&text);
     Ok((root, text, pin))
 }
@@ -1310,11 +1755,6 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 /// answer. Two runs leave it as it is: a `--notice` inside its window, which
 /// looks at nothing, and a run that fails before it reads the pin (no worktree,
 /// no branch), which cannot name the record it would clear.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT outdated-silent-without-pin|s@^            writeln!(out, "{} {what}", path.display())?;$@            return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
-//MUTANT malformed-pin-read-as-absent|s@^            let what = if unpinned.is_some() {$@            let what = if false {@|outdated_names_a_malformed_pin
-//MUTANT outdated-keeps-record-without-pin|s@^            clear_outdated(ask)?;$@@|outdated_clears_its_record_without_a_pin_and_when_blind
-//MUTANT outdated-keeps-record-when-blind|s@^            return clear_outdated(ask).and(Err(blind));$@            return Err(blind);@|outdated_clears_its_record_without_a_pin_and_when_blind
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     if ask.notice {
         // BEST-EFFORT, AND SO DISCARDED: a store it cannot write, a worktree it
@@ -1346,7 +1786,8 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
             return Ok(ExitCode::Violation);
         }
     };
-    let found = match distance(&releases_repository(), &tag) {
+    let repository = releases_repository();
+    let found = match distance(&repository, &tag) {
         Ok(found) => found,
         Err(why) => {
             let blind =
@@ -1360,15 +1801,7 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     if found.newer.is_empty() {
         return Ok(ExitCode::Success);
     }
-    writeln!(out, "{tag} → {}", found.latest)?;
-    for heading in &found.newer {
-        writeln!(
-            out,
-            "v{} {}",
-            heading.version,
-            heading.date.as_deref().unwrap_or("-")
-        )?;
-    }
+    write_distance(out, &repository, &tag, &found)?;
     Ok(ExitCode::Violation)
 }
 
@@ -1384,8 +1817,6 @@ fn set_str(item: &mut toml_edit::Item, new: &str) {
 /// and its `sha256` read off the release's `SHA256SUMS` by the URL's asset name.
 /// Each is written only where it differs, so a current artifact is left as it
 /// is and a stale one is repaired whatever its row's `version` says.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-digest-case-sensitive|s@^    if !pinned.is_some_and(\x7cpinned\x7c pinned.eq_ignore_ascii_case(&digest)) {$@    if pinned != Some(digest.as_str()) {@|an_update_leaves_a_digest_in_another_case
 fn sync_artifact(
     artifact: &mut dyn toml_edit::TableLike,
     new: &str,
@@ -1457,9 +1888,11 @@ fn sync_artifacts(
 }
 
 /// `text` with every batten declaration brought to release `tag` (CLOUD-2279):
-/// the `engine` pin; each `[[provision]] name = "batten"` row's `version`, its
-/// URLs with the version substituted, and each `sha256` from the release's
-/// `SHA256SUMS`; and `min_batten_version`, raised and never lowered.
+/// each `[[provision]] name = "batten"` row's `version`, its URLs with the
+/// version substituted, and each `sha256` from the release's `SHA256SUMS`; and
+/// the `engine` key's release alias, only where the config still declares the
+/// key (CLOUD-2595: the row is the pin, and a config that dropped the key is
+/// never given one back). `min_batten_version` is retired and no longer moved.
 ///
 /// `sums` is asked for only when a provision row needs a digest; the caller
 /// owns the one fetch it stands for.
@@ -1469,10 +1902,6 @@ fn sync_artifacts(
 /// A config `toml_edit` will not read, a tag that is not a version, or an asset
 /// the release publishes no digest for. Nothing is written by this function;
 /// the caller writes only its whole answer.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-leaves-provision-stale|s@^                set_str(item, &fresh);$@@|an_update_brings_every_batten_declaration_to_the_release
-//MUTANT update-keys-on-version-alone|s@^            sync_artifacts(row, &bare, moving, sums)?;$@            if moving { sync_artifacts(row, \&bare, moving, sums)?; }@|an_update_repairs_a_stale_digest_at_the_current_version
-//MUTANT update-lowers-min-version|s@^        .is_some_and(\x7cfloor\x7c floor < version);$@        .is_some_and(\x7cfloor\x7c floor != version);@|an_update_never_lowers_min_batten_version
 fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -> Result<String> {
     let version = engine::release_version(tag)?;
     let bare = version.to_string();
@@ -1514,19 +1943,15 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             }
         }
     }
-    let raise = doc
-        .get("min_batten_version")
-        .and_then(toml_edit::Item::as_str)
-        .and_then(|floor| ::semver::Version::parse(floor).ok())
-        .is_some_and(|floor| floor < version);
-    if raise && let Some(item) = doc.get_mut("min_batten_version") {
-        set_str(item, &bare);
+    let synced = doc.to_string();
+    if engine::top_level(&synced, "engine").is_none() {
+        return Ok(synced);
     }
     let pin = engine::Pin {
         release: Some(format!("v{bare}")),
         source: None,
     };
-    Ok(engine::rewrite(&doc.to_string(), &pin))
+    Ok(engine::rewrite(&synced, &pin))
 }
 
 /// The repository releases are fetched from: `BATTEN_RELEASES`, the
@@ -1550,7 +1975,7 @@ enum Want {
 
 /// The `engine` pin of the worktree at `root`, when there is one.
 fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
-    let text = std::fs::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
     engine::declared(&text)
 }
 
@@ -1562,9 +1987,6 @@ fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
 /// is refused by name and nothing is installed: the pin is the one authority, and
 /// a named version silently outranking it was how a cached script installed
 /// something no `batten.toml` asked for.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT worktree-pin-outranks-the-ref|s@^        Some(tag) => Some(Want::Release(tag)),$@        Some(tag) => Some(pinned_by(pin)?.unwrap_or(Want::Release(tag))),@|the_ref_outranks_the_worktree_pin
-//MUTANT a-named-version-overrides-the-pin|s@^    if named.is_some_and(\x7cnamed\x7c pinned != Want::Release(named.to_owned())) {$@    if false {@|a_named_version_never_overrides_the_worktree_pin
 fn install_want(
     named: Option<&str>,
     by_ref: Option<String>,
@@ -1619,7 +2041,7 @@ fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
 /// answered with whatever binary is running.
 fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
     if tag == engine::release() {
-        return Ok(std::fs::read(exe)?);
+        return Ok(crate::fsio::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
         engine::Release::Published(bytes) => Ok(bytes),
@@ -1658,9 +2080,6 @@ fn named_env(name: &str) -> Option<String> {
 ///
 /// Off `PATH` is a refusal, as it always was: every hook registration names
 /// `batten` bare, so a binary the shell cannot resolve is not installed.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT install-ignores-the-worktree-pin|s@^    let pin = worktree_pin(root.as_deref());$@    let pin: Option<engine::Pin> = None;@|a_pinned_worktree_installs_its_pin
-//MUTANT bootstrap-skips-a-current-pin|s@^    let installed = engine::is_installed(&exe, path.as_deref(), root.as_deref());$@    let installed = true;@|the_bootstrap_places_a_running_pin
 fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let repository = releases_repository();
     let root = git::worktree_root(Path::new(".")).ok();
@@ -1669,7 +2088,34 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
         .transpose()?;
     let pin = worktree_pin(root.as_deref());
     let want = install_want(named_env("BATTEN_VERSION").as_deref(), by_ref, pin)?;
-    install_wanted(want, root, &repository, out)
+    // ONLY THE RUNNING ENGINE IS ITS OWN TO PIN: the row it writes names its own
+    // release, so where `BATTEN_VERSION` or a ref placed another, writing it would
+    // pin bytes that were never installed. That engine pins itself on its own
+    // first clean load.
+    // AND ONLY WHEN THIS RUN PLACED IT: an `engine install` that found batten
+    // already installed changed nothing, and a session-start or setup task that
+    // runs it in an unpinned checkout must leave that checkout as it was
+    // (CLOUD-2123) — not dirty every developer's tree with their own version.
+    let bootstraps = !engine::is_installed(
+        &std::env::current_exe()?,
+        std::env::var_os("PATH").as_deref(),
+        root.as_deref(),
+    );
+    let installs_itself = want == Want::Running && bootstraps;
+    let adopt_at = root.clone();
+    let code = install_wanted(want, root, &repository, out)?;
+    // THE BOOTSTRAP'S LAST STEP PINS WHAT IT INSTALLED (CLOUD-2595 §2c). The
+    // public `install.sh` ends in this verb; a checkout that pinned nothing gains
+    // the row for the engine now running, so the next engine to read the file is
+    // that one, whatever the installer bakes later.
+    if installs_itself
+        && code == ExitCode::Success
+        && let Some(root) = adopt_at
+        && let Ok(Some(tag)) = adopt_engine_row(&root, &Overrides::default())
+    {
+        writeln!(std::io::stderr(), "{}", adopted_line(&tag))?;
+    }
+    Ok(code)
 }
 
 /// Install `want`, decided already: the half of [`engine_install`] after the
@@ -1699,7 +2145,7 @@ fn install_wanted(
             let bytes = release_bytes(&tag, &exe, repository)?;
             let fence = root.unwrap_or_else(|| exe.with_file_name(""));
             for target in engine::install_targets(&exe, path.as_deref(), &fence) {
-                if std::fs::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
+                if crate::fsio::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
                     continue;
                 }
                 durable::replace(&target, &bytes)?;
@@ -1743,7 +2189,7 @@ fn place_download(
         writable_dir,
     );
     let (tag, bytes) = match want {
-        Want::Running | Want::Source(_) => (engine::release(), std::fs::read(exe)?),
+        Want::Running | Want::Source(_) => (engine::release(), crate::fsio::read(exe)?),
         Want::Release(tag) => {
             let bytes = release_bytes(&tag, exe, repository)?;
             (tag, bytes)
@@ -1755,15 +2201,20 @@ fn place_download(
             dest.display()
         ))
     })?;
-    let binary = dest.join(dist::binary_file(
-        env!("CARGO_PKG_NAME"),
+    // GNU WHERE IT RUNS (CLOUD-2595): the bootstrap placed the static musl
+    // build; this tag's gnu build replaces it only after running here.
+    let (target, bytes) = engine::chosen_build(
         &engine::running_target(),
-    ));
+        bytes,
+        |gnu| engine::fetch_release_for(repository, &tag, gnu, None).ok(),
+        |candidate| runs_here(&dest, candidate),
+    );
+    let binary = dest.join(dist::binary_file(env!("CARGO_PKG_NAME"), &target));
     durable::replace(&binary, &bytes)?;
     engine::make_executable(&binary)?;
     writeln!(out, "installed={}", binary.display())?;
     writeln!(out, "version={tag}")?;
-    writeln!(out, "target={}", engine::running_target())?;
+    writeln!(out, "target={target}")?;
     writeln!(out, "verified=sha256")?;
     if !on_path.contains(&dest) {
         if var("BATTEN_ALLOW_OFF_PATH").as_deref() == Some("1") {
@@ -1790,12 +2241,22 @@ fn place_download(
     Ok(ExitCode::Success)
 }
 
+/// Whether `binary`'s bytes answer `--version` with exit 0 on this host: written
+/// beside where they would be installed, run with no shell, then removed.
+fn runs_here(dir: &Path, binary: &[u8]) -> bool {
+    let probe = dir.join(format!(".batten-probe-{}", std::process::id()));
+    let ran = durable::replace(&probe, binary).is_ok()
+        && engine::make_executable(&probe).is_ok()
+        && exec::piped(dir, &probe, &[String::from("--version")], "")
+            .is_some_and(|(code, _)| code == 0);
+    let _ = std::fs::remove_file(&probe);
+    ran
+}
+
 /// Install the engine built from this tree's source at `want` (CLOUD-2062,
 /// CLOUD-2226): built from the checkout, or copied from the running binary when
 /// it already carries that stamp, then swapped in by rename and stamped, so a
 /// crash leaves the old binary.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-judges-only-itself|s@^    if engine::runs_local() {$@    if engine::runs_local() \x7c\x7c engine::running_stamp().as_deref() == Some(want) {@|a_current_engine_replaces_a_stale_installed_copy
 fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCode> {
     let binary = std::env::current_exe()?;
     if engine::runs_local() {
@@ -1817,7 +2278,7 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
     // A CURRENT RUNNING BINARY IS COPIED, NOT REBUILT: it is the pinned engine
     // already, by its stamp, and a build would be the same bytes slower.
     let (bytes, digest) = if engine::running_stamp().as_deref() == Some(want) {
-        (std::fs::read(&binary)?, want.to_owned())
+        (crate::fsio::read(&binary)?, want.to_owned())
     } else {
         let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
             .iter()
@@ -1842,7 +2303,7 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
         // cargo was told to put it and the follow looked under `target/`.
         // `checkout_build` is deliberately NOT the other end — it reads no
         // environment, because its callers ask about somebody else's tree.
-        (std::fs::read(engine::release_build(root))?, digest)
+        (crate::fsio::read(engine::release_build(root))?, digest)
     };
     for target in behind {
         durable::replace(&target, &bytes)?;
@@ -1882,17 +2343,20 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
-    let digest = engine::digest(&root)?;
+    // THE DIGEST ONLY WHERE A VERB USES IT (CLOUD-2595). A consumer tree tracks no
+    // engine source, so computing it eagerly refused `engine pin <tag>` there —
+    // the one writer of a consumer's row — before the verb could run.
     match command {
-        cli::EngineCommand::Digest => writeln!(out, "{digest}")?,
+        cli::EngineCommand::Digest => writeln!(out, "{}", engine::digest(&root)?)?,
         cli::EngineCommand::Stamp => {
+            let digest = engine::digest(&root)?;
             let binary = std::env::current_exe()?;
             engine::stamp(&binary, &digest)?;
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
         cli::EngineCommand::Update => return engine_update(out),
         cli::EngineCommand::Pin { value, check } => {
-            return engine_pin(&root, &digest, value.as_deref(), check, out);
+            return engine_pin(&root, value.as_deref(), check, out);
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
         cli::EngineCommand::Install => return engine_install(out),
@@ -1956,16 +2420,17 @@ fn run_outdated(
 /// with the version it bumps.
 fn engine_pin(
     root: &Path,
-    digest: &str,
     value: Option<&str>,
     check: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path)?;
-    let source = |digest: &str| engine::Pin {
-        release: None,
-        source: Some(digest.to_owned()),
+    let text = crate::fsio::read_to_string(&path)?;
+    let source = || -> Result<engine::Pin> {
+        Ok(engine::Pin {
+            release: None,
+            source: Some(engine::digest(root)?),
+        })
     };
     let release = |tag: String| engine::Pin {
         release: Some(tag),
@@ -1973,10 +2438,10 @@ fn engine_pin(
     };
     let pin = match value {
         None => match engine::declared(&text).map(engine::Pin::kind) {
-            Some(engine::PinKind::Source(_)) => source(digest),
+            Some(engine::PinKind::Source(_)) => source()?,
             _ => return Ok(ExitCode::Success),
         },
-        Some("source") => source(digest),
+        Some("source") => source()?,
         Some("version") => release(engine::release()),
         Some(tag) if tag.starts_with('v') => release(tag.to_owned()),
         Some(other) => {
@@ -1985,7 +2450,21 @@ fn engine_pin(
             )));
         }
     };
-    let rewritten = engine::rewrite(&text, &pin);
+    // ONE WRITER (CLOUD-2595). A release pin over a config that declares the
+    // batten row moves the ROW — version, URLs and digests, the release's own —
+    // through the same rewrite `engine update` makes; the `engine` key moves with
+    // it only where it is still declared. A release with no published
+    // `SHA256SUMS` has no bytes the row could pin, so that refuses.
+    let rewritten = match (&pin.release, engine::row_release(&text)) {
+        (Some(tag), Some(_)) => {
+            let cache = state::repo_state_dir(root)?;
+            let repository = releases_repository();
+            sync_declarations(&text, tag, &|| {
+                engine::pinned_sums(&cache, &repository, tag)
+            })?
+        }
+        _ => engine::rewrite(&text, &pin),
+    };
     if rewritten == text {
         return Ok(ExitCode::Success);
     }
@@ -2010,14 +2489,20 @@ fn engine_pin(
 /// - No pin is nothing to judge.
 ///
 /// Every finding is a pointer: the file, the token, the pin.
-//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
-//MUTANT source-pin-admitted|s@^        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),$@        Some(engine::PinKind::Source(_)) => return Ok(ExitCode::Success),@|a_source_pin_is_refused_on_the_landing_path
-//MUTANT gate-admits-disagreeing-provision|s@^    if !disagreeing.is_empty() {$@    if false {@|a_provision_row_disagreeing_with_the_pin_is_refused
-//MUTANT gate-ignores-stale-digest|s@^    if !foreign.is_empty() {$@    if false {@|a_stale_digest_at_the_pinned_version_is_refused
-//MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&config_path)?;
+    let text = crate::fsio::read_to_string(&config_path)?;
+    // ONE DECLARATION (CLOUD-2595). The batten row IS the pin, so the only copy
+    // left to disagree is the `engine` key's release alias; a floor no longer
+    // exists to sit above it.
+    if let Some((key, row)) = engine::row_disagreement(&text) {
+        writeln!(
+            out,
+            "{} engine pins {key} and the batten provision row pins {row}; the row is the pin",
+            config_path.display()
+        )?;
+        return Ok(ExitCode::Violation);
+    }
     let tag = match engine::declared(&text).map(engine::Pin::kind) {
         None => return Ok(ExitCode::Success),
         Some(engine::PinKind::Release(tag)) => tag,
@@ -2028,17 +2513,12 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let tag = tag.as_str();
-    // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
-    // fetched: a batten provision row on another release, or a floor above the
-    // pin, is a config that names two engines. Each finding names the move that
-    // clears it, since `engine update` moves rows but never lowers a floor.
-    let disagreeing = engine::disagreements(&text, tag);
-    for (line, what, remedy) in &disagreeing {
-        writeln!(
-            out,
-            "{}:{line} {what} disagrees with engine pin {tag}; {remedy}",
-            config_path.display()
-        )?;
+    // EVERY OTHER BATTEN DECLARATION AGREES WITH THE PIN (CLOUD-2595): a second
+    // batten row a merge left behind, or a `min_batten_version` the followed
+    // engine would refuse itself under. Judged before anything is fetched.
+    let disagreeing = engine::gate_disagreements(&text, tag);
+    for (line, what) in &disagreeing {
+        writeln!(out, "{}:{line} {what}", config_path.display())?;
     }
     if !disagreeing.is_empty() {
         return Ok(ExitCode::Violation);
@@ -2068,7 +2548,8 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let binary = engine::pinned_release(&cache, &repository, tag)?;
+    let binary =
+        engine::pinned_release(&cache, &repository, tag, || engine::followed_digest(&text))?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
@@ -2099,7 +2580,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         findings += 1;
     }
     for lane in lanes {
-        let workflow = std::fs::read_to_string(root.join(lane))?;
+        let workflow = crate::fsio::read_to_string(root.join(lane))?;
         for verb in engine::invoked_verbs(&workflow) {
             let mut args: Vec<&str> = verb.split(' ').collect();
             args.push("--help");
@@ -2118,7 +2599,6 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
 
 /// Whether the pinned binary answers `--help` for a verb, which clap does only
 /// for a subcommand it declares.
-//MUTANT verb-drift-unchecked|s@^    runs(args)$@    Ok(true)@|a_verb_the_pinned_release_lacks_is_drift
 fn verb_exists(runs: &dyn Fn(&[&str]) -> Result<bool>, args: &[&str]) -> Result<bool> {
     runs(args)
 }
@@ -2288,7 +2768,7 @@ fn bench_drift(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let existing = std::fs::read_to_string(committed).unwrap_or_default();
+    let existing = crate::fsio::read_to_string(committed).unwrap_or_default();
 
     // THE HONESTY HALF RUNS FIRST, and over the COMMITTED bytes rather than
     // the fresh render. A generator bug that dropped a method line would
@@ -2526,7 +3006,7 @@ fn run_release(
     let root = Path::new(&root);
 
     let read = |path: &str| -> Result<String> {
-        std::fs::read_to_string(root.join(path)).map_err(|_| {
+        crate::fsio::read_to_string(root.join(path)).map_err(|_| {
             UsageError::raise(format!(
                 "release install: cannot read {path}, so the install contract is unknown. That is \
                  a checkout problem, not a failing contract."
@@ -2891,6 +3371,32 @@ fn run_init(
     match init::apply(Path::new("."), dry_run)? {
         init::Outcome::Created => {
             writeln!(out, "{}", config::CONFIG_FILE)?;
+            // THE STARTER IS WRITTEN PINNED (CLOUD-2595 §2c): the same row the
+            // Gradle-style write adds, for the engine that wrote it. Offline, or
+            // on a build no release publishes, it stays unpinned and says so.
+            match adopt_engine_row(Path::new("."), &Overrides::default()) {
+                Ok(Some(tag)) => {
+                    output::message(mode, Verbosity::Normal, err, &adopted_line(&tag))?;
+                }
+                _ => output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    "init: the engine pin could not be written (no published release to pin); \
+                     the first session start writes it",
+                )?,
+            }
+            // BATTEN IS REGISTERED ON EVERY HOST'S WHOLE SURFACE FROM THE FIRST
+            // WRITE (owner ruling, 2026-11-09): a `[[hook.handler]]` fires only on
+            // an event batten itself is on, so a starter that left the wiring to
+            // a later step would be a config `doctor` refuses on arrival.
+            let wired = wiring::register_committed(Path::new("."), false)?;
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("init: wired {} harness surface(s)", wired.len()),
+            )?;
             output::message(
                 mode,
                 Verbosity::Normal,
@@ -3005,7 +3511,7 @@ fn run_hk(
         // Answered above, before the probe it must not pay for.
         HkCommand::Observe { .. } => Ok(ExitCode::Success),
         HkCommand::Drift => {
-            let Ok(text) = std::fs::read_to_string(&artifact) else {
+            let Ok(text) = crate::fsio::read_to_string(&artifact) else {
                 writeln!(
                     err,
                     "::error:: hk: no committed contract at {path}, so there is nothing to compare — run `batten hk contract`",
@@ -3267,7 +3773,7 @@ fn declared_ledger(overrides: &Overrides) -> Result<(defects::Defects, PathBuf)>
 /// Read and parse the declared ledger. An absent file is an empty ledger — the
 /// ordinary state before the first record.
 fn read_ledger(path: &Path) -> Result<Vec<defects::Record>> {
-    defects::parse(&std::fs::read_to_string(path).unwrap_or_default())
+    defects::parse(&crate::fsio::read_to_string(path).unwrap_or_default())
 }
 
 /// List recorded defects, as pointers (CLOUD-52).
@@ -3544,8 +4050,6 @@ fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
 
 /// The drain scan lock, now held, or `None` where another drain holds it
 /// (CLOUD-2536).
-//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-//MUTANT drains-scan-concurrently|s@^        Err(fs4::TryLockError::WouldBlock) => Ok(None),$@        Err(fs4::TryLockError::WouldBlock) => Ok(Some(scan_lock)),@|a_drain_finding_another_scanning_does_not_scan
 fn take_drain_scan_lock(git_dir: &Path) -> std::io::Result<Option<std::fs::File>> {
     let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
     match fs4::FileExt::try_lock(&scan_lock) {
@@ -3556,7 +4060,6 @@ fn take_drain_scan_lock(git_dir: &Path) -> std::io::Result<Option<std::fs::File>
     }
 }
 
-//MUTANT drain-lock-taken-by-the-verb|s@^    let _scanning = if scan_tree \&\& std::env::var_os(DRAIN_MARKER).is_some() {$@    let _scanning = if scan_tree {@|a_drain_finding_another_scanning_does_not_scan
 fn run_state_record(
     overrides: &Overrides,
     mode: Mode,
@@ -4072,7 +4575,6 @@ fn run_capture(
 /// transport.
 // The rows below this one are judged under the suite they were before
 // (CLOUD-2193: a row runs under the declaration above it).
-//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<String>> {
     let (program, rest) = command.split_first()?;
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
@@ -4087,8 +4589,6 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
 /// The installed path of the committed `[[provision]]` row shipping `binary`,
 /// applied first (checksum-verified, cache first); `None` where no row ships it
 /// or it cannot be applied.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == binary)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
 fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
     let ProvisionSite {
         config,
@@ -4597,7 +5097,7 @@ fn file_and_report(
     if reduced.is_some()
         && let Ok(Some((path, index))) = capture::view(repo, &stored, &whole)
     {
-        writeln!(err, "{}", view_pointer(&path, &index))?;
+        writeln!(err, "{}", capture::pointer_line(&path, &index, &[&stored]))?;
     }
     writeln!(out, "{rendered}")?;
     // THE EXIT CODE IS THE ANSWER, AND UNTIL CLOUD-1645 IT WAS NOT ONE. This
@@ -4743,8 +5243,6 @@ fn run_target(
 /// # Errors
 ///
 /// Free space that cannot be read is could-not-look.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-//MUTANT prune-verb-skips-collect|s@^    let collected = collect::collect_toward_max(here, declared, \&kept, now, \&mut free, None, true);$@    let collected = None::<collect::Collected>;@|target_prune_collects_to_max_free_without_a_floor
 fn collect_on_demand(
     here: &Path,
     declared: &prune::Prune,
@@ -4787,36 +5285,6 @@ struct ShowRequest<'a> {
     json: bool,
 }
 
-/// The `output point now` finding for a stored response's view (CLOUD-2207):
-/// one subject per indexed field, naming its view lines and size, and the view
-/// itself as a document route — a pointer, never a byte of content (rule 4).
-//MUTANT-SUITE crates/batten/src/lib.rs
-//MUTANT view-route-dropped|s@^    \.with_document_route(&path\.display()\.to_string())$@    .with_severity(refusal::Severity::Note)@|the_view_pointer_names_each_field_and_the_view
-fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
-    view_refusal(path, index).render_finding(refusal::Arm::Pointer)
-}
-
-/// The `output point now` finding [`view_pointer`] renders, for a channel that
-/// carries findings rather than lines.
-fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
-    let subjects: Vec<verdict::Subject> = index
-        .iter()
-        .map(|field| {
-            verdict::artifact(&format!(
-                "{}:{}-{}({}B)",
-                field.pointer, field.from, field.to, field.bytes
-            ))
-        })
-        .collect();
-    refusal::Refusal::engine(
-        verdict::Native::OutputPointNow,
-        &subjects,
-        refusal::Fix::None,
-    )
-    .with_document_route(&path.display().to_string())
-    .with_severity(refusal::Severity::Note)
-}
-
 /// The text of one field of a stored JSON document, named by an RFC 6901 JSON
 /// Pointer (CLOUD-2207).
 ///
@@ -4824,8 +5292,6 @@ fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
 /// line selectors address it — and any other value is pretty-printed JSON. A
 /// capture that is not JSON, or a pointer that names nothing, is a usage error:
 /// the caller asked about a field that is not there.
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT field-string-as-json|s@^        serde_json::Value::String(text) => text.clone().into_bytes(),$@        serde_json::Value::String(text) => serde_json::to_vec(text)?,@|a_json_field_is_addressable_by_line
 fn field_text(parsed: &capture::Handle, bytes: &[u8], pointer: &str) -> Result<Vec<u8>> {
     let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
         UsageError::raise(format!(
@@ -5228,6 +5694,9 @@ struct ClaimAsk<'a> {
     issue: Option<&'a str>,
     /// Emit the refusals on the structured channel.
     json: bool,
+    /// Where the authority the receipt's base is read from lives
+    /// (`--config-in` / `--config-from`, CLOUD-2532).
+    overrides: &'a Overrides,
 }
 
 /// The repository root, or the working directory where there is none.
@@ -5250,7 +5719,7 @@ fn board_root() -> PathBuf {
 /// this cannot open has not supplied empty evidence, they have supplied evidence
 /// nobody read.
 fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>> {
-    let raw = std::fs::read_to_string(path).map_err(|_| {
+    let raw = crate::fsio::read_to_string(path).map_err(|_| {
         UsageError::raise(format!(
             "landed: {what} names a file that cannot be read: {path}. That is a caller problem, not a clean board."
         ))
@@ -5353,14 +5822,6 @@ struct Gathered {
 // drops one gathered arm, or launders one arm's could-not-look into an empty
 // reading, and the named case is the compiled tier that stops discriminating;
 // `board sweep`'s `--issue` read is the last two rows.
-//MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
-//MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
-//MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
-//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable_from(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
-//MUTANT gather-trunk-hardcoded|s@worktree::land_target(root, config.must_land_on.as_deref())@Ok::<_, anyhow::Error>(Some(String::from("origin/main")))@|the_gather_reads_the_declared_trunk_not_origin_main
-//MUTANT gather-merged-failure-is-empty|s@            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),@            Err(_) => gathered.merged = Some(std::collections::BTreeSet::new()),@|a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look
-//MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
-//MUTANT sweep-issue-reads-the-write|s@    let tools = \[READ_TOOL.to_owned()\];@    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];@|a_later_save_issue_response_does_not_displace_the_read_the_sweep_hands_its_gates
 
 /// Acquire every evidence arm the caller named no file for.
 ///
@@ -5990,9 +6451,6 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
 /// a head no workflow has registered for — "not yet", which a caller polls on
 /// forever rather than hearing that it could not look.
 //
-//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
-//MUTANT declined-read-as-empty|s@^    if !answer.is_reading() {$@    if false {@|a_declined_forge_read_is_could_not_look_never_not_yet
-//MUTANT fetch-ignores-sha|s@^        sha: sha.to_owned(),$@        sha: String::from("HEAD"),@|the_fetched_reading_is_the_named_commits
 fn checks_green_fetch(
     sha: &str,
     repo: Option<String>,
@@ -6244,46 +6702,32 @@ fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> R
         // than a blank line. The retiring shell spelled it `1`; the one table
         // spells a record that is not there `2`, and reserves `3` for
         // could-not-look.
-        TaskCommand::Read { pid, field } => match task::read_field(&git_dir, &pid, &field) {
-            Some(value) => {
-                writeln!(out, "{value}")?;
-                Ok(ExitCode::Success)
+        // AN UNKNOWN FIELD IS USAGE, BEFORE THE PID LOOKUP (CLOUD-2679): it read
+        // as an empty line, which is what an unset KNOWN field prints, so a
+        // misspelled `started` looked like a task that had not started.
+        TaskCommand::Read { pid, field } => {
+            if !task::FIELDS.contains(&field.as_str()) {
+                return Err(UsageError::raise(format!(
+                    "task read: `{field}` is no record field; the fields are {}",
+                    task::FIELDS.join(", ")
+                )));
             }
-            None => Ok(ExitCode::Violation),
-        },
-        TaskCommand::Alive {
-            program_root,
-            instant,
-        } => {
-            // COULD-NOT-LOOK WITHOUT THE ROOT, never a default: an unmatched
-            // corroboration reads as alive, so a guessed root would hide every
-            // crash behind a registry that looks healthy. The committed config's
-            // `[task] program_root` first, read at the repository root whatever
-            // directory asked; the flag only where it declares none (CLOUD-2370,
-            // transitional until the pinned release carries the table).
-            let Ok(table) =
-                crate::git::repo_root(Path::new(".")).and_then(|root| task_table(&root))
-            else {
-                writeln!(
-                    err,
-                    "batten: task alive: the committed config did not resolve, so there is no program root to read; `batten config lint` names why"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
-            let Some(program_root) = table
-                .map(|table| table.program_root)
-                .or(program_root.filter(|root| task::normalized_root(root).is_some()))
-            else {
-                writeln!(
-                    err,
-                    "batten: task alive: no [task] program_root in the committed config and no --program-root, so nothing tells a live task from a recycled pid"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
+            match task::read_field(&git_dir, &pid, &field) {
+                Some(value) => {
+                    writeln!(out, "{value}")?;
+                    Ok(ExitCode::Success)
+                }
+                None => Ok(ExitCode::Violation),
+            }
+        }
+        // NO CONFIG IS READ (CLOUD-1560): liveness compares the digest each
+        // registrant recorded, so there is no program root to resolve and no
+        // could-not-look for its absence. `--program-root` stays accepted and
+        // unread until CLOUD-2463 retires it.
+        TaskCommand::Alive { instant, .. } => {
             let reading = task::alive(
                 &git_dir,
                 task::Alive {
-                    program_root: &program_root,
                     now: supplied_epoch(instant.as_deref())?,
                 },
             );
@@ -6313,27 +6757,6 @@ fn run_singleton(
             task::singleton_release(&git_dir, &task);
             Ok(ExitCode::Success)
         }
-        SingletonCommand::Detach {
-            task,
-            marker,
-            log,
-            pattern,
-            attached,
-            command,
-        } => {
-            let detach = Detach {
-                task: &task,
-                marker: Path::new(&marker),
-                log: Path::new(&log),
-                pattern: &pattern,
-                command: &command,
-            };
-            if attached {
-                run_detached_copy(&git_dir, &detach)
-            } else {
-                run_detach(&detach, out)
-            }
-        }
         SingletonCommand::Acquire {
             task,
             pid,
@@ -6353,146 +6776,6 @@ fn run_singleton(
         }
     }
 }
-
-/// One `singleton detach` request, borrowed from the parsed command.
-struct Detach<'a> {
-    task: &'a str,
-    marker: &'a Path,
-    log: &'a Path,
-    pattern: &'a str,
-    command: &'a [String],
-}
-
-/// How many pointer lines a failure carries into the next turn.
-///
-/// The window cost of a failing run is bounded here, and nowhere downstream:
-/// `hookcost::judge` REPORTS an over-budget hook rather than truncating it, so a
-/// compiler's whole output would otherwise reach the agent's context.
-const DETACH_POINTERS: usize = 3;
-
-/// The `[[pattern]]` row `singleton detach` selects pointer lines with.
-fn detach_pattern(id: &str) -> Result<regex::Regex> {
-    let config = resolve::resolve(Path::new("."), &Overrides::default())?;
-    let row = config
-        .patterns
-        .iter()
-        .find(|row| row.id == id)
-        .ok_or_else(|| {
-            UsageError::raise(format!(
-                "singleton detach: no `[[pattern]]` row declares `{id}`"
-            ))
-        })?;
-    regex::Regex::new(&row.regex).map_err(|_| {
-        UsageError::raise(format!(
-            "singleton detach: `[[pattern]]` row `{id}` will not compile"
-        ))
-    })
-}
-
-/// `singleton detach`: announce and clear the previous run's failure, start the
-/// attached copy, and return without waiting (CLOUD-1731, CLOUD-1991).
-///
-/// STDOUT, because a handler's advisory is its stdout and stderr goes to a log
-/// nobody opens. CLEARED once announced, so one failure is said once rather than
-/// every turn until it is fixed. The pattern is resolved HERE, before anything
-/// starts, so a misdeclared row is this invocation's usage error rather than a
-/// background copy failing where no one reads it. Starting the copy is silent on
-/// failure: a turn's own check must never be the reason the turn stops.
-///
-/// # Errors
-///
-/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row;
-/// an internal error when the announcement cannot be written.
-fn run_detach(request: &Detach<'_>, out: &mut dyn Write) -> Result<ExitCode> {
-    detach_pattern(request.pattern)?;
-    if let Ok(said) = std::fs::read_to_string(request.marker) {
-        write!(out, "{said}")?;
-        let _ = std::fs::remove_file(request.marker);
-    }
-    let Ok(program) = std::env::current_exe() else {
-        return Ok(ExitCode::Success);
-    };
-    let mut args: Vec<String> = vec![
-        "singleton".to_owned(),
-        "detach".to_owned(),
-        request.task.to_owned(),
-        "--marker".to_owned(),
-        request.marker.to_string_lossy().into_owned(),
-        "--log".to_owned(),
-        request.log.to_string_lossy().into_owned(),
-        "--pattern".to_owned(),
-        request.pattern.to_owned(),
-        "--attached".to_owned(),
-        "--".to_owned(),
-    ];
-    args.extend(request.command.iter().cloned());
-    exec::detached(&program, &args, &[]);
-    Ok(ExitCode::Success)
-}
-
-/// The attached copy: take the lock for THIS pid, run the command, write its
-/// whole output to the log, and on a failure leave the capped pointers for the
-/// next invocation to announce.
-///
-/// A lock another copy holds is not an error: that copy's run is this turn's
-/// check, and a second one would only race it. Every exit is `0` — nobody waits
-/// on this process, so a code would reach no one; what it has to say is the
-/// marker.
-///
-/// # Errors
-///
-/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row.
-fn run_detached_copy(git_dir: &Path, request: &Detach<'_>) -> Result<ExitCode> {
-    let pattern = detach_pattern(request.pattern)?;
-    let own = std::process::id().to_string();
-    match task::singleton_acquire(
-        git_dir,
-        request.task,
-        &own,
-        std::time::Duration::from_millis(100),
-    ) {
-        task::Claim::Taken | task::Claim::Reclaimed(_) => {}
-        _ => return Ok(ExitCode::Success),
-    }
-    let ran = exec::piped_argv(
-        Path::new("."),
-        request.command,
-        "",
-        exec::Diagnostics::Keep,
-        &[],
-    );
-    let (code, said) = ran.unwrap_or((-1, String::new()));
-    let _ = durable::replace(request.log, &said);
-    if code != 0 {
-        let mut marker = format!(
-            "::error:: {}: `{}` did not pass\n",
-            request.task,
-            request.command.join(" ")
-        );
-        for line in said
-            .lines()
-            .filter(|line| pattern.is_match(line))
-            .take(DETACH_POINTERS)
-        {
-            marker.push_str("  ");
-            marker.push_str(line);
-            marker.push('\n');
-        }
-        marker.push_str("  (full output: ");
-        marker.push_str(&request.log.to_string_lossy());
-        marker.push_str(")\n");
-        let _ = durable::replace(request.marker, marker);
-    }
-    task::singleton_release(git_dir, request.task);
-    Ok(ExitCode::Success)
-}
-
-// The per-turn run's mutation rows, each caught by the compiled case it names
-// in the tier that drives both halves over a scratch repository.
-//MUTANT-SUITE crates/batten/tests/it/turn_cross_check.rs
-//MUTANT marker-not-cleared|s@^        let _ = std::fs::remove_file(request.marker);$@        let _ = request.marker;@|the_failure_is_announced_on_stdout_and_then_cleared
-//MUTANT pointers-uncapped|s@^            .take(DETACH_POINTERS)$@            .take(usize::MAX)@|the_pointers_are_capped_and_name_the_full_log
-//MUTANT lock-not-consulted|s@^        _ => return Ok(ExitCode::Success),$@        _ => {}@|a_copy_already_holding_the_lock_leaves_the_run_to_it
 
 /// The boundary's own clock, as whole seconds since the epoch.
 ///
@@ -6531,8 +6814,6 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
 ///
 /// The whole of it runs under [`record::hold_decide`], so no other decide can
 /// clear this one's reading between its write and its judgement (CLOUD-2069).
-//MUTANT decide-unserialised|s@^    let _held = record::hold_decide(family, err)?;$@@|a_concurrent_decide_waits_for_the_one_holding_the_record
-//MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
 fn run_record_decide(
     family: &str,
     inputs: &[String],
@@ -6789,12 +7070,13 @@ fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, S
         )]));
     };
     let repo_root = git::repo_root(Path::new("."))?;
-    let template = std::fs::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
-        UsageError::raise(format!(
-            "bot lane: cannot read body_template {}: {err}",
-            lane.body_template
-        ))
-    })?;
+    let template =
+        crate::fsio::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
+            UsageError::raise(format!(
+                "bot lane: cannot read body_template {}: {err}",
+                lane.body_template
+            ))
+        })?;
     let manifests = owned
         .iter()
         .map(|path| format!("- `{path}`"))
@@ -7060,8 +7342,16 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 ///
 /// [`UsageError`] carrying [`worktree::NO_TRUNK`], or naming the unresolved
 /// ref; a broken `batten.toml` propagates.
-fn claim_base(repo: &Path, verb: &str) -> Result<String> {
-    let Some(trunk) = worktree::declared_trunk(repo)? else {
+///
+/// **The trunk is CONFIG, read from the worktree's authority; the ref is STATE,
+/// resolved in `repo`** (CLOUD-2532). `repo` is the shared root, so from a
+/// linked worktree it is the main checkout, and reading `must_land_on` there
+/// judged the claim by another branch's `batten.toml` — refusing it outright
+/// when that file would not load, and ignoring `--config-in` because the read
+/// took no overrides.
+fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
+    let authority = config::authority_root(Path::new("."))?;
+    let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
         return Err(UsageError::raise(format!(
             "{verb}: {} — no receipt minted",
             worktree::NO_TRUNK
@@ -7412,7 +7702,7 @@ fn run_claim_bot(
         pr: number,
     };
     let receipts = git::git_dir(repo)?.join("batten-receipts");
-    let base = claim_base(repo, "claim bot")?;
+    let base = claim_base(repo, "claim bot", overrides)?;
     bot::mint(
         &receipts,
         &branch,
@@ -7959,6 +8249,7 @@ fn run_claim(
             let request = claim::Request {
                 takeover,
                 bypass_sequence,
+                own_pr: None,
             };
             run_claim_check(
                 &board_root(),
@@ -7970,6 +8261,7 @@ fn run_claim(
                     adopt_from: adopt_from.as_deref(),
                     issue: issue.as_deref(),
                     json,
+                    overrides,
                 },
                 mode,
                 out,
@@ -8292,6 +8584,29 @@ fn print_claim_refusals(
     Ok(())
 }
 
+/// Whether [`with_own_pr`] asks the forge: only when the request names no
+/// pull request yet and some row carries a live one, so a claim no PR touches
+/// costs no forge call.
+fn asks_forge(request: &claim::Request, issues: &[claim::Issue]) -> bool {
+    request.own_pr.is_none() && issues.iter().any(|issue| issue.live_pr.is_some())
+}
+
+/// The request with this branch's own pull request filled in (CLOUD-2697): a
+/// row the bundle's own draft PR already moved is this branch's claim. Asked
+/// only when a row carries a live PR, so no such row costs no forge call; no
+/// answer leaves the competitor rules to decide as before.
+fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -> claim::Request {
+    let mut request = request.clone();
+    if asks_forge(&request, issues)
+        && let Ok(Some(branch)) = git::current_branch(repo)
+        && let fast_forward::Lookup::Found(number) =
+            fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
+    {
+        request.own_pr = Some(number);
+    }
+    request
+}
+
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
@@ -8307,6 +8622,7 @@ fn run_claim_check(
         adopt_from,
         issue,
         json,
+        overrides,
     } = *ask;
     let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
     if adopt {
@@ -8318,6 +8634,7 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
+    let request = &with_own_pr(repo, request, &issues);
     let verdict = claim::judge(
         grammar,
         columns,
@@ -8380,7 +8697,7 @@ fn run_claim_check(
     // stands and only the side effect is skipped: a caller inspecting the board
     // from anywhere still deserves the answer.
     if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
-        let base = claim_base(repo, "claim check")?;
+        let base = claim_base(repo, "claim check", overrides)?;
         claim::mint(
             receipts,
             &branch,
@@ -8473,7 +8790,7 @@ fn run_claim_carry(
         git::BaseBlob::Found { text, .. } => text,
         git::BaseBlob::AbsentAtRef { .. } | git::BaseBlob::RefUnreachable { .. } => String::new(),
     };
-    let after = std::fs::read_to_string(repo.join(carry::TABLE)).unwrap_or_default();
+    let after = crate::fsio::read_to_string(repo.join(carry::TABLE)).unwrap_or_default();
 
     // Every OTHER path this branch moved. `writes_in_range` answers per commit
     // over declared globs, so `**` is the whole tree and the table is filtered out
@@ -8786,8 +9103,10 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
-        cli::WiringCommand::Register { check } => run_wiring_register(*check, mode, err),
-        cli::WiringCommand::Gate { body } => {
+        cli::WiringCommand::Register { check, all } => run_wiring_register(*check, *all, mode, err),
+        cli::WiringCommand::Gate {
+            body: Some(body), ..
+        } => {
             let linked = wiring::link_commit_gate(Path::new("."), body)?;
             output::message(
                 mode,
@@ -8795,6 +9114,28 @@ fn run_wiring(
                 err,
                 &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
             )?;
+            Ok(ExitCode::Success)
+        }
+        cli::WiringCommand::Gate { body: None, check } => {
+            let report = wiring::link_git_hooks(Path::new("."), *check)?;
+            // Hook NAMES under stable reason ids, never paths (rule 4).
+            for (reason, names) in [
+                ("git-hook-unlinked", &report.unlinked),
+                ("git-hook-foreign", &report.foreign),
+                ("git-hook-runner-unresolved", &report.runner_unresolved),
+            ] {
+                for name in names {
+                    output::message(
+                        mode,
+                        output::Verbosity::Normal,
+                        err,
+                        &format!("wiring gate: {name} {reason}"),
+                    )?;
+                }
+            }
+            if *check && report.owed() {
+                return Ok(ExitCode::Violation);
+            }
             Ok(ExitCode::Success)
         }
     }
@@ -8829,12 +9170,36 @@ fn run_wiring(
 /// # Errors
 ///
 /// Whatever [`wiring::register`] could not write.
-fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_wiring_register(
+    check: bool,
+    all: bool,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let repo = git::canonical(hook_authority_root());
-    let roots = match std::env::var("CLAUDE_PID")
-        .ok()
-        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
-    {
+    // THE COMMITTED HALF FIRST, AND UNGATED (CLOUD-2676): these are tracked
+    // repository files, so neither the disposable-home gate nor the no-session
+    // return below applies to them.
+    let mut owed = false;
+    if all {
+        for (harness, events) in wiring::register_committed(&repo, check)? {
+            let verb = if check { "owed" } else { "registered" };
+            for event in &events {
+                output::message(
+                    mode,
+                    output::Verbosity::Normal,
+                    err,
+                    &format!(
+                        "wiring register: {}:{event} {verb} on the committed surface",
+                        harness.as_str()
+                    ),
+                )?;
+            }
+            owed |= !events.is_empty();
+        }
+    }
+    // One resolution, shared with `doctor` (CLOUD-2676).
+    let roots = match wiring::live_session_root() {
         Some(root) => vec![root],
         // Only where the environment says the home is disposable: that is the
         // container a setup script provisions, and the only place a write would
@@ -8851,10 +9216,12 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
                 err,
                 "wiring register: no session root resolves, so no registration is owed",
             )?;
+            if check && owed {
+                return Ok(ExitCode::Violation);
+            }
             return Ok(ExitCode::Success);
         }
     };
-    let mut owed = false;
     for root in &roots {
         let done = wiring::register(root, &repo, check)?;
         let verb = if done.written { "registered" } else { "owed" };
@@ -8890,8 +9257,6 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
 /// Every directory a session could be rooted at above `repo` without loading
 /// the user-level surface: each strict ancestor, nearest first, skipping `home`
 /// and every ancestor of it (CLOUD-2205).
-//MUTANT-SUITE crates/batten/src/lib.rs
-//MUTANT session-roots-include-home|s@^        if matches!(home.as_deref(), Some(home) if home.starts_with(ancestor)) {$@        if false {@|candidate_roots_stop_short_of_home_and_everything_above_it
 fn candidate_session_roots(repo: &Path, home: Option<PathBuf>) -> Vec<PathBuf> {
     let home = home.map(|home| git::canonical(&home));
     let mut roots = Vec::new();
@@ -9131,7 +9496,12 @@ fn parse_line(range: &str, half: usize) -> Result<usize> {
             "capture show: {range:?} is not a line range — write `FROM:TO`, both 1-indexed"
         ))
     };
-    let (from, to) = range.split_once(':').ok_or_else(bad)?;
+    // `FROM-TO` TOO (CLOUD-2284): it is how an `output point now` subject spells
+    // a field's view lines, so the range the note prints is one this reads.
+    let (from, to) = range
+        .split_once(':')
+        .or_else(|| range.split_once('-'))
+        .ok_or_else(bad)?;
     let chosen = if half == 0 { from } else { to };
     let value: usize = chosen.trim().parse().map_err(|_| bad())?;
     if value == 0 {
@@ -9203,7 +9573,6 @@ struct StateFilter<'a> {
     path: Option<&'a str>,
 }
 
-//MUTANT state-filter-unread|s@^        self.rule.is_none_or(\x7crule\x7c record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
 impl StateFilter<'_> {
     /// Whether `record` is in the selection: its rule, and an instance in the
     /// file. A record outside it is dropped whole, never trimmed.
@@ -9922,7 +10291,7 @@ fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
 fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::Rule> {
     config.rules.iter().find(|rule| {
         rule.module.as_deref().is_some_and(|module| {
-            std::fs::read_to_string(module)
+            crate::fsio::read_to_string(module)
                 .is_ok_and(|text| policy::finding_ids(&text).contains(id))
         })
     })
@@ -9953,7 +10322,7 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         ))
     })?;
     let label = path.display().to_string();
-    let body = std::fs::read_to_string(&path)
+    let body = crate::fsio::read_to_string(&path)
         .map_err(|_| UsageError::raise(format!("{}: {label}", transcript::UNREADABLE_NOTICE)))?;
     // A REFUSAL RATHER THAN A COULD-NOT-LOOK, and the difference is this verb's
     // subject (CLOUD-1624). `check` reads the transcript incidentally and must
@@ -10164,9 +10533,6 @@ fn run_override_spend(
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
-//MUTANT fingerprint-unaddressed|s@path == subject \x7c\x7c fingerprint == subject@path == subject@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
-//MUTANT fingerprint-binds|s@Ok((admission::Anchor::Finding(fingerprint), path))@Ok((admission::Anchor::Finding(fingerprint), subject.to_owned()))@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
 /// (CLOUD-1125).
 ///
@@ -10522,14 +10888,13 @@ fn anchor_among(
 /// # It never grades an answer
 ///
 /// Non-negotiable rule 3. The predicate is presence and non-emptiness; anything
-/// stronger is a model verdict inside a gate, which would be worse than today's
+/// stronger is a gated-model verdict inside a gate, which would be worse than today's
 /// password.
 ///
 /// # Errors
 ///
 /// Returns a [`error::UsageError`] for an unknown class or a class that declares
 /// no override route, and an internal error when the store cannot be written.
-//MUTANT request-ignores-config-from|s@^    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;$@    let (epoch, _) = epoch::describe(root, None)?;@|an_admission_requested_under_config_from_spends_under_it
 fn run_override_request(
     rule: &str,
     token: &str,
@@ -11474,6 +11839,7 @@ fn run_land(
             run_land_verify(root, &standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
+        cli::LandCommand::Placed => run_land_placed(root, err),
         cli::LandCommand::Replay {
             reference,
             resolve,
@@ -11591,8 +11957,6 @@ fn land_reference(root: &Path, named: Option<&str>, err: &mut dyn Write) -> Resu
 /// # Errors
 ///
 /// Only a write failure on either channel; every failure to look is an exit code.
-//MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
-//MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
 fn run_land_linear(
     root: &Path,
     url: &str,
@@ -11842,7 +12206,6 @@ fn lease_wait_bound() -> u32 {
 /// paid laps used up the two hours, and twenty waits could not have changed
 /// that. What does is the pinned host maximum (CLOUD-2365) and a crash-only
 /// relaunch: a kill writes no lap record and prints no "run this again" line.
-//MUTANT lease-wait-default-spans-two-hours|s@^const LEASE_WAIT_DEFAULT: u32 = 20;$@const LEASE_WAIT_DEFAULT: u32 = 60;@|the_default_lease_waits_fit_inside_an_hour
 const LEASE_WAIT_DEFAULT: u32 = 20;
 
 /// Pause a pass lost to the landing lease before the next one (CLOUD-1700).
@@ -12039,10 +12402,8 @@ struct Reaped {
 /// group here gets no grace at all: its leader is already dead, so a survivor is
 /// not a leaf mid-exit. A GROUP TERM IS A REQUEST, NOT A FACT (CLOUD-434): the
 /// second pass is the observation that tells the two apart.
-//MUTANT-SUITE crates/batten/src/lib.rs
-//MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
-fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
-    let abandoned = task::abandoned(git_dir, program_root);
+fn reap_abandoned(git_dir: &Path) -> Reaped {
+    let abandoned = task::abandoned(git_dir);
     let own_group = task::process_group(&std::process::id().to_string());
     let mut reaped = Reaped::default();
     for entry in &abandoned {
@@ -12095,41 +12456,13 @@ fn run_land_singleton(
     };
     let pid = std::process::id().to_string();
 
-    // THE REAP, AND IT ABSTAINS WHERE THE CONSUMER HAS NOT SAID WHERE ITS
-    // PROGRAMS LIVE (non-negotiable rule 1).
-    //
-    // `program_root` is what tells a live task from a recycled pid wearing its
-    // number, and *where a consumer keeps its programs* is a fact about that
-    // consumer. The first version of this defaulted the value to a literal, which
-    // `document_facts::no_artifact_name_reaches_the_core` refused — correctly, and
-    // `task.rs`'s own header names that test as the reason the root is a
-    // parameter there rather than a constant. It is `[task] program_root`, which
-    // `task alive` reads too (CLOUD-2370), and until the pinned release carries
-    // that table, the environment's `BATTEN_TASK_PROGRAM_ROOT` where it is absent.
-    //
-    // Absent, this reaps NOTHING rather than guessing. A wrong root makes
-    // `matches_cmdline` miss every live task, so every entry reads as abandoned
-    // and the reaper signals the group of a lap that is running — the direction
-    // a miss must never fail in. Nor does it forget: without the root nothing
-    // tells an abandoned record from a live one, so `alive` keeps showing it
-    // until a landing that can tell runs.
-    //
-    // ONLY THE REAP IS CONDITIONAL. The lock and the registration below run
-    // either way: `singleton_acquire` reclaims on `pid_exists`, which needs no
-    // root at all, and skipping them here would trade a reaper for the
-    // concurrent-lands defect the lock exists to stop — a strictly worse bargain
-    // than reaping nothing.
-    let reaped = task_table(root)
-        .ok()
-        .flatten()
-        .map(|table| table.program_root)
-        .or_else(|| {
-            std::env::var("BATTEN_TASK_PROGRAM_ROOT")
-                .ok()
-                .filter(|root| task::normalized_root(root).is_some())
-        })
-        .map(|root| reap_abandoned(&git_dir, &root))
-        .unwrap_or_default();
+    // THE REAP, UNCONDITIONALLY (CLOUD-1560). It used to abstain wherever the
+    // consumer had not named its program root, because a wrong root made the
+    // path matcher miss every live task and the reaper would have signalled a
+    // running lap. Liveness now compares the cmdline digest each registrant
+    // recorded, so there is no root to get wrong, and `collect::group_orphaned`
+    // still declines any group its registrant or leader is in.
+    let reaped = reap_abandoned(&git_dir);
     if reaped.terminated > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
         // line; this reports how many groups went and how many had to be forced,
@@ -12186,6 +12519,28 @@ fn run_land_singleton(
 /// is a test that needs a wider margin than production.
 const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Put the committed release pin back over a local build's source pin before a
+/// lap judges anything ([`engine::local_source_pin`]). A lap judges with the
+/// release, an unreleased engine can never land, and the pin left in the tree
+/// fails every receipt the lap records; nothing else in the tree is touched.
+fn restore_release_pin(root: &Path, out: &mut dyn Write) -> Result<()> {
+    let path = root.join(config::CONFIG_FILE);
+    let (Ok(worktree), Ok(head)) = (
+        crate::fsio::read_to_string(&path),
+        git::show(root, "HEAD", config::CONFIG_FILE),
+    ) else {
+        return Ok(());
+    };
+    if engine::local_source_pin(&head, &worktree) {
+        crate::durable::replace(&path, head)?;
+        writeln!(
+            out,
+            "land: restored the committed release pin over a local build's source pin"
+        )?;
+    }
+    Ok(())
+}
+
 fn run_land_lap(
     root: &Path,
     url: &str,
@@ -12204,6 +12559,7 @@ fn run_land_lap(
         // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
         .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
+    restore_release_pin(root, out)?;
     // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
     // would ready and then abandon fails to LOAD rather than in production,
     // which is the whole difference between a schema and a convention.
@@ -12228,6 +12584,22 @@ fn run_land_lap(
     //
     // BEFORE the lease and the singleton, which is where the predecessor put it
     // and for its reason: a refusal here has spent nothing at all.
+    //
+    // A DIRTY TREE FIRST, AND HERE (owner ruling, 2026-11-11). `verify` refuses
+    // one only at `receipt record`, after the toolchain check, two compiles and
+    // the linearity fetch: measured on #1276, a lap stopped there on one
+    // uncommitted ledger line it could have named before spending anything. The
+    // question is one `git status` read, the cheapest a lap can ask, so it is
+    // asked before every other.
+    if let Some(dirty) = git::uncommitted(root).ok().filter(|dirty| *dirty > 0) {
+        writeln!(
+            err,
+            "::error:: land: the working tree differs from HEAD in {dirty} path(s), so no lap \
+             can verify what it would push. Commit the work (you are pre-authorised to) or set \
+             it aside, then run the lap again."
+        )?;
+        return Ok(ExitCode::Violation);
+    }
     if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
         return Ok(code);
     }
@@ -12295,8 +12667,6 @@ fn run_land_lap(
     })
 }
 
-//MUTANT landing-start-unnoted|s@^    note_declared(root, begin_note);$@@|a_landing_notes_its_start_and_every_chosen_end
-//MUTANT landing-end-unnoted|s@^    note_declared(root, stop_note);$@@|a_landing_notes_its_start_and_every_chosen_end
 /// Run `laps` inside the reclaim census's window: a beat before, a stop after.
 ///
 /// **THE STOP IS WRITTEN WHERE THE LANDING ENDS, never where a lap does**
@@ -14289,7 +14659,6 @@ fn disk_watcher<'a>(
 /// was armed and never asked (2026-10-13). Every heavy build `verify` runs —
 /// clippy, the test build, semver, deny, the cross and darwin links — goes
 /// through this verb, so watching here covers them without a wrapper per task.
-//MUTANT step-run-unwatched|s@^        .and_then(\x7croot\x7c disk_watcher(root, prune_rules.as_ref()));$@        .and_then(\x7c_\x7c None::<disk_watch::DiskWatch<'_>>);@|a_step_run_build_is_watched
 fn run_step_watched(
     step: &str,
     args: &[String],
@@ -14341,8 +14710,6 @@ pub const RUSTC_WRAPPER_PROBE: &str = "--batten-wrapper-probe";
 ///
 /// `None` when this process is not a wrapped compile: the binary parses its
 /// own arguments as ever.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT rustc-unguarded|s@^    guard_compile(\&args\[2..\]);$@@|a_wrapped_compile_collects_under_pressure
 #[must_use]
 pub fn rustc_wrapped(
     args: impl Iterator<Item = std::ffi::OsString>,
@@ -14378,7 +14745,6 @@ pub fn rustc_wrapped(
 ///
 /// A declared `min_free_mb` above the default floor is honoured by the hook
 /// and the watchers, not here: reading it would cost every compile the config.
-//MUTANT wrapper-fast-path-at-max|s@mb >= prune::DEFAULT_FREE_BAND.0@mb >= prune::DEFAULT_FREE_BAND.1@|a_wrapped_compile_above_the_floor_reads_no_config
 fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     let Some(out_dir) = rustc_args
         .iter()
@@ -14411,8 +14777,6 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
 }
 
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT pre-step-check-skipped|s@^    if !disk_admits(root, "land verify", err)? {$@    if false \&\& !disk_admits(root, "land verify", err)? {@|a_lap_whose_volume_cannot_be_freed_stops_before_the_gate
 fn run_land_verify(
     root: &Path,
     bet: &speculation::Bet,
@@ -14424,6 +14788,26 @@ fn run_land_verify(
     // NOTHING REGISTERED: a standalone `land verify` arms the stall only under a
     // supervising task's own `$BATTEN_TASK_PID`.
     run_land_verify_seen(root, bet, branch, reference, None, out, err).map(|(code, _)| code)
+}
+
+/// `land placed` (CLOUD-2707): ADVICE, never a refusal. Verifying without
+/// landing is legitimate, so the gate always runs; on a committed, pushed head
+/// outside the lap it says the one thing the run does not show — that the lap
+/// answers this head from the receipt this run writes (CLOUD-1891), so `land`
+/// is the next step and costs no second gate unless the trunk moves.
+fn run_land_placed(root: &Path, err: &mut dyn Write) -> Result<ExitCode> {
+    let under_lap = std::env::var_os(land::LAP_GATE).is_some();
+    let uncommitted = git::uncommitted(root).unwrap_or(1);
+    let placed = land::placement(under_lap, uncommitted, git::head_on_a_remote(root));
+    if placed == land::Placement::BeforeLand {
+        let head = git::head_commit(root).unwrap_or_default();
+        let short = head.get(..10).unwrap_or(&head);
+        writeln!(
+            err,
+            "land placed: {short} is committed and pushed; `mise run land` (backgrounded) reuses this run's receipt and runs no second gate unless the trunk moves"
+        )?;
+    }
+    Ok(ExitCode::Success)
 }
 
 /// The self-stall terms for this verify (CLOUD-2369), or `None` where the bound
@@ -14518,6 +14902,9 @@ fn run_land_verify_seen(
         .published()
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
+    // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
+    // the gate's first step, reads this and lets the run through.
+    published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
@@ -14552,12 +14939,16 @@ fn run_land_verify_seen(
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
     let log = land::verify_log(root, branch, verified.sha());
-    if let Some(first) = log.first() {
-        writeln!(
-            out,
-            "land: gate log {}; run batten capture show {first} --raw",
-            log.join(" ")
-        )?;
+    let gate_streams: Option<Vec<capture::Capture>> = log
+        .iter()
+        .map(|text| {
+            capture::Handle::parse(text)
+                .ok()
+                .map(capture::Capture::from)
+        })
+        .collect();
+    if let Some(pointer) = gate_streams.and_then(|held| capture::streams_pointer(root, &held)) {
+        writeln!(out, "land: gate log {pointer}")?;
     }
     match verified {
         land::Verified::Clean(head) => {
@@ -14627,8 +15018,7 @@ fn run_land_verify_seen(
 ///   recoveries. The base ref is the lap's and a hand-driven verify has none,
 ///   so it is `Option` rather than a guess that would reach the wrong ref in a
 ///   repository whose trunk is spelled differently (non-negotiable rule 1).
-/// - **Tree**: reproduce and fix locally.
-//MUTANT verify-refusal-misclassed|s@^    let class = verdict::Native::CheckRunRed;$@    let class = verdict::Native::JobRunRed;@|a_refused_gate_renders_its_verdict_with_its_cause
+/// - **Tree**: fix the cause the gate log names, then run the lap again.
 fn verify_refusal(
     sha: &str,
     cause: &land::Refusal,
@@ -14651,7 +15041,11 @@ fn verify_refusal(
                 short(base)
             )
         }
-        (land::Refusal::Tree, None) => String::from("reproduce and fix locally."),
+        (land::Refusal::Tree, None) => {
+            // NOT "REPRODUCE" (CLOUD-2707): the gate already ran here and the lap
+            // printed its log's handle, so reproducing it is the same gate twice.
+            String::from("fix the cause the gate log names, then run the lap again.")
+        }
     };
     let class = verdict::Native::CheckRunRed;
     refusal::Refusal::engine(class, &[verdict::artifact(sha)], refusal::Fix::Run(advice))
@@ -17004,8 +17398,6 @@ enum HoldEnd {
     Stalled,
 }
 
-//MUTANT hold-gone-noted-as-stop|s@^    if end == HoldEnd::Stalled {$@    if true {@|a_hold_notes_a_stop_only_where_it_chose_one
-//MUTANT hold-stall-unnoted|s@^    if end == HoldEnd::Stalled {$@    if false {@|a_hold_notes_a_stop_only_where_it_chose_one
 /// `lease hold`'s bail: hand the lease back, then note the stop iff it was CHOSEN.
 ///
 /// After the hand-back, so nothing this process writes follows the stop. The
@@ -17083,7 +17475,6 @@ fn note_declared(root: &Path, declared: &str) {
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
 }
 
-//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
 /// `lease hold`'s renewal that applied: its receipt, then the consumer's
 /// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
 /// passed as `beat_note`). After the receipt, so a beat never claims a hold the
@@ -17301,12 +17692,7 @@ struct Narrowed {
 /// a flag would change the public `MutateCommand` — measured, `cargo
 /// semver-checks` read it as three major breaks (a removed `Copy`, a unit variant
 /// changing kind).
-fn narrow_to_change(
-    root: &Path,
-    names: Vec<String>,
-    registry: &mutate::Registry,
-    err: &mut dyn Write,
-) -> Result<Narrowed> {
+fn narrow_to_change(root: &Path, names: Vec<String>, err: &mut dyn Write) -> Result<Narrowed> {
     let Some(base) = mutate::changed_since() else {
         return Ok(Narrowed {
             names,
@@ -17331,8 +17717,10 @@ fn narrow_to_change(
         .chain(delta.deleted.iter())
         .cloned()
         .collect();
+    let code_changed: std::collections::BTreeSet<String> =
+        delta.code_changed.iter().cloned().collect();
     Ok(Narrowed {
-        names: mutate::touched(root, &names, &changed, registry),
+        names: mutate::touched(root, &names, &changed, &code_changed),
         change: Some((base, changed)),
     })
 }
@@ -17350,6 +17738,16 @@ fn run_registered_runner(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    if mutate::RunnerKind::parse(id) == Some(mutate::RunnerKind::CargoMutants) {
+        writeln!(
+            err,
+            "::error:: mutate: {} names `{id}`, which runs as itself (`cargo mutants \
+             --in-diff`) and never through this verb; it owns its sources here only so the \
+             declared runner leaves them alone",
+            mutate::RUNNER
+        )?;
+        return Ok(ExitCode::Usage);
+    }
     let Some(kind) =
         mutate::RunnerKind::parse(id).filter(|kind| registry.registered().contains(kind))
     else {
@@ -17361,7 +17759,7 @@ fn run_registered_runner(
         )?;
         return Ok(ExitCode::Usage);
     };
-    let Some((base, changed)) = change else {
+    let Some((_, changed)) = change else {
         writeln!(
             err,
             "::error:: mutate: `{id}` judges a change, and MUTANT_CHANGED_SINCE names no base \
@@ -17369,15 +17767,6 @@ fn run_registered_runner(
         )?;
         return Ok(ExitCode::Internal);
     };
-    // THE PINNED RUNNER, NOT WHATEVER `PATH` HOLDS (CLOUD-2345): a CI runner has
-    // no cargo-mutants at all, and a host's may be another version. Applied for
-    // every registered runner rather than gated on the kind: the directory only
-    // answers `cargo mutants`, so another runner is unaffected by it. Where no row
-    // ships it, the inherited `PATH` decides and `unresolvable` reports absence.
-    let registry = &registry.clone().with_provisioned(
-        provisioned_binary("cargo-mutants", &Overrides::default())
-            .and_then(|binary| binary.parent().map(Path::to_path_buf)),
-    );
     let absent = mutate::unresolvable(root, registry);
     if !absent.is_empty() {
         for finding in &absent {
@@ -17385,15 +17774,7 @@ fn run_registered_runner(
         }
         return Ok(ExitCode::Internal);
     }
-    let work = mutate::work_dir(root);
-    std::fs::create_dir_all(&work)?;
-    let site = mutate::Site {
-        root,
-        base: &base,
-        registry,
-        work: &work,
-    };
-    let run = match mutate::run_registered(&site, &changed, kind, shard, err) {
+    let run = match mutate::run_registered(root, registry, &changed, kind, shard) {
         Ok(run) => run,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;
@@ -17412,18 +17793,12 @@ fn run_registered_runner(
     let shard = shard
         .map(|(k, n)| format!(" (shard {k}/{n})"))
         .unwrap_or_default();
-    if code == ExitCode::Success && kind == mutate::RunnerKind::Command {
+    if code == ExitCode::Success {
         // A command runner reports no count, so none is printed (CLOUD-2211).
         writeln!(
             out,
             "mutate sweep: {} changed source(s) by {id}{shard}, every one caught",
             run.sources
-        )?;
-    } else if code == ExitCode::Success {
-        writeln!(
-            out,
-            "mutate sweep: {} mutant(s) across {} changed source(s) by {id}{shard}, every one caught",
-            run.mutants, run.sources
         )?;
     } else {
         writeln!(
@@ -17504,6 +17879,9 @@ fn run_mutate(
     let anchor = hook_authority_root();
     let resolved = anchor.canonicalize().unwrap_or_else(|_| anchor.to_owned());
     let root: &Path = &resolved;
+    if command == cli::MutateCommand::Cargo {
+        return run_mutate_cargo(root, out, err);
+    }
     let declared = match mutate_table(root, err)? {
         Ok(declared) => declared,
         Err(code) => return Ok(code),
@@ -17518,21 +17896,22 @@ fn run_mutate(
     };
     match command {
         cli::MutateCommand::Census => {
-            let census = mutate::census(root, &names, table);
+            let registry = match mutate::Registry::from_env() {
+                Ok(registry) => registry,
+                Err(reason) => {
+                    writeln!(err, "::error:: mutate census: {reason:#}")?;
+                    return Ok(ExitCode::Usage);
+                }
+            };
+            let census = mutate::census(root, &names, table, &registry);
             for (subject, verdict) in &census.findings {
                 writeln!(out, "{subject} {verdict}")?;
             }
             if census.findings.is_empty() {
-                // THE UNDECLARED ENGINE COUNT RIDES THE CLEAN LINE (CLOUD-1369),
-                // because a route that landed with nothing reporting its
-                // population would make "the backlog is what the census will
-                // then report" false. A count is a sensor: it names no module
-                // (rule 4) and it refuses nothing, so the exit code is unmoved.
                 writeln!(
                     out,
-                    "mutate census: {} gate(s), every one enforced or exempt by a filed row; {} \
-                     engine module(s) declare nothing and are outside the censused set",
-                    census.subjects, census.engine_undeclared
+                    "mutate census: {} gate(s), every one enforced or exempt by a filed row",
+                    census.subjects
                 )?;
                 return Ok(ExitCode::Success);
             }
@@ -17551,7 +17930,91 @@ fn run_mutate(
             let command = table.map_or(&[][..], |table| table.command.as_slice());
             run_mutate_sweep(root, names, command, out, err)
         }
+        cli::MutateCommand::Cargo => run_mutate_cargo(root, out, err),
     }
+}
+
+/// `batten mutate cargo`: every mutant cargo-mutants makes of the change since
+/// `$MUTANT_CHANGED_SINCE`, judged in one schema build (`mutate::schema`), and
+/// the ones the schema hands back judged inside the sweep by cargo-mutants in
+/// place, on the cases that can observe each. Missed mutants are a violation;
+/// a run that erred or a timeout could not look.
+///
+/// The disk floor is the collector's own, so the jobs never spend the room it
+/// exists to keep.
+fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let Some(base) = mutate::changed_since() else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: `MUTANT_CHANGED_SINCE` names no base"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let shard = match mutate::shard_set(std::env::var(mutate::SHARD).ok())
+        .map(|shard| mutate::shard_parsed(&shard))
+        .transpose()
+    {
+        Ok(shard) => shard,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate cargo: {reason}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let registry = match mutate::Registry::from_env() {
+        Ok(registry) => registry,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate cargo: {reason:#}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let floor = prune::declared_alone(root)
+        .and_then(|declared| declared.free_band())
+        .unwrap_or(prune::DEFAULT_FREE_BAND)
+        .0;
+    let machine = mutate::Machine::probe(floor)?;
+    let diff = state::repo_state_dir(root)?
+        .join("mutate")
+        .join("change.diff");
+    // THE TREE THE LISTING READS, fixed before the change is written: the
+    // schema's snapshot and the classic stage are each held to it.
+    let listed_over = mutate::cover::source_digest(root)?;
+    let Some(sources) = mutate::write_change(root, &registry, &base, &diff)? else {
+        writeln!(
+            out,
+            "mutate cargo: no source cargo-mutants owns changed since {base}"
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
+    // itself, so the row needs no `link` (only the task runner's carries one).
+    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    // CARGO-MUTANTS' OWN GENERATOR, THE SCHEMA'S BUILD (CLOUD-2253): one build
+    // with every mutant switched in, one reach run, each mutant judged by the
+    // cases that reach it. Measured on #1276: 3,132 mutants, the classic tool
+    // building each one, against one 195 s build.
+    let mine = mutate::schema::shard_of(mutate::list_mutants(root, &runner, &diff)?, shard);
+    let workers = mutate::judging_jobs(machine);
+    writeln!(
+        out,
+        "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
+        mine.len()
+    )?;
+    // THE HANDED-BACK MUTANTS ARE JUDGED INSIDE THE SWEEP, in place, on the
+    // cases that can observe each, under the same journal: the classic stage
+    // this replaces paid a copy, a full build, a baseline run and the whole
+    // suite per mutant on every lap.
+    let handback = mutate::schema::Handback {
+        runner: &runner,
+        diff: &diff,
+    };
+    let swept = mutate::schema::sweep(root, &mine, &listed_over, workers, Some(&handback), out)?;
+    Ok(mutate::schema::exit_of(swept.code))
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one
@@ -17571,7 +18034,7 @@ fn run_mutate_sweep(
                 return Ok(ExitCode::Usage);
             }
         };
-    let narrowed = narrow_to_change(root, names, &registry, err)?;
+    let narrowed = narrow_to_change(root, names, err)?;
     // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
     // gates cost a suite build per mutant, and 94 of them across 14 touched gates
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
@@ -17644,8 +18107,6 @@ fn run_mutate_sweep(
 ///
 /// Admits where no band is declared or free space cannot be read: the
 /// fail-open direction every disk arm takes.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT sweep-unwatched|s@^    if !disk_admits(root, "mutate sweep", err)? {$@    if false \&\& !disk_admits(root, "mutate sweep", err)? {@|a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building
 fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     let Some(prune) = resolve::resolve(root, &Overrides::default())
         .ok()
@@ -17730,8 +18191,6 @@ const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_mins(20);
 /// A batten singleton held by a live process other than this one, by task
 /// name: the background build a below-floor step may wait for. This process's
 /// own lock (`land`'s, taken under its pid) is never one.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT singleton-unwaited|s@^        .find(\x7ctask\x7c task::singleton_holder(\&git_dir, task).is_some_and(\x7cholder\x7c holder != own))$@        .find(\x7c_\x7c false)@|a_lap_below_the_floor_waits_for_its_own_background_build
 fn foreign_singleton(root: &Path) -> Option<String> {
     let git_dir = crate::git::git_dir(root).ok()?;
     let own = std::process::id().to_string();
@@ -17759,13 +18218,16 @@ fn run_declared_sweep(
         for kind in registry.registered() {
             let owned = mutate::owned_changes(root, changed, registry, kind);
             if !owned.is_empty() {
+                let judge = if kind == mutate::RunnerKind::CargoMutants {
+                    String::from("`cargo mutants --in-diff`")
+                } else {
+                    format!("`{}={}`", mutate::RUNNER, kind.id())
+                };
                 writeln!(
                     out,
-                    "mutate sweep: {} changed source(s) owned by {} — judged by `{}={}`",
+                    "mutate sweep: {} changed source(s) owned by {} — judged by {judge}",
                     owned.len(),
                     kind.id(),
-                    mutate::RUNNER,
-                    kind.id()
                 )?;
             }
         }
@@ -18091,7 +18553,7 @@ fn commit_admissions(
             ))
         }
         (None, Some(message)) => {
-            let body = std::fs::read_to_string(message).map_err(|error| {
+            let body = crate::fsio::read_to_string(message).map_err(|error| {
                 UsageError::raise(format!(
                     "commit check: cannot read the commit message file `{message}`: {error}"
                 ))
@@ -18669,12 +19131,15 @@ fn run_attribution_check(
 
 fn run_attribution_identity(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
     let policy = attribution_policy(overrides)?;
-    let outcome = attribution::set_identity(Path::new("."), &policy)?;
+    // The process environment, read here so the resolver takes it as an input
+    // and a case can fence it (CLOUD-2659).
+    let env = |var: &str| std::env::var(var).ok().filter(|value| !value.is_empty());
+    let outcome = attribution::set_identity(Path::new("."), &policy, &env)?;
     // The report goes to stderr: this is a statement about what Batten did to the
     // clone, not a verdict about the repository, and §6 keeps those channels
     // apart.
-    writeln!(err, "{}", outcome.line(&policy.identity))?;
-    Ok(ExitCode::Success)
+    writeln!(err, "{}", outcome.line())?;
+    Ok(outcome.exit())
 }
 
 /// What a fail-open boundary says on its way out.
@@ -19032,6 +19497,8 @@ struct CallFacts {
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
+    commit_subject: facts::Look<String>,
+    pathspec_status: facts::Look<serde_json::Value>,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -19043,6 +19510,108 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
+        commit_subject: commit_subject_for(policy, envelope),
+        pathspec_status: pathspec_status_for(policy, envelope),
+    }
+}
+
+/// The status of every pathspec a checkout or restore names (CLOUD-2684),
+/// behind [`pinned_for`]'s narrowing and only for such a call: one index read
+/// and one status read, in process, never an argv carrying a caller's path.
+fn pathspec_status_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<serde_json::Value> {
+    if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
+        return facts::Look::CouldNotLook;
+    }
+    let base = envelope.cwd.clone().or_else(current_process_dir);
+    let Some(base) = base else {
+        return facts::Look::CouldNotLook;
+    };
+    let hook::Pathspecs::Placed(calls) = hook::pathspec_calls(envelope, &base) else {
+        return facts::Look::CouldNotLook;
+    };
+    let mut entries = Vec::new();
+    for call in &calls {
+        let Some(placed) = placed_pathspecs(call) else {
+            return facts::Look::CouldNotLook;
+        };
+        entries.extend(placed);
+    }
+    facts::Look::Is(serde_json::json!({ "pathspecs": entries }))
+}
+
+fn current_process_dir() -> Option<PathBuf> {
+    std::env::current_dir().ok()
+}
+
+/// One call's pathspecs, repo-relative with their status, or `None` where one
+/// leaves the repository or the repository cannot be read.
+fn placed_pathspecs(call: &hook::PathspecCall) -> Option<Vec<serde_json::Value>> {
+    let dir = git::canonical(&call.dir);
+    let root = git::worktree_root(&dir).ok()?;
+    let tracked = git::tracked_paths(&root).ok()?;
+    let changed = git::changed_paths(&root).ok()?;
+    let inside = dir.strip_prefix(&root).ok()?.to_string_lossy().into_owned();
+    let mut entries = Vec::new();
+    for spec in &call.pathspecs {
+        if spec.split('/').any(|part| part == "..") {
+            return None;
+        }
+        let path = match (inside.as_str(), spec.trim_end_matches('/')) {
+            ("", "." | "") => ".".to_owned(),
+            ("", spec) => spec.to_owned(),
+            (inside, "." | "") => inside.to_owned(),
+            (inside, spec) => format!("{inside}/{spec}"),
+        };
+        let under = |listed: &String| {
+            path == "." || *listed == path || listed.starts_with(&format!("{path}/"))
+        };
+        let literal = path != "."
+            && !spec.starts_with(':')
+            && !spec.contains(['*', '?', '['])
+            && !root.join(&path).is_dir();
+        entries.push(serde_json::json!({
+            "path": path,
+            "literal": literal,
+            "tracked": tracked.iter().any(under),
+            "clean": !changed.iter().any(under),
+        }));
+    }
+    Some(entries)
+}
+
+/// The subject of the message a mediated `git commit` names (CLOUD-2683),
+/// read only where `[commit]` is declared: a repository with no convention
+/// opens nothing. The parse is [`hook::commit_message`]'s; this half reads a
+/// `-F` file, bounded to its first line within 64 KiB.
+fn commit_subject_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<String> {
+    if policy.commit.is_none() || envelope.event != hook::Event::PreTool {
+        return facts::Look::CouldNotLook;
+    }
+    match hook::commit_message(envelope) {
+        None => facts::Look::CouldNotLook,
+        Some(hook::CommitMessage::Text(text)) => hook::commit_subject(&text),
+        Some(hook::CommitMessage::File(path)) => first_line(&path),
+    }
+}
+
+/// The subject of the message file at `path`: could-not-look where it is
+/// missing, unreadable, not UTF-8, or has no line end within 64 KiB.
+fn first_line(path: &std::path::Path) -> facts::Look<String> {
+    use std::io::Read as _;
+    let Ok(file) = std::fs::File::open(path) else {
+        return facts::Look::CouldNotLook;
+    };
+    let mut bytes = Vec::new();
+    if file.take(64 * 1024).read_to_end(&mut bytes).is_err() {
+        return facts::Look::CouldNotLook;
+    }
+    let complete = bytes.contains(&b'\n') || bytes.len() < 64 * 1024;
+    match String::from_utf8(bytes) {
+        Ok(text) if complete => hook::commit_subject(&text),
+        _ => facts::Look::CouldNotLook,
     }
 }
 
@@ -19058,13 +19627,13 @@ fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     {
         return facts::Look::CouldNotLook;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return facts::Look::CouldNotLook;
     };
     let (Ok(head), Ok(current)) = (
         git::show(root, "HEAD", config::CONFIG_FILE),
-        std::fs::read_to_string(root.join(config::CONFIG_FILE)),
+        crate::fsio::read_to_string(root.join(config::CONFIG_FILE)),
     ) else {
         return facts::Look::CouldNotLook;
     };
@@ -19130,7 +19699,6 @@ fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
     )
 }
 
-//MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) \x7c\x7c advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
@@ -19144,17 +19712,19 @@ fn run_hook(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
+    // THE HARNESS, BOUND FOR THE FACTS THAT DIFFER PER HOST (CLOUD-2709).
+    hook::bind_harness(harness);
     let Some(payload) = read_payload(mode, err)? else {
         return Ok(ExitCode::Success);
     };
     // THE FOLLOW, BEFORE THIS BUILD READS THE PAYLOAD FOR ITSELF. An answer the
     // §7 table names is this invocation's; anything else decided nothing and
     // falls through, over a stream this process has already taken.
-    let followed = follow_to_pinned(pinned, &payload, out)?;
+    let followed = follow_to_pinned(pinned, &payload, out, err)?;
     if let Some(code) = followed.answer {
         return Ok(code);
     }
-    let Some((raw, mut envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
+    let Some((raw, envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
     else {
         return Ok(ExitCode::Success);
     };
@@ -19167,6 +19737,72 @@ fn run_hook(
     // to a protected path was allowed. A target outside the tree is untouched.
     // Seeded from this session's authority first (CLOUD-2204), and every record
     // a backgrounded call owes is written before anything below reads one.
+    dispatch_envelope(
+        harness,
+        instant,
+        mode,
+        overrides,
+        HookInput {
+            raw: &raw,
+            envelope,
+            spilled: &spilled,
+            ran: followed.ran,
+        },
+        out,
+        err,
+    )?
+    .rendered
+}
+
+/// One decoded call, as [`dispatch_envelope`] takes it: the host's bytes, the
+/// envelope they decoded to, what spilled to the spool, and the engine a
+/// follow already ran.
+struct HookInput<'a> {
+    raw: &'a str,
+    envelope: hook::Envelope,
+    spilled: &'a [stream_input::Spilled],
+    ran: Option<&'a Path>,
+}
+
+/// What a dispatched envelope answered: the rendering's result, exactly as
+/// `render` returned it (a deny on the exit-code contract is an `Err(Denial)`
+/// `main` reports), and the rule or handler behind a rendered deny
+/// (CLOUD-2690's `record_forge_refusal` reads it; `run_hook` propagates the
+/// rendering unchanged, so its output is byte-identical).
+struct HookDispatch {
+    rendered: Result<ExitCode>,
+    deny: Option<String>,
+}
+
+impl HookDispatch {
+    /// An answer no rule or handler refused.
+    const fn undenied(code: ExitCode) -> Self {
+        Self {
+            rendered: Ok(code),
+            deny: None,
+        }
+    }
+}
+
+/// `run_hook`'s tail, extracted (CLOUD-2690): everything from settling the
+/// envelope to rendering the decision, so `forge intake` dispatches through
+/// exactly the Facts, config load, handlers, actions and `adjudicate` a
+/// harness hook gets. Nothing is rebuilt; there is no second dispatcher.
+fn dispatch_envelope(
+    harness: hook::Harness,
+    instant: std::time::SystemTime,
+    mode: Mode,
+    overrides: &Overrides,
+    input: HookInput<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<HookDispatch> {
+    let HookInput {
+        raw,
+        mut envelope,
+        spilled,
+        ran,
+    } = input;
     settle_envelope(overrides, &mut envelope);
     // The capability table, consulted before anything keys on the event
     // (CLOUD-45). A host that does not declare this event fires nothing and
@@ -19178,7 +19814,7 @@ fn run_hook(
     // is reachable it is the ordinary state rather than news.
     if let Some(note) = undeclared_event_note(harness, &harness.capabilities(), envelope.event) {
         output::message(mode, Verbosity::Verbose, err, &note)?;
-        return Ok(ExitCode::Success);
+        return Ok(HookDispatch::undenied(ExitCode::Success));
     }
     rearm_unlanded(&envelope);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
@@ -19243,7 +19879,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
-        post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
+        post_tool(harness, &envelope, spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -19320,10 +19956,10 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, followed.ran);
+        let handoff = Handoff::new(raw, ran);
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
-            Err(code) => return Ok(code),
+            Err(code) => return Ok(HookDispatch::undenied(code)),
         }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new(), None)
@@ -19410,6 +20046,8 @@ fn run_hook(
     // its module stay — this drops the call, not the capability.
     let stop = stop::StopFacts::default();
     let prospective = prospective_for(&policy, &envelope);
+    let budgeted = budgeted_for(&policy, &envelope);
+    let ratcheted = ratcheted_for(&policy, &envelope);
     // The reading manifest (CLOUD-925), resolved here because the tracked set is
     // a property of a checkout and `adjudicate` is contractually pure.
     //
@@ -19424,18 +20062,23 @@ fn run_hook(
         singleton: &call.singleton,
         discards: &call.discards,
         unread_history: &call.unread_history,
+        commit_subject: &call.commit_subject,
+        reach: hook_reach(),
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
         waived: &waived,
         sourced: &agent_sourced,
         prospective: &prospective,
+        budgeted: &budgeted,
+        ratcheted: &ratcheted,
         manifest,
         pinned: &call.pinned,
         tasks: &tasks,
         extracted: &extracted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
+        pathspec_status: &call.pathspec_status,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -19448,7 +20091,7 @@ fn run_hook(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice);
+    let handled = dispatch_handlers(&envelope, raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -19462,10 +20105,19 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
-    let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
+    let mut found = Vec::new();
+    let block = fill_turn_advice(
+        &policy,
+        &envelope,
+        &facts,
+        overrides,
+        raw,
+        &mut advice,
+        &mut found,
+    );
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
     if refused_stop(harness, block, &mut advice, err)? {
-        return Ok(ExitCode::Violation);
+        return Ok(HookDispatch::undenied(ExitCode::Violation));
     }
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
     // that ordering is the whole fix rather than a tidy-up.
@@ -19525,17 +20177,65 @@ fn run_hook(
     // longer happened.
     let decision = settle_repair(&policy, &envelope, decision)
         .map_refusal(|refusal| refusal.read_through(&policy.redirects));
+    // THE NONBLOCKING FINDINGS ARE RECORDED ONLY FOR A CALL THAT RUNS (CLOUD-2707):
+    // a refused or escalated call happens to nothing, so a finding about it would
+    // record a call that never ran — the same reason a refusal outranks advice.
+    if !matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
+        record_findings(&found, &envelope, err);
+    }
+    answer_decision(
+        (harness, &envelope, raw),
+        decision,
+        (&policy, &facts),
+        advice,
+        mode,
+        out,
+        err,
+    )
+}
+
+/// The decided call, answered: the worktree's own answer where it has one,
+/// the advisory channel, then the rendering. Split from [`dispatch_envelope`]
+/// to keep that function inside the line budget; the order is its own.
+fn answer_decision(
+    (harness, envelope, raw): (hook::Harness, &hook::Envelope, &str),
+    decision: hook::Decision,
+    (policy, facts): (&hook::Policy, &hook::Facts<'_>),
+    mut advice: Vec<advisory::Advice>,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<HookDispatch> {
     let ceiling = policy.advisory.as_ref();
+    // THE HOST'S WORKTREE REQUEST (CLOUD-2581): after the verdict, before either
+    // writer of `out`, because WorktreeCreate's stdout is the new path and
+    // nothing else.
+    if let Some(code) = worktree_answer(
+        harness,
+        envelope,
+        raw,
+        &decision,
+        (&mut advice, ceiling),
+        out,
+        err,
+    )? {
+        return Ok(HookDispatch::undenied(code));
+    }
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
-    let context = preapproval_context(harness, &decision, &envelope, &mut advice, ceiling);
-    emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
+    let context = preapproval_context(harness, &decision, envelope, &mut advice, ceiling);
+    emit_channel(harness, envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
-        updated_input: grant_rewrite(&decision, &policy, &envelope, &facts),
+        updated_input: grant_rewrite(&decision, policy, envelope, facts),
     };
-    render(harness, &envelope, decision, &rendering, mode, out, err)
+    let deny = match &decision {
+        hook::Decision::Deny(refusal) => Some(refusal.rule().to_owned()),
+        _ => None,
+    };
+    let rendered = render(harness, envelope, decision, &rendering, mode, out, err);
+    Ok(HookDispatch { rendered, deny })
 }
 
 /// A REPAIRED CALL IS AN ALLOW THAT OWES A RECORD (CLOUD-1639), and the record
@@ -19552,9 +20252,6 @@ fn run_hook(
 /// the key resolved, and structurally cannot carry the repair's command line or
 /// its output. ONLY `silent` arrives: a `retry` repair is a `Deny` carrying
 /// `call retry now`, because the call as made did not happen.
-//MUTANT-SUITE crates/batten/tests/it/repaired_arms.rs
-//MUTANT repair-record-unsaid|s@^    let hook::Decision::Repaired(repair) = decision else {$@    let Some(repair) = None::<\&hook::Repair> else {@|a_silent_repair_record_reaches_the_model
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
 fn push_repair_record(
     decision: &hook::Decision,
     envelope: &hook::Envelope,
@@ -19564,7 +20261,7 @@ fn push_repair_record(
         return;
     };
     let record = match envelope.context() {
-        Some(context) => refusal::with_legend(hook_authority_root(), &context, &repair.line_text()),
+        Some(context) => refusal::with_legend(hook_session_home(), &context, &repair.line_text()),
         None => repair.line_text(),
     };
     advice.push(advisory::Advice::rendered(
@@ -19657,6 +20354,7 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || envelope.event == hook::Event::Stop
         || envelope.event == hook::Event::SessionStart
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
+        || envelope.event == hook::Event::Forge
 }
 
 /// The mediated call's bytes off stdin, or `None` where the call must simply
@@ -19675,8 +20373,6 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 /// that did not run, and the silent version of that is byte-identical to a clean
 /// allow — the false green this engine exists to catch, in the one place nobody
 /// would think to look.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
 fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
@@ -19750,8 +20446,6 @@ struct Payload {
 /// hands a declared handler the payload as it arrived. Re-reading stdin for it is
 /// not an option — the stream is consumed — and re-serializing the envelope would
 /// hand a handler a document the host never sent.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
 fn decode_payload(
     harness: hook::Harness,
     payload: Payload,
@@ -19768,7 +20462,7 @@ fn decode_payload(
     // A spilled payload is by definition one memory must not hold, so there the
     // handlers read the parsed value, each spilled leaf holding its marker.
     let raw = if streamed.spilled.is_empty() {
-        std::fs::read_to_string(&streamed.raw).unwrap_or_default()
+        crate::fsio::read_to_string(&streamed.raw).unwrap_or_default()
     } else {
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
@@ -19861,12 +20555,6 @@ impl Drop for Spool {
 /// [`hook::Envelope::writes`] is already repository-relative at this boundary
 /// (`relativise_writes`), so the comparison is against the two file names this
 /// crate owns — never a consumer string, which would be non-negotiable rule 1.
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
-//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-refuses-engine-repair|s@^        (hook::Operation::Execute, None) => engine::is_repair_at($@        (hook::Operation::Execute, None) => false \&\& engine::is_repair_at(@|the_engine_repair_verb_reaches_a_skewed_pin
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
     // envelope is `Operation::Execute` with no write, so it lands on `_ => false`
@@ -19993,9 +20681,6 @@ fn is_source_excerpt(line: &str) -> bool {
 /// are this crate's own constants, not a consumer's (non-negotiable rule 1), and
 /// rebuilding is named without a command because which command rebuilds is the
 /// consumer's.
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT unadjudicable-remedy-unnamed|s@repair the file with those@restore it with git@|the_refusal_names_the_repair_floor_it_admits
-//MUTANT remedy-names-the-bare-repair|s@^    let root = git::canonical(hook_authority_root());$@    let root = std::path::PathBuf::from(".");@|a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it
 fn unadjudicable_remedy() -> Fix {
     // ROOTED AT THE AUTHORITY JUDGED BY (CLOUD-2218), so the named command runs
     // from wherever the shell stands; the floor admits exactly these strings.
@@ -20018,9 +20703,6 @@ type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
 /// The hook's config, or the floor over a config that will not load: a read
 /// and the repair write pass with no rules, and everything else is refused
 /// (CLOUD-1842, CLOUD-1917). `Err` carries the exit the call ends with.
-//MUTANT unloadable-config-admits-write|s@^                deny_unadjudicable(harness, envelope, \&unreadable, mode, out, err).map(Err)$@                Err(unreadable)@|a_write_over_a_config_that_fails_validation_is_refused
-//MUTANT floor-swallows-the-refusal|s@            if recoverable_without_rules(envelope) {@            if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-removed|s@            if recoverable_without_rules(envelope) {@            if false {@|a_read_still_answers_over_a_config_that_will_not_load
 fn hook_config_or_floor(
     overrides: &Overrides,
     harness: hook::Harness,
@@ -20138,6 +20820,7 @@ fn follow_to_pinned<'a>(
     pinned: Option<&'a FollowTarget>,
     payload: &Payload,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<Follow<'a>> {
     let Some(target) = pinned else {
         return Ok(Follow::NOTHING);
@@ -20149,10 +20832,14 @@ fn follow_to_pinned<'a>(
     // will not read hands the child nothing, so it falls through instead —
     // a child answering `0` over an empty document is not an answer about this
     // call, and NOTHING RAN, so the hand-off below is still owed its turn.
-    let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
+    let Ok(raw) = crate::fsio::read_to_string(&payload.streamed.raw) else {
         return Ok(Follow::NOTHING);
     };
-    hand_off(&target.root, &target.argv, &raw, out)
+    let followed = hand_off(&target.root, &target.argv, &raw, out)?;
+    if followed.ran.is_some() {
+        say_follow_once(target, &payload.streamed.value, err)?;
+    }
+    Ok(followed)
 }
 
 /// What the follow did: the answer if the child decided one, and the engine it
@@ -20206,8 +20893,6 @@ impl Follow<'_> {
 /// # Errors
 ///
 /// Only a write of the child's accepted answer to `out`.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
 fn hand_off<'a>(
     root: &Path,
     argv: &'a [String],
@@ -20270,10 +20955,6 @@ fn hand_off<'a>(
 /// read and the config repair.
 ///
 /// [`ExitCode::decided`]: exit::ExitCode::decided
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build) {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
@@ -20300,7 +20981,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
         return Ok(None);
     }
     let root = hook_authority_root();
-    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+    let Ok(text) = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
     if engine::declared(&text).and_then(|pin| pin.source).is_none() {
@@ -20380,15 +21061,23 @@ fn already_ran(ran: Option<&Path>, build: &Path) -> bool {
 /// the move the session can make itself.
 ///
 /// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
-/// per-harness deny channel: Claude Code answers in its JSON decision object at
-/// exit `0`, where the document *is* the deny, and the neutral adapter answers
+/// per-harness deny channel: Claude Code reads its JSON decision object, where
+/// the document *is* the deny, and the neutral adapter answers
 /// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
 /// host that reads the document instead of the number.
+///
+/// **Exit `3` carries the deny on Claude Code, measured rather than assumed**
+/// (CLOUD-2595, 2026-11-04). The host's hook runner drops a JSON document that
+/// arrives with a status other than `0` or `2` UNLESS the document is a deny
+/// (`decision: "block"` or `permissionDecision: "deny"`), and this one is — so the
+/// call is refused and the number stays honest about nothing having been judged.
+/// What the session saw as a bare `engine-cannot-adjudicate` was the pointer
+/// arm, not the exit code: [`arm_for`] now gives this refusal its full arm on
+/// every firing.
 ///
 /// **The refusal is `unloaded`**, and its hop still resolves: `policy explain`
 /// answers `engine-cannot-adjudicate` from the engine's own table with no config
 /// (CLOUD-2142).
-//MUTANT refusal-drops-the-cause|s@^        .filter(\x7cline\x7c !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
 fn deny_unadjudicable(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -20429,7 +21118,7 @@ fn deny_unadjudicable(
         .collect::<Vec<_>>()
         .join(" ");
     let refusal = Refusal::unloaded(
-        "engine-cannot-adjudicate",
+        UNADJUDICABLE,
         format!(
             "this build could not load the rules it is registered to enforce, so nothing judged \
              this call: {pointer}"
@@ -20679,9 +21368,6 @@ fn admitted(
     pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
-//MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap \x7c\x7c ripcord::present(root);@|the_ripcord_is_not_a_global_allow
 fn pull_ripcord(
     envelope: &hook::Envelope,
     decision: hook::Decision,
@@ -20782,7 +21468,6 @@ fn record_ripcord(root: &Path, envelope: &hook::Envelope, err: &mut dyn Write) {
 /// ordering below, and each block carries its own argument.
 ///
 /// Returns the Stop refusal [`stop_nudges`] decided, if any (CLOUD-2441).
-//MUTANT ladder-one-nudge|s@^    for nudge in stop_nudges(overrides, envelope, raw, \&mut block) {$@    for nudge in stop_nudges(overrides, envelope, raw, \&mut block).into_iter().take(1) {@|every_applicable_stop_rung_speaks_in_rank_order
 fn fill_turn_advice(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -20790,6 +21475,7 @@ fn fill_turn_advice(
     overrides: &Overrides,
     raw: &str,
     advice: &mut Vec<advisory::Advice>,
+    found: &mut Vec<hook::Graded>,
 ) -> Option<refusal::Refusal> {
     let mut block = None;
     // EVERY APPLICABLE STOP RUNG SPEAKS, IN RANK ORDER (CLOUD-2078). "At most
@@ -20806,26 +21492,99 @@ fn fill_turn_advice(
     for nudge in stop_nudges(overrides, envelope, raw, &mut block) {
         push_finding(advice, severity::AdvisoryTier::Caution, nudge);
     }
-    // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
-    // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
-    // `severity = "warn"` no longer denies; without this line its violation would
-    // reach nobody at all, which is a worse answer than the deny it replaced —
-    // an advisory nothing surfaces is a sensor with no reader.
-    //
-    // NOT FOLDED INTO THE STOP LADDER ABOVE. That one is the end-of-turn
-    // channel; this one rides a single tool call the agent is making right now,
-    // about the call in hand rather than about the turn. `policy_advice` is empty at `Stop` (the
-    // block above owns that moment), and returns every non-blocking module's
-    // line on a call (CLOUD-1470); the key test drops a finding two bundles
-    // raised identically (CLOUD-2075).
-    for refusal in hook::policy_advice(policy, envelope, facts) {
-        push_finding(
-            advice,
-            severity::AdvisoryTier::Warning,
-            refusal.read_through(&policy.redirects),
-        );
+    // EVERY NONBLOCKING FINDING IS RECORDED, AND `advise` IS ALSO SPOKEN
+    // (CLOUD-2707). The findings store is where `check` and `doctor` read what a
+    // row has been doing, so no grade bypasses it. `advise` is the write-time
+    // signal CLOUD-1131 built, spoken on the call the agent is making and never
+    // refusing it; `record` is a TRIAL, never spoken, so a row still being
+    // measured cannot teach the model that Batten's words are optional. A finding
+    // that cannot be written is said on the operator's stream — never swallowed.
+    *found = hook::nonblocking_findings(policy, envelope, facts);
+    // At Stop the ladder above already spoke (`stop_advice`), so these are only
+    // recorded there.
+    let speaks = envelope.event != hook::Event::Stop;
+    for (severity, refusal) in found.iter() {
+        if speaks && *severity == severity::RuleSeverity::Advise {
+            push_finding(
+                advice,
+                severity::AdvisoryTier::Warning,
+                refusal.clone().read_through(&policy.redirects),
+            );
+        }
     }
     block
+}
+
+/// Write every nonblocking finding of this call to the findings store, each at
+/// its grade (CLOUD-2707).
+///
+/// Never fails the call and never speaks to the model. A finding that cannot be
+/// written is NOT swallowed: one line on the operator's stream names the rule
+/// whose finding lost its record and why. Keyed by rule and pointer, so a row
+/// firing again on the same call shape counts an occurrence rather than minting
+/// a second finding.
+fn record_findings(found: &[hook::Graded], envelope: &hook::Envelope, err: &mut dyn Write) {
+    if found.is_empty() {
+        return;
+    }
+    let lost = |err: &mut dyn Write, rule: &str, why: &str| {
+        let _ = writeln!(
+            err,
+            "batten: `{rule}` fired and its finding could not be recorded: {why}"
+        );
+    };
+    let root = hook_authority_root();
+    let Some((dir, head)) = store::resolve(root)
+        .ok()
+        .and_then(|opened| store::bound_dir(&opened))
+        .zip(git::head_commit(root).ok())
+    else {
+        for (_, refusal) in found {
+            lost(
+                err,
+                refusal.rule(),
+                "the findings store or HEAD could not be resolved",
+            );
+        }
+        return;
+    };
+    for (grade, refusal) in found {
+        let pointer = refusal.render_finding(refusal::Arm::Pointer);
+        let context = findings::Context::new(format!("{}/{}", grade.as_str(), envelope.raw_tool));
+        let next = match grade {
+            severity::RuleSeverity::Record => {
+                "a `record` row is on trial: promote it to `advise` or `deny` once its record shows it decides correctly, or retire it"
+            }
+            severity::RuleSeverity::Allow
+            | severity::RuleSeverity::Advise
+            | severity::RuleSeverity::Ask
+            | severity::RuleSeverity::Deny => {
+                "advice spoken on the call; its record shows how often the row fires and whether it is heeded"
+            }
+        };
+        let advisory = findings::Advisory {
+            rule: refusal.rule().to_owned(),
+            identity: identity::StoredIdentity::new(
+                identity::FindingKind::Sequence,
+                identity::sequence_fingerprint(refusal.rule(), &pointer, None),
+            ),
+            tier: severity::row_for_rule(*grade).tier,
+            path: envelope.raw_tool.clone(),
+            line: None,
+            check: findings::Check::Reevaluate,
+            remediation: findings::Remediation::NoFix(next.to_owned()),
+        };
+        if let Err(error) = findings::record_advisory(
+            &dir,
+            &context,
+            &head,
+            None,
+            &advisory,
+            findings::FINDINGS_SCHEMA,
+        ) {
+            lost(err, refusal.rule(), &error.to_string());
+        }
+    }
 }
 
 /// Push a finding unless one with the same POINTER is already in the emission
@@ -20868,7 +21627,6 @@ struct HookSighter<'a> {
     sighted: bool,
 }
 
-//MUTANT delivery-marks-on-emit|s@^        let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@        let reached = true;@|an_undelivered_channel_marks_nothing
 impl<'a> HookSighter<'a> {
     fn new(harness: hook::Harness, envelope: &'a hook::Envelope) -> HookSighter<'a> {
         let capabilities = harness.capabilities();
@@ -20884,7 +21642,7 @@ impl<'a> HookSighter<'a> {
 impl advisory::Sighter for HookSighter<'_> {
     fn peek(&self, refusal: &Refusal) -> refusal::Arm {
         match (self.reached, self.envelope.context()) {
-            (true, Some(context)) => refusal::peek(hook_authority_root(), &context, refusal),
+            (true, Some(context)) => refusal::peek(hook_session_home(), &context, refusal),
             _ => refusal::Arm::Full,
         }
     }
@@ -20900,7 +21658,7 @@ impl advisory::Sighter for HookSighter<'_> {
 
 /// An emission's text, closed with where its overflow went when the ceiling
 /// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
-/// the closing line names the handle that returns exactly it.
+/// the closing line names its view, as every stored output is named (CLOUD-2284).
 fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
     let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
         return emission.text;
@@ -20908,21 +21666,19 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
     // NO CALL ROW (CLOUD-2397): an overflow is the hook's own words, read now or
     // not at all, so it is left row-less — kept through the eviction grace for
     // the read the closing line invites, and taken first after it.
-    let handle = git::repo_root(hook_authority_root())
-        .ok()
-        .and_then(|root| {
-            capture::store(
-                &root,
-                capture::Stream::Advisory,
-                emission.overflow.as_bytes(),
-            )
-            .ok()
-        })
-        .map(|stored| format!("{}:{}", capture::Stream::Advisory.as_str(), stored.digest));
+    let pointer = git::repo_root(hook_session_home()).ok().and_then(|root| {
+        let stored = capture::store(
+            &root,
+            capture::Stream::Advisory,
+            emission.overflow.as_bytes(),
+        )
+        .ok()?;
+        capture::streams_pointer(&root, &[stored])
+    });
     format!(
         "{}\n\n{}",
         emission.text,
-        advisory::suppressed_line(emission.suppressed, ceiling.max_tokens, handle.as_deref())
+        advisory::suppressed_line(emission.suppressed, ceiling.max_tokens, pointer.as_deref())
     )
 }
 
@@ -20931,7 +21687,7 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
 /// to mark it in, which is the session-less payload every other store skips too.
 fn legend_for(envelope: &hook::Envelope, text: String) -> String {
     match envelope.context() {
-        Some(context) => refusal::with_legend(hook_authority_root(), &context, &text),
+        Some(context) => refusal::with_legend(hook_session_home(), &context, &text),
         None => text,
     }
 }
@@ -20959,13 +21715,13 @@ fn legend_for(envelope: &hook::Envelope, text: String) -> String {
 /// function rather than an expression at the call site: the pre-approval arm needs
 /// the engine's decision to decide whether to keep the grant, and a reader has to
 /// be able to see that it is not consulted twice.
-//MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
 fn compose(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
 ) -> hook::Decision {
+    show_policy_input(envelope, facts);
     match handled {
         Some(hook::Decision::Preapproved(reason)) => {
             match hook::adjudicate(policy, envelope, facts) {
@@ -20987,6 +21743,41 @@ fn compose(
             decided => decided,
         },
     }
+}
+
+/// `adjudicate --show-input`, set once at dispatch (CLOUD-2696).
+static SHOW_INPUT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Store the policy input this call produced and print its pointer, when asked.
+///
+/// STORED AND POINTED AT, NEVER PRINTED (rule 4): the input carries the call's
+/// whole argv and every projected fact, so it goes where every other stored
+/// output goes and the reader follows the pointer. Silent on every failure: a
+/// diagnostic that cannot be stored must not change the decision it describes.
+fn show_policy_input(envelope: &hook::Envelope, facts: &hook::Facts<'_>) {
+    if !SHOW_INPUT.get().copied().unwrap_or(false) {
+        return;
+    }
+    let Some(input) = hook::policy_input(envelope, facts) else {
+        return;
+    };
+    let Ok(root) = git::repo_root(hook_session_home()) else {
+        return;
+    };
+    let Ok(bytes) = serde_json::to_vec(&input) else {
+        return;
+    };
+    let Ok(stored) = capture::store(&root, capture::Stream::Response, &bytes) else {
+        return;
+    };
+    let Ok((path, index)) = capture::result_view(&root, &stored, &input) else {
+        return;
+    };
+    let _ = writeln!(
+        std::io::stderr(),
+        "{}",
+        capture::pointer_line(&path, &index, &[&stored])
+    );
 }
 
 /// Fill the advisory buffer from the two producers that ride a batch boundary.
@@ -21027,6 +21818,7 @@ fn collect_batch_advice(
     expire_sightings(envelope);
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
+    adopt_engine_pin(envelope, overrides, advice);
     report_container_health(envelope, overrides, advice);
     Ok(())
 }
@@ -21047,7 +21839,7 @@ fn stamp_session(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    let Ok(git_dir) = git::git_dir(hook_session_home()) else {
         return;
     };
     // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
@@ -21146,6 +21938,90 @@ fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
     let _outcomes = startup::repair(here, &resolved.startup);
 }
 
+/// Pin this engine into a config that pins nothing, at the session's start
+/// (CLOUD-2595 §2c), and say so once on the advisory channel.
+///
+/// `SessionStart` rather than any call: it is the one hook event that may write
+/// (a session's first moment, the same one `repair_startup_rows` repairs at), and
+/// it fires once per session, so the record is said once.
+fn adopt_engine_pin(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return;
+    }
+    if let Ok(Some(tag)) = adopt_engine_row(here, overrides) {
+        advice.push(advisory::Advice::rendered(
+            severity::AdvisoryTier::Advisory,
+            adopted_line(&tag),
+        ));
+    }
+}
+
+/// The record a written pin is reported by: `batten note call fix silent at
+/// batten.toml provision.batten (pinned <tag>)`.
+fn adopted_line(tag: &str) -> String {
+    let head = refusal::head(refusal::Severity::Note, verdict::Native::CallFixSilent.id());
+    format!(
+        "{head} at {} provision.batten (pinned {tag})",
+        config::CONFIG_FILE
+    )
+}
+
+/// Append this engine's own batten row to `root`'s `batten.toml` when the file
+/// pins nothing and LOADS (CLOUD-2595 §2c): the release written, or `None` where
+/// nothing was.
+///
+/// **A config that fails to load is never written.** The load is the predicate:
+/// the owner's ruling is that a later engine finding a toml without a pin adds
+/// one "after the parse succeeds", and a file this engine refuses is not one it
+/// can vouch for being read by itself.
+///
+/// Never under `--config-from` (the ref, not the working tree, is the authority
+/// then) or `CI` (a checkout CI builds is not one to dirty), and silent when the
+/// release's `SHA256SUMS` cannot be read: an unpublished or local build has no
+/// bytes to pin, and the next clean load tries again.
+///
+/// # Errors
+///
+/// A config that fails to load, or a write that fails.
+fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
+    // An override names ANOTHER authority than `root`'s file, so a clean load
+    // under it says nothing about the bytes this would write.
+    if overrides.config_from.is_some()
+        || overrides.config_in.is_some()
+        || std::env::var_os("CI").is_some()
+    {
+        return Ok(None);
+    }
+    // ABSOLUTE, because the state directory is keyed by the repository's path:
+    // the hook and `init` hand in `.`.
+    let root = &git::canonical(root);
+    let path = root.join(config::CONFIG_FILE);
+    let text = crate::fsio::read_to_string(&path)?;
+    if engine::declared(&text).is_some() {
+        return Ok(None);
+    }
+    resolve::resolve(root, overrides)?;
+    let tag = engine::release();
+    let cache = state::repo_state_dir(root)?;
+    let repository = releases_repository();
+    let Ok(sums) = engine::pinned_sums(&cache, &repository, &tag) else {
+        return Ok(None);
+    };
+    let Some(adopted) = engine::adopted(&text, &repository, &tag, &sums) else {
+        return Ok(None);
+    };
+    durable::replace(&path, adopted)?;
+    Ok(Some(tag))
+}
+
 /// Say at session start whether this container is misconfigured (CLOUD-1324).
 ///
 /// # Why the report is pushed rather than waited for
@@ -21188,7 +22064,7 @@ fn report_container_health(
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let here = hook_authority_root();
+    let here = hook_session_home();
     // A tree with no consumer has nothing to be misconfigured FOR, which is
     // `refresh_pinned`'s narrowing and for the same reason.
     if !here.join(config::CONFIG_FILE).exists() {
@@ -21243,7 +22119,7 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let _ = wiring::clear_at_load(hook_authority_root());
+    let _ = wiring::clear_at_load(hook_session_home());
 }
 
 /// Close this context's sighting epoch at a `SessionStart` that loses the window
@@ -21255,9 +22131,6 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
 /// and no single `additionalContext` carries the whole cycle's prose. **`resume`
 /// and `fork` keep**: the host replays the transcript, so what it delivered is
 /// still in the window. Other contexts in the clone are never touched.
-//MUTANT compact-keeps-window|s@^        Some("resume" \x7c "fork") => {}$@        Some("resume" \x7c "fork" \x7c "compact") => {}@|a_compaction_forgets_and_the_next_firing_is_full
-//MUTANT resume-forgets-window|s@^        Some("resume" \x7c "fork") => {}$@        Some("fork") => {}@|a_resume_keeps_the_window
-//MUTANT drain-result-kept|s@^    forget_drain_result(envelope);$@    let _ = forget_drain_result;@|a_session_start_relists_the_drain_payload
 fn expire_sightings(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
@@ -21268,7 +22141,7 @@ fn expire_sightings(envelope: &hook::Envelope) {
     };
     match envelope.start_source.as_deref() {
         Some("resume" | "fork") => {}
-        _ => refusal::forget_sightings(hook_authority_root(), &context),
+        _ => refusal::forget_sightings(hook_session_home(), &context),
     }
 }
 
@@ -21279,13 +22152,12 @@ fn expire_sightings(envelope: &hook::Envelope) {
 /// compaction the context no longer holds what it read and owes the read again
 /// before changing the row. `resume` and `fork` carry the window over and keep
 /// the reads.
-//MUTANT compact-keeps-history|s@^    let carried = matches!(envelope.start_source.as_deref(), Some("resume" \x7c "fork"));$@    let carried = matches!(envelope.start_source.as_deref(), Some("resume" \x7c "fork" \x7c "compact"));@|a_compaction_drops_the_history_receipt
 fn expire_history_reads(envelope: &hook::Envelope) {
     let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));
     if envelope.event != hook::Event::SessionStart || carried {
         return;
     }
-    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_authority_root()))
+    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_session_home()))
     else {
         return;
     };
@@ -21298,7 +22170,6 @@ fn expire_history_reads(envelope: &hook::Envelope) {
 /// whose program is `batten`, by name or path, directly or after
 /// `mise exec --`, or a task runner (`mise run`/`mise r`, `hk`) whose output
 /// carries the engine's nested lines.
-//MUTANT data-output-collapsed|s@\.rsplit('/')\.next() == Some("batten")@.rsplit('/').next().is_some()@|only_a_call_that_runs_the_engine_has_its_output_collapsed
 fn runs_engine(command: &str) -> bool {
     command
         .split(['|', ';', '&', '\n'])
@@ -21320,8 +22191,6 @@ fn runs_engine(command: &str) -> bool {
 
 /// What the model reads of a post-tool result: the seen-finding collapse and
 /// the result bound (CLOUD-2223), emitted as ONE document.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT unrewritten-pointer-dropped|s@^            push_finding(advice, severity::AdvisoryTier::Advisory, pointer);$@            drop(pointer);@|a_host_that_cannot_rewrite_still_gets_the_pointer
 fn rewrite_post_tool(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -21400,9 +22269,6 @@ fn post_tool(
 /// (CLOUD-2224): the result keeps the host's shape and loses only the bulk the
 /// streamed read never held. `None` with no repository to store into, which
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spilled-leaf-unpointed|s@^    } else if !spilled.is_empty() {$@    } else if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
-//MUTANT spill-unrecorded|s@^        record_stored(\&root, envelope, harness, capture::POST_TOOL_MEMBER, \&leaf);$@@|a_spilled_result_is_recorded
 fn point_at_spills(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -21423,7 +22289,7 @@ fn point_at_spills(
             _ => {}
         }
     }
-    let root = git::repo_root(hook_authority_root()).ok()?;
+    let root = git::repo_root(hook_session_home()).ok()?;
     let mut stored = Vec::new();
     for spill in spilled {
         let leaf = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
@@ -21439,27 +22305,8 @@ fn point_at_spills(
         .collect();
     let (_, first) = stored.first()?;
     let (path, index) = capture::result_view_spilled(&root, first, result, &markers).ok()?;
-    let mut subjects: Vec<verdict::Subject> = index
-        .iter()
-        .map(|field| {
-            verdict::artifact(&format!(
-                "{}:{}-{}({}B)",
-                field.pointer, field.from, field.to, field.bytes
-            ))
-        })
-        .collect();
-    subjects.extend(
-        stored
-            .iter()
-            .map(|(_, capture)| verdict::artifact(&capture.handle())),
-    );
-    let pointer = refusal::Refusal::engine(
-        verdict::Native::OutputPointNow,
-        &subjects,
-        refusal::Fix::None,
-    )
-    .with_document_route(&path.display().to_string())
-    .with_severity(refusal::Severity::Note);
+    let leaves: Vec<&capture::Capture> = stored.iter().map(|(_, leaf)| leaf).collect();
+    let pointer = capture::pointer(&path, &index, &leaves);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
     for (spill, _) in &stored {
@@ -21475,9 +22322,29 @@ fn point_at_spills(
 /// Counted from the files in chunks, stopping once past the bound; a file whose
 /// bytes alone prove it over (an `o200k` token is at most 128 bytes) is never
 /// read. At or under the default, nothing spilled can be within it.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT raised-bound-ignored|s@^    if configured <= capture::DEFAULT_RESULT_MAX_TOKENS {$@    if true {@|a_raised_bound_keeps_a_spilled_result_whole
 fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
+    let configured = capture::result_max_tokens(capture_budget().as_ref());
+    spills_admitted(result, spilled, configured)
+}
+
+/// [`spills_within_bound`] under an explicit `configured` bound: only a bound
+/// raised past the default can hold a spilled result, and then only when the
+/// result fits it.
+fn spills_admitted(
+    result: &serde_json::Value,
+    spilled: &[stream_input::Spilled],
+    configured: u64,
+) -> bool {
+    configured > capture::DEFAULT_RESULT_MAX_TOKENS && spills_within(result, spilled, configured)
+}
+
+/// Whether `result`'s inline text and its `spilled` files hold at most
+/// `configured` tokens, counted in chunks and stopping once past it.
+fn spills_within(
+    result: &serde_json::Value,
+    spilled: &[stream_input::Spilled],
+    configured: u64,
+) -> bool {
     fn inline(value: &serde_json::Value, into: &mut u64) {
         match value {
             serde_json::Value::String(text) => *into += o200k::tokens(text),
@@ -21487,10 +22354,6 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             }
             _ => {}
         }
-    }
-    let configured = capture::result_max_tokens(capture_budget().as_ref());
-    if configured <= capture::DEFAULT_RESULT_MAX_TOKENS {
-        return false;
     }
     let mut counted = 0;
     inline(result, &mut counted);
@@ -21502,7 +22365,8 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             return false;
         };
         let mut chunk = vec![0_u8; 64 * 1024];
-        let mut carry = Vec::new();
+        // THE ONE STREAM COUNTER (CLOUD-2284), the view's own.
+        let mut tokens = o200k::Chunked::default();
         loop {
             let Ok(read) = std::io::Read::read(&mut file, &mut chunk) else {
                 return false;
@@ -21510,39 +22374,45 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             if read == 0 {
                 break;
             }
-            carry.extend_from_slice(chunk.get(..read).unwrap_or_default());
-            // A CHUNK ENDS ON A CHARACTER: the tail of a split one waits.
-            let whole = match std::str::from_utf8(&carry) {
-                Ok(_) => carry.len(),
-                Err(cut) => cut.valid_up_to(),
-            };
-            let (text, rest) = carry.split_at(whole);
-            counted += o200k::tokens(std::str::from_utf8(text).unwrap_or_default());
-            carry = rest.to_vec();
-            if counted > configured {
+            tokens.feed(chunk.get(..read).unwrap_or_default());
+            if counted + tokens.counted() > configured {
                 return false;
             }
         }
+        counted += tokens.counted();
     }
     counted <= configured
 }
 
 /// Whether this call reads a capture view, the route the bound's own pointer
 /// prints (CLOUD-2228): such a read is never bounded again.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT view-re-read-rebounded|s@^    let bounded = if reads_a_view(envelope) {$@    let bounded = if false {@|following_the_pointer_returns_text_not_another_pointer
+///
+/// **THE SAME ANSWER FOR A SHELL READ OF THE VIEW.** A `cat`, `sed -n` or
+/// `grep` naming the view is the same route followed through another tool, and
+/// bounding it handed back a pointer to a pointer: measured 2026-11-11, a `sed`
+/// over a view spilled into a second view. One route, one answer, whichever
+/// tool takes it. A shell call is a view read when one of its words is a view.
 fn reads_a_view(envelope: &hook::Envelope) -> bool {
-    let Some(path) = envelope
+    let named = envelope
         .input
         .get("file_path")
-        .and_then(serde_json::Value::as_str)
-    else {
+        .and_then(serde_json::Value::as_str);
+    if named.is_none() && envelope.command.is_empty() {
+        return false;
+    }
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         return false;
     };
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
-        return false;
-    };
-    capture::is_view(&root, Path::new(path))
+    named.map_or_else(
+        || {
+            envelope
+                .command
+                .split_whitespace()
+                .map(|word| word.trim_matches(|c| c == '\'' || c == '"'))
+                .any(|word| capture::is_view(&root, Path::new(word)))
+        },
+        |path| capture::is_view(&root, Path::new(path)),
+    )
 }
 
 /// Mark every finding a tool's output carries as seen in this context, and cut
@@ -21561,7 +22431,7 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
     if !runs_engine(&envelope.command) {
         return None;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let mut rewritten = envelope.result.clone();
     let mut changed = false;
     for stream in ["stdout", "stderr"] {
@@ -21595,10 +22465,6 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 ///
 /// CHEAP WHEN SMALL: the size is read before config, and only a result over the
 /// inline threshold pays for reading the declared bound.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT result-bound-ignored|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if true {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
-//MUTANT small-result-rewritten|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if false {@|a_result_within_the_bound_is_left_alone
-//MUTANT bound-unrecorded|s@^    record_stored(\&root, envelope, harness, capture::POST_TOOL_MEMBER, \&stored);$@@|a_bounded_result_is_recorded
 fn bound_result(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -21657,12 +22523,12 @@ fn bound_result(
     // No repository, no store: the bound needs somewhere to put the bytes it
     // takes out of the window, and minting a state root under the cwd is what
     // `capture_response` refuses for the same reason.
-    let root = git::repo_root(hook_authority_root()).ok()?;
+    let root = git::repo_root(hook_session_home()).ok()?;
     let bytes = serde_json::to_vec(result).ok()?;
     let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
     record_stored(&root, envelope, harness, capture::POST_TOOL_MEMBER, &stored);
     let (path, index) = capture::result_view(&root, &stored, result).ok()?;
-    let pointer = view_refusal(&path, &index);
+    let pointer = capture::pointer(&path, &index, &[&stored]);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
     replace_bulk(&mut bounded, &line);
@@ -21676,7 +22542,7 @@ fn forget_drain_result(envelope: &hook::Envelope) {
     let Some(session) = envelope.session.as_deref() else {
         return;
     };
-    let Ok(repo) = git::repo_root(hook_authority_root()) else {
+    let Ok(repo) = git::repo_root(hook_session_home()) else {
         return;
     };
     let Ok(resolved) = store::resolve(&repo) else {
@@ -22060,6 +22926,99 @@ fn emit_channel(
     emit_advisory(harness, envelope, out, err, &text)
 }
 
+/// Answer Claude Code's `WorktreeCreate` / `WorktreeRemove` natively
+/// (CLOUD-2581), or `None` for every other event.
+///
+/// A refusal (`Deny` or `Ask`) writes its pointer to stderr, nothing to stdout,
+/// and exits 2, which the host reads as a failed request. Otherwise the action
+/// runs: create answers the new directory on stdout and NOTHING ELSE, so the
+/// call's advice goes to stderr as pointer lines rather than sharing the
+/// stream; remove answers nothing on stdout and exits 0. A branch the declared
+/// trunk does not carry survives a remove, as does every branch when no trunk
+/// resolves: fail closed on a delete.
+fn worktree_answer(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    raw: &str,
+    decision: &hook::Decision,
+    (advice, ceiling): (&mut Vec<advisory::Advice>, Option<&advisory::Channel>),
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let create = match envelope.event {
+        hook::Event::WorktreeCreate => true,
+        hook::Event::WorktreeRemove => false,
+        _ => return Ok(None),
+    };
+    if matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
+        if let hook::Decision::Deny(refusal) | hook::Decision::Ask(refusal) = decision {
+            // FULL, not the pointer arm: this host shows a failed worktree
+            // request once, and the row that refused it must be named there.
+            writeln!(err, "{}", refusal.render_finding(refusal::Arm::Full))?;
+        }
+        return Ok(Some(ExitCode::Violation));
+    }
+    let payload: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
+    let field = |key: &str| {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let answer = if create {
+        create_worktree(&field("cwd"), &field("name")).map(Some)
+    } else {
+        remove_worktree(&field("worktree_path")).map(|()| None)
+    };
+    let pending = std::mem::take(advice);
+    if !pending.is_empty() {
+        let mut sighter = HookSighter::new(harness, envelope);
+        let emission = advisory::admit(pending, ceiling, &mut sighter);
+        output::verdict(err, &closed_emission(emission, ceiling))?;
+    }
+    match answer {
+        Ok(Some(dir)) => {
+            writeln!(out, "{}", dir.display())?;
+            Ok(Some(ExitCode::Success))
+        }
+        Ok(None) => Ok(Some(ExitCode::Success)),
+        Err(why) => {
+            writeln!(err, "batten deny worktree action refused: {why}")?;
+            Ok(Some(ExitCode::Violation))
+        }
+    }
+}
+
+/// [`worktree_answer`]'s create: the main checkout's root and common dir from
+/// the payload's `cwd`, then [`gitwrite::link_worktree`].
+fn create_worktree(cwd: &str, name: &str) -> Result<std::path::PathBuf> {
+    let cwd = Path::new(cwd);
+    let top = git::repo_root(cwd)?;
+    let common = PathBuf::from(git::common_dir(cwd)?);
+    gitwrite::link_worktree(&common, &top, name)
+}
+
+/// [`worktree_answer`]'s remove: [`gitwrite::unlink_worktree`], then the branch
+/// only when the declared trunk carries it.
+fn remove_worktree(worktree_path: &str) -> Result<()> {
+    let (common, branch) = gitwrite::unlink_worktree(Path::new(worktree_path))?;
+    let Some(branch) = branch else {
+        return Ok(());
+    };
+    let Some(top) = common.parent() else {
+        return Ok(());
+    };
+    let Ok(Some(trunk)) = worktree::declared_trunk(top) else {
+        return Ok(());
+    };
+    let carried = gitwrite::carries(&common, &branch, &trunk.tracking);
+    if carried {
+        gitwrite::delete_ref(&common, &branch)?;
+    }
+    Ok(())
+}
+
 fn emit_advisory(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -22336,6 +23295,132 @@ fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Manif
     ))
 }
 
+/// Each `[budget.*]` set this write would change, measured before and after
+/// (CLOUD-2661). Nothing is read for a write no set selects. Every read is
+/// bounded: the target, then the set's literal members, each capped, and a
+/// member that cannot be read leaves the totals unjudged, never refused.
+/// The target's text now (`None` for a file that does not exist) and its text
+/// once the write lands: a `Write`'s content, or an `Edit`'s spans applied to
+/// the current text. `None` is could-not-look. The one reading the budget and
+/// the ratchet gates share, so they cannot disagree about what a write lands.
+fn projected_write(
+    root: &Path,
+    target: &str,
+    envelope: &hook::Envelope,
+) -> Option<(Option<String>, String)> {
+    let current = match read_capped(&root.join(target)) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return None,
+    };
+    let written = ["/content", "/new_source"].iter().find_map(|key| {
+        envelope
+            .input
+            .pointer(key)
+            .and_then(serde_json::Value::as_str)
+    });
+    let projected = match written {
+        Some(text) => text.to_owned(),
+        None => match hook::landed_from(current.as_deref().unwrap_or(""), &envelope.input) {
+            facts::Look::Is(text) => text,
+            facts::Look::IsNot | facts::Look::CouldNotLook => return None,
+        },
+    };
+    Some((current, projected))
+}
+
+/// Each ratchet row this write would move the banned way past its base
+/// (CLOUD-2692). A write no row's glob covers reads nothing; any git failure is
+/// could-not-look, which admits, because `check` judges the tree regardless.
+fn ratcheted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::RatchetFacts {
+    let rows = policy.ratchets_for(envelope);
+    let Some(target) = envelope.writes.as_deref() else {
+        return facts::Look::CouldNotLook;
+    };
+    if rows.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let root = hook_authority_root();
+    let Some((current, projected)) = projected_write(root, target, envelope) else {
+        return facts::Look::CouldNotLook;
+    };
+    let cache = state::state_root()
+        .ok()
+        .and_then(|state| cache::root_under(&state));
+    // Every selected row in one pass, so they share the merge base, HEAD and
+    // every git read.
+    match rules::ratchets_at_call(
+        &rows,
+        root,
+        target,
+        current.as_deref(),
+        &projected,
+        cache.as_deref(),
+    ) {
+        Ok(moved) => facts::Look::Is(moved),
+        Err(_) => facts::Look::CouldNotLook,
+    }
+}
+
+fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::BudgetFacts {
+    let names = policy.budget_sets_for(envelope);
+    let (Some(budget), Some(target)) = (&policy.budget, envelope.writes.as_deref()) else {
+        return facts::Look::CouldNotLook;
+    };
+    if names.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let root = hook_authority_root();
+    let Some((current, projected)) = projected_write(root, target, envelope) else {
+        return facts::Look::CouldNotLook;
+    };
+    let mut measures = Vec::new();
+    for name in names {
+        let Some(set) = budget.0.get(name) else {
+            continue;
+        };
+        let members = set_members(root, set, target, current.is_some());
+        measures.push(budget::project(
+            name,
+            set,
+            current.as_deref(),
+            &projected,
+            members.as_ref(),
+        ));
+    }
+    facts::Look::Is(measures)
+}
+
+/// Every OTHER member of a set whose totals can be judged at the call: all
+/// `files` entries literal, no `embedded` entry, each member readable, and an
+/// absent target counted only where a literal entry names it exactly.
+fn set_members(
+    root: &Path,
+    set: &budget::BudgetSet,
+    target: &str,
+    target_exists: bool,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    if !set.embedded.is_empty() || !set.files.iter().all(|entry| budget::literal_entry(entry)) {
+        return None;
+    }
+    if !target_exists && !set.files.iter().any(|entry| entry == target) {
+        return None;
+    }
+    let mut members = std::collections::BTreeMap::new();
+    for entry in set.files.iter().filter(|entry| entry.as_str() != target) {
+        members.insert(entry.clone(), read_capped(&root.join(entry)).ok()?);
+    }
+    Some(members)
+}
+
+/// A file's text, refused past the prospective read's 1 MiB cap.
+fn read_capped(path: &Path) -> std::io::Result<String> {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > 1 << 20) {
+        return Err(std::io::Error::other("over the read cap"));
+    }
+    crate::fsio::read_to_string(path)
+}
+
 fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ProspectiveFacts {
     if policy.reads_prospective(envelope) {
         hook::prospective_facts(hook_authority_root(), envelope)
@@ -22421,7 +23506,6 @@ fn push_drained(advice: &mut Vec<advisory::Advice>, refusal: refusal::Refusal) {
     ));
 }
 
-//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_refusals(\&records, \&drained, registry) {$@        for rule_refusal in drained_refusals(\&records, \&drained, registry).into_iter().take(0) {@|a_drained_rules_remedy_rides_its_first_drain_only
 fn drain_advisories(
     envelope: &hook::Envelope,
     overrides: &Overrides,
@@ -22434,7 +23518,7 @@ fn drain_advisories(
     // and where the repository is — so in a linked worktree with no committed
     // authority of its own the drain returned early while the store it wanted was
     // bound perfectly well one directory up.
-    let here = hook_authority_root();
+    let here = hook_session_home();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(());
     }
@@ -22882,7 +23966,7 @@ fn record_history_reads(envelope: &hook::Envelope) {
     {
         return;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return;
     };
@@ -22968,7 +24052,7 @@ fn stop_nudges(
     //
     // MECHANICAL, NEVER AN INFERENCE FROM PROSE. The host declares the mode; this
     // reads it. Deciding from the user's wording whether they "meant" a read-only
-    // turn would be the model verdict non-negotiable rule 3 forbids.
+    // turn would be the gated-model verdict non-negotiable rule 3 forbids.
     //
     // ABOVE THE SEAM WRITES ON PURPOSE? NO — deliberately below them. The links
     // and the state mint are the engine's own record rather than advice to the
@@ -22976,7 +24060,7 @@ fn stop_nudges(
     // make `doctor session` answer could-not-look over a session it watched, which
     // is the distinction CLOUD-1372 spent a rule on. Only the SPEAKING half is
     // suppressed.
-    let root = &hook_authority_root();
+    let root = &hook_session_home();
     // THE TRANSCRIPT SEAM, and it is a WRITE this routine owes rather than a rule
     // (CLOUD-990). `[transcript].path` names one fixed repo-relative path because
     // the key is the committed authority and is deliberately unlayerable — a
@@ -23398,9 +24482,11 @@ fn record_state(overrides: &Overrides) {
 /// `skipped` and `errored` are the engine's words for "did not look", and a
 /// question asked on the strength of a scan that never ran is the false green in
 /// nudge form. Only an observed, positive count is a finding.
-//MUTANT unlanded-pointer-repeats|s@^    if already_marked(spoken.as_deref(), \&key) {$@    if false \&\& already_marked(spoken.as_deref(), \&key) {@|an_unchanged_unlanded_pointer_is_spoken_once_across_stops
 fn unlanded_pointer() -> Option<refusal::Refusal> {
-    let UnlandedClaim { branch, key, count } = unlanded_claim()?;
+    // No observed claim may still be a claim nobody could look at (CLOUD-2655).
+    let Some(UnlandedClaim { branch, key, count }) = unlanded_claim() else {
+        return unlanded_unknown_pointer();
+    };
 
     // ONCE PER CLAIM, AND THE KEY IS NOT ONE THE REMEDY CAN MINT (CLOUD-890).
     //
@@ -23454,6 +24540,10 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     // `UserPromptSubmit` — the operator is back, so the level is worth reporting
     // once more. Its own file, never `unlanded-nudged`: that one is
     // `turn mint ahead`'s "this claim was told" and must not be cleared.
+    // Keyed on the claim AND its step (CLOUD-2656), so the push that turns
+    // `push` into `merge-held` speaks once more.
+    let step = claim_step(git_dir.as_deref(), &branch, &key);
+    let key = format!("{key} {}", step.as_str());
     let spoken = git_dir
         .as_deref()
         .map(|dir| recorder::record_path(dir, UNLANDED_SPOKEN, &branch, None));
@@ -23463,14 +24553,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     if let Some(path) = spoken.as_deref() {
         let _ = crate::durable::append(path, &key);
     }
-    Some(refusal::Refusal::engine(
-        verdict::Native::CommitShipMissing,
-        &[
-            verdict::artifact(completion::RULE_ID),
-            verdict::Subject::Count { count },
-        ],
-        refusal::Fix::None,
-    ))
+    Some(step_refusal(step, count))
 }
 
 /// Re-arm the unlanded pointer when the operator has spoken (CLOUD-2332).
@@ -23479,8 +24562,6 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 /// re-arming on one is the loop this exists to end. Fail-silent like every
 /// Stop-path write: a marker that will not clear costs one pointer, never the
 /// prompt.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT unlanded-never-rearmed|s@^        let _ = std::fs::remove_file(marker);$@@|an_operator_prompt_rearms_the_unlanded_pointer
 fn rearm_unlanded(envelope: &hook::Envelope) {
     if envelope.event == hook::Event::PostTool {
         note_land_dispatch(envelope);
@@ -23642,9 +24723,6 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// the advisory, which already resumes the model once (CLOUD-2332); the Stop
 /// after it, with still no land, is the pointer ignored, and only that one is
 /// refused.
-//MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-//MUTANT unlanded-stop-unbounded|s@ \x7c\x7c already_marked(Some(\&refused), \&key) {$@ {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-//MUTANT land-dispatch-ignored|s@^    if std::fs::remove_file(\&dispatched).is_ok() {$@    if false {@|a_land_just_started_excuses_one_stop
 ///
 /// Called only from [`stop_nudges`], past every guard it applies: the event,
 /// `stop_active`, both bypasses and plan mode.
@@ -23662,6 +24740,12 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     }
+    // A held merge and a shallow target are never refused (CLOUD-2656).
+    let step = claim_step(Some(&git_dir), &branch, &key);
+    if !step.refusable() {
+        return None;
+    }
+    let key = format!("{key} {}", step.as_str());
     let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
     let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
     if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
@@ -23675,14 +24759,7 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:
     // a refusal that cannot record itself is not issued.
     crate::durable::append(&refused, &key).ok()?;
-    Some(refusal::Refusal::engine(
-        verdict::Native::CommitShipMissing,
-        &[
-            verdict::artifact(completion::RULE_ID),
-            verdict::Subject::Count { count },
-        ],
-        refusal::Fix::None,
-    ))
+    Some(step_refusal(step, count))
 }
 
 /// The receipt naming every crashed record the watchdog has spoken about
@@ -23764,9 +24841,6 @@ fn land_under_way() -> LandMotion {
 /// Cheapest first: no declared task, or no crashed one, returns before the
 /// boot time or the receipt is written. Everything it cannot read says nothing,
 /// as every failure on this routine does.
-//MUTANT-SUITE crates/batten/tests/it/stop_watchdog.rs
-//MUTANT watchdog-unbounded|s@^        .filter(\x7centry\x7c !already_marked(Some(\&receipt), \&spoken_key(entry)))$@        .filter(\x7c_\x7c true)@|a_crash_is_refused_once
-//MUTANT watchdog-stale-dispatch|s@\.is_none_or(\x7centry\x7c entry.started().is_some_and(\x7cstarted\x7c at > started))$@.is_none_or(\x7c_\x7c true)@|a_land_dispatch_older_than_the_crash_excuses_nothing
 fn watchdog_stop(
     root: &Path,
     landing: LandMotion,
@@ -23782,7 +24856,7 @@ fn watchdog_stop(
         return (None, None);
     };
     let receipt = git_dir.join(RECEIPT_DIR).join(WATCHDOG_SPOKEN);
-    let (running, abandoned) = task::partition(&git_dir, &table.program_root);
+    let (running, abandoned) = task::partition(&git_dir);
     let mut unspoken: Vec<task::Entry> = abandoned
         .into_iter()
         .filter(|entry| table.relaunch.contains(&entry.task))
@@ -23856,7 +24930,6 @@ fn watchdog_stop(
 /// Drop the `land-dispatched` receipt once the land it recorded holds the lock,
 /// or is refused it (CLOUD-2370): it meant "started, not yet locked", and left
 /// behind it would excuse this land's own later crash at the Stop watchdog.
-//MUTANT forget-dispatch-inert|s@^        let _ = std::fs::remove_file(recorder::record_path($@        let _ = std::path::PathBuf::from(recorder::record_path(@|taking_the_landing_lock_clears_the_dispatch_receipt
 fn forget_dispatch(root: &Path, git_dir: &Path) {
     if let Some(branch) = git::current_branch(root).ok().flatten() {
         let _ = std::fs::remove_file(recorder::record_path(
@@ -23876,7 +24949,7 @@ fn spoken_key(entry: &task::Entry) -> String {
 /// Whether the claim `key` is already recorded in the marker at `seen`.
 fn already_marked(seen: Option<&Path>, key: &str) -> bool {
     seen.is_some_and(|path| {
-        std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
+        crate::fsio::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
     })
 }
 
@@ -23908,10 +24981,6 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
 /// Stop, to bound a channel that repeated full text. The projection bounds the
 /// full text once per context per window now, and a pointer withheld is a
 /// pointer the reader needed, so both stores and their writes are gone.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT filed-row-selected-by-id|s@^        .filter(\x7cdeclared\x7c publishers.contains(declared.id.as_str()))$@        .filter(\x7cdeclared\x7c declared.id == "filed-here")@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
-//MUTANT filed-scan-asserts-the-registry|s@^            checks: policy::ModuleChecks::RunOverSelection, // one row, never the authority$@            checks: policy::ModuleChecks::Run,@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
     let config = resolve::resolve(root, overrides).ok()?;
     // THE ROW IS FOUND BY WHAT IT PUBLISHES, NEVER BY ITS ID. A literal id here
@@ -23993,7 +25062,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
     let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
     let mut seen = std::collections::BTreeSet::new();
-    let filed: Vec<String> = std::fs::read_to_string(record)
+    let filed: Vec<String> = crate::fsio::read_to_string(record)
         .map(|text| {
             text.lines()
                 .filter_map(|line| {
@@ -24009,16 +25078,30 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     // canceled, a duplicate or completed is off the checklist. The store's
     // newest read answers it, so the Stop path never calls the tracker; a row
     // never read stays listed, the could-not-look direction.
+    // A ROW THIS BRANCH CLOSES IS ANSWERED: its commits name it in closing form,
+    // so the merge lands it and nothing is deferred. Listed anyway, the
+    // checklist asked every Stop for an answer the branch had already given,
+    // and only rows still open to the question belong on it. A log that cannot
+    // be read closes nothing, the could-not-look direction.
+    let closed_here: std::collections::BTreeSet<String> =
+        ready::Grammar::from_compiled(&crate::pattern::compiled(&config.patterns))
+            .ok()
+            .zip(
+                worktree::declared_trunk(root)
+                    .ok()
+                    .flatten()
+                    .and_then(|trunk| git::log_messages(root, &trunk.tracking).ok().flatten()),
+            )
+            .map(|(grammar, log)| race::closes(&log, &grammar).into_iter().collect())
+            .unwrap_or_default();
     let filed = filed
         .into_iter()
-        .filter(|id| !row_closed(root, id))
+        .filter(|id| !row_closed(root, id) && !closed_here.contains(id))
         .collect();
     Some((flagged, filed))
 }
 
 /// Whether the newest stored read of `key` says the row is closed.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT closed-row-listed|s@^        .filter(\x7cid\x7c !row_closed(root, id))$@        .filter(\x7c_\x7c true)@|a_closed_row_leaves_the_filed_checklist
 fn row_closed(authority: &Path, key: &str) -> bool {
     // THE ROOT THE WRITER STORED UNDER: `capture_response` keys the store by
     // `git::repo_root` of the authority, never the authority path itself.
@@ -24067,7 +25150,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
         return Vec::new();
     };
     let dispatched = handler::dispatch(
-        hook_authority_root(),
+        hook_session_home(),
         &table.handlers,
         hook::Event::Stop,
         "",
@@ -24138,6 +25221,7 @@ fn resolve_backgrounded(overrides: &Overrides, envelope: &hook::Envelope) {
     for (pending, stdout) in background::resolve(&git_dir, transcript, now_unix()) {
         let result = serde_json::json!({"stdout": stdout, "stderr": ""});
         write_records_for(overrides, &pending.tool, &pending.input, &result);
+        replay_mints(overrides, &pending, &result);
     }
 }
 
@@ -24248,12 +25332,7 @@ fn defer_backgrounded(
             )
     });
     if selected {
-        let pending = background::Pending {
-            tool: raw_tool.to_owned(),
-            input: input.clone(),
-            at: now_unix(),
-        };
-        let _ = background::defer(&git_dir, id, &pending);
+        let _ = background::defer(&git_dir, id, &pending_for(root, raw_tool, input));
     }
 }
 
@@ -24309,7 +25388,7 @@ fn defer_backgrounded(
 fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
     let text = result.as_str()?;
     let path = facts::spilled_path(text)?;
-    let bytes = std::fs::read_to_string(path).ok()?;
+    let bytes = crate::fsio::read_to_string(path).ok()?;
     facts::payload_in(&serde_json::from_str(&bytes).ok()?)
 }
 
@@ -24370,10 +25449,6 @@ pub fn mint_receipts_for_test(
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
-//MUTANT dispatch-not-spent|s@^                clear_minted(&claimed)$@                std::fs::rename(\&claimed, \&original)@|a_dispatched_review_answers_only_once_it_completes
-//MUTANT dependent-before-writer|s@^    ordered.sort_by_key(\x7cmint\x7c mint.after.is_some());$@    ordered.sort_by_key(\x7c_\x7c 0);@|a_dependent_declared_first_still_waits_for_its_writer
-//MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
-//MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -24490,6 +25565,18 @@ fn mint_receipts(
         // takes it.
         let claim = match mint.after.as_deref() {
             None => None,
+            // CHECKED, NEVER SPENT (CLOUD-2680): a bridge on file under this
+            // row's key admits every `require` dependent over the same change.
+            Some(after) if mint.effective_after_mode() == crate::mint::AfterMode::Require => {
+                let required = format!("{after}.{suffix}");
+                if written_now.contains(&required) {
+                    continue;
+                }
+                if !store.join(&required).is_file() {
+                    continue;
+                }
+                None
+            }
             Some(after) => {
                 let prerequisite = format!("{after}.{suffix}");
                 if written_now.contains(&prerequisite) {
@@ -24526,7 +25613,6 @@ fn mint_receipts(
 
 /// Remove a minted record (CLOUD-2083). A record already gone is the state the
 /// row asks for, so it is not an error.
-//MUTANT clear-writes-nothing|s@^    match std::fs::remove_file(path) {$@    match Ok::<(), std::io::Error>(()) {@|a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one
 fn clear_minted(path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
@@ -24639,6 +25725,24 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
+    // A BACKGROUNDED CALL HAS NOT RUN YET (CLOUD-2677). Its result names a task,
+    // so a mint here would record a check that never ran. It is deferred to the
+    // task's notification and replayed then, pinned to the HEAD it launched on.
+    if let Some(task) = background::task_id(&result) {
+        defer_mints(&policy, &envelope.raw_tool, &envelope.input, task);
+        return;
+    }
+    mint_with_policy(&policy, &envelope.raw_tool, &envelope.input, &result);
+}
+
+/// Every mint a call owes, under `policy`: the one path into `mint_receipts`,
+/// for a foreground call and a replayed background one alike (CLOUD-2677).
+fn mint_with_policy(
+    policy: &hook::Policy,
+    raw_tool: &str,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+) {
     let declared = policy.declared_mints();
     // NO ROW NAMES THIS TOOL, NOTHING IS BUILT (CLOUD-2315). `mint_receipts`
     // skips every row whose tool does not select this call, so the grammar
@@ -24647,7 +25751,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // first; a call some row names is untouched.
     if !declared
         .iter()
-        .any(|mint| rules::selects_tool_name(&mint.tool, &envelope.raw_tool))
+        .any(|mint| rules::selects_tool_name(&mint.tool, raw_tool))
     {
         return;
     }
@@ -24663,14 +25767,61 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // `[[pattern]]` table cannot build a grammar has no verdict, so an
     // `{authority:…}` piece records `-` rather than a template failing whole.
     let grammar = ready::Grammar::from_compiled(&policy.compiled_patterns()).ok();
-    mint_receipts(
-        declared,
-        &envelope.raw_tool,
-        &envelope.input,
-        &result,
-        root,
-        grammar.as_ref(),
-    );
+    mint_receipts(declared, raw_tool, input, result, root, grammar.as_ref());
+}
+
+/// Keep a backgrounded call for [`replay_mints`] when some declared mint
+/// selects it; nothing is minted at launch either way (CLOUD-2677).
+fn defer_mints(policy: &hook::Policy, raw_tool: &str, input: &serde_json::Value, task: &str) {
+    if !mint_owed(policy.declared_mints(), raw_tool, input) {
+        return;
+    }
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let _ = background::defer(&git_dir, task, &pending_for(root, raw_tool, input));
+}
+
+/// Whether one declared mint selects this call by BOTH its tool and its input
+/// selector: a row naming the tool whose selector refuses the input owes nothing,
+/// and neither does a matching selector under another tool.
+fn mint_owed(
+    declared: &[crate::mint::Declared],
+    raw_tool: &str,
+    input: &serde_json::Value,
+) -> bool {
+    declared.iter().any(|mint| {
+        rules::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
+    })
+}
+
+/// The one constructor of a deferred call, so a recorder's deferral and a
+/// mint's write the same entry, HEAD included (CLOUD-2677).
+fn pending_for(root: &Path, raw_tool: &str, input: &serde_json::Value) -> background::Pending {
+    background::Pending {
+        tool: raw_tool.to_owned(),
+        input: input.clone(),
+        at: now_unix(),
+        head: git::resolve_ref(root, "HEAD").ok().flatten(),
+    }
+}
+
+/// Mint over a deferred call whose task completed, only if HEAD is still the
+/// commit it launched on: a moved HEAD means the task checked other bytes, and
+/// the gate asks again (CLOUD-2677).
+fn replay_mints(overrides: &Overrides, pending: &background::Pending, raw: &serde_json::Value) {
+    let Ok(Some(head)) = git::resolve_ref(hook_authority_root(), "HEAD") else {
+        return;
+    };
+    if pending.head.as_deref() != Some(head.as_str()) {
+        return;
+    }
+    let result = facts::payload_in(raw).unwrap_or(serde_json::Value::Null);
+    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+        return;
+    };
+    mint_with_policy(&policy, &pending.tool, &pending.input, &result);
 }
 
 /// Persist this post-tool response as a local capture (CLOUD-919).
@@ -24715,7 +25866,7 @@ fn capture_response(
     // resolves through `hook_authority_root`, and a capture written under one
     // root while its budget is read from another is two authorities for one
     // call.
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         note(capture::STATE_ROOT_UNRESOLVED);
         return;
     };
@@ -24845,7 +25996,7 @@ fn record_absent_response(
     harness: hook::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         return;
     };
     record_absence(&root, envelope, harness, capture::RESPONSE_ABSENT, advice);
@@ -24892,14 +26043,12 @@ fn record_absence(
 
 /// A capture notice as the class it belongs to (CLOUD-2078): the reason id is
 /// its one subject.
-//MUTANT capture-notice-misclassed|s@^    let class = verdict::Native::OutputWriteMissing;$@    let class = verdict::Native::RunBroken;@|a_capture_notice_is_a_classed_finding
 fn capture_notice(reason: &str) -> refusal::Refusal {
     let class = verdict::Native::OutputWriteMissing;
     refusal::Refusal::engine(class, &[verdict::artifact(reason)], refusal::Fix::None)
 }
 
 /// The one push site for a capture notice, classed.
-//MUTANT capture-notice-free-text|s@^    push_finding(advice, severity::AdvisoryTier::Advisory, notice);$@    drop(notice); advice.push(advisory::Advice::new(severity::AdvisoryTier::Advisory, format!("hook.capture.response: {reason}")));@|every_advisory_push_carries_a_class
 fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
     let notice = capture_notice(reason);
     push_finding(advice, severity::AdvisoryTier::Advisory, notice);
@@ -24915,10 +26064,6 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
 /// Under `BATTEN_DISK_TRACE=1` a pre-tool call prints `disk-call <tool>
 /// <free_before_mb> <free_after_mb>` to stderr, band declared or not: the trace
 /// is what sizes the band.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT hook-skips-collection|s@^    let collected = band.and_then(\x7cprune\x7c {$@    let collected = None::<collect::Collected>.and_then(\x7c_: \&prune::Prune\x7c {@|the_hook_collects_before_admitting_under_pressure
-//MUTANT session-rearm-skipped|s@^                collect::rearm(\&tree);$@@|a_session_start_re_arms_every_fingerprint
-//MUTANT trace-silent|s@^        let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);$@@|the_hook_traces_a_call_under_the_trace_variable
 fn collect_before_admitting(
     envelope: &hook::Envelope,
     pruning: Option<&prune::Prune>,
@@ -24999,7 +26144,7 @@ fn collect_before_admitting(
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(hook_session_home().join(config::CONFIG_FILE)).ok()?;
     let parsed: config::Config = toml::from_str(&text).ok()?;
     parsed.capture
 }
@@ -25060,41 +26205,156 @@ fn hook_authority_root() -> &'static Path {
 
 static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-/// Pin [`hook_authority_root`] for this call from the session, before any reader
-/// asks (CLOUD-2204).
+// CLOUD-2672's ledger split, at the legend read in `render`.
+/// The session's home (CLOUD-2672): the root its ledger lives under, which a
+/// visit to another repository never moves. Falls back to the judging root where
+/// the call resolved no home, so a reader is never left without a store.
+fn hook_session_home() -> &'static Path {
+    HOOK_SESSION_HOME
+        .get()
+        .map_or_else(hook_authority_root, PathBuf::as_path)
+}
+
+static HOOK_SESSION_HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Where this call stands and what it reaches, as [`seed_hook_authority`]
+/// placed it (CLOUD-2672).
+fn hook_reach() -> &'static hook::Reach {
+    HOOK_REACH.get().unwrap_or(&hook::NO_REACH)
+}
+
+static HOOK_REACH: std::sync::OnceLock<hook::Reach> = std::sync::OnceLock::new();
+
+/// Pin the call's two roots before any reader asks (CLOUD-2204, CLOUD-2672).
 ///
-/// **The cwd is where the shell happens to stand, not which repository governs
-/// the session.** A host launched above its checkouts (`/home/user` holding
-/// `batten/` and `marketing/`, the ordinary multi-repository cloud session)
-/// snaps the shell back to that parent whenever a `cd` leaves a working
-/// directory, and from there [`anchor`] resolves no authority. Measured
-/// 2026-10-11: every call after that point was judged by
-/// `Policy::declaring_nothing` — `forge read first` never routed a bare,
-/// proxied `gh api` write to the memory saying why it 403s — and nothing said
-/// the gates had gone dark.
+/// **The judging root is the call's target.** A call is judged by the first of
+/// its targets (`hook::call_targets`) that places in a repository holding an
+/// authority, and otherwise by its session's home. The start directory is the
+/// payload's `cwd` where the host sent one, the process's otherwise.
 ///
-/// So a call whose cwd resolves an authority records it for its session, and a
-/// call whose cwd resolves none is judged by the one its session last stood in.
+/// **The home is where the session started, and a visit does not move it.** It
+/// is written by the first call whose START directory places an authority; a
+/// later call re-homes it only from the same repository (a linked worktree of
+/// it, CLOUD-2532) or when the home lost its authority. So the session's ledger
+/// (sightings, captures, history reads) stays in one store, while what a call
+/// is judged by, and the receipts it mints, follow the repository it acts on.
+///
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
-    let Some(session) = envelope.session.as_deref() else {
-        return hook_authority_root();
-    };
-    let here = anchor();
-    if here.join(config::CONFIG_FILE).is_file() {
-        let _ = state::record_session_authority(session, &git::canonical(&here));
-        // Pinned here too, so the readers below do not resolve `anchor` again:
-        // a second git spawn on the hottest path for an answer already in hand.
-        let _ = HOOK_AUTHORITY_ROOT.set(here);
-        return hook_authority_root();
+    let start = envelope
+        .cwd
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let start_root = authority_placed(&start);
+    let home = session_home(envelope.session.as_deref(), start_root.as_deref());
+    let placed = hook::call_targets(envelope, &start).and_then(|targets| placed_roots(&targets));
+    let judging = target_root(placed.as_deref());
+    if let Some(root) = judging.or_else(|| home.clone()) {
+        // The anchor's own spelling where it names the same directory, so a
+        // session standing at its root keeps the relative `.` every pointer is
+        // rendered against.
+        let here = anchor();
+        let pinned = if git::canonical(&here) == root {
+            here
+        } else {
+            root
+        };
+        let _ = HOOK_AUTHORITY_ROOT.set(pinned);
     }
-    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
-        let _ = HOOK_AUTHORITY_ROOT.set(root);
+    if let Some(home) = &home {
+        let _ = HOOK_SESSION_HOME.set(home.clone());
     }
+    let _ = HOOK_REACH.set(reach_of(&start, placed.as_deref(), home.as_deref()));
     hook_authority_root()
+}
+
+/// The root a directory places in, where that root carries the authority.
+fn authority_placed(dir: &Path) -> Option<PathBuf> {
+    match git::placement(dir, config::CONFIG_FILE) {
+        git::Placement::Root(root) if root.join(config::CONFIG_FILE).is_file() => Some(root),
+        _ => None,
+    }
+}
+
+/// The session's home: recorded by the first call whose start directory places
+/// an authority, and moved only within the same repository or off a ghost.
+fn session_home(session: Option<&str>, start_root: Option<&Path>) -> Option<PathBuf> {
+    let Some(session) = session else {
+        return start_root.map(Path::to_path_buf);
+    };
+    let home = state::recorded_session_authority(session, config::CONFIG_FILE);
+    if let Some(start_root) = start_root
+        && (home.is_none() || same_repository(home.as_deref(), start_root))
+    {
+        let _ = state::record_session_authority(session, start_root);
+        return Some(start_root.to_path_buf());
+    }
+    home
+}
+
+/// Whether `home` and `root` are checkouts of one repository: one common dir.
+fn same_repository(home: Option<&Path>, root: &Path) -> bool {
+    home.is_some_and(|home| {
+        matches!(
+            (git::common_dir(home), git::common_dir(root)),
+            (Ok(left), Ok(right)) if left == right
+        )
+    })
+}
+
+/// Each target's root, in target order, or `None` where one cannot be placed.
+/// A target in no repository has no root and is skipped.
+fn placed_roots(targets: &[PathBuf]) -> Option<Vec<PathBuf>> {
+    let mut roots = Vec::new();
+    for target in targets {
+        match git::placement(target, config::CONFIG_FILE) {
+            git::Placement::Root(root) => roots.push(root),
+            git::Placement::Outside => {}
+            git::Placement::Unplaceable => return None,
+        }
+    }
+    Some(roots)
+}
+
+/// The first placed root that carries an authority.
+fn target_root(placed: Option<&[PathBuf]>) -> Option<PathBuf> {
+    placed?
+        .iter()
+        .find(|root| root.join(config::CONFIG_FILE).is_file())
+        .cloned()
+}
+
+/// The reach the policy input and the reach gate read. The home's config is
+/// read only for a call that leaves the home or cannot be placed, so a call at
+/// home costs no second load.
+fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> hook::Reach {
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let roots = placed.map(|placed| {
+        let mut roots: Vec<String> = placed.iter().map(|root| text(root)).collect();
+        roots.sort();
+        roots.dedup();
+        roots
+    });
+    let outward = home.is_some_and(|home| {
+        roots
+            .as_ref()
+            .is_none_or(|roots| roots.iter().any(|root| *root != text(home)))
+    });
+    let grade = home.filter(|_| outward).and_then(|home| {
+        let loaded = config::load(&home.join(config::CONFIG_FILE)).ok()?;
+        Some(rules::native_grade(
+            &loaded.rules,
+            rules::NativeGate::RepositoryReach,
+        ))
+    });
+    hook::Reach {
+        cwd: Some(text(&git::canonical(start))),
+        roots,
+        home: home.map(text),
+        grade,
+    }
 }
 
 fn load_policy(
@@ -25107,7 +26367,6 @@ fn load_policy(
 /// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
 /// collector's band costs the pre-tool path nothing beyond the load it already
 /// pays (CLOUD-2197).
-//MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new(), None));@|an_auto_mode_call_is_granted_where_no_authority_governs
 fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<HookConfig> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
@@ -25271,7 +26530,6 @@ impl HookLoads {
 /// Returns a [`UsageError`] for an unreadable authority or a `--jobs` value that
 /// is not a positive whole number, and whatever [`exec::run_with`] returns
 /// otherwise — including the child's own code, as a [`error::Passthrough`].
-//MUTANT exec-lock-verdict-discarded|s@^    exec::run_with(&command, &patterns, &settings, err)$@    exec::run_with(\&command, \&patterns, \&settings, err).or(Ok(ExitCode::Success))@|the_wrapped_exit_code_survives_the_lock
 fn run_exec(
     request: &cli::ExecRequest,
     overrides: &Overrides,
@@ -25537,18 +26795,26 @@ struct Rendering<'a> {
 /// The one chooser between a finding's two arms (CLOUD-2075): the source's
 /// declared lifecycle, consulted against the context's store.
 fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusal) -> refusal::Arm {
+    // THE UNLOADED REFUSAL SAYS ITS CAUSE ON EVERY FIRING, as an `ask` does
+    // (CLOUD-2595 §2f). It carries no subjects and no routes, so its pointer arm
+    // is the bare head — measured in a consumer, every call after the
+    // first read `batten deny engine-cannot-adjudicate` and nothing else, and the
+    // session never saw WHY its config would not load. A refusal that blocks
+    // every call is the one whose reason must never be shed.
+    if refusal.rule() == UNADJUDICABLE {
+        return refusal::Arm::Full;
+    }
     match (source.finding_lifecycle(), envelope.context()) {
         (hook::Lifecycle::Sighted, Some(context)) => {
-            refusal::sight(hook_authority_root(), &context, refusal)
+            refusal::sight(hook_session_home(), &context, refusal)
         }
         (hook::Lifecycle::Sighted, None) | (hook::Lifecycle::PrintedFull, _) => refusal::Arm::Full,
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-//MUTANT grant-said-every-firing|s@^            let arm = arm_for(hook::HookSource::Harness, envelope, \&grant);$@            let arm = refusal::Arm::Full;@|a_grant_says_its_definition_once_per_window
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT ask-arm-sighted|s@^            let asked = refusal.render_finding(refusal::Arm::Full);$@            let asked = refusal.render_finding(arm_for(hook::HookSource::Harness, envelope, \&refusal));@|an_ask_carries_the_full_arm_on_every_firing
+/// The id the hook refuses every call under when its config will not load.
+const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
+
 fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -25604,7 +26870,7 @@ fn render(
         hook::Decision::Deny(refusal) => {
             // A refusal its rule asked to be counted (CLOUD-2292). A write at
             // the boundary like the one below; the rule decides, not the engine.
-            doctor::record_gap(hook_authority_root(), &refusal);
+            doctor::record_gap(hook_session_home(), &refusal);
             // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
             // `render_finding` projects and stays pure; consulting-and-marking
             // the context's store is a write, and a write belongs at the boundary
@@ -25614,7 +26880,7 @@ fn render(
             // earns the epoch's legend unconditionally (CLOUD-2145).
             let legend = envelope
                 .context()
-                .is_some_and(|context| refusal::legend_due(hook_authority_root(), &context))
+                .is_some_and(|context| refusal::legend_due(hook_session_home(), &context))
                 .then_some(refusal::LEGEND);
             let rendered = refusal.render_finding(arm);
             let reason = match legend {
@@ -25984,7 +27250,7 @@ fn run_judges(
                 path: Some((*path).clone()),
                 line: None,
                 class: judge::PayloadClass::FileText,
-                bytes: std::fs::read(root.join(path)).unwrap_or_default(),
+                bytes: crate::fsio::read(root.join(path)).unwrap_or_default(),
             });
         }
         let rule_text = judge::RuleText {
@@ -26620,17 +27886,29 @@ fn register_completion(
     // stopping point. Not an optimisation: an unsignalled session's outcome is
     // already decided, and asking git anyway would let a misconfigured target
     // fail a scan whose verdict never depended on it.
+    let mut shallow = false;
     let landing = match signal {
         None => None,
         Some(_) => match worktree::land_target(repo, config.must_land_on.as_deref())? {
-            Some(target) => Some((
-                git::landing(repo, &target, "HEAD", git::Window::DEFAULT)?,
-                target,
-            )),
+            Some(target) => {
+                let clone_is_shallow = git::is_shallow(repo)?;
+                let landing = worktree::landing_or_shallow(repo, &target, clone_is_shallow)?;
+                shallow = landing.is_none();
+                landing.map(|landing| (landing, target))
+            }
             None => None,
         },
     };
-    let outcome = completion::assess(signal, landing.as_ref().map(|(landing, _)| landing));
+    // A shallow clone is could-not-look (CLOUD-2655), built here: `assess` only
+    // knows the no-target reason.
+    let outcome = if shallow {
+        completion::Outcome::NotComputable {
+            reason: worktree::SHALLOW,
+        }
+    } else {
+        completion::assess(signal, landing.as_ref().map(|(landing, _)| landing))
+    };
+    record_unlanded_step(repo, config, stream.session.as_deref(), &outcome);
 
     let Some(observation) = outcome.observation() else {
         // Not signalled: nothing to write. Reported on the top rung, because a
@@ -26708,6 +27986,141 @@ fn register_completion(
         ),
     )?;
     Ok(())
+}
+
+use completion::Step;
+
+/// The receipt family carrying the Stop's step for this claim (CLOUD-2655).
+/// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
+const UNLANDED_STEP: &str = "unlanded-step";
+
+/// Write `<fingerprint> <step>` for this claim, or remove the receipt where the
+/// outcome owes no step. Written at the mint because the store cannot carry a
+/// could-not-look on an identity with no record. Fail-silent, like every
+/// Stop-path receipt.
+fn record_unlanded_step(
+    repo: &Path,
+    config: &resolve::Resolved,
+    session: Option<&str>,
+    outcome: &completion::Outcome,
+) {
+    let Some(branch) = git::current_branch(repo).ok().flatten() else {
+        return;
+    };
+    let Ok(git_dir) = git::git_dir(repo) else {
+        return;
+    };
+    let path = recorder::record_path(&git_dir, UNLANDED_STEP, &branch, None);
+    let Some(step) = owed_step(outcome, config.landed_by, || {
+        push_state(repo, config.landed_by)
+    }) else {
+        let _ = std::fs::remove_file(path);
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let fingerprint = completion::identity(session).fingerprint.to_hex();
+    let _ = crate::durable::replace(&path, format!("{fingerprint} {}\n", step.as_str()));
+}
+
+/// The step `outcome` owes, if any: a raised claim's next step, by who lands
+/// it (CLOUD-2656), with `push` read only where that needs it; a shallow
+/// clone's could-not-look; nothing else.
+fn owed_step(
+    outcome: &completion::Outcome,
+    landed_by: config::LandedBy,
+    push: impl FnOnce() -> completion::PushState,
+) -> Option<Step> {
+    match outcome {
+        // Push state is read only in person mode, so the agent default costs
+        // nothing new.
+        completion::Outcome::Raised { .. } => Some(completion::next_step(landed_by, push())),
+        completion::Outcome::NotComputable { reason } if *reason == worktree::SHALLOW => {
+            Some(Step::Shallow)
+        }
+        _ => None,
+    }
+}
+
+/// Where the claim's commits are relative to its upstream (CLOUD-2656). Read
+/// only in person mode; any failure is could-not-look, never pushed.
+fn push_state(repo: &Path, landed_by: config::LandedBy) -> completion::PushState {
+    if landed_by == config::LandedBy::Agent {
+        return completion::PushState::NotComputable;
+    }
+    let Ok(upstream) = git::upstream_of_head(repo) else {
+        return completion::PushState::NotComputable;
+    };
+    let Some(upstream) = upstream else {
+        return completion::PushState::NoUpstream;
+    };
+    let shallow = git::is_shallow(repo).unwrap_or(true);
+    match worktree::landing_or_shallow(repo, &upstream, shallow) {
+        Ok(Some(landing)) if landing.is_landed() => completion::PushState::Pushed,
+        Ok(Some(_)) => completion::PushState::Unpushed,
+        _ => completion::PushState::NotComputable,
+    }
+}
+
+/// This branch's recorded step and its claim fingerprint, if any.
+fn unlanded_step(git_dir: &Path, branch: &str) -> Option<(String, Step)> {
+    let path = recorder::record_path(git_dir, UNLANDED_STEP, branch, None);
+    let text = crate::fsio::read_to_string(path).ok()?;
+    let (key, step) = text.trim().split_once(' ')?;
+    Some((key.to_owned(), Step::parse(step)?))
+}
+
+/// The step recorded for the claim `key`; an absent or mismatched receipt is
+/// `land`, today's behaviour.
+fn claim_step(git_dir: Option<&Path>, branch: &str, key: &str) -> Step {
+    git_dir
+        .and_then(|dir| unlanded_step(dir, branch))
+        .filter(|(recorded, _)| recorded == key)
+        .map_or(Step::Land, |(_, step)| step)
+}
+
+/// The refusal a claim's step speaks under (CLOUD-2656).
+fn step_refusal(step: Step, count: u64) -> refusal::Refusal {
+    let (class, fact) = match step {
+        Step::Push => (verdict::Native::CommitPushMissing, Some("unpushed")),
+        Step::NoUpstream => (verdict::Native::CommitPushMissing, Some("no-upstream")),
+        Step::PushUnknown | Step::Shallow => (verdict::Native::CommitShipUnknown, None),
+        Step::MergeHeld => (verdict::Native::CommitMergeHeld, None),
+        _ => (verdict::Native::CommitShipMissing, None),
+    };
+    let mut subjects = vec![verdict::artifact(completion::RULE_ID)];
+    if let Some(fact) = fact {
+        subjects.push(verdict::artifact(fact));
+    }
+    subjects.push(verdict::Subject::Count { count });
+    refusal::Refusal::engine(class, &subjects, refusal::Fix::None)
+}
+
+/// The Stop's could-not-look notice on a shallow clone (CLOUD-2655): said once
+/// per claim and step until the operator speaks, and never a refusal, because
+/// nothing was proven at risk.
+fn unlanded_unknown_pointer() -> Option<refusal::Refusal> {
+    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
+    let git_dir = git::git_dir(Path::new(".")).ok()?;
+    let step = unlanded_step(&git_dir, &branch);
+    let Some((key, Step::Shallow)) = step else {
+        return None;
+    };
+    let key = format!("{key} {}", Step::Shallow.as_str());
+    let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
+    if already_marked(Some(&spoken), &key) {
+        return None;
+    }
+    if let Some(parent) = spoken.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = crate::durable::append(&spoken, &key);
+    Some(refusal::Refusal::engine(
+        verdict::Native::CommitShipUnknown,
+        &[verdict::artifact(completion::RULE_ID)],
+        refusal::Fix::None,
+    ))
 }
 
 /// Register every guardrail bypass the session recorded (CLOUD-98).
@@ -27009,7 +28422,9 @@ fn anchor() -> PathBuf {
     if here.join(config::CONFIG_FILE).is_file() {
         return here;
     }
-    git::repo_root(&here).unwrap_or(here)
+    // The worktree's own authority before the repository's (CLOUD-2532): from a
+    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
+    config::authority_root(&here).unwrap_or(here)
 }
 
 /// Filter `findings` against this checkout's baseline, and fold what drifted
@@ -27096,8 +28511,6 @@ fn apply_baseline(
 /// row) admits nothing — there is no token an admission could bind. An
 /// unresolvable HEAD or epoch admits nothing. An unreadable store admits
 /// nothing. A store this cannot read must not be able to suppress.
-//MUTANT block-arm-removed|s@^                git::commit_record(root, "HEAD")$@                git::commit_record(root, "refs/batten/none")@|a_spent_block_in_the_head_commit_admits_with_no_store
-//MUTANT merge-parent-arm-removed|s@^                git::commit_record(root, "HEAD^2")$@                git::commit_record(root, "refs/batten/none")@|a_spent_block_on_a_merge_refs_second_parent_admits
 fn apply_admissions(
     findings: Vec<rules::Finding>,
     scan: &rules::Scan,
@@ -27349,9 +28762,6 @@ fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
 /// `absent_refuses` is whether a release the forge has positively not cut is a
 /// refusal on the caller's surface (CLOUD-2518), decided by the caller because
 /// only it knows whether the release must already exist there.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT uncut-release-could-not-look|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
-//MUTANT uncut-refused-everywhere|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if uncut(\&slug, tag, \&get) => {@|an_uncut_draft_stays_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
@@ -27505,7 +28915,6 @@ fn run_release_path(
 
 /// Post `verdict` as the `release-path` status on `sha`: `None` when posted,
 /// or the exit code of a post that failed.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn post_release_path(
     slug: &str,
     sha: &str,
@@ -27552,8 +28961,6 @@ fn post_release_path(
 ///
 /// `sealing` is whether the caller is `--seal`, the one surface an uncut
 /// release is judged on (CLOUD-2518).
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT trunk-read-from-head|s@^    let trunk = match worktree::committed_trunk(here, overrides) {$@    let trunk = match worktree::declared_trunk(here) {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 fn release_path_verdict(
     here: &Path,
     sha: &str,
@@ -27629,7 +29036,6 @@ fn release_path_verdict(
 /// The names `policy/release-assets.rego` demands that release `tag` lacks: the
 /// release's record written, then that one rule run over it (CLOUD-2033). The
 /// set is the module's, never restated.
-//MUTANT-SUITE crates/batten/tests/it/release_assets.rs
 fn release_assets_missing(
     tag: &str,
     mode: Mode,
@@ -28338,10 +29744,7 @@ fn run_rules(
                     path: &finding.path,
                     line: finding.line,
                     severity: finding.severity,
-                    report: severity::promote(
-                        severity::row_for_rule(finding.severity).report,
-                        config.fail_on_warning,
-                    ),
+                    report: severity::report_for(finding.severity, config.fail_on_warning),
                     identity: &finding.identity,
                 })
                 .collect(),
@@ -28664,7 +30067,7 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
                 UsageError::raise("the brief on stdin is not valid UTF-8".to_owned())
             })?
         }
-        Some(source) => std::fs::read_to_string(source).map_err(|err| {
+        Some(source) => crate::fsio::read_to_string(source).map_err(|err| {
             UsageError::raise(format!("cannot read the brief at {source}: {err}"))
         })?,
     };
@@ -28947,7 +30350,6 @@ fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
 
 /// `batten config`'s verbs. `config lint`'s exact output is pinned over the
 /// compiled binary, so its suite judges a mutant here (CLOUD-2303).
-//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
@@ -29313,7 +30715,7 @@ fn run_ci_suites(
     let mut subjects: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
         std::collections::BTreeMap::new();
     for suite in &suites {
-        let Ok(text) = std::fs::read_to_string(root.join(suite)) else {
+        let Ok(text) = crate::fsio::read_to_string(root.join(suite)) else {
             return widest(&format!("{suite} could not be read"), out, err);
         };
         subjects.insert(suite.clone(), rules::declared_subject(&text, "# subject:"));
@@ -29538,7 +30940,6 @@ fn run_diagnose(json: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<
 /// the stdout data lines are untouched, and what an agent reads carries the
 /// labels. Full for the first item of each class in the invocation, the
 /// pointer for the rest, so one invocation states a definition once.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn print_labelled(err: &mut dyn Write, findings: &[refusal::Refusal]) -> Result<()> {
     let mut stated = std::collections::BTreeSet::new();
     for finding in findings {
@@ -29582,11 +30983,13 @@ fn run_doctor_hooks(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
                 )?;
                 continue;
             }
+            // `<harness> <event> <reason> <file>: run <fix>` (CLOUD-2676): the
+            // file and the repair, so a finding is acted on rather than traced.
             for finding in &harness.findings {
                 writeln!(
                     out,
-                    "{} {} {}",
-                    harness.harness, finding.event, finding.reason
+                    "{} {} {} {}: run {}",
+                    harness.harness, finding.event, finding.reason, finding.file, finding.fix
                 )?;
             }
         }
@@ -29658,7 +31061,6 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(session_code(&report))
 }
 
-//MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
     // than unfinished work (CLOUD-1760). The two arms answer different questions —
@@ -29841,8 +31243,6 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 /// ONE CLASSED FINDING (CLOUD-2078): `commit port blocked`, the branch, the
 /// target, the commit, the count and each path as subjects, and the route out
 /// as its remedy — so the stop is one line a reader parses like every other.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT conflict-stop-misclassed|s@^    let class = crate::verdict::Native::CommitPortBlocked;$@    let class = crate::verdict::Native::CheckRunRed;@|the_conflict_stop_names_every_path_and_the_route_out
 #[must_use]
 pub fn land_conflict_stop(
     branch: &str,
@@ -30104,10 +31504,128 @@ pub fn land_ready_owes(
     }
 }
 
+/// The build script's marker scanner, compiled here only so its own unit tests run.
+#[cfg(test)]
+mod mutation_markers;
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A write's projection reads the file it replaces: a missing file is a
+    /// creation (no current text), while any OTHER read failure is
+    /// could-not-look, never a creation, so a ratchet is not judged against an
+    /// empty base it never read. #1276's sweep found the `NotFound` guard
+    /// unpinned.
+    ///
+    /// Fails by: the `NotFound` guard forced either way.
+    #[test]
+    fn a_projection_treats_only_a_missing_file_as_a_creation() {
+        let root = std::env::temp_dir().join(format!("batten-projected-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        let raw = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "new.txt", "content": "written\n" },
+        });
+        let envelope = hook::decode(hook::Harness::ClaudeCode, &raw.to_string()).unwrap();
+        assert_eq!(
+            projected_write(&root, "new.txt", &envelope),
+            Some((None, "written\n".to_owned())),
+            "a missing file is created from nothing"
+        );
+        assert_eq!(
+            projected_write(&root, "dir", &envelope),
+            None,
+            "a target that cannot be read is not a creation"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A deferred call owes a mint only when one row selects it by tool AND by
+    /// input. #1276's sweep found the conjunction unpinned: every case reaching
+    /// it either matched both halves or neither.
+    ///
+    /// Fails by: `&&` read as `||`, or either half dropped.
+    #[test]
+    fn a_mint_is_owed_only_when_its_tool_and_selector_both_select() {
+        let mint: crate::mint::Declared = serde_json::from_value(serde_json::json!({
+            "name": "issue-read",
+            "tool": "get_issue",
+            "key": "named",
+            "key_from": "id",
+            "requires": ["id"],
+            "mode": "replace",
+            "body": "{id}",
+            "selects_at": "state",
+            "selects": "open",
+        }))
+        .expect("a declared mint");
+        let rows = std::slice::from_ref(&mint);
+        let open = serde_json::json!({ "state": "open" });
+        let closed = serde_json::json!({ "state": "closed" });
+        assert!(mint_owed(rows, "get_issue", &open), "both halves select");
+        assert!(
+            !mint_owed(rows, "get_issue", &closed),
+            "the selector refuses"
+        );
+        assert!(!mint_owed(rows, "save_issue", &open), "the tool refuses");
+    }
+
+    /// The wake form answers 0 whatever rendered; the `--event` form keeps a
+    /// non-zero exit that carried no deny. #1276's sweep found `Ok(_) if wake`
+    /// unguarded: every forge case reaches the wake arm through a deny, never
+    /// through a rendering that is `Ok` and not `Success`.
+    ///
+    /// Fails by: the wake guard dropped from either arm.
+    #[test]
+    fn only_the_wake_form_turns_a_rendering_into_success() {
+        let mut err = Vec::new();
+        let kept = wake_exit(Ok(ExitCode::Violation), false, &mut err).unwrap();
+        assert_eq!(kept, ExitCode::Violation, "the event form keeps its exit");
+        let woken = wake_exit(Ok(ExitCode::Violation), true, &mut err).unwrap();
+        assert_eq!(woken, ExitCode::Success, "the wake form answers 0");
+        assert!(
+            wake_exit(Err(anyhow::anyhow!("denied")), false, &mut err).is_err(),
+            "the event form keeps a deny"
+        );
+        let woken = wake_exit(Err(anyhow::anyhow!("denied")), true, &mut err).unwrap();
+        assert_eq!(woken, ExitCode::Success, "a woken deny is a stderr line");
+        assert_eq!(String::from_utf8_lossy(&err), "denied\n");
+    }
+
+    /// `engine install`'s gnu probe (CLOUD-2595) keeps only bytes that ANSWER
+    /// here, judged by running them with no shell, and leaves no probe behind.
+    /// Real executables stand in for the release builds: `true` answers,
+    /// `false` refuses, and bytes that are no program cannot be run at all.
+    #[test]
+    fn a_build_is_kept_only_when_it_answers_here() {
+        // The gnu probe runs only on musl Linux; `true` and `false` stand in on
+        // every unix host, and a missing one is a failure, never a skip.
+        if cfg!(not(unix)) {
+            return;
+        }
+        let dir = crate::scratch::scratch("runs-here");
+        let program = |name: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|bin| Path::new(bin).join(name))
+                .find(|path| path.is_file())
+                .and_then(|path| crate::fsio::read(path).ok())
+        };
+        let answers = program("true").expect("every unix host carries `true`");
+        let refuses = program("false").expect("every unix host carries `false`");
+        assert!(runs_here(&dir, &answers), "a build that exits 0 is kept");
+        assert!(!runs_here(&dir, &refuses), "a build that exits 1 is not");
+        assert!(
+            !runs_here(&dir, b"not a program"),
+            "bytes that cannot run are not"
+        );
+        let left = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(left, 0, "the probe is removed whatever it answered");
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
@@ -30119,8 +31637,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&git_dir);
         std::fs::create_dir_all(&git_dir).unwrap();
         task::register(&git_dir, "land", "4194305", "verify", 100);
-        let reaped = reap_abandoned(&git_dir, "programs");
-        let left = task::abandoned(&git_dir, "programs").len();
+        let reaped = reap_abandoned(&git_dir);
+        let left = task::abandoned(&git_dir).len();
         let _ = std::fs::remove_dir_all(&git_dir);
         let found_dead = usize::from(cfg!(unix));
         assert_eq!(
@@ -30196,24 +31714,45 @@ mod tests {
                 from: 2,
                 to: 2,
                 bytes: 5,
+                tokens: 2,
             },
             capture::ViewField {
                 pointer: "/description".to_owned(),
                 from: 4,
                 to: 7,
                 bytes: 40,
+                tokens: 10,
             },
         ];
-        let line = view_pointer(Path::new("/s/views/d.md"), &index);
+        // THE VIEW IS THE ROUTE FOR EVERY BOUNDED RESULT (CLOUD-2284), as it is
+        // for a spill: `--field` alone prints only a size header, so the hint
+        // as printed reached no content.
+        let stored = capture::Capture {
+            stream: "response",
+            bytes: 45,
+            digest: "ab12".to_owned(),
+        };
+        let line = capture::pointer_line(Path::new("/s/views/d.md"), &index, &[&stored]);
         assert!(
-            line.starts_with("batten note output point now at /id:2-2(5B) /description:4-7(40B);"),
+            line.starts_with(
+                "batten note output point now at /id:2-2(5B 2T) /description:4-7(40B 10T) \
+                 response:ab12;"
+            ),
             "{line}"
         );
-        assert!(
-            line.contains("; run batten capture show <handle> --field /<name>"),
-            "{line}"
-        );
+        assert!(!line.contains("--field"), "{line}");
         assert!(line.ends_with("; read /s/views/d.md"), "{line}");
+    }
+
+    /// Fails by: the `FROM-TO` range an `output point now` subject prints
+    /// refused by `capture show --lines`, or either spelling misread.
+    #[test]
+    fn a_line_range_reads_in_either_spelling() {
+        for range in ["2:89", "2-89"] {
+            assert_eq!(parse_line(range, 0).unwrap(), 2, "{range}");
+            assert_eq!(parse_line(range, 1).unwrap(), 89, "{range}");
+        }
+        assert!(parse_line("2", 0).is_err());
     }
 
     /// CLOUD-2205's bound, as a pure function over fabricated paths, so the
@@ -30492,7 +32031,7 @@ mod tests {
             "the declared beat ran on the applied renewal"
         );
         let receipt = lease_receipt_path(&root, "claude/x").unwrap();
-        assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
+        assert_eq!(crate::fsio::read_to_string(receipt).unwrap(), "42\n");
         // And a consumer that declares no beat gets nothing spawned.
         let _ = std::fs::remove_file(&beat);
         lease_renewed(&root, "claude/x", 43, "");
@@ -30587,5 +32126,256 @@ mod tests {
         lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
         assert!(marker.exists(), "stopping a stalled lander is");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Each step speaks under its class, and the two push steps each name the
+    /// fact they mean.
+    ///
+    /// Fails by: an arm dropped, which reads its step as `Land`'s.
+    #[test]
+    fn each_unlanded_step_speaks_under_its_own_class() {
+        let class = |step| step_refusal(step, 1).verdict().map(str::to_owned);
+        assert_eq!(class(Step::NoUpstream), class(Step::Push));
+        assert_ne!(
+            step_refusal(Step::NoUpstream, 1),
+            step_refusal(Step::Push, 1),
+            "no-upstream is its own fact"
+        );
+        assert_eq!(class(Step::PushUnknown), class(Step::Shallow));
+        for step in [
+            Step::NoUpstream,
+            Step::PushUnknown,
+            Step::Shallow,
+            Step::MergeHeld,
+        ] {
+            assert_ne!(class(step), class(Step::Land), "{step:?}");
+        }
+    }
+
+    /// A message file's subject is its first line, read within 64 KiB: a file
+    /// under the cap needs no line end, one at it does.
+    #[test]
+    fn a_message_files_subject_is_read_within_its_first_64_kib() {
+        let dir = crate::scratch::scratch("first-line");
+        let write = |name: &str, body: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            path
+        };
+        let is = |text: &str| facts::Look::Is(text.to_owned());
+        assert_eq!(first_line(&write("short", b"subject\nbody")), is("subject"));
+        assert_eq!(first_line(&write("unended", b"subject")), is("subject"));
+        assert_eq!(
+            first_line(&write("mid", &[b'a'; 2_000])),
+            is(&"a".repeat(2_000)),
+            "under the cap, no line end is needed"
+        );
+        let mut early = b"s\n".to_vec();
+        early.extend(vec![b'a'; 70_000]);
+        assert_eq!(first_line(&write("early", &early)), is("s"));
+        assert_eq!(
+            first_line(&write("long", &vec![b'a'; 70_000])),
+            facts::Look::CouldNotLook,
+            "no line end within the cap"
+        );
+        assert_eq!(first_line(&dir.join("missing")), facts::Look::CouldNotLook);
+    }
+
+    #[test]
+    fn a_read_is_refused_only_past_one_mib() {
+        let dir = crate::scratch::scratch("read-capped");
+        std::fs::write(dir.join("at"), vec![b'a'; 1 << 20]).unwrap();
+        std::fs::write(dir.join("over"), vec![b'a'; (1 << 20) + 1]).unwrap();
+        assert_eq!(read_capped(&dir.join("at")).unwrap().len(), 1 << 20);
+        assert!(read_capped(&dir.join("over")).is_err());
+    }
+
+    /// A set is judged at the call only with every entry literal, none
+    /// embedded, every other member readable, and an absent target named.
+    #[test]
+    fn a_set_is_judged_at_the_call_only_when_literal_and_readable() {
+        let root = crate::scratch::scratch("set-members");
+        std::fs::write(root.join("a.md"), "a").unwrap();
+        std::fs::write(root.join("b.md"), "b").unwrap();
+        let set = |files: &[&str], embedded: bool| budget::BudgetSet {
+            files: files.iter().map(|file| (*file).to_owned()).collect(),
+            max_tokens: 1,
+            max_lines: None,
+            max_bytes_per_file: None,
+            embedded: if embedded {
+                vec![budget::EmbeddedDecl {
+                    path: String::from("c.toml"),
+                    key: String::from("k"),
+                }]
+            } else {
+                Vec::new()
+            },
+        };
+        let b = Some([(String::from("b.md"), String::from("b"))].into());
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], false), "a.md", true),
+            b
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], true), "a.md", true),
+            None
+        );
+        assert_eq!(
+            set_members(&root, &set(&["*.md"], false), "a.md", true),
+            None
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], false), "c.md", false),
+            None,
+            "an absent target no entry names"
+        );
+        let both = Some(
+            [
+                (String::from("a.md"), String::from("a")),
+                (String::from("b.md"), String::from("b")),
+            ]
+            .into(),
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md", "c.md"], false), "c.md", false),
+            both,
+            "an absent target named exactly"
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "gone.md"], false), "a.md", true),
+            None,
+            "an unreadable member"
+        );
+    }
+
+    #[test]
+    fn two_paths_in_one_checkout_are_one_repository() {
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(same_repository(Some(here), &here.join("src")));
+        assert!(!same_repository(None, here));
+    }
+
+    /// Fails by: the forge asked when the request already names its PR, or
+    /// when no row carries one.
+    #[test]
+    fn the_forge_is_asked_only_for_a_live_pr_the_request_does_not_name() {
+        let issue = |live_pr: Option<&str>| claim::Issue {
+            id: String::from("CLOUD-1"),
+            status: String::from("Todo"),
+            assigned: false,
+            live_pr: live_pr.map(String::from),
+            description: None,
+            created_at: None,
+        };
+        let unnamed = claim::Request::default();
+        let named = claim::Request {
+            own_pr: Some(String::from("7")),
+            ..claim::Request::default()
+        };
+        assert!(asks_forge(&unnamed, &[issue(None), issue(Some("7"))]));
+        assert!(!asks_forge(&unnamed, &[issue(None)]));
+        assert!(!asks_forge(&named, &[issue(Some("7"))]));
+    }
+
+    /// A pathspec is literal only when it is not `.`, magic, a glob or a
+    /// directory: each of those may name more than one path.
+    #[test]
+    fn a_pathspec_is_literal_only_when_it_names_one_path() {
+        let repo = crate::scratch::scratch("placed-pathspecs");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        std::fs::create_dir_all(repo.join("d")).unwrap();
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        std::fs::write(repo.join("d/x"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt"), String::from("d/x")], "seed")
+            .unwrap();
+        let specs = ["a.txt", ":(top)a.txt", "*.txt", "d", "."];
+        let placed = placed_pathspecs(&hook::PathspecCall {
+            dir: repo.clone(),
+            pathspecs: specs.iter().map(|spec| (*spec).to_owned()).collect(),
+        })
+        .unwrap();
+        let literal: Vec<bool> = placed
+            .iter()
+            .map(|entry| entry["literal"].as_bool().unwrap())
+            .collect();
+        assert_eq!(literal, [true, false, false, false, false], "{placed:?}");
+    }
+
+    /// Only a shallow clone's could-not-look owes a step; any other one owes
+    /// nothing, so no receipt says `shallow` about a clone that is not.
+    #[test]
+    fn only_a_shallow_could_not_look_owes_a_step() {
+        let owed = |reason| {
+            owed_step(
+                &completion::Outcome::NotComputable { reason },
+                config::LandedBy::Agent,
+                || completion::PushState::NotComputable,
+            )
+        };
+        assert_eq!(owed(worktree::SHALLOW), Some(Step::Shallow));
+        assert_eq!(owed("the trunk is unreadable"), None);
+    }
+
+    /// A spilled result is within the bound exactly at it and not one token
+    /// past; a file whose bytes alone prove it over is never read.
+    #[test]
+    fn a_spill_is_within_its_bound_exactly_at_it() {
+        let dir = crate::scratch::scratch("spills-within");
+        let text = "word ".repeat(400);
+        let path = dir.join("leaf");
+        std::fs::write(&path, &text).unwrap();
+        let spilled = [stream_input::Spilled {
+            pointer: String::from("/a"),
+            path,
+            bytes: text.len() as u64,
+        }];
+        let inline = serde_json::json!({"b": "one two"});
+        let total = o200k::chunked_tokens(text.as_bytes()) + o200k::tokens("one two");
+        assert!(spills_within(&inline, &spilled, total));
+        assert!(!spills_within(&inline, &spilled, total - 1));
+        let huge = [stream_input::Spilled {
+            bytes: 128 * (total + 1),
+            ..spilled[0].clone()
+        }];
+        assert!(
+            !spills_within(&inline, &huge, total),
+            "over by its bytes alone"
+        );
+    }
+
+    /// A spilled result is kept whole only under a bound raised past the
+    /// default, and then only when it fits: the default itself admits nothing,
+    /// even a result within it. #1276's sweep found the guard unpinned.
+    ///
+    /// Fails by: `>` read as `>=`, or `&&` read as `||` (every spill kept whole
+    /// under any raised bound).
+    #[test]
+    fn only_a_raised_bound_keeps_a_spill_and_only_when_it_fits() {
+        let dir = crate::scratch::scratch("spills-admitted");
+        let path = dir.join("leaf");
+        std::fs::write(&path, "word").unwrap();
+        let spilled = [stream_input::Spilled {
+            pointer: String::from("/a"),
+            path,
+            bytes: 4,
+        }];
+        let inline = serde_json::json!({});
+        let default = capture::DEFAULT_RESULT_MAX_TOKENS;
+        assert!(
+            spills_admitted(&inline, &spilled, default + 1),
+            "raised and fits"
+        );
+        assert!(
+            !spills_admitted(&inline, &spilled, default),
+            "the default admits nothing, however small"
+        );
+        let over = [stream_input::Spilled {
+            bytes: 128 * (default + 2),
+            ..spilled[0].clone()
+        }];
+        assert!(
+            !spills_admitted(&inline, &over, default + 1),
+            "raised, but the result does not fit"
+        );
     }
 }

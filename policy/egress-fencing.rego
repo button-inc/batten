@@ -42,6 +42,17 @@
 # decides nothing. So it is an in-repo module by default, and non-negotiable rule
 # 1 is why it may name `mise.toml` and the host at all.
 #
+# ─── THE SECOND SURFACE IS RETIRED (CLOUD-2688) ──────────────────────────────
+#
+# This module also read `batten.toml`'s `[[provision.env]]` rows, the fence for
+# mise's OWN resolver through the provisioning launcher (CLOUD-1550). CLOUD-2688
+# retired that route: the container carries no PAT, the agent proxy's App
+# credential carries this repository, and the toolchain installs LOCKED from
+# `mise.lock` with no `api.github.com` resolve at all. The rows, the launcher and
+# the arms that demanded them went together; keeping the arms would have refused
+# every release head over a fence nothing provisions. The `[env]` half stays: it
+# is what applies wherever a real token exists.
+#
 #MUTANT dropped-fence-passes|s@not env\[key\]@false@|a_deleted_fence_is_refused
 #MUTANT narrowed-fence-passes|s@not regex.match(data.batten.patterns\["egress-resolver-host"\], value)@false@|a_fence_that_no_longer_names_the_resolver_host_is_refused
 # NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, for the reason
@@ -49,8 +60,6 @@
 # clause the engine cannot make fire is reported as a survivor and the runner is
 # right to report it. The clause stays because it is correct.
 #
-#MUTANT provision-fence-dropped-passes|s@not declares_spelling(key)@false@|a_deleted_provision_fence_is_refused
-#MUTANT provision-fence-narrowed-passes|s@not fences_resolver(key)@false@|a_provision_fence_that_no_longer_names_the_resolver_host_is_refused
 #MUTANT-SUITE crates/batten/tests/it/egress_fencing.rs
 
 # METADATA
@@ -129,99 +138,6 @@ violation contains {
 } if {
 	some path, _ in input.tree.missing
 	path == "mise.toml"
-}
-
-# ---------------------------------------------------------------------------
-# THE SECOND SURFACE, AND IT IS THE ONE THAT ACTUALLY RUNS (CLOUD-1550).
-#
-# `mise.toml`'s `[env]` reaches what mise SPAWNS, never mise's own resolver
-# (CLOUD-1455). The wrapper at `~/.local/bin/mise` is what fences the resolver,
-# and in a provisioned container that wrapper is generated from `batten.toml`'s
-# `[[provision.env]]` rows. So the arms above could pass over a tree whose real
-# fence had been deleted — measured on #889, which replaced the fence with
-# `unset HTTPS_PROXY` and was refused by nothing.
-#
-# `provision` is an ARRAY of tables and the fence may live on any row, so this
-# asks whether SOME row declares it rather than naming an index. A row-shaped
-# read, not a text scan: `.claude/rules/policy-modules.md` refuses a predicate
-# built on text a round trip rewrites, and the six shell spellings of `unset`
-# are exactly that class.
-# ---------------------------------------------------------------------------
-
-provision_rows := r if {
-	r := input.tree.documents["batten.toml"].provision
-	is_array(r)
-}
-
-declares_spelling(key) if {
-	some row in provision_rows
-	some entry in row.env
-	entry.name == key
-}
-
-fences_resolver(key) if {
-	some row in provision_rows
-	some entry in row.env
-	entry.name == key
-	some host in entry.prepend_list
-	regex.match(data.batten.patterns["egress-resolver-host"], host)
-}
-
-# C: no provision row declares the spelling at all.
-violation contains {
-	"rule": "provision guard missing",
-	"verdict": "provision declare dropped",
-	"subjects": [{"path": "batten.toml"}, {"artifact": key}],
-} if {
-	some key in spellings
-	provision_rows
-	not declares_spelling(key)
-}
-
-# D: a row declares it and no longer prepends the host it exists for.
-violation contains {
-	"rule": "provision guard missing",
-	"verdict": "provision declare partial",
-	"subjects": [{"path": "batten.toml"}, {"artifact": key}],
-} if {
-	some key in spellings
-	declares_spelling(key)
-	not fences_resolver(key)
-}
-
-# E: THE WHOLE TABLE IS GONE, WHICH IS NOT WHAT C AND D DECIDE.
-#
-# Both arms above are guarded on `provision_rows`, and that rule is UNDEFINED
-# when `batten.toml` parses and carries no `provision` array — so Rego reads
-# their bodies as not holding, `input.tree.missing` stays empty because the file
-# read perfectly well, and the module reports zero violations over a tree whose
-# fence has been deleted outright. That is the exact case the second surface was
-# added for, arriving through the one shape its own cases did not fabricate:
-# `test_a_deleted_provision_fence_is_refused` deletes the `NO_PROXY` ENV ROW and
-# leaves the table standing.
-#
-# It carries no `artifact` subject on purpose. C and D name a spelling because a
-# spelling is what went missing; here nothing is left to name one against, and
-# inventing one would point a reader at a key the file never had.
-violation contains {
-	"rule": "provision guard missing",
-	"verdict": "provision declare dropped",
-	"subjects": [{"path": "batten.toml"}],
-} if {
-	# The document was READ — this is a statement about its content, and the
-	# arm below owns the case where nobody could look at all.
-	input.tree.documents["batten.toml"]
-	not provision_rows
-}
-
-# Could not look, for the second surface.
-violation contains {
-	"rule": "provision guard missing",
-	"verdict": "provision read unread",
-	"subjects": [{"path": path}],
-} if {
-	some path, _ in input.tree.missing
-	path == "batten.toml"
 }
 
 # --- cases -----------------------------------------------------------------
@@ -328,115 +244,15 @@ test_an_unrelated_missing_document_is_not_this_rules_business if {
 		with data.batten.patterns as patterns
 }
 
-# --- the second surface's cases --------------------------------------------
-#
-# `ptree` carries BOTH documents, because the two surfaces are independent: a
-# case supplying only one leaves the other's rules undefined, which is the
-# abstention shape and NOT a pass. The mise.toml half is held fenced here so a
-# finding can only come from the provision rows under test.
-
-fenced_row(key) := {"name": key, "prepend_list": ["api.github.com", "codeload.github.com"]}
-
-ptree(rows) := {"tree": {
-	"documents": {
-		"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}},
-		"batten.toml": {"provision": rows},
-	},
-	"missing": {},
-}}
-
-test_a_provision_fence_naming_the_host_in_both_spellings_passes if {
-	count(violation) == 0 with input as ptree([{"env": [fenced_row("NO_PROXY"), fenced_row("no_proxy")]}])
-		with data.batten.patterns as patterns
-}
-
-# THE FENCE MAY LIVE ON ANY `[[provision]]` ROW, so a second row carrying it is
-# as good as the first. This is what stops the predicate from hard-coding an
-# index the manifest is free to reorder.
-test_a_provision_fence_on_a_later_row_passes if {
-	count(violation) == 0 with input as ptree([
-		{"env": []},
-		{"env": [fenced_row("NO_PROXY"), fenced_row("no_proxy")]},
-	])
-		with data.batten.patterns as patterns
-}
-
-test_a_deleted_provision_fence_is_refused if {
-	found := violation with input as ptree([{"env": [{"name": "MISE_GITHUB_TOKEN", "from_first_set": ["X"]}]}])
-		with data.batten.patterns as patterns
-	count(found) == 2
-	every finding in found {
-		finding.verdict == "provision declare dropped"
-	}
-}
-
-# THE ARM C AND D CANNOT REACH. `ptree` always builds a `provision` key, so no
-# case above can produce the shape where the table is absent entirely — which is
-# why the defect survived the suite. This one builds `batten.toml` WITHOUT it.
-test_a_provision_table_deleted_outright_is_refused if {
-	found := violation with input as {"tree": {
+# THE RETIRED SURFACE STAYS RETIRED: a `batten.toml` with no fence rows, or none
+# at all, is not this module's business any more (CLOUD-2688).
+test_a_batten_toml_without_fence_rows_is_not_judged if {
+	count(violation) == 0 with input as {"tree": {
 		"documents": {
 			"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}},
-			"batten.toml": {"exec": []},
+			"batten.toml": {"provision": [{"env": []}]},
 		},
-		"missing": {},
-	}}
-		with data.batten.patterns as patterns
-	count(found) == 1
-	every finding in found {
-		finding.verdict == "provision declare dropped"
-	}
-}
-
-# THE OTHER DIRECTION, and it is what keeps the arm above from firing on a tree
-# nobody could read: an unparseable `batten.toml` is `missing`'s to report, and
-# the content arm must stay silent because there is no content to judge.
-test_an_unreadable_batten_toml_reports_could_not_look_and_not_a_dropped_table if {
-	found := violation with input as {"tree": {
-		"documents": {"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}}},
-		"missing": {"batten.toml": "unparsed"},
-	}}
-		with data.batten.patterns as patterns
-	count(found) == 1
-	every finding in found {
-		finding.verdict == "provision read unread"
-	}
-}
-
-test_a_provision_fence_that_no_longer_names_the_resolver_host_is_refused if {
-	found := violation with input as ptree([{"env": [
-		{"name": "NO_PROXY", "prepend_list": ["localhost"]},
-		{"name": "no_proxy", "prepend_list": ["localhost"]},
-	]}])
-		with data.batten.patterns as patterns
-	count(found) == 2
-	every finding in found {
-		finding.verdict == "provision declare partial"
-	}
-}
-
-# The lower-case half alone, for the reason the mise.toml pair already carries.
-test_a_provision_fence_on_only_the_upper_case_spelling_is_refused if {
-	found := violation with input as ptree([{"env": [
-		fenced_row("NO_PROXY"),
-		{"name": "no_proxy", "prepend_list": ["localhost"]},
-	]}])
-		with data.batten.patterns as patterns
-	count(found) == 1
-	some finding in found
-	finding.verdict == "provision declare partial"
-	finding.subjects[1].artifact == "no_proxy"
-}
-
-# COULD NOT LOOK, asserted for the second surface too: a `batten.toml` that
-# would not parse must refuse rather than read as a tree with no provision rows.
-test_an_unreadable_batten_toml_is_refused if {
-	found := violation with input as {"tree": {
-		"documents": {"mise.toml": {"env": {"NO_PROXY": fenced_value, "no_proxy": fenced_value}}},
 		"missing": {"batten.toml": "Unparsed"},
 	}}
 		with data.batten.patterns as patterns
-	count(found) == 1
-	some finding in found
-	finding.verdict == "provision read unread"
 }

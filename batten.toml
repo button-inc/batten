@@ -248,10 +248,11 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
 read = "read_memory"
-# `read_server = "serena"` (CLOUD-2229) is HELD until the release that carries
-# it: `main` pins v0.0.214, which does not know the key, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). It
-# returns with the pin that can read it.
+# The read is refused only where a declared source can reach `serena`
+# (CLOUD-2229). Held while `main` pinned v0.0.214, which could not read the key;
+# restored by CLOUD-2699 once the pin could. Without it, a session whose serena
+# connection died had every memory read refused toward a route it could not take.
+read_server = "serena"
 
 [[redirect]]
 glob = "policy/**"
@@ -365,15 +366,12 @@ tasks = "~/.claude/tasks/{session}"
 # this repository is a `mise run`, invoked by BARE NAME from the session handlers,
 # the git hooks and the agent's own shell — none of which can see batten's cache.
 #
-# THE PROXY HALF IS ALREADY THE TREE'S AND IS NOT REPEATED HERE. `mise.toml`'s
-# `[env]` block prepends the GitHub API and asset hosts to both spellings of
-# NO_PROXY and sets GH_TOKEN from the session PAT, so every `mise` invocation in
-# this repository reaches third-party release repos around the proxy. Measured
-# 2026-09-04: `mise exec -- env` carries
-# `NO_PROXY=api.github.com,objects.githubusercontent.com,…`. The old script's PATH
-# wrapper existed to do that before `[env]` did, and it is redundant rather than
-# missing — which is why no row here writes one. `policy/egress-fencing.rego`
-# refuses the commit that deletes that block.
+# THE PROXY HALF IS `mise.toml`'s AND IS NOT REPEATED HERE. Its `[env]` block
+# fences the GitHub API and asset hosts out of the proxy ONLY where a real token
+# exists to send — CI's, which mise-action sets — and leaves a session's traffic
+# on the proxy otherwise, because a cloud session carries no PAT (CLOUD-2688).
+# Installs need neither: they are locked (`session:install`). `policy/egress-
+# fencing.rego` refuses the commit that deletes that block.
 #
 # The version is not tracked automatically and deliberately so: a runner that
 # updated itself under a container would make two sessions on one commit run
@@ -386,169 +384,14 @@ unpack = "none"
 binary = "mise"
 link = "~/.local/bin"
 
-# THE RUNNER'S OWN RESOLVER, WHICH `mise.toml`'s `[env]` CANNOT REACH
-# (CLOUD-1455). The two rows below are the same two variables `[env]` already
-# declares, applied one layer earlier, because that is the only layer where they
-# work: `[env]` is applied to what the runner SPAWNS, while the HTTP client that
-# fetches a pinned tool reads the environment the runner was STARTED with.
-#
-# Measured 2026-09-05, one cold install of one pinned tool, only the environment
-# differing: declared through `mise.toml [env]` the install 403s; with the same
-# two variables in the process environment it succeeds. The ~120-line setup
-# script this repository retired shadowed `mise` with a wrapper that set exactly
-# these, and `mise.toml`'s own comment says so — the one-line Setup script
-# dropped the wrapper and took the proxy bypass and the credential with it.
-#
-# WHY EACH IS DERIVED RATHER THAN A LITERAL. The host already exempts its own
-# hosts from the proxy, so replacing `NO_PROXY` would send package-manager
-# traffic back through it; `prepend_list` adds and keeps. And a credential must
-# not be written into a tracked file at all, so the second row names where to
-# find one — the session's, falling back to the runner's own in CI, and nothing
-# at all where neither exists, which is the container-build case.
-#
-# `github.com` IS EXEMPTED HERE, AND THAT IS THE DIFFERENCE FROM `mise.toml`.
-# That file leaves it proxied so `git` keeps its proxy-provided auth to this
-# repository — a real constraint, and one that does not reach this row. These
-# variables are applied to the RUNNER'S OWN PROCESS by the launcher; `git` runs
-# in its own process and never sees them. So the reason to hold github.com back
-# does not apply, and holding it back costs the thing the row exists for: a
-# release asset is served from `github.com/<owner>/<repo>/releases/download/…`
-# before it ever redirects, so the proxy gets first refusal on the biggest
-# single source of these 403s.
-# AND THE BYPASS APPLIES ONLY WHERE THE INTERCEPTOR IS. A proxy is a legitimate
-# part of most networks and these rows honour one: `when_trust_names` reads the
-# host's trust bundle, and they apply only where a certificate authority under
-# that organisation is in it. Point `SSL_CERT_FILE` at a CA you chose and the
-# condition goes false, the rows do not apply, and the runner uses your proxy.
-#
-# THE ORGANISATION RATHER THAN A COMMON NAME, measured 2026-09-05: the bundle
-# here carries five interception authorities —
-#
-#   CN = CCR Upstream Proxy CA (staging)
-#   CN = CCR agent-proxy interception CA (production) 2026-08
-#   CN = sandbox-egress-gateway-production Egress Gateway CA
-#   CN = sandbox-egress-gateway-staging Egress Gateway CA
-#   CN = sandbox-egress-production TLS Inspection CA
-#
-# — and the direct path and the proxied path present DIFFERENT ones, so a row
-# keyed on a common name would silently miss whichever the author did not test.
-# `O` is the one field all five share.
-#
-# NOT THE PROXY VARIABLES, which is the same distinction one step out. Every
-# intercepting environment sets those, so a row keyed on them could never tell an
-# interceptor from a proxy somebody wants — and the point of this row is to be
-# false on the second.
-[[provision.env]]
-name = "NO_PROXY"
-when_trust_names = "Anthropic"
-prepend_list = [
-  "github.com",
-  "api.github.com",
-  "objects.githubusercontent.com",
-  "codeload.github.com",
-  "uploads.github.com",
-]
-
-[[provision.env]]
-name = "no_proxy"
-when_trust_names = "Anthropic"
-prepend_list = [
-  "github.com",
-  "api.github.com",
-  "objects.githubusercontent.com",
-  "codeload.github.com",
-  "uploads.github.com",
-]
-
-# THREE SOURCES, AND `GH_TOKEN` IS DELIBERATELY NOT ONE OF THEM. It is the obvious
-# candidate and it is measured harmful here: in this sandbox the ambient
-# `GH_TOKEN` is a proxy placeholder that answers 401 when sent straight to
-# GitHub, and these rows send traffic straight to GitHub. Anonymous is a worse
-# answer than authenticated and a better one than wrongly authenticated, so a row
-# that fell back to it would turn a rate-limited read into a refused one. Those
-# below are the same names `mise.toml`'s own `GH_TOKEN` template trusts: the
-# session's credential, then the job token CI's runner sets.
-#
-# `BATTEN_GITHUB_TOKEN` IS THE NAME THIS CONTAINER ACTUALLY INJECTS, and its
-# absence here was the whole of CLOUD-1474. With only the two original names,
-# neither is set in a fresh container, so this row produced nothing and mise fell
-# through to exactly the ambient placeholder the paragraph above rules out —
-# sending it direct, over the fence these rows raise, for a `Bad credentials`
-# 401. That is the reported `mise verify` failure, and it is not a scope verdict:
-# the same missing token reads as 403 on the proxied side, because there the
-# proxy substitutes its own credential instead. Re-measure with `mise cache
-# clear` before each arm; `ls-remote` caches, and a warm cache makes every arm
-# after the first success pass.
-[[provision.env]]
-name = "MISE_GITHUB_TOKEN"
-from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "MISE_GITHUB_TOKEN"]
-
-# THE INJECTED PLACEHOLDER MUST LOSE TO A REAL CREDENTIAL, ON EVERY NAME A TOOL
-# READS (CLOUD-1569). `GITHUB_TOKEN` and `GH_TOKEN` arrive in this container
-# carrying a value whose literal prefix is `proxy-`: it is not a credential, it
-# is the marker of one the proxy will substitute for its own. Proxied that never
-# reaches GitHub; fenced — which the two rows above do — it is sent verbatim and
-# GitHub answers `Bad credentials`. So the fence WITHOUT these rows converts a
-# 403 into a 401, which is precisely the bug this file's own `[env]` comment has
-# recorded all along and which #889 then re-diagnosed as a scope problem.
-#
-# `from_first_set` is the whole mechanism and no prefix test is needed: the real
-# names are tried first, so a placeholder is overwritten wherever a PAT exists
-# and left alone where none does. That last part is why the ambient name is
-# still listed last rather than omitted — in CI there is no PAT and the runner's
-# own token is the right answer, and a row that wrote nothing there would strip
-# a working credential to fix a container that is not CI.
-#
-# WHAT THIS STILL CANNOT DO, stated rather than implied. A `[[provision.env]]`
-# row can only SET a variable. It cannot UNSET one, and it cannot refuse a value
-# by its prefix — the schema carries `from_first_set`, `prepend_list` and
-# `when_trust_names` and nothing else. So a placeholder survives wherever no
-# real credential exists to displace it, and the proxy variables cannot be
-# cleared here at all even in a disposable container that declares itself one.
-# Both are CLOUD-1569's engine half.
-[[provision.env]]
-name = "GITHUB_TOKEN"
-from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "GITHUB_TOKEN"]
-reject_prefix = "proxy-"
-
-[[provision.env]]
-name = "GH_TOKEN"
-from_first_set = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN", "GH_TOKEN"]
-reject_prefix = "proxy-"
-
-# THE PROXY VARIABLES GO, IN A CONTAINER THIS ROW CAN NAME. `when_trust_names`
-# is the whole safety argument: it fires only where the trust bundle carries an
-# interception authority whose organisation is Anthropic, so a developer's
-# deliberately-configured proxy is never cleared. Where it DOES fire, the egress
-# is intercepted at the network layer regardless — the same certificate chain is
-# presented on both routes and must be trusted on both — so clearing these
-# trades away no confidentiality. It decides one thing only: whether the
-# injected credential is substituted for ours, or ours is respected.
-#
-# `NO_PROXY` above is kept rather than made redundant by this. The two answer
-# different clients: a tool reading `NO_PROXY` is steered per host, and a tool
-# that reads only `HTTPS_PROXY` is steered by its absence. Dropping either
-# leaves whichever class does not read the other still going through the proxy,
-# which is how `land-lock`'s `git push` stayed proxied while `mise` did not.
-[[provision.env]]
-name = "HTTPS_PROXY"
-when_trust_names = "Anthropic"
-unset = true
-
-[[provision.env]]
-name = "https_proxy"
-when_trust_names = "Anthropic"
-unset = true
-
-[[provision.env]]
-name = "ALL_PROXY"
-when_trust_names = "Anthropic"
-unset = true
-
-[[provision.env]]
-name = "all_proxy"
-when_trust_names = "Anthropic"
-unset = true
+# NO ENVIRONMENT ROWS, AND THE NINE THAT WERE HERE ARE GONE (CLOUD-2688). They
+# fenced the GitHub hosts out of the agent proxy, unset the proxy variables and
+# fed the runner a PAT, so it could reach GitHub's API directly — and there is no
+# PAT: the container carries only the proxy's `proxy-` placeholders. Fenced with
+# nothing to send, the runner could not install at all (measured 2026-11-11).
+# The API was never needed: `session:install` installs LOCKED, from the URL and
+# checksum `mise.lock` pins, through the proxy, which serves release assets and
+# refuses only API calls about repositories outside the session.
 
 [provision.platforms.linux-x86_64]
 url = "https://github.com/jdx/mise/releases/download/v2026.9.1/mise-v2026.9.1-linux-x64"
@@ -592,9 +435,9 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # publishes the same version for every platform here, each with a `.sig`. These
 # rows pin those bytes by sha256, measured on 2026-10-16 when the linux-x86_64
 # binary answered `cargo-mutants 27.1.0`; a changed artifact fails the checksum
-# rather than running. No link: `mutate sweep` applies this row itself and runs
-# cargo with the cached binary's directory first on PATH
-# (`Registry::with_provisioned`).
+# rather than running. Never linked onto PATH: `batten mutate cargo` resolves the
+# cached binary and runs it as cargo runs a subcommand (CLOUD-2253), so
+# cargo-mutants is the Rust half of the landing loop with nothing wrapping it.
 [[provision]]
 name = "cargo-mutants"
 version = "27.1.0"
@@ -1032,7 +875,26 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["verify", "linear-check"]
 key = "head"
-reason = "Run `mise run verify` (backgrounded), then `mise run linear-check`, then retry, or just `mise run land`, which drives the whole loop. Readying is what starts CI, so prove it green first."
+reason = "Run `mise run land` (backgrounded): each lap runs `verify` and `linear-check`, reusing a `verify` receipt already on this head, and readies the head itself. Readying is what starts CI, so it waits for a green head."
+
+# CLOUD-2707, half one: A PUSHED HEAD NO `verify` EVER SAW. Measured on PR #1276:
+# 42 row commits pushed over hours, each checked with clippy and its own tests
+# only, so the first full gate was `land`'s first lap and its sixteen findings,
+# a failing test and a Windows break all landed on the bundle's last hour instead
+# of on the row that caused each. AGENTS.md says push the imperfect draft, so
+# this is a WARN, never a deny: the push proceeds and each unverified push is
+# RECORDED in the findings store (never spoken: the model hears Batten only on
+# a refusal), so `check` and `doctor` show how often a branch was pushed past
+# the gate, and the row can be promoted once its record says it decides well.
+[[rule]]
+id = "branch run missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "warn"
+pattern = "git push"
+checks = ["verify"]
+key = "head"
+reason = "This head has no `verify` receipt. Run `mise run land` (backgrounded) after the push: each lap runs `verify`, so a finding is named at this row and not at the bundle's end."
 
 # CLOUD-859. The read-the-review gate, and this repository's FIRST `[[fact]]`
 # row — the agent-sourced channel has had no consumer since CLOUD-776 landed it.
@@ -1934,16 +1796,6 @@ regex = 'mise exec -- [a-z][a-z0-9._-]*'
 #
 # They are also better here than they were in a script: a list in a `[[pattern]]`
 # row is reviewable data a gate reads, which is rule 3 as well as rule 1.
-
-# A compiler diagnostic's POINTER line, as `--message-format=short` prints it:
-# `path:line:col: … error …` (CLOUD-1731). `batten singleton detach` keeps at most
-# three of these from a failed `cross-turn` run for the next turn to announce, so
-# a build log never reaches the window. `.*` between `: ` and `error` because
-# `CARGO_TERM_COLOR = "always"` puts escapes there; three drafts of the retired
-# one-liner died anchoring on a literal `: error`.
-[[pattern]]
-id = "compiler-error-pointer"
-regex = '^[^ :]+:[0-9]+:[0-9]+: .*error'
 
 # The package whose sub-closure `evaluator-closure` walks. Named ONCE: it is the
 # node the walk starts from AND the word the refusal uses, and two spellings of
@@ -3946,7 +3798,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "subscribe_pr_activity"
-reason = "No webhook babysitting. Run `mise run land` (backgrounded): it laps to the fast-forward by itself and stops only for a rebase conflict, a failed `verify` or red CI. Fetching CI on demand is fine."
+reason = "No webhook babysitting. To land, run `mise run land` (backgrounded): it stops only for a conflict, a failed `verify` or red CI. To watch forge events, run `batten forge poll --every N` as a `[[startup]]` row."
 
 # ONE PR ALL OF IT, AS A MECHANISM RATHER THAN A SENTENCE (CLOUD-1891).
 #
@@ -4148,55 +4000,6 @@ delta_sources = ["**"]
 # inherit the gate for it in the same preset.
 reason = "Name a shell program `.sh` or `.bash`; make a sibling it builds at run time a file the tree carries; and write no more shell than the base, since the `[census.shell]` homes may only lose shell lines."
 
-# The substitution family of the same kind (CLOUD-864). Measured over one
-# session's transcript: 34 of 38 Bash calls had a first-class tool that does the
-# job, and `Read`/`Grep`/`Glob` were used ZERO times — 15 `head -N`, 13 `grep`,
-# 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
-#
-# THE ROW IS ON THIS KIND BECAUSE OF WHAT DISTINGUISHES THE TWO CASES, and there
-# is no other kind that can hold it. `grep pat crates/` answers a question `Grep`
-# answers better; `git ls-files | grep crates/batten` is a filter over another
-# command's output that no tool replaces. Same program, same operand, opposite
-# verdicts — only the POSITION separates them. A `shape` row cannot see it:
-# `matching_shape_rows` iterates every segment with no index in scope, so it
-# would refuse the filter too. This kind is already defined over what surrounds a
-# command, which is exactly the fact in question.
-#
-# The list is the consumer's, like `filters` above. Another repository's `awk` may
-# have no better answer available; here every one of these has one.
-#
-# WHAT IT DELIBERATELY DOES NOT CATCH, so nobody reads silence as coverage: a
-# path reached through a shell variable (`grep "$p" "$d"` names no path the
-# parser can see, and guessing would refuse work over an unnameable target); the
-# native `Grep`/`Read` tools, which arrive as structured input rather than a
-# command line; and anything outside the repository, which keeps the
-# `>/tmp/x.log` form the row above MANDATES allowed.
-[[rule]]
-id = "tool select other"
-kind = "pipeline"
-scope = "mediated_call"
-severity = "deny"
-#
-# `sed:-n` is QUALIFIED and the rest are not, on a distinction the corpus makes
-# and a bare name cannot. `sed -n '1,40p' f` prints a range — `Read(offset,
-# limit)`, and the single most-measured shape here. `sed 's/a/b/' f` transforms
-# the stream, which no first-class tool does, so refusing it would tell the
-# caller "a tool answers this directly" when none does. The other eight read a
-# file or list paths in every mode they have, so they need no qualifier.
-#
-# `wc` stays unqualified deliberately: `wc -l f` has no range-read equivalent,
-# but a count over a pattern answers the question that reaches for it, and the
-# reason text names that capability.
-substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
-#
-# THE REASON NAMES CAPABILITIES, NEVER PRODUCTS (CLOUD-998). It used to name
-# `Read(offset, limit)`, `Grep`, `Glob` and Serena's symbol tools as literals.
-# That is wrong wherever a session does not carry them — the structured surface
-# is not guaranteed present, and a remedy naming an absent tool is unactionable
-# in exactly the session that most needs one. The four questions below are what
-# is invariant; which instrument answers them is whatever the session has.
-reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
-
 [[rule]]
 id = "verdict guard missing"
 kind = "pipeline"
@@ -4393,6 +4196,38 @@ exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submod
 severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (prose): state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
+
+# Rule 3's scope, kept from drifting back (owner ruling, 2026-11-10). The rule
+# forbids the GATED model's verdict — the harness's, or any whose context the
+# agent reaches — and never a model Batten runs pinned and deterministic
+# (house-style, principle 3). Its unqualified spelling read as "no model
+# anywhere" to every agent that restated it, about forty times across the tree,
+# and that reading ruled out the Batten-managed classifier CLOUD-1921 builds.
+# The qualified spelling is `gated-model`; a line naming the old phrase only to
+# quote this row is excluded by its leading key.
+[[rule]]
+id = "prose name loose"
+kind = "forbid"
+glob = "**"
+regex = "(^|[^-a-z])model (verdicts?|judgements?)"
+exclude = "^(regex|exclude) = "
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (prose): say which model — `gated-model` for the harness's own judgement, or name the Batten-managed model (mem:doctrine/model-verdict)"
+
+# CLOUD-2711: THE MUTATION RUNNER NAMES NO CONSUMER PATH (non-negotiable rule 1).
+# `mutate.rs` once hardcoded this repository's preset directory, so a consumer
+# whose presets lived elsewhere was never censused or swept and nothing said so.
+# The directory is `$MUTANT_PRESETS` now; this row holds the file at zero
+# spellings of the crate's own path, prose and test fixtures included.
+[[rule]]
+id = "path name loose"
+kind = "forbid"
+glob = "crates/batten/src/mutate.rs"
+regex = "crates/batten"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (prose): name the path through its declaration (`MUTANT_PRESETS`, `MUTANT_TASKS`) or a neutral fixture such as `crates/app/`, never this repository's layout"
 
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"
@@ -5480,6 +5315,10 @@ Linear = "mcp.linear.app"
 # from also matching every other server behind the same proxy host, which would
 # be `Ambiguous`.
 Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
+# THE SESSION'S GITHUB MCP (CLOUD-2693), by the path that does not move when the
+# launcher rotates the server's key (CLOUD-1264): `forge poll`'s `mcp` source
+# resolves it here. A dispatch address only, never a grant.
+github = "/github/mcp"
 
 [mcp.source.credential]
 header = "Authorization"
@@ -8141,7 +7980,7 @@ severity = "deny"
 # triggered rules file carry both failure directions. It catches DELETION and
 # DRIFT, which is the whole failure mode when the remedy is words. Whether a given
 # session actually claimed before branching is NOT a property of the tree, and a
-# rule resolving to that would be the model verdict non-negotiable rule 3 forbids.
+# rule resolving to that would be the gated-model verdict non-negotiable rule 3 forbids.
 #
 # `line_sources` IS LOAD-BEARING, not decoration. Without it the engine builds no
 # lines for these two paths, every clause reads undefined, and the module loads
@@ -8197,43 +8036,6 @@ scope = "tree"
 forge = ["HEAD"]
 module = "policy/forge-verdict-required.rego"
 severity = "deny"
-
-# Refusals recorded this session and a turn ending anyway (CLOUD-1172, the
-# successor shape for `finding-sink-check`'s question).
-#
-# THE TRANSCRIPT IS NEVER READ AS TEXT. `input.call.transcript` is the path and
-# never a byte of the session, and the fact that carries the rest carries COUNTS
-# — the extractor set is closed and every member resolves to an integer over
-# typed events, so no span of session text can reach a module even if one asked.
-# A transcript holds every command, every file body and every prompt this session
-# touched, which is why rule 4 is decided in the fact's TYPE here rather than in
-# a module's discipline.
-#
-# CLOUD-1029 IS NOT A PRECONDITION FOR THIS ROW, and that is a recorded argument
-# rather than an oversight. That row makes the transcript tamper-EVIDENT, and it
-# is a precondition for any gate whose verdict is ABOUT the record's integrity.
-# This one grades neither the record nor its author: it reads a count the engine
-# derived from typed fields and decides a question about THIS turn. If the
-# substrate were rewritten the count would move, and the honest cost is stated —
-# a consumer that later grades transcript CONTENT needs CLOUD-1029 first, and
-# this declaration authorises no such consumer.
-#
-# COULD-NOT-LOOK IS THE COMMON CASE (CLOUD-388: transcripts die with their
-# container). Four states are null — no path on the envelope, a host that keeps
-# none, a file that will not parse, and nobody having declared an extractor — and
-# every one is different from an extractor that ran and counted zero. The module
-# refuses only on a real count, because reading null as "nothing was stranded"
-# is the false green CLOUD-990 measured costing a session an hour.
-[[rule]]
-id = "turn deny held"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
-kind = "policy"
-scope = "mediated_call"
-module = "policy/denials-outlive-the-turn.rego"
-severity = "deny"
-[[rule.extract]]
-id = "denials"
-count = "hook-denials"
 
 # An effective bound on a suspected feedback path (CLOUD-1344, the across-turn
 # family no command-string row can reach).
@@ -10047,10 +9849,10 @@ id = "provision guard missing"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
-documents = ["mise.toml", "batten.toml"]
+documents = ["mise.toml"]
 module = "policy/egress-fencing.rego"
 severity = "deny"
-reason = "Restore the fence on both surfaces: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for mise's own resolver, in both no-proxy spellings. Removing or narrowing either restores the 403."
+reason = "Restore the fence in mise.toml's [env], in both no-proxy spellings: it routes GitHub direct wherever a real token exists. batten.toml's [[provision.env]] half is retired (CLOUD-2688)."
 [[rule]]
 id = "pin declare wrong"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
@@ -12361,48 +12163,6 @@ timeout_ms = 10000
 owner = "CLOUD-1717"
 expires = "2027-02-28"
 
-# THE CROSS-TRIPLE CHECK, MOVED FROM A GATE'S CADENCE TO A TURN'S (CLOUD-1731).
-#
-# `cross-check` ran in exactly one place — inside `verify` — so "this does not
-# compile on Windows" was learned at the cadence of the whole gate, which in
-# practice is after the author moved on. `rules/rust.md` says the cost in its own
-# words: an attribute deletes the case on every other target, "and the next edit
-# to the other one is discovered by CI". CLOUD-1148 is the recorded instance —
-# the `windows` job reddening alone, and the first fix making it worse.
-#
-# `user-prompt-submit` IS THE ONLY EVENT THAT FIRES ONCE PER TURN AND FIRES AT ITS
-# START, which is the whole reason it is this row and not a `stop` one. A verdict
-# that arrives after the turn ends is the discovered-late failure one notch
-# smaller; a verdict that arrives while the author still holds the change is the
-# point.
-#
-# MEASURED BEFORE IT WAS WIRED, 2026-09-09: the handler returns in 224ms because
-# the type-check is detached, and the check it launches costs 1.0s on a tree that
-# changed no Rust (a step-cache hit, measured under the task `batten step`
-# retired) against 54s when it must re-derive. So the tax is a second on the turns that need nothing and a minute of BACKGROUND
-# work on the turns that do.
-#
-# IT IS NOT A SECOND `verify` AND MUST NOT BECOME ONE. `verify` stays the
-# blocking authority and this row never gates anything: it reports a failure on
-# the following turn and says nothing on success, because a line every turn is
-# noise that teaches the reader to skip the one turn it matters.
-#
-# WHY THE TEST TIER IS THE SUBJECT rather than the library: `cross-check`'s own
-# comment records that the suite is the half most likely to break, because it
-# reaches for `PermissionsExt`, `#!/bin/sh` fixtures and Unix paths as a matter of
-# course while the library's platform code is deliberate and already gated. The
-# change that prompted this row added all three in one file.
-[[hook.handler]]
-id = "turn-cross-check"
-on = "user-prompt-submit"
-run = ["mise", "run", "cross-turn"]
-# Detached, so the bound is process startup and a marker read rather than a
-# type-check. Measured at 224ms; 2000 is an order of headroom, the same figure
-# its two siblings above carry for the same reason.
-timeout_ms = 2000
-owner = "CLOUD-1731"
-expires = "2027-02-28"
-
 # CLOUD-1650's trigger, and the instance the `command_matcher` column was added
 # for. CLOUD-1630 landed the verdict — `Mediator::BuildBehindSource`, rendered
 # `mediator failed mediator-build-behind-source` — and nothing invoked it, so a
@@ -13402,42 +13162,6 @@ id = "prompt declare now"
 kind = "document"
 target = "skills"
 [[verdict]]
-id = "provision declare dropped"
-gloss = "no [[provision.env]] row carries a no-proxy key, so the provisioned mise wrapper fences nothing"
-class = """
-The surface that actually runs. `mise.toml`'s `[env]` reaches what mise SPAWNS,
-never mise's own resolver (CLOUD-1455) — the wrapper generated from these rows
-is what fences the resolver, so deleting the fence here restores the 403 while
-the `[env]` arms stay green. Measured on #889.
-"""
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
-[[verdict]]
-id = "provision declare partial"
-gloss = "a [[provision.env]] no-proxy row no longer prepends the host mise's release resolver calls"
-class = """
-A fence that does not name the host it exists for fences nothing. The row
-survives, so a predicate asking only whether it exists would pass this.
-"""
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
-[[verdict]]
-id = "provision read unread"
-gloss = "batten.toml would not parse, so the provisioned wrapper's fence could not be read"
-class = """
-Could-not-look, refused rather than reported clean: a module that iterates only
-`documents` reports green over a file it never read, and a dead gate and a clean
-tree are byte-identical on the decision surface.
-"""
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
-[[verdict]]
 id = "task declare dropped"
 gloss = "mise.toml's [env] carries no no-proxy key, so nothing is fenced out of the agent proxy"
 class = """
@@ -13515,16 +13239,6 @@ target = "rules/toolchain.md"
 id = "task run first"
 kind = "command"
 target = "mise run land"
-[[verdict]]
-id = "turn deny held"
-gloss = "this session recorded refusals and the turn is ending again anyway"
-class = """
-The session's own record counts hook runs that denied, and the agent is stopping a second time with that count still standing. A first stop after refusals is work concluding; a repeat one is a finding produced and then left behind, which is the question `finding-sink-check` reads a transcript to answer. The count is derived from a hook run's exit code rather than from any prose, and no span of session text reaches this decision. A session with no transcript is never this class -- that is could-not-look, and reading it as clean is the false green CLOUD-990 measured.
-"""
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "policy/denials-outlive-the-turn.rego"
 [[verdict]]
 id = "task run loose"
 gloss = "this call is a weaker spelling of a task the project already defines"
@@ -14674,7 +14388,7 @@ class = """
 The agent said it would do this and is landing without having done it. The gate \
 reads a status TOKEN and nothing else: it does not judge whether the entry was \
 worth doing, whether its text is honest, or whether the work behind `completed` \
-happened — those are model verdicts and no gate here makes one. Three exits, and \
+happened — those are gated-model verdicts and no gate here makes one. Three exits, and \
 two of them are free: finish it, withdraw it deliberately so the store records \
 that the decision was made, or spend an admission saying why it is not this \
 branch's to finish. The store is written by `batten record plan` rather than \
@@ -17080,7 +16794,7 @@ Refuses ABSENCE and nothing else. A declared id missing from the review store \
 means the vendored prompt has not been shown to run over this subject, which is \
 a comparison of two digests — a record keyed to another prompt, or to bytes that \
 have since changed, lives under a different name and does not answer. What the \
-agent CONCLUDED is never read: refusing on that would be a model verdict wearing \
+agent CONCLUDED is never read: refusing on that would be a gated-model verdict wearing \
 an exit code, which non-negotiable rule 3 forbids, and the fact is shaped so it \
 cannot be written. A review that ran and pointed at something is as clean as one \
 that pointed at nothing, deliberately — pricing findings is how you buy an agent \
@@ -17953,7 +17667,7 @@ target = "policy/ci-cache-declared.rego"
 id = "test cover partial"
 gloss = "this branch put a #[cfg] platform attribute on a #[test], so one arm is never compiled where it is authored"
 class = """
-The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. A case whose SUBJECT genuinely does not exist off the platform is a different thing and is not what this refuses: the rule is a ratchet over the diff, so the ~40 pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
+The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. "Its subject does not exist off the platform" is NOT an exemption: it is a claim the gate cannot check, and the measured instance was false — three CLOUD-2711 cases called their fixture "a bash program the tier executes" while the sweep applies a row in-process, and the fixture became portable by reading the gate rather than spawning it. The one exemption is the compiler's verdict, not the author's: a `cfg!` arm that does not TYPE-CHECK off the platform (`cross-check` refuses it), which is a fact a reviewer can reproduce. The rule is a ratchet over the diff, so the pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
 """
 
 [[verdict.route]]
@@ -18483,3 +18197,37 @@ tools = [
   ["rustc", "--version"],
   ["mise", "tasks", "info", "hk-drift", "--json"],
 ]
+
+# EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
+# fsio codemod moved 374 direct `std::fs` reads in `crates/batten/src` onto the
+# `batten-fsio` crate, so a read can batch on a completion queue where the
+# platform has one, and nothing before that run held the shape. These two rows
+# are the regrowth gate the migration owes: the count can only fall, and since
+# both are judged at the call, the write that would add a direct read is refused
+# before it lands, not at `verify`.
+#
+# Two LITERAL substrings rather than `fs::read`, because `ratchet` counts with
+# `str::matches`: the bare prefix would also count `fs::read_dir(` and
+# `fs::read_link(`, which `fsio` does not cover. The three survivors today are
+# prose naming the retired form, a doc comment and two codemod comments.
+[[rule]]
+id = "path read loose"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = 'fs::read('
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio::read`, which batches on the completion queue; a direct `std::fs::read` is the shape the migration retired"
+
+[[rule]]
+id = "source read loose"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = 'fs::read_to_string('
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio::read_to_string`, which batches on the completion queue; a direct `std::fs::read_to_string` is the shape the migration retired"

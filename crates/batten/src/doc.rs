@@ -26,7 +26,6 @@
 //! prose per 90k window over a design point of 24 distinct gates. Rationale and
 //! precedent are not interaction: they stay in the class paragraph, which
 //! `explain` prints, and no section may cite an issue key.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -1338,6 +1337,27 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ],
     },
     VendoredDoc {
+        id: "commit ship unknown",
+        why: Some("A shallow clone cannot say whether committed work is on the target"),
+        act: &["deepen the clone with `git fetch --unshallow`, then stop again"],
+        dont: &["read could-not-look as landed"],
+    },
+    VendoredDoc {
+        id: "commit push missing",
+        why: Some("A person merges here, so work only in this clone is lost on reclaim"),
+        act: &[
+            "push it with `git push`",
+            "with no upstream, `git push -u <remote> HEAD` sets one",
+        ],
+        dont: &["run `batten land lap`: a person merges in this repository"],
+    },
+    VendoredDoc {
+        id: "commit merge held",
+        why: Some("The repository declares that a person merges pushed work"),
+        act: &["leave the merge to the person `landed_by` names"],
+        dont: &["merge or land it yourself"],
+    },
+    VendoredDoc {
         id: "issue list unclear",
         why: Some("A row filed mid-task is either new work or this task deferred"),
         act: &[
@@ -1402,7 +1422,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some("A head the declared gate refuses is not one to push"),
         act: &[
             "fix the cause the line names",
-            "run `batten land verify` again",
+            "run `batten land lap` again",
         ],
         dont: &["push around the gate"],
     },
@@ -1411,7 +1431,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some("A head red in CI is not one to land"),
         act: &[
             "reproduce each named check locally and fix it",
-            "run `batten land verify` again",
+            "run `batten land lap` again",
         ],
         dont: &["re-run CI on the same head to see if it passes"],
     },
@@ -1459,6 +1479,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["delete `target/` by hand, which drops the units the next build needs"],
     },
     VendoredDoc {
+        id: "call reach loose",
+        why: Some(
+            "A session's ledger, captures and grants live in its home, so a call reaching another repository acts outside them",
+        ),
+        act: &[
+            "work in the other repository from a session homed there",
+            "or request an override for this crossing with `batten override request`",
+        ],
+        dont: &["respell the path or `cd` through a symlink to reach the same repository"],
+    },
+    VendoredDoc {
         id: "script run loose",
         why: Some(
             "A script file carries its writes in its own body, where no edit guard looks, so it walks around all of them",
@@ -1476,7 +1507,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ),
         act: &[
             "read the view at the lines the subject names, with an offset and a limit",
-            "or `batten capture show <handle> --field /<name>` for one field",
+            "or the route the line names, where it names one",
         ],
         dont: &["re-fetch the row through the raw connector"],
     },
@@ -1553,7 +1584,6 @@ fn push_sentence(out: &mut String, text: &str) {
 ///
 /// `rendered` is the whole first-sighting body the class produces — gloss, these
 /// sections and its admissible preconditions — measured against [`DOC_BYTES`].
-//MUTANT doc-cap-unchecked|s@^    if rendered.len() > DOC_BYTES {$@    if false {@|a_class_doc_over_640_bytes_does_not_load
 #[must_use]
 pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
     if rendered.len() > DOC_BYTES {
@@ -1606,8 +1636,6 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
 /// the agent writing status lines to the hook as if it were the person: a
 /// conversation the operator was never part of, repeated on every stop. The
 /// alternative to an action is another action, such as filing the blocker.
-//MUTANT-SUITE crates/batten/src/doc.rs
-//MUTANT words-remedy-loads|s@^    if doc.act.iter().any(\x7citem\x7c asks_for_words(item)) {$@    if false {@|a_do_item_asking_for_words_does_not_load
 fn asks_for_words(item: &str) -> bool {
     let item = item.trim().to_lowercase();
     let item = item.strip_prefix("or ").unwrap_or(&item);

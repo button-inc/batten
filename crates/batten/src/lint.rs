@@ -814,7 +814,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     let base = base_ref
         .map(|reference| trust::load_base(dir, reference))
         .transpose()?;
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             // THE MAXIMAL WEAKENING IS A VERDICT, NOT A USAGE ERROR. Deleting
@@ -913,7 +913,7 @@ pub fn host_drift(
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)?;
         buffer
     } else {
-        std::fs::read_to_string(source).map_err(|err| {
+        crate::fsio::read_to_string(source).map_err(|err| {
             crate::UsageError::raise(format!("cannot read host rules from {source}: {err}"))
         })?
     };
@@ -1020,7 +1020,7 @@ fn workspace_rust_version(source: &str) -> Option<String> {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("Cargo.toml");
-    let manifest = std::fs::read_to_string(beside).ok()?;
+    let manifest = crate::fsio::read_to_string(beside).ok()?;
     // `toml::from_str`, never `str::parse`: the `FromStr` impl reads a single
     // VALUE and rejects a document at its first table header, so parsing a
     // manifest that way silently yields `None` and the gate reports nothing.
@@ -2163,5 +2163,3 @@ mod tests {
 
 // `config lint` over the compiled binary: the host-rules payload a path names,
 // and the located view a dropped row must not shift.
-//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
-//MUTANT host-rules-path-unread|s@^    let payload = if source == "-" {$@    let payload = if true {@|a_linear_history_rule_the_config_denies_is_drift

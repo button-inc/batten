@@ -1170,6 +1170,18 @@ jobs:
           path: ~/.local/share/batten/*/provision
           key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
           restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
+      # THE SCHEMA'S VERDICT JOURNAL (CLOUD-2253): append-only, every verdict
+      # keyed by the content it was decided over, so any shard's line stands
+      # wherever its key still holds and a lap re-judges only what moved. Saved
+      # under a key per run, since a cache entry is never overwritten, and
+      # restored from this shard's newest, else any shard's.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/batten/*/mutate/schema/verdicts
+          key: mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-${{ strategy.job-index }}-
+            mutant-verdicts-${{ runner.os }}-${{ runner.arch }}-
       - run: mise run mutant:changed
         env:
           # Both halves from `strategy`, so another matrix axis cannot leave a

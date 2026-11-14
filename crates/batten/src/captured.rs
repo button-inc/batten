@@ -283,15 +283,16 @@ mod tests {
         let dir = crate::scratch::scratch("captured-reduce");
         crate::testing::contain_state(&dir.join("state"));
         std::fs::create_dir_all(dir.join("repo")).unwrap();
-        // The store is keyed under the resolved spelling, as the hook writes it,
-        // and `reduce` is handed an unresolved one, so resolving it is its own
-        // job on every platform, not only where the temp dir is a symlink.
+        // `reduce` is handed an unresolved spelling of the root the hook wrote
+        // under. The store is named from the canonical root, so both spellings
+        // address one store, on every platform, not only where the temp dir is a
+        // symlink.
         let given = dir.join("repo").join("..").join("repo");
         let root = crate::git::canonical(&given);
-        assert_ne!(
+        assert_eq!(
             crate::state::repo_state_dir(&root).unwrap(),
             crate::state::repo_state_dir(&given).unwrap(),
-            "the unresolved spelling addresses another store"
+            "an unresolved spelling must name the store its resolved one does"
         );
         let stored = crate::capture::store(
             &root,

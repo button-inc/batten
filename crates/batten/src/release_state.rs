@@ -41,9 +41,6 @@ pub enum Step {
 /// # Errors
 ///
 /// The refusal pointer, for a published release.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT discard-deletes-published|s@^        Found::Published => Err(PUBLISHED.to_owned()),$@        Found::Published => Ok(vec![Step::DeleteTag]),@|discard_refuses_a_published_release
-//MUTANT discard-deletes-orphan-tag|s@^        Found::Absent => Ok(Vec::new()),$@        Found::Absent => Ok(vec![Step::DeleteTag]),@|discard_leaves_an_orphan_tag_alone
 pub fn discard(found: &Found) -> Result<Vec<Step>, String> {
     const PUBLISHED: &str = "it is published; a published release is never discarded";
     match found {
@@ -76,7 +73,6 @@ pub enum Relation {
     Absent,
 }
 
-//MUTANT identical-read-as-behind|s@^            Some((true, true)) => Self::Identical,$@            Some((true, true)) => Self::MainBehind,@|both_producers_agree_on_every_relation
 impl Relation {
     /// The forge's `compare/{main}...{commit}` status, or `None` for one it
     /// does not define. `ahead` and `behind` are the commit's, against `main`.
@@ -131,7 +127,6 @@ pub struct Flight {
 }
 
 /// Whether a release is in flight, naming it and the arm that holds, or `None`.
-//MUTANT freeze-ignores-pending-land|s@^        if pending.relation != Relation::MainBehind {$@        if true {@|a_pending_land_is_in_flight_until_its_hold_expires
 #[must_use]
 pub fn in_flight(flight: &Flight) -> Option<String> {
     if let Some(run) = &flight.active_run {
@@ -246,8 +241,6 @@ pub enum CutOrLand {
 /// open draft's target is landed; any other head is cut as before, which is what
 /// keeps the bake from looping — its own CI completing on the release branch
 /// would otherwise discard the draft it was baked from.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT baked-head-recut|s@^    if draft_target.is_some_and(\x7ctarget\x7c baked_onto(head, target, tag, sums)) {$@    if false {@|cut_or_land_lands_a_baked_head_and_cuts_any_other
 #[must_use]
 pub fn cut_or_land(draft_target: Option<&str>, head: &Head, tag: &str, sums: &str) -> CutOrLand {
     if draft_target.is_some_and(|target| baked_onto(head, target, tag, sums)) {
@@ -305,8 +298,6 @@ fn full_sha(text: &str) -> bool {
 /// `sha` is A itself or A's bake (CLOUD-2287): the bake commits only the
 /// install lock and the script rendered from it, so A's pin, version and
 /// relation to `main` are the release's.
-//MUTANT baked-head-refused|s@^            let baked = is_baked(facts, target);$@            let baked = false;@|a_baked_head_of_the_drafts_target_is_draft_ok
-//MUTANT land-state-resume-as-burned|s@^                (true, Relation::MainBehind) => LandState::ResumeAtD,$@                (true, Relation::MainBehind) => LandState::Burned,@|land_state_resumes_a_published_release_main_is_behind
 #[must_use]
 pub fn land_state(facts: &LandFacts) -> LandState {
     match &facts.read {
@@ -349,7 +340,6 @@ pub fn land_state(facts: &LandFacts) -> LandState {
 /// # Errors
 ///
 /// The refusal pointer.
-//MUTANT published-release-overwritten|s@^        Read::Published { .. } => Err(PUBLISHED.to_owned()),$@        Read::Published { .. } => Ok(()),@|guard_refuses_a_published_release_and_a_foreign_draft
 pub fn guard(read: &Read, sha: &str) -> Result<(), String> {
     const PUBLISHED: &str = "it is published, and a published release's assets are never replaced";
     match read {
@@ -372,7 +362,6 @@ pub enum Unusable {
 /// Whether vX is unusable: burned, or a stray tag.
 ///
 /// `reachable` is whether `main` reaches a published release's tag commit.
-//MUTANT stray-tag-not-unusable|s@^        Found::Absent if tag_exists => Some(Unusable::StrayTag),$@        Found::Absent if false => Some(Unusable::StrayTag),@|a_stray_tag_is_unusable
 #[must_use]
 pub fn unusable(found: &Found, reachable: bool, tag_exists: bool) -> Option<Unusable> {
     match found {
@@ -418,7 +407,6 @@ pub struct Files {
 /// # Errors
 ///
 /// The pointer naming the file that does not carry X where it must.
-//MUTANT bump-keeps-changelog-heading|s@^    let changelog = bump_heading(\&files.changelog, from, \&to)$@    let changelog = Some(files.changelog.clone())@|an_unusable_version_bumps_all_four_paths
 pub fn bump(files: &Files, from: &str, packages: &[String]) -> Result<(String, Files), String> {
     let to = next_version(from).ok_or_else(|| format!("{from} is not a patch version"))?;
     let old_line = format!("version = \"{from}\"");
@@ -1191,7 +1179,6 @@ pub fn run_bump_unusable(
 
 /// The body of the changelog's `## [version]` section — every line after its
 /// heading up to the next `## [` heading — or `None` where there is none.
-//MUTANT notes-section-unbounded|s@^        if line.starts_with("## \[") {$@        if false {@|the_notes_are_the_versions_own_section
 #[must_use]
 pub fn section(changelog: &str, version: &str) -> Option<String> {
     let opener = format!("## [{version}]");
@@ -1562,7 +1549,7 @@ pub fn run_pin(
     let text = match at {
         Some(rev) => crate::git::show(std::path::Path::new("."), rev, "batten.toml")
             .map_err(|why| why.to_string()),
-        None => std::fs::read_to_string("batten.toml").map_err(|why| why.to_string()),
+        None => crate::fsio::read_to_string("batten.toml").map_err(|why| why.to_string()),
     };
     let text = match text {
         Ok(text) => text,
@@ -1937,7 +1924,7 @@ mod tests {
         let (code, out, fixture) = cut("cut-dispatched", 204);
         assert_eq!(code, crate::ExitCode::Success, "{out}");
         assert!(out.contains("v1.0.0 drafted at"), "{out}");
-        let drafted = std::fs::read_to_string(fixture.join("route.3.request")).unwrap();
+        let drafted = crate::fsio::read_to_string(fixture.join("route.3.request")).unwrap();
         assert!(
             drafted.contains("notes") && !drafted.contains("old"),
             "{drafted}"
@@ -2041,7 +2028,7 @@ mod tests {
             "install.lock\ninstall.sh\n"
         );
         assert!(
-            std::fs::read_to_string(dir.join(crate::install::LOCK_FILE))
+            crate::fsio::read_to_string(dir.join(crate::install::LOCK_FILE))
                 .unwrap()
                 .contains("\ntag v1.0.0\n")
         );

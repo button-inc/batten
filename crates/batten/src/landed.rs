@@ -1454,8 +1454,6 @@ an undeclared gate's suite as a `.bats` file named for it, and this module has
 none — `V-SHELL-RULE-ADDED` refuses adding one. The named cases are this file's
 own unit tier, so the declared path is this file (CLOUD-1267).
 
-#MUTANT-SUITE crates/batten/src/landed.rs
-#MUTANT abandoned-ignores-bound|s@today - day > bound.max_idle_days@true@|the_idle_bound_is_exclusive_at_exactly_the_threshold
 A ROW'S SCRIPT MAY CARRY NO `|` OF ITS OWN, because the three fields are
 `|`-separated and `rows_in` splits on every one. The first draft of the row
 below mutated both rescues at once — `has_pull_request() || has_live_branch()` —
@@ -1463,5 +1461,4 @@ and the two pipes made it a five-field row the sweep refused to read. Mutating
 the single conjunct the case is about is both well-formed AND the sharper
 declaration: it discriminates the pull-request arm rather than the disjunction.
 
-#MUTANT abandoned-ignores-pr|s@claim.has_pull_request()@false@|only_a_pull_request_attachment_rescues_a_claim
 */

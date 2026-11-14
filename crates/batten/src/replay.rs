@@ -165,8 +165,6 @@ fn differs(base: &str, head: &str) -> bool {
 
 /// What changed between a file's base and head text.
 #[must_use]
-//MUTANT-SUITE crates/batten/src/replay.rs
-//MUTANT modified-unseen|s@^    shape(base) != shape(head)$@    false@|a_changed_body_is_modified_and_formatting_is_not
 pub fn compare(base: &str, head: &str) -> Changed {
     let index = |source: &str| -> BTreeMap<String, TestFn> {
         tests_in(source)
@@ -384,7 +382,6 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     })
 }
 
-//MUTANT replay-target-outside-the-checkout|s@^    let target = root.join("target").join("replay");$@    let target = state.join("target");@|a_replay_builds_where_the_prune_can_reach_it
 /// Materialise HEAD under the repository's state directory, splice each base
 /// body in, and run each modified test there. A test that fails, or a tree that
 /// will not build, is `test-expectation-changed`.
@@ -671,8 +668,6 @@ const COMPILE_FAILED: &str = "could not compile";
 /// every test, as it failed every per-test build of the one spliced tree. A run
 /// that named the test nowhere and did not fail to compile is could-not-look,
 /// never a finding: a refusal the replay never measured would read as one it did.
-//MUTANT-SUITE crates/batten/tests/it/test_replay.rs
-//MUTANT expectation-unchecked|s@^    let failed = results.iter().any(\x7cresult\x7c !PASSED.contains(result));$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
 fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
     let Some((code, output)) = outcome else {
         bail!("test replay: could not replay {test}: {}", said(outcome));

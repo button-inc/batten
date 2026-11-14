@@ -160,7 +160,7 @@ mod tests {
                 if path.extension() != Some(std::ffi::OsStr::new("rs")) {
                     continue;
                 }
-                let source = std::fs::read_to_string(&path).unwrap();
+                let source = crate::fsio::read_to_string(&path).unwrap();
                 for _ in 0..source.matches(needle.as_str()).count() {
                     sites.push(path.display().to_string());
                 }

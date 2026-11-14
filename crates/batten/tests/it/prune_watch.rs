@@ -6,14 +6,6 @@
 //! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-#MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-#MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-#MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -118,6 +110,8 @@ fn request<'a>(
         deadline: None,
         wait: false,
         live_since: None,
+        copies: None,
+        fixtures_since: None,
     }
 }
 
@@ -126,6 +120,7 @@ fn request<'a>(
 fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask.fixtures_since = ask.live_since;
     ask
 }
 
@@ -191,6 +186,66 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert_eq!(units, 1, "only the stale fixture is outside the live build");
     assert!(!tree.join("tmp/old-fixture").exists());
     assert!(tree.join("tmp/live-fixture").exists());
+}
+
+/// A FIXTURE A FINISHED SUITE WROTE GOES, EVEN INSIDE A LIVE BUILD'S WINDOW
+/// (#1276): the `cargo run` hosting a lap lives as long as the lap, and every
+/// fixture its suites wrote read as live until the mutation stage filled the
+/// volume. With no suite running, nothing roots a fixture.
+///
+/// Fails by: fixtures judged by the build window rather than their own.
+#[test]
+fn a_fixture_no_running_suite_wrote_is_collected_inside_a_builds_window() {
+    let root = common::scratch("collect-finished-suite");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/finished-suite-fixture"), 1);
+    let trees = [tree.clone()];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.fixtures_since = None;
+    let units = batten::collect::collect(&ask).removed;
+    assert_eq!(
+        units, 1,
+        "the finished suite's fixture is outside every window"
+    );
+    assert!(!tree.join("tmp/finished-suite-fixture").exists());
+}
+
+/// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
+/// SWEEP'S IS NOT (#1276). cargo-mutants removes its copy only on a clean exit,
+/// and a lap began 4.5GB down beside its own live 12GB copy on a volume whose
+/// every ranked tree was under the checkout.
+///
+/// THE LIVE COPY IS WRITTEN TWO LEVELS DOWN AND NOWHERE ELSE, because that is how
+/// a sweep writes: a shallow date reads it as idle since it was staged.
+///
+/// Fails by: no copies read; any directory in the temp directory taken; a copy
+/// dated shallow, which collects the live one.
+#[test]
+fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
+    let root = common::scratch("collect-mutant-copies");
+    let temp = root.join("temp");
+    let stale = temp.join("cargo-mutants-batten-AAAAAA.tmp");
+    aged_dir(&stale.join("target/debug"), 7200);
+    aged_dir(&stale.join("target"), 7200);
+    aged_dir(&stale, 7200);
+    let live = temp.join("cargo-mutants-batten-BBBBBB.tmp");
+    aged_dir(&live.join("src/deep"), 1);
+    aged_dir(&live.join("src"), 7200);
+    aged_dir(&live, 7200);
+    let other = temp.join("somebody-elses.tmp");
+    aged_dir(&other, 7200);
+    let tree = root.join("target");
+    std::fs::create_dir_all(&tree).unwrap();
+    let trees = [tree];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.copies = Some(&temp);
+    let _ = batten::collect::collect(&ask);
+    assert!(!stale.exists(), "a copy no live sweep writes goes");
+    assert!(
+        live.exists(),
+        "a copy written since the live build began stays"
+    );
+    assert!(other.exists(), "only cargo-mutants' own copies are taken");
 }
 
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:

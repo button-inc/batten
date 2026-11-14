@@ -34,7 +34,6 @@
 //! identical tree bytes it returns the identical, sorted hit list.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -216,7 +215,7 @@ pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
         if selecting.is_empty() {
             continue;
         }
-        let Some(text) = scannable(fs::read_to_string(root.join(&path)), &path)? else {
+        let Some(text) = scannable(crate::fsio::read_to_string(root.join(&path)), &path)? else {
             continue;
         };
         for (index, line) in text.lines().enumerate() {
@@ -257,6 +256,7 @@ pub fn counts(markers: &[Marker], hits: &[Hit]) -> BTreeMap<String, u64> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn marker(id: &str, token: &str) -> Marker {
         Marker {
@@ -392,7 +392,7 @@ mod tests {
         // bits do not bite, the walk reads the file like any other and reports its
         // marker, so the case still says what the walk does with what it can read.
         let found = find(&dir, &[marker("m", "A")]);
-        if fs::read_to_string(&unreadable).is_ok() {
+        if crate::fsio::read_to_string(&unreadable).is_ok() {
             let hits = found.expect("a file the caller can read walks clean");
             assert_eq!(hits.len(), 1, "its one marker is found: {hits:?}");
         } else {

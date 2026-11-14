@@ -57,12 +57,6 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
-//MUTANT echoed-column-undeclared|s@"verdict...class",@@|no_verb_emits_content_it_merely_read
-//MUTANT echo-arm-unreached|s@args: &\["no-canary-command"]@args: \&["cargo run loose"]@|no_verb_emits_content_it_merely_read
-//MUTANT echo-column-unresolved|s@"fact...command"]@"fact[].command", "rule[].nonesuch"]@|every_echo_declaration_resolves_to_capped_config_leaves
-//MUTANT prose-column-unseeded|s@columns: &\["waiver...reason"]@columns: \&[]@|the_corpus_seeds_every_prose_column
-//MUTANT redirect-arm-undeclared|s@"redirect...read",@@|the_protected_mutation_arm_echoes_only_its_declared_columns
 
 use crate::common;
 
@@ -1246,6 +1240,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `land placed` (CLOUD-2707) prints at most one line naming a short sha and
+    // the next step, on stderr. No field it renders can carry a payload.
+    Verb {
+        path: "land placed",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // `landed check` (CLOUD-186, CLOUD-1127) reads a tracker payload, which is
     // the widest body on any read surface: a row carries a description an agent
     // wrote and a consumer's own facts sit in it. What it renders is a key, two
@@ -2246,6 +2248,24 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2690: with nothing on stdin there is no event, so the verb names
+    // the fault and dispatches nothing; a dispatched event's output is the
+    // exit-code adapter's own pointer.
+    Verb {
+        path: "forge intake",
+        args: &["--event", "pull_request"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2693: a zero interval is a usage error, named and dispatching
+    // nothing. (With no `[[forge.source]]` the round would be could-not-look,
+    // exit 3, which this corpus reads as proving nothing.)
+    Verb {
+        path: "forge poll",
+        args: &["--every", "0"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the
@@ -2482,6 +2502,13 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "mutate sweep",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // A refusal naming the undeclared per-job cost, before anything is spawned.
+    Verb {
+        path: "mutate cargo",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -2932,25 +2959,6 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "singleton release",
         args: &["land"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
-    // declares, which refuses before anything is announced or started — a
-    // corpus run must not leave a detached copy behind.
-    Verb {
-        path: "singleton detach",
-        args: &[
-            "census-detach",
-            "--marker",
-            "detach.marker",
-            "--log",
-            "detach.log",
-            "--pattern",
-            "no-such-pattern-row",
-            "--",
-            "true",
-        ],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

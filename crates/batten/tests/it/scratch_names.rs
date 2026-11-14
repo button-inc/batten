@@ -250,7 +250,6 @@ impl<'ast> Visit<'ast> for Sites {
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        // MUTANT threading-helper-unjudged|s@threading: threading_helpers(\&file)@threading: BTreeMap::new()@|two_cases_sharing_a_name_through_a_threading_helper_are_refused
         if let Some(template) = template_of(&call.func, &self.threading)
             && let Some(literal) = literal_name(&call.args)
             && let Some((function, in_test)) = self.within.last()

@@ -19,9 +19,6 @@
 //! CLOUD-2224): reading a 50 MB payload whole peaked at 150 MiB and 248-284 ms;
 //! streamed, 2.4 MiB (the process baseline) and 179-210 ms.
 
-//MUTANT-SUITE crates/batten/src/stream_input.rs
-//MUTANT tee-drops-bytes|s@^        self.sink.write_all(buf.get(..read).unwrap_or_default())?;$@@|the_spool_holds_the_exact_bytes_the_host_sent
-
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -98,7 +95,7 @@ pub fn restore(value: &Value, spilled: &[Spilled]) -> Value {
         .iter()
         .filter(|spill| spill.bytes <= RESTORE_MAX_BYTES)
     {
-        if let Ok(text) = std::fs::read_to_string(&spill.path) {
+        if let Ok(text) = crate::fsio::read_to_string(&spill.path) {
             put(&mut restored, &marker(&spill.pointer), &text);
         }
     }
@@ -187,7 +184,6 @@ pub fn read(
     })
 }
 
-//MUTANT leaf-never-spills|s@^                if self.counted > self.bound {$@                if false {@|a_result_over_the_bound_spills_and_one_under_it_is_kept
 impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     /// The top level: an object whose result members are walked as results.
     fn document<R: Read>(&mut self, json: &mut JsonStreamReader<R>) -> Result<Value> {
@@ -378,7 +374,7 @@ mod tests {
         assert_eq!(read.spilled.len(), 1, "{:?}", read.spilled);
         assert_eq!(read.spilled[0].pointer, "/file/content");
         assert_eq!(
-            std::fs::read_to_string(&read.spilled[0].path).expect("leaf"),
+            crate::fsio::read_to_string(&read.spilled[0].path).expect("leaf"),
             big,
             "the leaf file holds the whole text"
         );
@@ -406,7 +402,7 @@ mod tests {
         let sent = format!("\u{feff}{}", payload("é and \\\"quoted\\\" text"));
         let read =
             super::read(sent.as_bytes(), &dir, 1000, |text| text.len() as u64).expect("reads");
-        let spooled = std::fs::read_to_string(&read.raw).expect("raw");
+        let spooled = crate::fsio::read_to_string(&read.raw).expect("raw");
         assert_eq!(
             spooled,
             sent.trim_start_matches('\u{feff}'),

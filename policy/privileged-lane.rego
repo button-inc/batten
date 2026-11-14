@@ -16,7 +16,7 @@
 # somewhere. It deliberately does not judge WHICH comparison is made: asking that
 # would make this module reason about landing policy, and non-negotiable rule 3
 # says a gate resolves to a command and an exit code over an object it decides,
-# never a model verdict. A lane that tests origin and gets the comparison wrong is
+# never a gated-model verdict. A lane that tests origin and gets the comparison wrong is
 # a code review's finding, not this file's.
 
 # The `package batten` schema binding lives in `policy/opa-compliance.rego`, not

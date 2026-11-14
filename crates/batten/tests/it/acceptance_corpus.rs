@@ -334,7 +334,7 @@ fn every_source_item_has_exactly_one_recorded_disposition() {
                         )
                     });
                 let expected = match entry.bucket {
-                    Bucket::RuleWarn(_) => RuleSeverity::Warn,
+                    Bucket::RuleWarn(_) => RuleSeverity::Advise,
                     _ => RuleSeverity::Deny,
                 };
                 assert_eq!(

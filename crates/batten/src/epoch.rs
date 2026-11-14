@@ -211,7 +211,6 @@ fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<crate::cache::Sta
 
 /// The key the entry is filed under: each tracked PATH and its stamp, so adding
 /// or removing a path invalidates even when every surviving file is unchanged.
-//MUTANT epoch-key-ignores-paths|s@^        fields.push(path.as_bytes());$@        let _ = path;@|adding_a_tracked_path_invalidates_even_when_no_file_changed
 fn cache_key(tracked: &[String], stamps: &[crate::cache::Stamp]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 * tracked.len());
     for (path, stamp) in tracked.iter().zip(stamps) {
@@ -250,7 +249,6 @@ fn cache_path(state: &Path) -> Option<PathBuf> {
 /// strictly older than the entry's write time may have been rewritten in the
 /// same timestamp tick, with every stamped field unchanged, so the entry cannot
 /// vouch for it.
-//MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\x7cstamp\x7c stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
 fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
     let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
     let (written, epoch) = body.split_once(' ')?;
@@ -294,7 +292,7 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 fn read_tracked(dir: &Path, path: &str, base_ref: Option<&str>) -> Result<Vec<u8>> {
     match base_ref {
         Some(reference) => git::show(dir, reference, path).map(String::into_bytes),
-        None => std::fs::read(dir.join(path)).map_err(|err| {
+        None => crate::fsio::read(dir.join(path)).map_err(|err| {
             UsageError::raise(format!(
                 "cannot read tracked config-surface path {path}: {err}"
             ))

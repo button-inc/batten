@@ -21,7 +21,6 @@
 //! * **The receipt is per context.** One file per (row, context), so one
 //!   session's read never admits another's edit, and a compaction drops this
 //!   context's reads because what was read left the window with it.
-//MUTANT-SUITE crates/batten/tests/it/history_gate.rs
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -251,7 +250,6 @@ pub fn changed_ranges(
 }
 
 /// The receipt file for one (row, context) pair.
-//MUTANT history-receipt-ignores-context|s@^        .join(format!("history-read.{}.{}", short(id), short(context)))$@        .join(format!("history-read.{}.{}", short(id), short(\&context[..0])))@|another_contexts_receipt_does_not_admit
 fn receipt_path(git_dir: &Path, id: &str, context: &str) -> PathBuf {
     let short = |text: &str| crate::receipt::hex_sha256(text.as_bytes())[..16].to_owned();
     git_dir
@@ -280,10 +278,9 @@ pub fn record_read(
 }
 
 /// Whether `context` holds a read of `id`'s history at `digest`.
-//MUTANT history-receipt-ignores-digest|s@^        .is_some_and(\x7cheld\x7c held == digest)$@        .is_some()@|a_new_commit_to_the_rule_invalidates_the_history_receipt
 #[must_use]
 pub fn admits(git_dir: &Path, context: &str, id: &str, digest: &str) -> bool {
-    std::fs::read_to_string(receipt_path(git_dir, id, context))
+    crate::fsio::read_to_string(receipt_path(git_dir, id, context))
         .ok()
         .and_then(|body| body.split('\x1f').nth(1).map(str::to_owned))
         .is_some_and(|held| held == digest)
@@ -349,9 +346,6 @@ pub struct Assembler<'a> {
     shown: BTreeSet<String>,
 }
 
-//MUTANT history-cap-counts-row|s@^        let row = out.len();$@        let row = 0;@|a_row_longer_than_the_cap_still_lists_its_changes
-//MUTANT history-marks-unprinted|s@^            let full = message$@            let full = message.is_some() \&\& self.shown.insert(sha.clone()) \&\& message@|a_message_the_cap_cut_is_not_pointed_at
-//MUTANT history-full-unfitted|s@^                .is_some_and(\x7cmessage\x7c fits(short.len() + message.trim_end().len() + 3));$@                .is_some();@|a_message_the_cap_cut_is_not_pointed_at
 impl<'a> Assembler<'a> {
     /// Reads the authority at `HEAD` and lists the commits that changed it.
     ///

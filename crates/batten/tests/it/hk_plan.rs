@@ -112,6 +112,63 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
             .any(|step| step.name == "batten-check" && step.status == "included"),
         "this repository's gate still runs the step the row requires"
     );
+    // AND THE MODULE READS WHAT THE BOUNDARY COULD NOT ACQUIRE (CLOUD-845's gap,
+    // a suite that never installs the module): the tree's own
+    // `hk-plan-required` over a checkout with no `hk.pkl`, where no plan can be
+    // taken, says so rather than passing over the declared plan.
+    let module = std::fs::read_to_string(root.join("policy/hk-plan-required.rego"))
+        .expect("the module reads");
+    let dir = common::scratch("hk-plan-unacquired");
+    // EVERY VERDICT THE MODULE RAISES IS DECLARED, or the engine refuses the
+    // row at load — and that refusal NAMES `plan read missing`, so a case
+    // reading the output for the token passed over any module at all, the
+    // predicate mutated away included. Measured on #1276's sweep:
+    // `plan-unacquired-silenced` survived exactly that way.
+    let mut declared = String::new();
+    for id in ["step run missing", "plan run refused", "plan read missing"] {
+        std::fmt::Write::write_fmt(
+            &mut declared,
+            format_args!(
+                "\n[[verdict]]\nid = \"{id}\"\ngloss = \"the fixture class {id}\"\n\
+                 class = \"A fixture class raised by the shipping module.\"\n\n\
+                 [[verdict.route]]\nid = \"read the module\"\nkind = \"document\"\n\
+                 target = \"policy/hk-plan-required.rego\"\n"
+            ),
+        )
+        .expect("write to a string");
+    }
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[rule]]\nid = \"plan require missing\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/hk-plan-required.rego\"\nseverity = \"deny\"\n\n\
+             [[rule.plan]]\nid = \"gate\"\nhook = \"check\"\nrequired = [\"batten-check\"]\n\
+             {declared}"
+        ),
+    );
+    common::write(&dir, "policy/hk-plan-required.rego", &module);
+    common::init_repo(&dir);
+    let answer = common::batten()
+        .args(["check", "--rule", "plan require missing"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&answer.stdout),
+        String::from_utf8_lossy(&answer.stderr)
+    );
+    // THE VERDICT, NOT THE TOKEN: exit `2` and the deny line naming the plan.
+    assert_eq!(
+        answer.status.code(),
+        Some(2),
+        "a declared plan the runner could not produce is refused\n{said}"
+    );
+    assert!(
+        said.contains("deny plan read missing at gate"),
+        "the refusal names the plan nobody could acquire\n{said}"
+    );
 }
 
 /// A step the plan carries a reason for keeps the KIND and nothing else.

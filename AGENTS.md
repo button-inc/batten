@@ -111,8 +111,7 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    `land` won't ready what your own gates refuse. Push early, fix after.
 2. **`mise run land`, backgrounded — the one step after pushing.** Each lap runs
    `verify` (mirrors CI, runs `linear-check`, refuses a branch stale on
-   `origin/main`), so neither is a prior step; a standalone `verify` iterates a
-   draft (CLOUD-2240). `land` readies after its push — a ready by hand buys only
+   `origin/main`), so neither is a prior step (CLOUD-2240). `land` readies after its push — a ready by hand buys only
    draft-era skips (CLOUD-247). No wall clock, only counts, never the PR webhook;
    it stops on a conflict, a failed `verify`, red CI or a spent lap budget. **When
    a stop says run it again, run it again.**
@@ -158,7 +157,7 @@ its exit, push. Declared work dies too: **"unsaved?" is `batten doctor session`*
    case escapes it, which `mutate` SHOWS and a surviving mutant refutes; an
    escape found later is owed to the gate, not to a note.
 3. **Gates decide, never estimate** — a command and an exit code over an object,
-   never a model verdict. _(house-style §5.)_
+   never the gated model's verdict. _(house-style §5; `mem:doctrine/model-verdict`.)_
 4. **Output is a pointer, never the payload** — a count, `path:line`, or boolean,
    never the content. _(house-style §6.)_
 5. **Exit codes and output follow one contract** — byte-stable, `0/1/2/3`, no

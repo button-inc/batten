@@ -207,6 +207,8 @@ fn a_merge_of_the_trunk_into_a_branch_is_refused() {
         "git pull origin main",
         "cd /tmp && git merge origin/main",
         "git -C /tmp pull",
+        // CLOUD-2354: directory `-c`, verb `merge`.
+        "git -C -c merge origin/main",
     ] {
         let out = linear_decision("linear-history-refused", command);
         assert!(

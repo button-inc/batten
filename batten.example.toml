@@ -530,3 +530,60 @@ model = "some-model-id"
 # scope = "mediated_call"
 # preset = "trunk-based"
 # severity = "deny"
+
+# FORGE EVENT SOURCES (CLOUD-2693). Where forge events come from when nothing
+# pushes them: `batten forge poll` reads the FIRST AVAILABLE row each round, in
+# declaration order, and runs each event through the handlers and rules a harness
+# hook gets (`[[hook.handler]] on = "forge"`). Run it as the host's own background
+# task, never detached: a process started past the host is invisible to it, and
+# a container with nothing visible running is reclaimed.
+#   batten forge poll --every 300
+#
+# A session's own GitHub MCP, polled as a snapshot: the first sight is a
+# baseline, then a new PR emits `opened` and a tracked field that moved emits its
+# action. PAT-free, so it is first.
+#
+[forge]
+
+[[forge.source]]
+id = "github-mcp-pulls"
+kind = "mcp"
+server = "github"
+method = "list_pull_requests"
+arguments = '{"owner":"{owner}","repo":"{repo}","state":"all","sort":"updated","direction":"desc","perPage":50}'
+decode = "snapshot"
+event = "pull_request"
+key = "/number"
+new = "opened"
+
+[[forge.source.track]]
+pointer = "/head/sha"
+action = "synchronize"
+
+[[forge.source.track]]
+pointer = "/state"
+values = { closed = "closed", open = "reopened" }
+
+# The `gh` CLI over the repository Events API, where it is present and
+# authenticated. Usually PAT-backed, so it is last.
+
+[[forge.source]]
+id = "gh-events"
+kind = "command"
+run = ["gh", "api", "repos/{owner}/{repo}/events"]
+available = ["gh", "auth", "status"]
+decode = "events"
+
+# A forge or GitHub Desktop MCP is the same `kind = "mcp"` shape, naming the
+# server your own `[[mcp.source]]` wiring declares:
+#
+# [[forge.source]]
+# id = "desktop-pulls"
+# kind = "mcp"
+# server = "your-forge-server"
+# method = "list_pull_requests"
+# arguments = '{"owner":"{owner}","repo":"{repo}"}'
+# decode = "snapshot"
+# event = "pull_request"
+# key = "/number"
+# new = "opened"

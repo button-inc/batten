@@ -374,7 +374,6 @@ fn named_toolchain(value: Option<String>) -> Option<String> {
 ///
 /// The directory cannot be created, or a stale tree or document cannot be
 /// removed.
-//MUTANT scratch-target-wiped|s@^        at.join("tree"),$@        at.join("target"),@|scratch_keeps_the_target_and_drops_the_tree_and_json
 pub fn prepare_scratch(at: &Path, package: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(at)?;
     let stale = [
@@ -623,7 +622,6 @@ pub fn current_rustdoc(
 /// failed build with its summary, "error: could not document `batten`",
 /// and the cause is the first diagnostic above it. Measured on a land lap: the
 /// gate refused with the summary alone, and the reason was nowhere to read.
-//MUTANT build-cause-dropped|s@^        .find(\x7cline\x7c line.trim_start().starts_with("error"))$@        .find(\x7c_\x7c false)@|a_failed_build_names_its_first_error_not_its_summary
 fn cause_line(stream: &[u8]) -> String {
     String::from_utf8_lossy(stream)
         .lines()

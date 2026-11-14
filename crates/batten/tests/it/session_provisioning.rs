@@ -259,6 +259,14 @@ fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
     }
     write(&repo, "batten.toml", &config);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // Wired on every host's whole surface, as `init` leaves a consumer: a
+    // passing session start owes the doctor's wiring check nothing.
+    let wired = common::batten()
+        .current_dir(&repo)
+        .args(["wiring", "register", "--all"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
 
     Bench { repo }
 }
@@ -771,8 +779,6 @@ fn the_reachable_set_is_not_empty() {
 // zero bodies. So the mutation makes the extraction yield nothing, and the case
 // it must redden is the anti-vacuity one — which is the only case that can tell
 // "nothing compiles" from "nothing was read".
-//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
-//MUTANT session-start-compiles|s@^                \["mise", "run", task, \.\.\] => Some((\*task).to_owned()),$@                ["mise", "run", _task, ..] => None,@|the_reachable_set_is_not_empty
 #[test]
 fn no_session_start_step_compiles_the_engine() {
     for (name, body) in reachable_session_task_bodies() {
@@ -821,11 +827,11 @@ fn every_handler_row_is_read() {
     assert!(
         rows.len() > DECLARED.len(),
         "the scan reads the handler table: the provisioning rows plus the \
-         user-prompt-submit and pre-tool rows that predate them, found {}",
+         stop and pre-tool rows beside them, found {}",
         rows.len()
     );
     assert!(
-        rows.iter().any(|row| row.on == "user-prompt-submit"),
+        rows.iter().any(|row| row.on == "stop"),
         "a row on another event is read too, so `session_rows` is filtering \
          rather than being all there is"
     );
@@ -835,7 +841,7 @@ fn every_handler_row_is_read() {
 /// has probed, stated so the census below can be exact rather than lenient.
 /// CLOUD-1961 owns emptying it; a row leaving this list is what closing the gap
 /// looks like, in `ADVISORY_GAPS`' shape one table over.
-const UNHEARD: [&str; 2] = ["turn-cross-check", "head-move-mediator-check"];
+const UNHEARD: [&str; 1] = ["head-move-mediator-check"];
 
 /// Whether Claude Code carries an advisory emitted on the event a row names.
 ///
@@ -861,7 +867,6 @@ fn claude_hears(on: &str) -> bool {
 // everything passes the first loop over any tree, which is the exact false green
 // this census exists to refuse: the finding the door drops looks, from the
 // config, identical to one it delivers.
-//MUTANT hears-everything|s@^    capabilities.advisory_reachable(spelling)$@    !capabilities.events.is_empty() \&\& !spelling.is_empty()@|every_reporting_handler_speaks_on_a_delivered_channel
 #[test]
 fn every_reporting_handler_speaks_on_a_delivered_channel() {
     // CLOUD-1946. A handler's exit-1 report joins the advisory buffer, and the
@@ -914,7 +919,7 @@ fn every_provisioning_step_declares_its_own_bound() {
 }
 
 #[test]
-fn the_install_step_is_declared_lockfile_free() {
+fn the_install_step_is_declared_locked() {
     // CARRIES `"the install is lockfile-free — provisioning must not dirty the
     // tracked lock"` (CLOUD-223), and `"mise install runs — the step whose
     // absence was the defect"` with it: both were greps over the retired
@@ -937,13 +942,28 @@ fn the_install_step_is_declared_lockfile_free() {
         .and_then(|tasks| tasks.values().next())
         .expect("the block carries its task");
 
-    assert_eq!(
+    // LOCKED, NOT LOCKFILE-FREE, since CLOUD-2688. The invariant is unchanged —
+    // provisioning must not dirty the tracked lock — and the mechanism moved: a
+    // LOCKED install reads `mise.lock` (its URLs and checksums, so no
+    // `api.github.com` resolve the proxy refuses) and refuses, rather than
+    // appends, anything the lock lacks. Measured: all 38 tools into an empty data
+    // directory, lock byte-identical after.
+    let env = |key: &str| {
         task.get("env")
-            .and_then(|env| env.get("MISE_LOCKFILE"))
-            .and_then(toml::Value::as_str),
-        Some("false"),
-        "provisioning installs purely, so it cannot append a platform key `mise lock` \
-         cannot produce and `lock cover partial` rejects"
+            .and_then(|env| env.get(key))
+            .and_then(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    assert_eq!(
+        env("MISE_LOCKED").as_deref(),
+        Some("true"),
+        "provisioning installs from the lock and never writes it, so it cannot append a \
+         platform key `mise lock` cannot produce and `lock cover partial` rejects"
+    );
+    assert_eq!(
+        env("MISE_LOCKFILE").as_deref(),
+        Some("true"),
+        "locked mode reads the lockfile, so the lockfile must be on"
     );
     assert!(
         task_value(&block, "run").contains("mise install"),

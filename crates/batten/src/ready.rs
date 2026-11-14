@@ -528,8 +528,9 @@ pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
 
 #[cfg(test)]
 fn read_committed_patterns() -> Vec<crate::pattern::NamedPattern> {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
-        .unwrap_or_default();
+    let text =
+        crate::fsio::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
+            .unwrap_or_default();
     match crate::facts::Format::Toml.read(&text) {
         crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
             Some(crate::facts::Node::List(items)) => items
@@ -720,8 +721,6 @@ fn closes_a_key(text: &str, at: usize) -> bool {
 // expression, which is what makes it discriminate: `key_of` and `keys_in`
 // compose no key expression of their own, so there is nothing else here for a
 // mutation to reach.
-//MUTANT-SUITE crates/batten/tests/it/issue_key.rs
-//MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
 impl Grammar {
     /// Is this WHOLE string a key? The four shell `case` globs' question.
     ///
@@ -865,7 +864,7 @@ fn first_line(pattern: &Regex, lines: &[&str]) -> Option<usize> {
 /// regime must not guess, because guessing either way manufactures a violation
 /// or launders one.
 pub fn workspace_version(root: &Path) -> Result<String> {
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).map_err(|_| {
+    let manifest = crate::fsio::read_to_string(root.join("Cargo.toml")).map_err(|_| {
         UsageError::raise(format!(
             "ready: cannot read the workspace version from {}/Cargo.toml — §6 needs it to know \
              which SemVer arrows fire",
@@ -901,8 +900,6 @@ pub fn workspace_version(root: &Path) -> Result<String> {
 // second takes it back on the `no-ready-block` refusal, which is where it was
 // first written: the fact then exists for refined rows only, and an unrefined
 // row's stray citation — the likeliest kind — becomes invisible.
-//MUTANT emission-dropped|s@^    report.emissions.push(emit_keys($@    std::mem::drop(emit_keys(@|the_bodys_cited_keys_are_emitted_before_any_verdict
-//MUTANT emission-after-the-verdict|s@^            rule: "no-ready-block".to_owned(),$@            rule: { report.emissions.clear(); "no-ready-block".to_owned() },@|the_bodys_cited_keys_are_emitted_before_any_verdict
 /// Lint one payload against the checkable Ready clauses.
 ///
 /// **The order of the checks is the order of the report**, and it is the shell
@@ -1057,7 +1054,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // measured failure that opened this row, where every clause was present and
     // none had been pressure-tested. This asks a different question that shape
     // cannot answer: has a PARTICULAR vendored prompt run over these exact bytes?
-    // It is a comparison of two digests, so no model verdict reaches the exit
+    // It is a comparison of two digests, so no gated-model verdict reaches the exit
     // code (rule 3), and it cannot be satisfied by better prose because the prose
     // is the input to the hash.
     //
@@ -1106,9 +1103,6 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
 // is a `no bump` type, since a releasable one collapses to the same answer either
 // way. The second drops the unqualified-denial refusal, which is the whole
 // failure CLOUD-842 reversed: the five landed rows were silent, not warned.
-//MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
-//MUTANT break-claim-refusal-dropped|s@^    if grammar.break_denial.is_match(bump_line) .*{$@    if false {@|a_negative_break_claim_must_name_the_surface_it_denies_about
-//MUTANT type-read-after-answer|s@^        .find(\x7cm\x7c (..answer_at).contains(\&m.start()))$@        .next()@|a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
@@ -1252,7 +1246,6 @@ fn check_bump(
 // Carried off the retired `mise-tasks/ready-lint.sh` (CLOUD-1221): the mutation
 // drops the deny conjunct, so every gate-introducing block is demanded a replay —
 // including the `warn` ones the clause deliberately leaves alone.
-//MUTANT replay-demanded-of-a-warn-gate|s@^    if !grammar.gate_intro.is_match(block) .. !grammar.deny_severity.is_match(block) {$@    if !grammar.gate_intro.is_match(block) {@|a_deny_gate_owes_a_replay_and_a_warn_gate_does_not
 /// §7: a new deny gate reports its firing rate before its severity is chosen.
 ///
 /// CLOUD-751. Showing a gate CAN fail on a fixture (CLOUD-418) is a different
@@ -1262,9 +1255,9 @@ fn check_bump(
 /// often is noise a reader can weigh, where a `deny` that fires often stops the
 /// fleet — which is why the obligation attaches to `deny` alone.
 ///
-/// Presence and shape only, never whether the number is good: judging an
-/// acceptable false-positive rate is a model verdict and rule 3 forbids it. The
-/// author reports; the reader decides.
+/// Presence and shape only, never whether the number is good: a rate is only
+/// judged against a declared threshold, and a Ready block declares none, so
+/// there is nothing to compare it with. The author reports; the reader decides.
 fn check_replay(
     grammar: &Grammar,
     block: &str,
@@ -1303,7 +1296,6 @@ fn check_replay(
 /// CLOUD-1092 both lived in — a declaration disagreeing with the table it is
 /// checked against — is not expressible here at all. That is the difference
 /// between checking a claim and removing the chance to make a wrong one.
-//MUTANT empty-tests-admitted-beyond-docs|s@declared == "docs"@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
 fn check_claims(
     grammar: &Grammar,
     payload: &Payload,
@@ -1700,7 +1692,6 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
 /// its presence keeps the answer it had. The claims object's `blockers` key is a
 /// key rather than prose, and [`check_claimed_blockers`] still holds it to the
 /// edges.
-//MUTANT prose-blockers-from-the-sentence|s@^        \&payload.blocked_by.join(" "),$@        \&payload.description,@|a_section_eight_sentence_is_never_read_as_a_claim
 fn emit_prose_blockers(grammar: &Grammar, payload: &Payload, report: &mut Report) {
     report.emissions.push(emit_keys(
         grammar,

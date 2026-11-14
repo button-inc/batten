@@ -21,7 +21,7 @@
 
 use crate::common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::{StateHome as _, run_with_stdin, stdout};
 
@@ -79,7 +79,7 @@ fn denied(mode: &str, command: &str) -> Option<String> {
 fn left_to_the_host(command: &str) -> bool {
     let words: Vec<&str> = command.split_whitespace().collect();
     [
-        "--delete", "--hard", "-D", "--", ".", "drop", "clear", "expire", "-fdx", "-f",
+        "--delete", "--hard", "-D", "--", ".", "drop", "clear", "expire", "-fdx", "-f", "restore",
     ]
     .iter()
     .any(|marker| words.contains(marker))
@@ -191,7 +191,7 @@ fn an_everyday_git_call_is_granted() {
     for call in [
         "git status",
         "git add f",
-        "git commit -m x",
+        "git commit -m 'fix: x'",
         "git commit -F f",
         "git fetch origin",
         "git switch -c feat",
@@ -204,7 +204,16 @@ fn an_everyday_git_call_is_granted() {
         "git log",
         "git reset --soft HEAD~1",
     ] {
-        assert!(granted("auto", call), "must be pre-approved: {call}");
+        // By THIS preset's rule: in auto mode `call grant now` answers a
+        // non-destructive shell line too, and would hide the git grant's loss.
+        let reason = decision("auto", call)
+            .filter(|(word, _)| word == "allow")
+            .map(|(_, reason)| reason)
+            .unwrap_or_default();
+        assert!(
+            reason.contains("program grant now"),
+            "must be pre-approved by the git preset: {call}: {reason}"
+        );
     }
 }
 
@@ -232,6 +241,21 @@ fn a_destructive_git_call_is_left_to_the_host() {
             "must be left to the host: {call}"
         );
     }
+}
+
+/// CLOUD-2354: `-C -c` is directory `-c`, so the verb is `reset`. The preset's
+/// own copy of git's option table skipped `reset` as `-c`'s value and granted
+/// the hard reset; the engine's projected subcommand does not.
+#[test]
+fn a_global_option_never_hides_a_destructive_git_call() {
+    for call in ["git -C -c reset --hard HEAD~1", "git reset --hard HEAD~1"] {
+        assert!(
+            !granted("default", call),
+            "must be left to the host: {call}"
+        );
+    }
+    // Anti-vacuity: the same globals before a read are granted.
+    assert!(granted("default", "git -C -c status"));
 }
 
 /// The preset alone, so its own plan-mode guard is what decides: in this
@@ -297,4 +321,136 @@ fn a_route_is_cut_at_its_prose_and_filled() {
         runnable("git fetch, then rebase onto what is there"),
         "git fetch"
     );
+}
+
+// --- CLOUD-2684: a checkout or restore is granted by what is at its paths ---
+
+/// The preset alone over a committed tree: `f`, `b`, `docs/g.md`, `sub/a`, `sub/b`.
+fn pathspec_tree(name: &str) -> PathBuf {
+    common::Fixture::new(name)
+        .file("batten.toml", GIT_ONLY)
+        .file("f", "f\n")
+        .file("b", "b\n")
+        .file("docs/g.md", "g\n")
+        .file("sub/a", "a\n")
+        .file("sub/b", "b\n")
+        .base_commit()
+        .build()
+}
+
+/// Whether `command`, run with the payload's `cwd`, is granted in `default`
+/// mode, where a grant is the module's and never auto mode's.
+fn granted_at(dir: &Path, cwd: &Path, command: &str) -> bool {
+    let home = common::scratch(&format!("{}-home", dir.display()).replace('/', "_"));
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "permission_mode": "default",
+        "cwd": cwd,
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let mut invocation = common::batten();
+    invocation
+        .current_dir(dir)
+        .state_home(&home)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = invocation.spawn().expect("spawn batten adjudicate");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("the child's stdin")
+            .write_all(payload.as_bytes())
+            .expect("write the envelope");
+    }
+    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    stdout(&outcome).contains(r#""permissionDecision":"allow""#)
+}
+
+#[test]
+fn a_checkout_of_a_clean_tracked_file_is_granted() {
+    let dir = pathspec_tree("pathspec-clean");
+    assert!(granted_at(&dir, &dir, "git checkout HEAD -- f"));
+    assert!(granted_at(
+        &dir,
+        &dir,
+        "git restore --staged --worktree --source=HEAD f"
+    ));
+}
+
+#[test]
+fn a_checkout_of_a_dirty_file_is_left_to_the_host() {
+    let dir = pathspec_tree("pathspec-dirty");
+    common::write(&dir, "f", "edited\n");
+    common::write(&dir, "b", "staged\n");
+    common::git_in(&dir, &["add", "b"]);
+    for command in [
+        "git checkout HEAD -- f",
+        "git checkout HEAD -- b",
+        "git checkout HEAD -- docs/g.md f",
+    ] {
+        assert!(!granted_at(&dir, &dir, command), "{command}");
+    }
+    assert!(granted_at(&dir, &dir, "git checkout HEAD -- docs/g.md"));
+}
+
+#[test]
+fn a_bare_restore_of_a_dirty_file_is_left_to_the_host() {
+    let dir = pathspec_tree("pathspec-bare-restore");
+    common::write(&dir, "f", "edited\n");
+    for command in [
+        "git restore f",
+        "git restore -s HEAD f",
+        "git restore --staged f",
+    ] {
+        assert!(!granted_at(&dir, &dir, command), "{command}");
+    }
+    assert!(granted_at(&dir, &dir, "git restore docs/g.md"));
+}
+
+#[test]
+fn a_checkout_of_an_untracked_path_is_left_to_the_host() {
+    let dir = pathspec_tree("pathspec-untracked");
+    common::write(&dir, "u", "untracked\n");
+    for command in ["git checkout HEAD -- u", "git checkout HEAD -- nothere"] {
+        assert!(!granted_at(&dir, &dir, command), "{command}");
+    }
+    assert!(granted_at(&dir, &dir, "git checkout HEAD -- f"));
+}
+
+#[test]
+fn a_globbed_or_directory_pathspec_is_left_to_the_host() {
+    let dir = pathspec_tree("pathspec-glob");
+    for command in [
+        "git checkout HEAD -- '*.md'",
+        "git checkout HEAD -- docs",
+        "git checkout HEAD -- .",
+        "git restore .",
+    ] {
+        assert!(!granted_at(&dir, &dir, command), "{command}");
+    }
+    assert!(granted_at(&dir, &dir, "git checkout HEAD -- docs/g.md"));
+}
+
+#[test]
+fn a_pathspec_is_placed_against_the_payload_cwd() {
+    let dir = pathspec_tree("pathspec-payload-cwd");
+    // `sub/a` is tracked and clean; the root has no `a`.
+    assert!(granted_at(&dir, &dir.join("sub"), "git checkout HEAD -- a"));
+}
+
+#[test]
+fn a_pathspec_behind_an_unfollowed_cd_is_left_to_the_host() {
+    let dir = pathspec_tree("pathspec-unfollowed-cd");
+    assert!(!granted_at(
+        &dir,
+        &dir,
+        "cd -P sub && git checkout HEAD -- b"
+    ));
+    assert!(granted_at(&dir, &dir, "cd sub && git checkout HEAD -- b"));
 }

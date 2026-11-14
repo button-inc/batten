@@ -240,7 +240,7 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
         return Err(UsageError::raise("ci step: no command after `--`"));
     };
     let stdin = match request.stdin {
-        Some(ref path) => std::fs::read_to_string(path)
+        Some(ref path) => crate::fsio::read_to_string(path)
             .map_err(|e| UsageError::raise(format!("ci step: --stdin {path}: {e}")))?,
         None => String::new(),
     };
@@ -304,12 +304,6 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/src/ci_step.rs
-//MUTANT key-unchecked|s@        && chars.all(\x7cc\x7c c.is_ascii_alphanumeric() \x7c\x7c c == '_' \x7c\x7c c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
-//MUTANT tail-unbounded|s@lines.len().saturating_sub(SUMMARY_TAIL)@0@|a_summary_keeps_the_tail_of_a_long_log
-//MUTANT empty-passed|s@        match lookup(name).filter(\x7cvalue\x7c !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
-//MUTANT require-empty-passed|s@        .find(\x7cname\x7c lookup(name).is_none_or(\x7cvalue\x7c value.is_empty()))@        .find(\x7cname\x7c lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
-//MUTANT capture-blank|s@        .find(\x7cline\x7c !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
 mod tests {
     use super::*;
 
@@ -319,7 +313,7 @@ mod tests {
         let file = dir.join("output");
         append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "k=v\n").unwrap();
         append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "").unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "k=v\n");
+        assert_eq!(crate::fsio::read_to_string(&file).unwrap(), "k=v\n");
         append_to(Some(std::ffi::OsString::new()), OUTPUT_VAR, "k=v\n").unwrap();
         append_to(None, OUTPUT_VAR, "k=v\n").unwrap();
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);

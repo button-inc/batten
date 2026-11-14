@@ -130,9 +130,16 @@ pub struct Attribution {
     /// false green. That is the asymmetry rather than a softening of it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_identity_allow: Vec<String>,
-    /// The accountable identity `--set-identity` writes into the repo-local git
-    /// config.
-    pub identity: Identity,
+    /// A committed accountable identity: still parsed, NEVER consulted
+    /// (CLOUD-2659).
+    ///
+    /// Who answers for a commit is the person making it, and a name committed
+    /// here reaches every clone, so `attribution identity` resolves the person at
+    /// run time instead (git, the session owner, the forge user). Optional so a
+    /// table without it loads; kept parseable so a consumer that still carries
+    /// one does not break. A present table is still refused with a blank half.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Identity>,
 }
 
 /// The identity a commit is accountable to.
@@ -215,8 +222,6 @@ pub struct Finding {
     pub verdict: Native,
 }
 
-//MUTANT-SUITE crates/batten/src/attribution.rs
-//MUTANT attribution-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_attribution_finding_names_its_vendored_class
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>`, through the
     /// same projection every declared refusal renders with.
@@ -273,12 +278,15 @@ impl Attribution {
             Matchers::compile(key, patterns)?;
         }
         Matchers::compile("trailer_allow", &self.trailer_allow)?;
-        if self.identity.name.is_empty() || self.identity.email.is_empty() {
-            return Err(UsageError::raise(
-                "attribution.identity: name and email are both required; an accountable identity \
-                 with a blank half is not one"
-                    .to_owned(),
-            ));
+        if let Some(identity) = &self.identity {
+            let blank = identity.name.is_empty() || identity.email.is_empty();
+            if blank {
+                return Err(UsageError::raise(
+                    "attribution.identity: name and email are both required; an accountable \
+                     identity with a blank half is not one"
+                        .to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -449,7 +457,7 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>>
 /// Returns an error when the message file cannot be read or git cannot resolve an
 /// identity — exit `1`, not a pass.
 pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
-    let body = std::fs::read_to_string(message).map_err(|error| {
+    let body = crate::fsio::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(
             "attribution: cannot read the commit message file `{}`: {error}",
             message.display()
@@ -466,70 +474,270 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
 
 /// Set the repo-local identity when it is unset or denied; report what happened.
 ///
-/// **Repo-local only, never `--global`.** The wider scope covers a developer's own
-/// unrelated repositories, and nothing here has the standing to change those.
+/// **Resolved at run time, never read from the committed table** (CLOUD-2659).
+/// Candidates, each judged against `identity_deny`; the first not denied wins and
+/// a denied one falls through, never echoed or written:
 ///
-/// The current identity is read as git *resolves* it rather than from the local
-/// file, because the defect is an identity inherited from a wider scope: asking
-/// only `--local` would report "unset" for an accountable global identity and write a
-/// redundant copy into every clone.
+/// 1. git's own resolution — the identity [`read_message`] judges, so the verb
+///    and the gate read one identity. Both halves accountable is `LeftAlone`;
+/// 2. the session owner, from the host's declared variable;
+/// 3. the forge user.
+///
+/// Nothing resolved is [`Outcome::Unresolved`]: nothing is written and a vendor
+/// identity is never a fallback. **Repo-local only, never `--global`.** After the
+/// write both stamped identities are re-read, because git ranks the
+/// `GIT_AUTHOR_*` variables and `author.*` keys above `user.*`; one that still
+/// stamps a denied identity is [`Outcome::Outranked`], naming what set it.
+///
+/// `env` is the process environment, passed so a case can fence it.
 ///
 /// # Errors
 ///
-/// Returns an error when git cannot be run or the write fails.
-pub fn set_identity(dir: &Path, attribution: &Attribution) -> Result<Outcome> {
-    let name = git::config_value(dir, "user.name")?.unwrap_or_default();
-    let email = git::config_value(dir, "user.email")?.unwrap_or_default();
-
-    let outcome = if name.trim().is_empty() || email.trim().is_empty() {
-        Outcome::WasUnset
-    } else {
-        let current = format!("{} <{}>", name.trim(), email.trim());
-        let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
-        if deny.matches(&current) {
-            Outcome::WasDenied
-        } else {
-            // A contributor who set their own accountable identity keeps it.
-            // Overwriting a real person's name with a configured default would
-            // assert the opposite of what the record says accountability is.
+/// Returns an error when the deny list does not compile or the write fails.
+pub fn set_identity(
+    dir: &Path,
+    attribution: &Attribution,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Outcome> {
+    let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
+    let git = stamped_pair(dir).ok();
+    let was = match &git {
+        // A contributor who set their own accountable identity keeps it.
+        Some((author, committer)) if !deny.matches(author) && !deny.matches(committer) => {
             return Ok(Outcome::LeftAlone);
         }
+        Some(_) => Prior::Denied,
+        None => Prior::Unset,
     };
+    let owner = session_owner(env);
+    let forge = forge_user();
+    let mut candidates = Vec::new();
+    if let Some(email) = owner {
+        // The forge user's name when it answered, else the address's own local
+        // part: the person's own address, never a fabricated one.
+        let name = forge.as_ref().map_or_else(
+            || email.split('@').next().unwrap_or_default().to_owned(),
+            |user| user.name.clone(),
+        );
+        candidates.push(Identity { name, email });
+    }
+    candidates.extend(forge);
+    let Some(identity) = first_accountable(candidates, &deny) else {
+        return Ok(Outcome::Unresolved);
+    };
+    git::set_config_local(dir, "user.name", &identity.name)?;
+    git::set_config_local(dir, "user.email", &identity.email)?;
+    if still_denied(dir, &deny)? {
+        return Ok(Outcome::Outranked {
+            identity,
+            was,
+            by: overriding_names(dir, env),
+        });
+    }
+    Ok(Outcome::Written { identity, was })
+}
 
-    git::set_config_local(dir, "user.name", &attribution.identity.name)?;
-    git::set_config_local(dir, "user.email", &attribution.identity.email)?;
-    Ok(outcome)
+/// The first candidate `identity_deny` does not match.
+fn first_accountable(candidates: Vec<Identity>, deny: &Matchers) -> Option<Identity> {
+    candidates
+        .into_iter()
+        .find(|candidate| !deny.matches(&candidate.rendered()))
+}
+
+/// Both identities git would stamp, or an error where either half is
+/// unresolved or blank — half an identity is no identity.
+fn stamped_pair(dir: &Path) -> Result<(String, String)> {
+    let author = git::stamped_identity(dir, "GIT_AUTHOR_IDENT")?;
+    let committer = git::stamped_identity(dir, "GIT_COMMITTER_IDENT")?;
+    for stamped in [&author, &committer] {
+        let (name, email) = stamped
+            .rsplit_once(" <")
+            .map(|(name, email)| (name.trim(), email.trim_end_matches('>').trim()))
+            .unwrap_or_default();
+        if name.is_empty() || email.is_empty() {
+            return Err(UsageError::raise(
+                "could not resolve the identity git would stamp".to_owned(),
+            ));
+        }
+    }
+    Ok((author, committer))
+}
+
+/// Whether either stamped identity is still denied after the write.
+fn still_denied(dir: &Path, deny: &Matchers) -> Result<bool> {
+    let (author, committer) = stamped_pair(dir)?;
+    Ok(deny.matches(&author) || deny.matches(&committer))
+}
+
+/// The session owner's address, from every host's declared variable.
+///
+/// Two hosts' variables set to DIFFERENT values is no answer: it never guesses.
+fn session_owner(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let found: std::collections::BTreeSet<String> = Harness::ALL
+        .iter()
+        .filter_map(|harness| harness.session_owner_email_var())
+        .filter_map(env)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| value.contains('@'))
+        .collect();
+    let mut found = found.into_iter();
+    match (found.next(), found.next()) {
+        (Some(email), None) => Some(email),
+        _ => None,
+    }
+}
+
+/// The forge user, through the in-process REST tier; `None` where it did not
+/// answer with a reading.
+fn forge_user() -> Option<Identity> {
+    let answer = crate::rest::get("user", None)?;
+    if !answer.is_reading() {
+        return None;
+    }
+    let user: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let login = user["login"].as_str().filter(|login| !login.is_empty())?;
+    let name = user["name"]
+        .as_str()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(login);
+    let email = match user["email"].as_str().filter(|email| !email.is_empty()) {
+        Some(email) => email.to_owned(),
+        None => format!("{}+{login}@users.noreply.github.com", user["id"].as_u64()?),
+    };
+    Some(Identity {
+        name: name.to_owned(),
+        email,
+    })
+}
+
+/// The names of whatever outranks the repo-local `user.*`, never their values.
+fn overriding_names(dir: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    let mut names: Vec<String> = [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ]
+    .into_iter()
+    .filter(|var| env(var).is_some())
+    .map(ToOwned::to_owned)
+    .collect();
+    let count = env("GIT_CONFIG_COUNT")
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    for n in 0..count {
+        let var = format!("GIT_CONFIG_KEY_{n}");
+        if env(&var).is_some_and(|key| identity_key(&key)) {
+            names.push(var);
+        }
+    }
+    for key in [
+        "author.name",
+        "author.email",
+        "committer.name",
+        "committer.email",
+    ] {
+        if git::config_value(dir, key).ok().flatten().is_some() {
+            names.push(key.to_owned());
+        }
+    }
+    names
+}
+
+/// Whether a config key names an identity git stamps.
+fn identity_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["user.", "author.", "committer."]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+/// The identity state before the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Prior {
+    /// No identity resolved.
+    Unset,
+    /// The resolved identity matched the deny-set.
+    Denied,
+}
+
+impl Prior {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unset => "unset",
+            Self::Denied => "denied",
+        }
+    }
 }
 
 /// What [`set_identity`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Outcome {
-    /// No identity resolved; one was written.
-    WasUnset,
-    /// The resolved identity matched the deny-set; it was replaced.
-    WasDenied,
+    /// A resolved, accountable identity was written.
+    Written {
+        /// What was written.
+        identity: Identity,
+        /// The state it replaced.
+        was: Prior,
+    },
     /// An accountable identity was already configured and was not touched.
     LeftAlone,
+    /// No candidate resolved, or every one was denied; nothing was written.
+    Unresolved,
+    /// Written, but something git ranks above `user.*` still stamps a denied
+    /// identity.
+    Outranked {
+        /// What was written.
+        identity: Identity,
+        /// The state it replaced.
+        was: Prior,
+        /// The variable or key names that outrank it, never their values.
+        by: Vec<String>,
+    },
 }
 
 impl Outcome {
-    /// The one-line report, pointer-only: it names the prior *state*, never the
-    /// denied value.
+    /// The report, pointer-only: it names the prior *state* and the overriding
+    /// names, never the denied value.
     #[must_use]
-    pub fn line(self, identity: &Identity) -> String {
+    pub fn line(&self) -> String {
         match self {
-            Self::WasUnset => format!(
-                "attribution: repo-local identity set to {} (was: unset)",
-                identity.rendered()
-            ),
-            Self::WasDenied => format!(
-                "attribution: repo-local identity set to {} (was: denied)",
-                identity.rendered()
+            Self::Written { identity, was } => format!(
+                "attribution: repo-local identity set to {} (was: {})",
+                identity.rendered(),
+                was.as_str()
             ),
             Self::LeftAlone => {
                 "attribution: identity already accountable; left as configured".to_owned()
             }
+            Self::Unresolved => {
+                "attribution: no accountable identity resolved (git, session owner, forge)"
+                    .to_owned()
+            }
+            Self::Outranked { identity, was, by } => format!(
+                "attribution: repo-local identity set to {} (was: {})\n\
+                 attribution: a denied identity outranks the repo-local one; set by {}; unset them",
+                identity.rendered(),
+                was.as_str(),
+                if by.is_empty() {
+                    "an unnamed source".to_owned()
+                } else {
+                    by.join(", ")
+                }
+            ),
+        }
+    }
+
+    /// The exit this outcome owes: `0` written or left alone, `1` nothing
+    /// resolvable, `2` written but outranked.
+    #[must_use]
+    pub const fn exit(&self) -> crate::exit::ExitCode {
+        match self {
+            Self::Written { .. } | Self::LeftAlone => crate::exit::ExitCode::Success,
+            Self::Unresolved => crate::exit::ExitCode::Usage,
+            Self::Outranked { .. } => crate::exit::ExitCode::Violation,
         }
     }
 }
@@ -640,10 +848,10 @@ mod tests {
             // has, and a fixture where the two coincide would pass a judge that
             // conflated them.
             tag_identity_allow: vec![r"^Release Cutter <releases@example\.test>$".to_owned()],
-            identity: Identity {
+            identity: Some(Identity {
                 name: "Accountable Human".to_owned(),
                 email: "human@example.test".to_owned(),
-            },
+            }),
         }
     }
 
@@ -955,7 +1163,7 @@ mod tests {
     #[test]
     fn a_blank_half_of_the_identity_is_refused() {
         let mut blank = policy();
-        blank.identity.email = String::new();
+        blank.identity.as_mut().unwrap().email = String::new();
         assert!(blank.validate().is_err());
     }
 
@@ -981,7 +1189,7 @@ mod tests {
     #[test]
     fn an_identity_renders_as_git_renders_an_author() {
         assert_eq!(
-            policy().identity.rendered(),
+            policy().identity.unwrap().rendered(),
             "Accountable Human <human@example.test>"
         );
     }
@@ -1022,23 +1230,42 @@ mod tests {
         crate::gitwrite::init_on_main(&dir).unwrap();
         git::set_config_local(&dir, "user.name", "Somebody").unwrap();
         git::set_config_local(&dir, "user.email", " ").unwrap();
-        assert_eq!(set_identity(&dir, &policy()).unwrap(), Outcome::WasUnset);
+        let owner =
+            |var: &str| (var == "CLAUDE_CODE_USER_EMAIL").then(|| "o@example.test".to_owned());
+        let forge = crate::rest::routed("attribution-half-forge", &[("/user", 401, "{}")]);
+        assert_eq!(
+            crate::rest::with_fixture(&forge, || set_identity(&dir, &policy(), &owner)).unwrap(),
+            Outcome::Written {
+                identity: Identity {
+                    name: "o".to_owned(),
+                    email: "o@example.test".to_owned(),
+                },
+                was: Prior::Unset,
+            }
+        );
         assert_eq!(
             git::config_value(&dir, "user.email").unwrap().as_deref(),
-            Some("human@example.test")
+            Some("o@example.test")
         );
     }
 
     #[test]
     fn the_outcome_line_names_the_state_not_the_denied_value() {
-        let identity = policy().identity;
-        assert!(Outcome::WasDenied.line(&identity).contains("was: denied"));
-        assert!(Outcome::WasUnset.line(&identity).contains("was: unset"));
-        assert!(
-            Outcome::LeftAlone
-                .line(&identity)
-                .contains("left as configured")
-        );
+        let identity = policy().identity.unwrap();
+        let written = |was| Outcome::Written {
+            identity: identity.clone(),
+            was,
+        };
+        assert!(written(Prior::Denied).line().contains("was: denied"));
+        assert!(written(Prior::Unset).line().contains("was: unset"));
+        assert!(Outcome::LeftAlone.line().contains("left as configured"));
+        let outranked = Outcome::Outranked {
+            identity: identity.clone(),
+            was: Prior::Denied,
+            by: vec!["GIT_AUTHOR_NAME".to_owned()],
+        }
+        .line();
+        assert!(outranked.contains("set by GIT_AUTHOR_NAME"), "{outranked}");
     }
 
     #[test]

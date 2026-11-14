@@ -333,8 +333,6 @@ pub struct Handler {
     pub preapproves: bool,
 }
 
-//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).has_root())@|a_write_inside_the_tree_is_selected
-//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).has_root())@|a_tree_only_row_selects_a_pathless_call
 impl Handler {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
@@ -655,8 +653,6 @@ fn event_of(token: &str) -> Option<Event> {
 // The survivor is what makes it a finding: a suite that only asserted the
 // advisory FIRES would stay green under this patch, because an over-firing
 // handler fires. The case has to assert the calls it does NOT select.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT head-move-unwatched|s@^        let Some(matcher) = self.command_matcher.as_deref() else {$@        let Some(matcher) = None::<\&str> else {@|a_git_call_that_moves_no_head_is_not_selected
 
 /// Reject a handler set that cannot honestly run.
 ///
@@ -742,7 +738,6 @@ impl Violation {
 
 /// A handler's report as the class it belongs to (CLOUD-2078): its row and
 /// its own words travel as subjects of `hook report now`.
-//MUTANT handler-advice-misclassed|s@^    let class = crate::verdict::Native::HookReportNow;$@    let class = crate::verdict::Native::HookAnswerBroken;@|handler_advice_and_violations_carry_their_row_and_class
 #[must_use]
 pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
     let class = crate::verdict::Native::HookReportNow;
@@ -1028,7 +1023,7 @@ impl Payload {
         match self {
             Payload::Text(text) => std::borrow::Cow::Borrowed(text),
             Payload::Spooled(path) => {
-                std::borrow::Cow::Owned(std::fs::read_to_string(path).unwrap_or_default())
+                std::borrow::Cow::Owned(crate::fsio::read_to_string(path).unwrap_or_default())
             }
         }
     }
@@ -1040,10 +1035,6 @@ impl Payload {
 /// says "exceeded …ms and was killed" — so the cases that prove it read that
 /// record rather than a wall clock (CLOUD-2059). Each row below takes the bound
 /// away in one way, and its case reads `Pass` where the record should have been.
-//MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
-//MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
-//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c payload.write_to(pipe)); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
-//MUTANT handler-cwd-inherited|s@^            .current_dir(root)$@            .current_dir(".")@|a_handler_runs_from_the_declaring_root_whatever_the_cwd
 fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
@@ -1295,7 +1286,28 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
 /// because a handler that put its reason on the wrong stream has still said
 /// something true, and discarding it would leave a refusal with no reason at all
 /// — which §5 forbids more strongly than it requires a particular stream.
+///
+/// **A BATTEN CHILD'S OWN REFUSAL IS THE REASON, AND ONLY IT.** A handler that
+/// runs `batten check` through a task runner writes its finding to stdout, its
+/// remedy line to stderr, and the runner adds its own `ERROR task failed` line
+/// there too. Taking stderr whole handed the session three statements for one
+/// refusal, and the one carrying the pointer (`… at CLOUD-N`) was the one
+/// dropped. So the `batten deny` lines on either stream are the reason, and
+/// nothing else: one refusal, its pointers kept.
 fn reason(stderr: &str, stdout: &str) -> String {
+    let head = format!(
+        "{} {} ",
+        crate::refusal::PROVENANCE,
+        crate::refusal::Severity::Deny.word()
+    );
+    let denials: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|line| line.starts_with(&head) && crate::refusal::parse_finding(line).is_some())
+        .collect();
+    if !denials.is_empty() {
+        return denials.join("\n");
+    }
     if stderr.is_empty() {
         stdout.to_owned()
     } else {
@@ -1307,6 +1319,36 @@ fn reason(stderr: &str, stdout: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A Batten child's refusal reaches the session as its deny lines alone:
+    /// the remedy line and the task runner's error line are dropped, and the
+    /// deny on stdout (the one carrying the pointer) is kept.
+    #[test]
+    fn a_batten_child_refusal_is_its_deny_lines_alone() {
+        let stdout = "batten deny issue file held at CLOUD-1\n";
+        let stderr = "batten remedy issue file other — class 3 (a board action)\n\
+                      [filed-here:guard] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file held at CLOUD-1"
+        );
+
+        // Two denials are two pointers, both kept, stderr's first.
+        let stdout = "batten deny issue file held at CLOUD-2\n";
+        let stderr = "batten deny issue file unclear at CLOUD-3\n[x] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file unclear at CLOUD-3\nbatten deny issue file held at CLOUD-2"
+        );
+
+        // A line merely mentioning a deny mid-sentence is not a finding.
+        let stderr = "note: batten deny is printed below\n";
+        assert_eq!(reason(stderr, ""), stderr);
+
+        // A handler that is not Batten keeps the old reading: stderr, else stdout.
+        assert_eq!(reason("", "plain reason\n"), "plain reason\n");
+        assert_eq!(reason("stderr reason\n", "stdout\n"), "stderr reason\n");
+    }
 
     /// The command selector's four readings, decided directly (CLOUD-1650).
     ///
@@ -1370,6 +1412,19 @@ mod tests {
         assert!(row.selects_path(None));
         assert!(row.selects_path(Some("crates/batten/src/lib.rs")));
         assert!(!row.selects_path(Some("/root/.claude/plans/x.md")));
+    }
+
+    /// A row on `forge` selects by the normalized `<event>.<action>` through the
+    /// matcher column it already has (CLOUD-2689).
+    #[test]
+    fn a_forge_handler_selects_its_matching_event_only() {
+        let mut row = handler("forge-pr", "forge", &["true"]);
+        row.matcher = Some("^pull_request\\.opened$".to_owned());
+        let rows = [row];
+        assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
+        assert!(selects(&rows, Event::Forge, "pull_request.opened"));
+        assert!(!selects(&rows, Event::Forge, "issues.opened"));
+        assert!(!selects(&rows, Event::PostTool, "pull_request.opened"));
     }
 
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {

@@ -19,15 +19,6 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// The engine-side rows this suite kills, declared beside the code they mutate
-// (`src/drain.rs`, `src/lib.rs`) and mirrored here so CLOUD-2175's obligations,
-// which name this file, bind (`policy/obligations-bound.rego`'s `declares_slug`):
-/*
-#MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-#MUTANT drain-cut-unreported|s@^        crate::verdict::Native::DrainFitBroken,$@        crate::verdict::Native::CallGrantNow,@|an_over_budget_payload_is_cut_and_points_at_the_journal
-#MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
-*/
-
 use crate::common;
 
 use std::fmt::Write as _;
@@ -77,7 +68,7 @@ fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
         .state_home(home)
         .args(["adjudicate", "--harness", harness])
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -100,7 +91,7 @@ fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
         .args(leading)
         .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -120,7 +111,7 @@ fn state_cmd(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .state_home(home)
         .args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten")
 }
@@ -186,7 +177,7 @@ fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
         .state_home(home)
         .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION_PARENT", parent)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -437,7 +428,7 @@ fn the_advisory_reaches_the_model_in_band_where_the_host_delivers_it() {
         "and it is not ALSO on stderr — two copies of one notice is two channels to keep in step"
     );
 
-    let neutral = hook_as(&repo, &home, "exit-code", &post_tool("s2"));
+    let neutral = hook_as(&repo, &home, "exit-code", &post_tool_batch("s2"));
     assert_eq!(neutral.status.code(), Some(0));
     assert!(
         advisory_context(&neutral).is_none(),
@@ -484,15 +475,15 @@ fn a_post_tool_use_is_silent_where_the_host_names_the_batch() {
 
 #[test]
 fn a_host_without_the_batch_event_still_coalesces_post_tool_wakes() {
-    // §7(b). The window is DEMOTED to the fallback, not deleted: the neutral
-    // `exit-code` adapter declares the converged core and no batch event, so
+    // §7(b). The window is DEMOTED to the fallback, not deleted: `codex-cli`
+    // declares the converged core and no batch event, so
     // `degrade` hands it `PostToolUse` and four wakes inside one window are one
     // drain — the same guarantee, reached the way CLOUD-79 built it.
     let (repo, home) =
         drained_fixture("drain-fallback-window", "\n[drain]\ninterval_ms = 600000\n");
     let mut emitted = 0;
     for _ in 0..4 {
-        if !payload(&hook_as(&repo, &home, "exit-code", &post_tool("batch"))).is_empty() {
+        if !payload(&hook_as(&repo, &home, "codex-cli", &post_tool("batch"))).is_empty() {
             emitted += 1;
         }
     }
@@ -517,9 +508,9 @@ fn the_capability_table_decides_the_wake_event_not_the_drain() {
     );
     // The host that does not: the same bytes are its boundary.
     assert_eq!(
-        payload(&hook_as(&repo, &home, "exit-code", &post_tool("s1"))).len(),
+        payload(&hook_as(&repo, &home, "codex-cli", &post_tool("s1"))).len(),
         1,
-        "exit-code declares no batch event, so PostToolUse degrades to the wake"
+        "codex-cli declares no batch event, so PostToolUse degrades to the wake"
     );
 }
 
@@ -531,7 +522,7 @@ fn a_batch_payload_to_a_host_that_does_not_name_it_does_not_drain() {
     // `Event::normalize` knowing the spelling must not be mistaken for the host
     // declaring the event.
     let (repo, home) = drained_fixture("drain-batch-undeclared", "");
-    let output = hook_as(&repo, &home, "exit-code", &post_tool_batch("s1"));
+    let output = hook_as(&repo, &home, "codex-cli", &post_tool_batch("s1"));
     assert_eq!(output.status.code(), Some(0));
     assert!(
         payload(&output).is_empty(),
@@ -772,7 +763,7 @@ fn a_warm_fork_resumes_from_its_parents_watermark() {
         .state_home(&home)
         .args(["state", "record"])
         .current_dir(&repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION", "child")
         .env("BATTEN_SESSION_PARENT", "parent")
         .output()

@@ -239,7 +239,6 @@ pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
 ///
 /// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
-//MUTANT carries-spends|s@^    let Ok(repo) = crate::git::open_fresh(dir) else {$@    let Ok(repo) = crate::git::open_for_write(dir) else {@|an_ancestry_read_leaves_the_memo_standing
 pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
     let Ok(repo) = crate::git::open_fresh(dir) else {
         return false;
@@ -249,7 +248,7 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
         return false;
     };
     repo.merge_base(base, head)
-        .is_ok_and(|found| found.detach() == base)
+        .is_ok_and(|found| found.is_some_and(|found| found.detach() == base))
 }
 
 /// The merge commits in `base..tip`, oldest last, or `None` where either rev
@@ -261,7 +260,6 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 ///
 /// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
-//MUTANT merges-in-spends|s@^    let repo = crate::git::open_fresh(dir).ok()?;$@    let repo = crate::git::open_for_write(dir).ok()?;@|an_ancestry_read_leaves_the_memo_standing
 pub fn merges_in(dir: &Path, base: &str, tip: &str) -> Option<Vec<String>> {
     let repo = crate::git::open_fresh(dir).ok()?;
     let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
@@ -501,7 +499,7 @@ fn replay_range(
     let descends = bound == base
         && repo
             .merge_base(base, tip)
-            .is_ok_and(|found| found.detach() == base);
+            .is_ok_and(|found| found.is_some_and(|found| found.detach() == base));
 
     let walk = repo
         .rev_walk([tip])
@@ -1093,7 +1091,7 @@ fn settle(
             let source = resolutions
                 .get(path)
                 .map_or_else(|| std::path::PathBuf::from(path), Clone::clone);
-            let bytes = std::fs::read(dir.join(&source)).map_err(|err| {
+            let bytes = crate::fsio::read(dir.join(&source)).map_err(|err| {
                 anyhow::anyhow!(
                     "gitwrite: {path} carries no resolution to read at {}: {err}",
                     source.display()
@@ -1123,7 +1121,7 @@ fn settle(
 /// matched, so a union is never taken for a path the file did not name.
 fn union_paths(dir: &Path) -> std::collections::BTreeSet<String> {
     // stream: the repository's own attributes file, a handful of lines.
-    let Ok(text) = std::fs::read_to_string(dir.join(".gitattributes")) else {
+    let Ok(text) = crate::fsio::read_to_string(dir.join(".gitattributes")) else {
         return std::collections::BTreeSet::new();
     };
     text.lines()
@@ -1185,12 +1183,25 @@ fn union_of(ours: &[u8], theirs: &[u8]) -> Vec<u8> {
 /// the existing index already held, for a path this replay did not touch, and a
 /// fresh `stat(2)` for one it wrote.
 fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectId) -> Result<()> {
-    let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+    if repo.workdir().is_none() {
         // A bare repository has nothing to update, and that is a fact about the
         // clone rather than a failure of the replay.
         return Ok(());
+    }
+    checkout_between(repo, tree_of(repo, was)?, tree_of(repo, now)?)
+}
+
+/// [`update_worktree`]'s body over two TREE ids (CLOUD-2581): a fresh checkout
+/// is the delta from the empty tree, so [`link_worktree`] reaches the same
+/// filter pipeline and stat-correct index a replay does.
+fn checkout_between(
+    repo: &gix::Repository,
+    before: gix::ObjectId,
+    after: gix::ObjectId,
+) -> Result<()> {
+    let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+        return Ok(());
     };
-    let (before, after) = (tree_of(repo, was)?, tree_of(repo, now)?);
     let read = |id: gix::ObjectId| -> Result<gix::Tree<'_>> {
         repo.find_tree(id)
             .map_err(|err| anyhow::anyhow!("gitwrite: tree {id} will not read: {err}"))
@@ -1255,7 +1266,7 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
 
     let mut index = repo
         .index_from_tree(&after.id())
-        .map_err(|err| anyhow::anyhow!("gitwrite: no index for {now}: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index for tree {}: {err}", after.id()))?;
     let (mut pipeline, _) = repo
         .filter_pipeline(None)
         .map_err(|err| anyhow::anyhow!("gitwrite: no filter pipeline: {err}"))?;
@@ -1284,14 +1295,143 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
     remove_gone(&workdir, &gone, gone_trees)
 }
 
+/// Create the linked worktree `name` for the host, at `<top>/.claude/worktrees/<name>`
+/// (CLOUD-2581), and answer its directory.
+///
+/// Native, because `git.rs::no_second_git_invoker_exists` forbids a `git`
+/// spawn: the branch `refs/heads/worktree-<id>` at the main checkout's `HEAD`,
+/// the admin directory `<common>/worktrees/<id>` with its `HEAD`, `commondir`
+/// and `gitdir`, the worktree's own `.git` file, and a checkout from the empty
+/// tree through [`checkout_between`]. `<id>` is `name` with `/` spelled `+`.
+/// A failure removes everything written before it.
+///
+/// # Errors
+///
+/// A `name` that is empty, absolute or carries a `..` segment; a target that
+/// exists; or any step that will not complete, named in the message.
+pub fn link_worktree(common: &Path, top: &Path, name: &str) -> Result<std::path::PathBuf> {
+    if name.is_empty() || name.starts_with('/') || name.split('/').any(|segment| segment == "..") {
+        return Err(anyhow::anyhow!(
+            "worktree name {name:?} is not a relative name"
+        ));
+    }
+    let id = name.replace('/', "+");
+    let branch = format!("refs/heads/worktree-{id}");
+    let dir = top.join(".claude").join("worktrees").join(name);
+    let admin = common.join("worktrees").join(&id);
+    if dir.exists() || admin.exists() {
+        return Err(anyhow::anyhow!("worktree {name} exists"));
+    }
+    let mut main = crate::git::open_for_write(top)?;
+    let head = main
+        .head_id()
+        .map_err(|err| anyhow::anyhow!("worktree: HEAD will not resolve: {err}"))?
+        .detach();
+    // `git worktree add` writes its branch's reflog under a fallback identity
+    // when none is configured; gix refuses unless the fallback is said.
+    {
+        let mut config = main.config_snapshot_mut();
+        let _ = config.set_value(
+            &gix::config::tree::gitoxide::Committer::NAME_FALLBACK,
+            "batten",
+        );
+        let _ = config.set_value(
+            &gix::config::tree::gitoxide::Committer::EMAIL_FALLBACK,
+            "batten@localhost",
+        );
+    }
+    let written = (|| -> Result<()> {
+        let name: gix::refs::FullName = branch
+            .as_str()
+            .try_into()
+            .map_err(|err| anyhow::anyhow!("worktree: {branch} is not a ref name: {err}"))?;
+        main.edit_reference(gix::refs::transaction::RefEdit {
+            change: gix::refs::transaction::Change::Update {
+                log: gix::refs::transaction::LogChange {
+                    mode: gix::refs::transaction::RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "batten: worktree create".into(),
+                },
+                expected: gix::refs::transaction::PreviousValue::MustNotExist,
+                new: gix::refs::Target::Object(head),
+            },
+            name,
+            deref: false,
+        })
+        .map_err(|err| anyhow::anyhow!("worktree: {branch} will not write: {err}"))?;
+        std::fs::create_dir_all(&admin)
+            .map_err(|err| anyhow::anyhow!("worktree: admin dir will not write: {err}"))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| anyhow::anyhow!("worktree: directory will not write: {err}"))?;
+        let admin_files = [
+            ("HEAD", format!("ref: {branch}\n")),
+            ("commondir", "../..\n".to_owned()),
+            ("gitdir", format!("{}\n", dir.join(".git").display())),
+        ];
+        for (file, body) in admin_files {
+            crate::durable::replace(admin.join(file), body)
+                .map_err(|err| anyhow::anyhow!("worktree: admin {file} will not write: {err}"))?;
+        }
+        crate::durable::replace(dir.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .map_err(|err| anyhow::anyhow!("worktree: .git will not write: {err}"))?;
+        let linked = crate::git::open_for_write(&dir)?;
+        let empty = gix::ObjectId::empty_tree(linked.object_hash());
+        checkout_between(&linked, empty, tree_of(&linked, head)?)
+    })();
+    if let Err(why) = written {
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&admin);
+        let _ = delete_ref(top, &branch);
+        return Err(why);
+    }
+    Ok(dir)
+}
+
+/// Remove the linked worktree at `worktree`: its directory, then its admin
+/// directory (CLOUD-2581). Answers the common dir and the branch the admin
+/// `HEAD` named, so the caller decides whether the branch goes too.
+///
+/// The common dir is read from the worktree's own `.git` file, never from the
+/// hook's cwd, which may be the worktree being removed.
+///
+/// # Errors
+///
+/// A worktree with no readable `.git` file or admin directory, or a removal the
+/// filesystem refuses.
+pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<String>)> {
+    let pointer = crate::fsio::read_to_string(worktree.join(".git")).map_err(|err| {
+        anyhow::anyhow!("worktree: {} has no .git file: {err}", worktree.display())
+    })?;
+    let admin = std::path::PathBuf::from(
+        pointer
+            .trim()
+            .strip_prefix("gitdir:")
+            .ok_or_else(|| anyhow::anyhow!("worktree: .git is not a gitdir pointer"))?
+            .trim(),
+    );
+    let commondir = crate::fsio::read_to_string(admin.join("commondir"))
+        .map_err(|err| anyhow::anyhow!("worktree: no commondir: {err}"))?;
+    let common = crate::git::canonical(&admin.join(commondir.trim()));
+    let branch = crate::fsio::read_to_string(admin.join("HEAD"))
+        .ok()
+        .and_then(|head| {
+            head.trim()
+                .strip_prefix("ref:")
+                .map(|named| named.trim().to_owned())
+        });
+    std::fs::remove_dir_all(worktree)
+        .map_err(|err| anyhow::anyhow!("worktree: directory will not remove: {err}"))?;
+    std::fs::remove_dir_all(&admin)
+        .map_err(|err| anyhow::anyhow!("worktree: admin dir will not remove: {err}"))?;
+    Ok((common, branch))
+}
+
 /// Unlink every deleted path, then prune the directories the base deleted.
 ///
 /// ONE UNREMOVABLE PATH DOES NOT STRAND THE REST. Every deletion is attempted and
 /// the failures are reported together afterwards: returning on the first is what
 /// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
 /// one because it reads as the branch's own untracked work.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(\x7ctree\x7c std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
 fn remove_gone(
     workdir: &Path,
     gone: &std::collections::BTreeSet<Vec<u8>>,
@@ -1499,6 +1639,25 @@ pub fn init_on_main(dir: &Path) -> Result<()> {
     })
 }
 
+/// Make `dir` an empty BARE repository whose `HEAD` names `main`, in-process:
+/// [`init_on_main`] for a repository with no working tree, such as a remote a
+/// suite pushes to.
+///
+/// # Errors
+///
+/// A directory that will not initialise, or a `HEAD` that will not write.
+pub fn init_bare_on_main(dir: &Path) -> Result<()> {
+    gix::init_bare(dir).map_err(|err| {
+        anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
+    })?;
+    crate::durable::replace(dir.join("HEAD"), "ref: refs/heads/main\n").map_err(|err| {
+        anyhow::anyhow!(
+            "gitwrite: could not point {}'s HEAD at main: {err}",
+            dir.display()
+        )
+    })
+}
+
 /// Commit exactly `paths` under `dir` on `HEAD`, and write the index from that
 /// commit's tree — `git init` + `git add` + `git commit --allow-empty`, in-process.
 ///
@@ -1519,7 +1678,6 @@ pub fn init_on_main(dir: &Path) -> Result<()> {
 ///
 /// A directory that will not initialise or open, a file that will not read, an
 /// object the odb refuses, or an index that will not write.
-//MUTANT commit-keeps-the-memo|s@^    crate::git::spend_scope();$@@|a_commit_spends_the_scopes_memo
 pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
     let repo = if dir.join(".git").exists() {
         gix::open(dir)
@@ -1542,7 +1700,7 @@ pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
         if !meta.is_file() {
             continue;
         }
-        let body = std::fs::read(&full)
+        let body = crate::fsio::read(&full)
             .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", full.display()))?;
         let id = repo
             .write_blob(&body)
@@ -1705,7 +1863,7 @@ fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
                 tree_from_dir(repo, &path)?,
             )
         } else {
-            let body = std::fs::read(&path).map_err(|err| {
+            let body = crate::fsio::read(&path).map_err(|err| {
                 anyhow::anyhow!("gitwrite: cannot read {}: {err}", path.display())
             })?;
             let id = repo
@@ -1783,8 +1941,6 @@ pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
 /// of [`replay_range`] to keep that function a readable length.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT borrowed-upstream-replayed|s@^    if widen {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
 fn drop_set(
     dir: &Path,
     branch: &str,
@@ -1934,7 +2090,7 @@ mod tests {
         let dir = crate::scratch::scratch("gitwrite-refs");
         init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
         assert_eq!(
-            std::fs::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),
+            crate::fsio::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),
             "ref: refs/heads/main\n"
         );
         let head = || {
@@ -2274,5 +2430,64 @@ mod tests {
             assert_eq!(mode & 0o777, 0o644);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a bare repository left uninitialised, or its `HEAD` not
+    /// naming `main`.
+    #[test]
+    fn a_bare_repository_is_initialised_on_main() {
+        let dir = crate::scratch::scratch("gitwrite-bare-main");
+        init_bare_on_main(&dir).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            crate::fsio::read_to_string(dir.join("HEAD")).unwrap_or_else(|err| panic!("{err}")),
+            "ref: refs/heads/main\n"
+        );
+    }
+
+    /// Fails by: any one malformed name admitted, or a target whose directory
+    /// or admin directory alone exists reused (CLOUD-2581).
+    #[test]
+    fn a_worktree_name_must_be_relative_and_its_target_new() {
+        let top = crate::scratch::scratch("gitwrite-link-names");
+        init_on_main(&top).unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(&top, &[], "seed").unwrap_or_else(|err| panic!("{err}"));
+        let common = top.join(".git");
+        for name in ["", "/abs", "a/../b"] {
+            let refused = link_worktree(&common, &top, name)
+                .err()
+                .unwrap_or_else(|| panic!("must be refused"));
+            assert!(
+                refused.to_string().contains("not a relative name"),
+                "{name:?}: {refused}"
+            );
+        }
+        std::fs::create_dir_all(top.join(".claude").join("worktrees").join("dir"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        std::fs::create_dir_all(common.join("worktrees").join("admin"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        for name in ["dir", "admin"] {
+            let refused = link_worktree(&common, &top, name)
+                .err()
+                .unwrap_or_else(|| panic!("must be refused"));
+            assert!(refused.to_string().contains("exists"), "{name}: {refused}");
+        }
+    }
+
+    /// Fails by: a well-formed name refused, a created worktree answered by any
+    /// path but its own, or a removal answering any common dir or branch but
+    /// the ones it created (CLOUD-2581).
+    #[test]
+    fn a_linked_worktree_round_trips_its_directory_common_dir_and_branch() {
+        let top = crate::scratch::scratch("gitwrite-link-round-trip");
+        init_on_main(&top).unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(&top, &[], "seed").unwrap_or_else(|err| panic!("{err}"));
+        let common = top.join(".git");
+        let dir = link_worktree(&common, &top, "feat").unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(dir, top.join(".claude").join("worktrees").join("feat"));
+        assert!(dir.join(".git").is_file());
+        let (answered, branch) = unlink_worktree(&dir).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(answered, crate::git::canonical(&common));
+        assert_eq!(branch.as_deref(), Some("refs/heads/worktree-feat"));
+        assert!(!dir.exists());
     }
 }

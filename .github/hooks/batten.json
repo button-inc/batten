@@ -1,44 +1,83 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "ErrorOccurred": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "Notification": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
       }
     ],
     "PostToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
       }
     ],
-    "Stop": [
+    "PostToolUseFailure": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "PreCompact": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
       }
     ],
     "SessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "Stop": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli",
+        "type": "command"
+      }
+    ],
+    "subagentStart": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli --event subagentStart",
+        "type": "command"
+      }
+    ],
+    "userPromptTransformed": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli --event userPromptTransformed",
+        "type": "command"
       }
     ]
-  }
+  },
+  "version": 1
 }

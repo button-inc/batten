@@ -41,6 +41,14 @@ fn fixture(name: &str) -> std::path::PathBuf {
     std::fs::write(dir.join(".claude/settings.json"), "{\"hooks\":{}}\n").unwrap();
     std::fs::write(dir.join("mise-tasks/a-gate"), "#!/usr/bin/env bash\ntrue\n").unwrap();
     common::git_in(&dir, &["init", "-q"]);
+    // Batten is registered on every host's whole surface, as `init` leaves a
+    // consumer, so the doctor check behind session start has nothing to owe.
+    let wired = common::batten()
+        .current_dir(&dir)
+        .args(["wiring", "register", "--all"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
     common::git_in(&dir, &["add", "-A"]);
     common::git_in(&dir, &["commit", "-qm", "seed"]);
     dir
@@ -479,10 +487,13 @@ impl PipeNotice for Output {
 fn each_wiring_names_the_event_it_was_called_on() {
     for event in ["SessionStart", "PostToolBatch"] {
         let dir = fixture(&format!("contract-event-{event}"));
+        // One session per fixture: a session keeps its home (CLOUD-2672), so a
+        // second repository under the same id would be judged by the first.
+        let session = format!("s-{event}");
         // Seed, so the second call is the one with something to say.
-        drift_on(&dir, "s-1", event, &[]);
+        drift_on(&dir, &session, event, &[]);
         std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
-        let output = drift_on(&dir, "s-1", event, &[]);
+        let output = drift_on(&dir, &session, event, &[]);
 
         let raw = common::stdout(&output);
         let document: serde_json::Value =

@@ -134,6 +134,96 @@ pub struct Forge {
     /// renders reads it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probe: Vec<Probe>,
+    /// Where forge events come from when nothing pushes them (CLOUD-2693):
+    /// rows tried in declaration order, the first available read each round.
+    /// The concrete rows are a consumer's config, never engine code (rule 1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source: Vec<Source>,
+}
+
+/// One `[[forge.source]]` row (CLOUD-2693).
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Source {
+    /// The stable id its cursor and its pointer lines are named by.
+    pub id: String,
+    /// How the document is read.
+    pub kind: SourceKind,
+    /// How the document is decoded into events.
+    pub decode: Decode,
+    /// `mcp`: the server a `[[mcp.source]]` wiring resolves.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server: String,
+    /// `mcp`: the tool method.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub method: String,
+    /// `mcp`: a JSON object template; `{owner}` and `{repo}` are filled from
+    /// the forge remote.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
+    /// `command`: the argv whose stdout is the document; `{owner}` and `{repo}`
+    /// are filled per element.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run: Vec<String>,
+    /// `command`: an argv that exits 0 when the source can be read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available: Vec<String>,
+    /// `snapshot`: the catalog event each object is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub event: String,
+    /// `snapshot`: a JSON pointer to each object's identity.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// `snapshot`: the action a key first seen after the baseline round emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+    /// `snapshot`: the tracked fields whose change emits an action.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track: Vec<Track>,
+}
+
+/// How a source is read.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    /// A tool call through a declared MCP server.
+    Mcp,
+    /// A declared program's stdout.
+    Command,
+}
+
+/// How a source's document is decoded.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Decode {
+    /// An array of Events API items.
+    Events,
+    /// An array of objects compared with the last round's.
+    Snapshot,
+}
+
+/// One tracked field of a `snapshot` source.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Track {
+    /// A JSON pointer into each object.
+    pub pointer: String,
+    /// The action any change of the pointed value emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// The action each new value emits; a value not listed emits nothing.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub values: std::collections::BTreeMap<String, String>,
 }
 
 /// One `[[forge.probe]]` row: a claim the credential must carry, and the
@@ -887,7 +977,7 @@ pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::Pat
 /// What [`routed`]'s fixture was asked, one `<METHOD> <url>` per line.
 #[cfg(test)]
 pub(crate) fn asked(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join("args")).unwrap_or_default()
+    crate::fsio::read_to_string(dir.join("args")).unwrap_or_default()
 }
 
 /// One request as the fixture seam sees it.
@@ -917,7 +1007,7 @@ fn from_fixture(
     now: u64,
 ) -> Option<Answer> {
     let url = request.url;
-    if let Ok(routes) = std::fs::read_to_string(dir.join("routes")) {
+    if let Ok(routes) = crate::fsio::read_to_string(dir.join("routes")) {
         let line = format!("{} {url}", request.method);
         let routed = routes.lines().find_map(|route| {
             let (needle, file) = route.split_once('\t')?;
@@ -928,12 +1018,12 @@ fn from_fixture(
             if let Some(body) = request.body {
                 let _ = crate::durable::replace(dir.join(format!("{file}.request")), body);
             }
-            let raw = std::fs::read_to_string(dir.join(&file)).ok()?;
+            let raw = crate::fsio::read_to_string(dir.join(&file)).ok()?;
             return Some(canned(&raw, now));
         }
     }
     let calls = dir.join("calls");
-    let n = std::fs::read_to_string(&calls)
+    let n = crate::fsio::read_to_string(&calls)
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(0)
@@ -958,8 +1048,8 @@ fn from_fixture(
             }
         }
     }
-    let raw = std::fs::read_to_string(dir.join(format!("resp.{n}")))
-        .or_else(|_| std::fs::read_to_string(dir.join("resp.last")))
+    let raw = crate::fsio::read_to_string(dir.join(format!("resp.{n}")))
+        .or_else(|_| crate::fsio::read_to_string(dir.join("resp.last")))
         .ok()?;
     Some(canned(&raw, now))
 }
@@ -1046,7 +1136,6 @@ fn wire(etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Wire {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
@@ -1115,8 +1204,6 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
 /// on elapsed wall time, which the clock census now refuses. The loop's half is
 /// `pr_watch::tests::a_server_requested_floor_reaches_the_pause`; this is the
 /// header's half.
-//MUTANT-SUITE crates/batten/src/rest.rs
-//MUTANT poll-floor-unread|s@^    raw.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())$@    None::<\&str>.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())@|a_poll_interval_header_is_the_floor
 fn poll_floor_of(raw: Option<&str>) -> Option<f64> {
     raw.and_then(|value| value.trim().parse::<f64>().ok())
         .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
@@ -1322,6 +1409,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
@@ -1335,6 +1423,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
@@ -1351,6 +1440,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -1373,6 +1463,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
@@ -1635,8 +1726,3 @@ mod tests {
 // spawned binary: a GET a poll reads, a DELETE a release check makes, the asset
 // bytes a checksum manifest hashes, a JSON POST and PATCH a bot lane writes,
 // and the credential an attestation must hold before it asks.
-//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT-SUITE crates/batten/tests/it/checksums.rs
-//MUTANT-SUITE crates/batten/tests/it/bot_lane.rs
-//MUTANT-SUITE crates/batten/tests/it/attestation.rs

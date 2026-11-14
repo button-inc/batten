@@ -341,7 +341,7 @@ impl Pin {
         let Some(path) = Self::path(dir) else {
             return Ok(None);
         };
-        let text = match std::fs::read_to_string(&path) {
+        let text = match crate::fsio::read_to_string(&path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => {
@@ -1859,6 +1859,14 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::MustLandOnRemoved]),
     },
     FieldCoverage {
+        field: "landed_by",
+        coverage: Coverage::NoMonotoneReading(
+            "who takes the last step is a fact about the repository's process (CLOUD-2656): \
+             `person` drops the refusal of a pushed branch, `agent` sends an agent to a merge a \
+             person-merges repository forbids, so neither direction is a raise",
+        ),
+    },
+    FieldCoverage {
         field: "hook",
         coverage: Coverage::Compared(&[WeakeningKind::HandlerRemoved]),
     },
@@ -3176,8 +3184,6 @@ fn governed_aliases(
 /// Keyed on the effective governed set rather than on the list, so deleting the
 /// alias, deleting its selector and deleting `[mcp]` report the same key: each
 /// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
-//MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT mcp-alias-loss-unseen|s@^    for (alias, needles) in governed_aliases(base) {$@    for (alias, needles) in governed_aliases(None) {@|losing_a_governed_mcp_name_is_a_weakening
 fn mcp_weakenings(
     base: Option<&crate::mcp::McpConfig>,
     working: Option<&crate::mcp::McpConfig>,
@@ -3209,8 +3215,6 @@ fn mcp_weakenings(
 /// comparing them has them adjacent.
 /// The `[forge] nothing_graded` statuses `working` declares and `base` does not,
 /// ascending (CLOUD-2080).
-//MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT nothing-graded-unchecked|s@^        if !before.contains(\&status) {$@        if false {@|widening_nothing_graded_is_a_weakening
 fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
     // The EFFECTIVE lists, so an absent key (the documented default) and the
     // same list declared explicitly are one reading.
@@ -3888,9 +3892,10 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// reviewer needs. The gate refuses an absent table loudly on its own (exit 1),
 /// which is a second signal rather than a reason for this one to stay quiet.
 ///
-/// The `identity` beneath the lists is not compared: which name and email a
-/// repository holds itself accountable to is that repository's own decision, and
-/// two identities cannot be ranked.
+/// The `identity` beneath the lists is not compared, and its REMOVAL is not a
+/// weakening (CLOUD-2659): who answers for a commit is resolved at run time from
+/// the person making it, never from a committed name, so the table is no longer
+/// a repository's decision and its absence ranks below nothing.
 fn attribution_weakenings(
     base: Option<&crate::attribution::Attribution>,
     working: Option<&crate::attribution::Attribution>,
@@ -3915,7 +3920,7 @@ fn attribution_weakenings(
         &keyed("attribution.trailer_allow", &base.trailer_allow),
         &keyed("attribution.trailer_allow", candidate),
     ));
-    found
+    found // the identity is not compared (CLOUD-2659)
 }
 
 /// The three deny lists, keyed as `batten.toml` spells them.
@@ -4630,14 +4635,14 @@ mod tests {
     #[test]
     fn lowering_a_rules_severity_is_a_weakening() {
         let base = parse(&format!("version = 1\n{}", rule("r", "deny")));
-        let working = parse(&format!("version = 1\n{}", rule("r", "warn")));
+        let working = parse(&format!("version = 1\n{}", rule("r", "advise")));
         assert_eq!(
             weakenings(&base, &working),
             vec![Weakening::new(
                 WeakeningKind::SeverityLowered,
                 "rule[r].severity",
                 "deny",
-                "warn"
+                "advise"
             )]
         );
     }
@@ -6600,6 +6605,16 @@ mod tests {
     const ATTRIBUTION: &str = "\n[attribution]\nidentity_deny = [\"vendor\", \"other\"]\ntrailer_deny = [\"Co-Made-By\"]\nbody_deny = [\"advert\"]\ntrailer_allow = [\"Signed-off-by\"]\n\n[attribution.identity]\nname = \"A Person\"\nemail = \"person@example.invalid\"\n";
 
     #[test]
+    fn removing_the_committed_identity_is_not_a_weakening() {
+        let without = ATTRIBUTION
+            .split("\n[attribution.identity]")
+            .next()
+            .unwrap_or_default();
+        assert_ne!(without, ATTRIBUTION);
+        assert!(weakenings(&config(ATTRIBUTION), &config(without)).is_empty());
+    }
+
+    #[test]
     fn shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening() {
         let base = config(ATTRIBUTION);
         assert_eq!(
@@ -7391,6 +7406,7 @@ mod tests {
             selects: None,
             requires: requires.iter().map(|path| (*path).to_owned()).collect(),
             after: None,
+            after_mode: None,
             mode: crate::mint::MintMode::Replace,
             body: "{id} {now}".to_owned(),
         }
@@ -7614,7 +7630,6 @@ mod tests {
 
     #[test]
     fn a_marker_mint_a_receipt_row_also_reads_is_still_a_weakening() {
-        // MUTANT: dropping the `checks` arm of the exemption's reader test lets
         // this mint pass as marker-only while it satisfies a receipt row.
         let reader = receipt_rule("ready", "").replace("[\"verify\"]", "[\"pr-open\"]");
         let base = parse(&format!("version = 1\n{MARKER_DENY}{reader}"));
@@ -7750,7 +7765,4 @@ Each undoes one half of `BoardSweepRefusalWidened`, and the named case is the
 one that stops discriminating. The named case is this file's own unit tier, so
 the declared suite is this file, `landed.rs`'s reason.
 
-#MUTANT-SUITE crates/batten/src/trust.rs
-#MUTANT sweep-refusal-widening-unread|s@sweep_refusals(working, base)@sweep_refusals(base, base)@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
-#MUTANT sweep-abstention-to-refusal-flagged|s@gate.refuses.iter().chain(gate.abstains.iter())@gate.refuses.iter().chain(gate.refuses.iter())@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
 */

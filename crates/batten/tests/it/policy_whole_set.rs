@@ -5,7 +5,7 @@
 //! decided any of them. Row order decides a mediated call and nothing says so;
 //! cross-row validation was one check wide. At 33 committed rows that was still
 //! tractable by reading, and "read it carefully" is not a gate — non-negotiable
-//! rule 3 makes a model verdict inadmissible, so the alternative to a decidable
+//! rule 3 makes a gated-model verdict inadmissible, so the alternative to a decidable
 //! mechanism is nothing.
 //!
 //! # The caveat that is the whole engineering problem
@@ -69,10 +69,12 @@ fn a_healthy_set_sweeps_clean_and_reaches_every_module() {
 /// cycle inside it goes unreported and the run is green. Without this case the
 /// two below pass on an analysis that ran over nothing at all.
 ///
-/// The discriminator is a module in a package the sweep's query does not reach:
-/// `PACKAGE_QUERY` is rooted at `data.batten`, so a module declaring some other
-/// top-level package compiles into the same engine and is never evaluated. That
-/// is exactly the dark corner the coverage read exists to find.
+/// The discriminator is a module whose only definition is a FUNCTION: the
+/// sweep's package query evaluates rules, never an uncalled function's body, so
+/// the module compiles into the engine and is never entered. A package outside
+/// `data.batten` was the discriminator until CLOUD-2696 made that a load error
+/// (it decided nothing live while passing its own cases); this keeps the
+/// coverage read's dark corner reachable without it.
 #[test]
 fn a_module_the_sweep_never_entered_is_reported() {
     let bundle = policy::compile(
@@ -84,12 +86,12 @@ fn a_module_the_sweep_never_entered_is_reported() {
             ),
             module(
                 "dark",
-                "package elsewhere\nimport rego.v1\nnever_reached contains \"x\" if { true }\n",
+                "package batten.dark\nimport rego.v1\nnever_called(x) := y if {\n\ty := x\n}\n",
             ),
         ],
         &serde_json::json!({}),
     )
-    .expect("both compile — being unreachable is not a compile error");
+    .expect("both compile — being unentered is not a compile error");
 
     let Look::Is(analysis) = policy::analyse(&bundle).expect("the set resolves") else {
         panic!("the sweep ran");

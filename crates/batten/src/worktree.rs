@@ -55,6 +55,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::error::UsageError;
 use crate::git;
 
 /// The marker a rendered verdict carries when the scan filled its window, so an
@@ -160,6 +161,11 @@ pub struct AtRisk {
     /// get an error rather than a fix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_upstream: Option<String>,
+    /// Set when the branch tracks an upstream but the clone is too shallow to
+    /// say whether its work is there (CLOUD-2655). Its own fact, never
+    /// `unpushed`'s absence: "could not look" must not read as "pushed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_not_computable: Option<String>,
     /// Whether the branch's work is on the landing target, or whether that could
     /// be established at all.
     pub unlanded: Unlanded,
@@ -172,6 +178,7 @@ impl AtRisk {
         self.uncommitted > 0
             || self.unpushed.is_some()
             || self.no_upstream.is_some()
+            || self.upstream_not_computable.is_some()
             || self.unlanded.is_at_risk()
     }
 
@@ -187,6 +194,9 @@ impl AtRisk {
         }
         if let Some(branch) = &self.no_upstream {
             lines.push(format!("no-upstream: {branch}"));
+        }
+        if self.upstream_not_computable.is_some() {
+            lines.push(format!("unpushed: not-computable ({SHALLOW})"));
         }
         match &self.unlanded {
             Unlanded::Landed => {}
@@ -236,6 +246,33 @@ pub fn land_target(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Str
 /// the consumer names it, or the clone records the remote's default. What it
 /// never says is `main` — a guess that resolves would answer about the wrong
 /// trunk silently (CLOUD-2188).
+/// Why landedness could not be computed on a shallow clone (CLOUD-2655): the
+/// walk reached the boundary's missing parent. Fixed text, naming the repair.
+pub const SHALLOW: &str = "the clone is shallow; `git fetch --unshallow` deepens it";
+
+/// [`git::landing`] of `HEAD` against `target`, or `None` where `shallow` and
+/// the walk failed (CLOUD-2655).
+///
+/// On a shallow clone every walk that reaches the boundary errs, so an `Ok`
+/// means no walk crossed it and is kept as given. Only the error is mapped, and
+/// only a non-usage one: an unresolvable target is still the config error it
+/// is, and a non-shallow failure still propagates.
+///
+/// # Errors
+///
+/// Propagates a usage error, and any error on a full clone.
+pub fn landing_or_shallow(
+    repo: &Path,
+    target: &str,
+    shallow: bool,
+) -> Result<Option<git::Landing>> {
+    match git::landing(repo, target, "HEAD", git::Window::DEFAULT) {
+        Ok(landing) => Ok(Some(landing)),
+        Err(err) if shallow && err.downcast_ref::<UsageError>().is_none() => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 pub const NO_TRUNK: &str = "no trunk: set `must_land_on`, or set the remote's HEAD \
                             (`git remote set-head origin --auto`)";
 
@@ -268,9 +305,6 @@ pub struct Trunk {
 /// # Errors
 ///
 /// Propagates a `git` failure reading the remotes or the remote's HEAD.
-//MUTANT-SUITE crates/batten/tests/it/trunk_name.rs
-//MUTANT trunk-name-falls-back-to-main|s@^            None => return Ok(None),$@            None => String::from("refs/remotes/origin/main"),@|an_unresolvable_trunk_is_refused_not_assumed
-//MUTANT must-land-on-ignored|s@^    let declared = match must_land_on {$@    let declared = match None::<\&str> {@|must_land_on_names_the_trunk_when_origin_head_is_unset
 pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trunk>> {
     let declared = match must_land_on {
         Some(declared) => declared.to_owned(),
@@ -297,7 +331,12 @@ pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trun
 ///
 /// Propagates a present `batten.toml` that will not load, and [`land_trunk`]'s.
 pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
-    let site = crate::config::authority_site(root, None);
+    // THE AUTHORITY FOR `root`, not `root` itself (CLOUD-2532): a caller standing
+    // in a worktree subdirectory passes `.`, which carries no `batten.toml`, and
+    // `must_land_on` must come from the worktree's file rather than read as
+    // undeclared. The git reads below stay on `root`.
+    let authority = crate::config::authority_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let site = crate::config::authority_site(&authority, None);
     let declared = if site.path.is_file() {
         crate::config::load_site(&site)?.0.must_land_on
     } else {
@@ -317,8 +356,6 @@ pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
 /// # Errors
 ///
 /// As [`declared_trunk`], and [`crate::resolve::committed`]'s for a ref.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT committed-trunk-ignores-ref|s@^    if overrides.config_from.is_none() \&\& overrides.config_in.is_none() {$@    if true {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 pub fn committed_trunk(
     root: &Path,
     overrides: &crate::resolve::Overrides,
@@ -390,17 +427,21 @@ pub fn status(repo: &Path, must_land_on: Option<&str>) -> Result<AtRisk> {
     // The landing target, resolved by the one resolver. What it must never
     // become is a *pass*, which is what the third arm below is for.
     let target = land_target(repo, must_land_on)?;
+    // Read once: both halves map a failed walk the same way on a shallow clone.
+    let shallow = git::is_shallow(repo)?;
 
     // Computed first, because the upstream half consults it: a branch with no
     // upstream is judged against the target instead.
     let unlanded = match target {
-        Some(target) => {
-            let landing = git::landing(repo, &target, "HEAD", git::Window::DEFAULT)?;
-            match pointer_if_outstanding(&landing, &label) {
+        Some(target) => match landing_or_shallow(repo, &target, shallow)? {
+            Some(landing) => match pointer_if_outstanding(&landing, &label) {
                 Some(pointer) => Unlanded::Outstanding { pointer, target },
                 None => Unlanded::Landed,
-            }
-        }
+            },
+            None => Unlanded::NotComputable {
+                reason: SHALLOW.to_owned(),
+            },
+        },
         // The honest third answer. Every other fact still reports — losing them
         // because *this* one could not be computed is precisely the "report
         // nothing at all" failure this gate was demoted for.
@@ -414,11 +455,12 @@ pub fn status(repo: &Path, must_land_on: Option<&str>) -> Result<AtRisk> {
     // not "unpushed" — there is nowhere to have pushed it to — and saying so
     // sends a reader to `git push`, which fails. It is its own category.
     let upstream = git::upstream_of_head(repo)?;
-    let (unpushed, no_upstream) = match upstream {
-        Some(ref upstream) => {
-            let landing = git::landing(repo, upstream, "HEAD", git::Window::DEFAULT)?;
-            (pointer_if_outstanding(&landing, &label), None)
-        }
+    let (unpushed, no_upstream, upstream_not_computable) = match upstream {
+        Some(ref upstream) => match landing_or_shallow(repo, upstream, shallow)? {
+            Some(landing) => (pointer_if_outstanding(&landing, &label), None, None),
+            // Could-not-look, never "pushed" (CLOUD-2655).
+            None => (None, None, Some(label.clone())),
+        },
         // No upstream, for a branch and a detached HEAD alike. Absence of an
         // upstream is not safety — but it is not *danger* either, on its own.
         // What is at risk is work that exists in only one place, so this fires
@@ -427,13 +469,14 @@ pub fn status(repo: &Path, must_land_on: Option<&str>) -> Result<AtRisk> {
         // and raising it there would flag every finished local branch forever.
         // When landedness is not computable the fact fires too, because then
         // nothing can show the work is anywhere else.
-        None => (None, unlanded.is_at_risk().then(|| label.clone())),
+        None => (None, unlanded.is_at_risk().then(|| label.clone()), None),
     };
 
     Ok(AtRisk {
         uncommitted,
         unpushed,
         no_upstream,
+        upstream_not_computable,
         unlanded,
     })
 }
@@ -578,6 +621,7 @@ mod tests {
             uncommitted: 0,
             unpushed: None,
             no_upstream: None,
+            upstream_not_computable: None,
             unlanded: Unlanded::Landed,
         };
         assert!(!clean.any());
@@ -628,6 +672,7 @@ mod tests {
             uncommitted: 0,
             unpushed: None,
             no_upstream: None,
+            upstream_not_computable: None,
             unlanded: unknown,
         };
         assert!(at_risk.any(), "unknown landedness is not safety");
@@ -647,6 +692,7 @@ mod tests {
             uncommitted: 0,
             unpushed: None,
             no_upstream: Some("feature".to_owned()),
+            upstream_not_computable: None,
             unlanded: Unlanded::Landed,
         };
         assert_eq!(
@@ -665,6 +711,7 @@ mod tests {
             uncommitted: 3,
             unpushed: Some(pointer(false)),
             no_upstream: None,
+            upstream_not_computable: None,
             unlanded: outstanding(true),
         };
         assert_eq!(

@@ -17,12 +17,6 @@
 //! and no `.append(…)`. A handle held in a variable is refused, because its
 //! access mode is not visible at the call.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/truncate_handle.rs
-#MUTANT receiver-unread|s@^            if !chain.through_a_write_handle() {$@            if false {@|a_truncation_through_a_variable_is_named
-#MUTANT append-unread|s@^                    "append" => chain.appends = true,$@                    "append" => {}@|a_truncation_through_an_append_chain_is_named
-*/
-
 use crate::common;
 
 use std::path::{Path, PathBuf};

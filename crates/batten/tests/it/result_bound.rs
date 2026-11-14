@@ -250,6 +250,54 @@ fn following_the_pointer_returns_text_not_another_pointer() {
 }
 
 #[test]
+fn a_shell_read_of_the_view_returns_text_not_another_pointer() {
+    // The same route through Bash: a `sed -n` over the view was bounded again
+    // into a second pointer (measured 2026-11-11). One route, one answer,
+    // whichever tool follows it. A shell call naming no view is still bounded.
+    let dir = repo("result-bound-follow-shell");
+    let first = post_tool(&dir, &read_result(&payload(2000)));
+    let view = view_named(&first.stdout);
+    let text = std::fs::read_to_string(&view).expect("the view exists");
+    let shell = |command: String| {
+        serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "bound",
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+            "tool_response": { "stdout": text, "stderr": "", "interrupted": false },
+        })
+    };
+    let followed = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell(format!("sed -n 1,400p '{view}'")).to_string(),
+    );
+    assert_eq!(
+        followed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&followed)
+    );
+    let again = String::from_utf8_lossy(&followed.stdout);
+    assert!(
+        !again.contains("output point now"),
+        "the view is read: {again}"
+    );
+
+    let other = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell("sed -n 1,400p notes.md".to_owned()).to_string(),
+    );
+    assert_eq!(other.status.code(), Some(0), "{}", common::stderr(&other));
+    let bounded = String::from_utf8_lossy(&other.stdout);
+    assert!(
+        bounded.contains("output point now"),
+        "a non-view read is bounded: {bounded}"
+    );
+}
+
+#[test]
 fn a_built_in_result_is_evicted_before_a_tracker_read() {
     // Storing every result must not displace what gates resolve: a store bounded
     // to two records keeps the tracker read through three built-in results.
@@ -492,4 +540,279 @@ fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
         "the MCP response was evicted by the call that stored it: {}",
         common::stderr(&shown)
     );
+}
+
+// --- spilled leaves are pointers a native read follows (CLOUD-2284) -------------
+
+/// Post an MCP response whose one text leaf is `leaf`, as Claude Code shapes it.
+fn mcp_post(dir: &Path, leaf: &str) -> std::process::Output {
+    mcp_post_in(dir, leaf, "bound")
+}
+
+/// [`mcp_post`] in its own session.
+fn mcp_post_in(dir: &Path, leaf: &str, session: &str) -> std::process::Output {
+    common::run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": session,
+            "tool_name": "mcp__linear__get_issue",
+            "tool_input": { "id": "CLOUD-1" },
+            "tool_response": [{ "type": "text", "text": leaf }],
+        })
+        .to_string(),
+    )
+}
+
+/// The `output point now` note in the hook's decoded answer.
+fn note_of(stdout: &[u8]) -> String {
+    fn find(value: &serde_json::Value) -> Option<String> {
+        match value {
+            serde_json::Value::String(text) if text.contains("output point now at") => {
+                Some(text.clone())
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(find),
+            serde_json::Value::Object(fields) => fields.values().find_map(find),
+            _ => None,
+        }
+    }
+    let answer: serde_json::Value =
+        serde_json::from_slice(stdout).expect("the hook answers one JSON document");
+    find(&answer).unwrap_or_else(|| panic!("a pointer: {answer}"))
+}
+
+/// One `<pointer>:<from>-<to>(<n>B <t>T)` subject.
+#[derive(Debug)]
+struct Spilled {
+    pointer: String,
+    from: usize,
+    to: usize,
+    bytes: usize,
+    tokens: u64,
+}
+
+/// Every counted subject the note names.
+fn spilled_subjects(note: &str) -> Vec<Spilled> {
+    let head = note.split(';').next().unwrap_or_default();
+    let words: Vec<&str> = head.split_whitespace().collect();
+    let mut found = Vec::new();
+    for pair in words.windows(2) {
+        let (Some((left, bytes)), Some(tokens)) = (
+            pair[0]
+                .strip_suffix('B')
+                .and_then(|word| word.split_once('(')),
+            pair[1].strip_suffix("T)"),
+        ) else {
+            continue;
+        };
+        let (pointer, lines) = left.rsplit_once(':').expect("pointer:lines");
+        let (from, to) = lines.split_once('-').expect("from-to");
+        found.push(Spilled {
+            pointer: pointer.to_owned(),
+            from: from.parse().unwrap(),
+            to: to.parse().unwrap(),
+            bytes: bytes.parse().unwrap(),
+            tokens: tokens.parse().unwrap(),
+        });
+    }
+    found
+}
+
+/// Lines `from..=to` of the view, joined with `\n`.
+fn section(view: &str, subject: &Spilled) -> String {
+    let text = std::fs::read_to_string(view).expect("the view exists");
+    let lines: Vec<&str> = text.split('\n').collect();
+    lines[subject.from - 1..subject.to].join("\n")
+}
+
+/// One line of JSON, `count` objects long.
+fn json_leaf(count: usize) -> String {
+    let items: Vec<serde_json::Value> = (0..count)
+        .map(|n| serde_json::json!({ "id": n, "name": format!("item {n:05} of the list") }))
+        .collect();
+    serde_json::Value::Array(items).to_string()
+}
+
+/// The stored leaf's `response:<digest>` handle the note names.
+fn leaf_handle(note: &str) -> String {
+    let rest = note
+        .split("response:")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a stored leaf: {note}"));
+    let digest: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+    format!("response:{digest}")
+}
+
+/// AN MCP SPILL IS READ UNDER ITS OWN POINTER (CLOUD-2284): the view walks the
+/// content array, so the text sits under `## /0/text`, not escaped under `/`.
+#[test]
+fn an_mcp_spill_is_read_under_its_own_pointer() {
+    let dir = repo("result-bound-mcp-spill");
+    let body = payload(2000);
+    let posted = mcp_post(&dir, &body);
+    assert!(
+        !posted.stdout.is_empty(),
+        "no answer: {}",
+        common::stderr(&posted)
+    );
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let note = note_of(&posted.stdout);
+    assert!(note.contains("/0/text:"), "{note}");
+    let view = view_named(&posted.stdout);
+    let subjects = spilled_subjects(&note);
+    let text = subjects
+        .iter()
+        .find(|subject| subject.pointer == "/0/text")
+        .unwrap_or_else(|| panic!("{subjects:?}"));
+    assert_eq!(section(&view, text), body);
+
+    let bounded = common::Fixture::at(common::scratch("result-bound-mcp-bounded").join("repo"))
+        .config("version = 1\n\n[capture]\nresult_max_tokens = 500\n")
+        .git()
+        .base_commit()
+        .build();
+    let posted = mcp_post_in(&bounded, &payload(150), "bound-small");
+    assert!(
+        !posted.stdout.is_empty(),
+        "no answer: {}",
+        common::stderr(&posted)
+    );
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    assert!(note_of(&posted.stdout).contains("/0/text:"));
+}
+
+/// A TARGETLESS RESULT IS BOUND BY ITS SESSION'S HOME, NOT THE DIRECTORY IT
+/// CROSSED (CLOUD-2705, by CLOUD-2672's design). An MCP answer names no path, so
+/// it is judged where its session started; a visit to a repository declaring a
+/// tighter bound does not move that. Fails by: the second repository's bound
+/// applying to a session homed in the first.
+#[test]
+fn a_targetless_result_is_bound_by_its_sessions_home() {
+    let home = repo("result-bound-home-default");
+    // The session homes in a repository with the default bound.
+    let first = mcp_post_in(&home, &payload(2000), "homed");
+    assert!(note_of(&first.stdout).contains("/0/text:"));
+    let visited = common::Fixture::at(common::scratch("result-bound-home-visited").join("repo"))
+        .config("version = 1\n\n[capture]\nresult_max_tokens = 500\n")
+        .git()
+        .base_commit()
+        .build();
+    // Under the visited repository's own bound this would be rewritten, and its
+    // own session proves it; under the home's default it is not.
+    let own = mcp_post_in(&visited, &payload(150), "visited-own");
+    assert!(note_of(&own.stdout).contains("/0/text:"));
+    let homed = mcp_post_in(&visited, &payload(150), "homed");
+    assert_eq!(homed.status.code(), Some(0), "{}", common::stderr(&homed));
+    assert!(
+        homed.stdout.is_empty(),
+        "the visited repository's bound governed a session homed elsewhere: {}",
+        String::from_utf8_lossy(&homed.stdout)
+    );
+}
+
+/// EVERY SPILL POINTER NAMES ITS LINES, BYTES AND TOKENS (CLOUD-2284), and each
+/// holds: the view exists, its lines are the section, the section is the leaf.
+#[test]
+fn every_spill_pointer_names_its_lines_bytes_and_tokens() {
+    let dir = repo("result-bound-spill-counts");
+    let text = payload(2000);
+    let json = json_leaf(2000);
+    let cases = [
+        (
+            post_tool(&dir, &read_result(&text)),
+            "/file/content",
+            text.clone(),
+            false,
+        ),
+        (mcp_post(&dir, &text), "/0/text", text.clone(), false),
+        (mcp_post(&dir, &json), "/0/text", json.clone(), true),
+    ];
+    for (posted, pointer, leaf, pretty) in cases {
+        assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+        let note = note_of(&posted.stdout);
+        let view = view_named(&posted.stdout);
+        let subjects = spilled_subjects(&note);
+        let subject = subjects
+            .iter()
+            .find(|subject| subject.pointer == pointer)
+            .unwrap_or_else(|| panic!("{pointer} in {note}"));
+        let section = section(&view, subject);
+        assert_eq!(section.len(), subject.bytes, "{pointer}");
+        assert_eq!(
+            subject.tokens,
+            batten::o200k::chunked_tokens(section.as_bytes()),
+            "{pointer}"
+        );
+        if pretty {
+            let parsed: serde_json::Value = serde_json::from_str(&section).unwrap();
+            let posted: serde_json::Value = serde_json::from_str(&leaf).unwrap();
+            assert_eq!(parsed, posted);
+        } else {
+            assert_eq!(section, leaf, "{pointer}");
+        }
+    }
+}
+
+/// ONE-LINE JSON IS PRETTY-PRINTED UNDER THE CAP (CLOUD-2284), so a line range
+/// means something, and the stored leaf keeps the host's bytes; over the cap
+/// the section is the leaf as it came.
+#[test]
+fn a_one_line_json_spill_is_pretty_printed_under_the_cap() {
+    let dir = repo("result-bound-json-pretty");
+    let small = json_leaf(2000);
+    let posted = mcp_post(&dir, &small);
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let note = note_of(&posted.stdout);
+    let subjects = spilled_subjects(&note);
+    let subject = subjects
+        .iter()
+        .find(|subject| subject.pointer == "/0/text")
+        .unwrap_or_else(|| panic!("{note}"));
+    assert!(subject.to > subject.from, "pretty-printed: {subject:?}");
+    let pretty = section(&view_named(&posted.stdout), subject);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&pretty).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&small).unwrap()
+    );
+    let shown = common::run(&dir, &["capture", "show", &leaf_handle(&note), "--raw"]);
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains(&small),
+        "{}",
+        common::stderr(&shown)
+    );
+
+    let big = json_leaf(40_000);
+    assert!(big.len() > 1 << 20, "the premise: over the cap");
+    let dir = repo("result-bound-json-capped");
+    let posted = mcp_post(&dir, &big);
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let note = note_of(&posted.stdout);
+    let subjects = spilled_subjects(&note);
+    let subject = subjects
+        .iter()
+        .find(|subject| subject.pointer == "/0/text")
+        .unwrap_or_else(|| panic!("{note}"));
+    assert_eq!(subject.from, subject.to, "one line: {subject:?}");
+    assert_eq!(section(&view_named(&posted.stdout), subject), big);
+}
+
+/// A SPILL NOTE NAMES NO `--field` ROUTE (CLOUD-2284): the stored leaf is not a
+/// JSON document, so that route refused; the view is the one route, on both arms.
+#[test]
+fn a_spill_note_names_no_field_route() {
+    for (harness, name) in [
+        ("exit-code", "result-bound-route-full"),
+        ("claude-code", "result-bound-route-pointer"),
+    ] {
+        let dir = repo(name);
+        let posted = post_tool_on(&dir, harness, &read_result(&payload(2000)));
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&posted.stdout),
+            common::stderr(&posted)
+        );
+        assert!(!said.contains("--field"), "{harness}: {said}");
+        assert!(said.contains("; read "), "{harness}: {said}");
+    }
 }

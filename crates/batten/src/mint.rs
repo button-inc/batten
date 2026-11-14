@@ -212,6 +212,12 @@ pub struct Declared {
     /// Absent leaves the row judged exactly as before the column existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    /// How `after` is met (CLOUD-2680): `spend` (the default) consumes the
+    /// prerequisite, so one dispatch answers one completion; `require` only
+    /// checks it is on file, so one bridge admits every dependent over the same
+    /// change. Absent never serializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_mode: Option<AfterMode>,
     /// Whether the record is replaced or appended.
     pub mode: MintMode,
     /// The record's bytes, as a template over the closed placeholder vocabulary
@@ -818,6 +824,32 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
     validate_across(mints)
 }
 
+/// How a `[[mint]]` row's `after` prerequisite is met (CLOUD-2680).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum AfterMode {
+    /// The prerequisite is consumed by the record it admits.
+    #[default]
+    Spend,
+    /// The prerequisite is checked and left on file.
+    Require,
+}
+
+impl Declared {
+    /// The row's `after_mode`, `spend` where it declares none.
+    #[must_use]
+    pub fn effective_after_mode(&self) -> AfterMode {
+        self.after_mode.unwrap_or_default()
+    }
+
+    /// Whether the row consumes its prerequisite.
+    fn spends(&self) -> bool {
+        self.effective_after_mode() == AfterMode::Spend
+    }
+}
+
 /// The refusals that read more than one row: a `clear` with no writer, and an
 /// `after` naming no writer keyed the same way.
 ///
@@ -836,6 +868,17 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
              so it would clear nothing",
             orphan.name
         )));
+    }
+    // AN `after_mode` WITHOUT AN `after` modes nothing (CLOUD-2680), and on a
+    // `clear` row it would read as a gate the row does not have.
+    for mint in mints {
+        if mint.after_mode.is_some() && mint.after.is_none() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares `after_mode` and no `after`; the mode says how a \
+                 prerequisite is met, and this row names none",
+                mint.name
+            )));
+        }
     }
     // AN `after` NAMING NO WRITER KEYED ALIKE can never be satisfied, so its gate
     // denies forever with a remedy that cannot clear it (CLOUD-2261). "Alike" is
@@ -881,6 +924,10 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
                         && other.selects.is_some()
                         && mint.selects.is_some()
                         && other.selects != mint.selects)
+                    // Two `require` rows read the record and leave it, so
+                    // neither can starve the other (CLOUD-2680). A spend row
+                    // beside a require row is refused below, for its mode.
+                    && mint.spends()
             })
             .count()
             > 1
@@ -888,6 +935,21 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` names `after = \"{after}\"` on the same tool and key as another \
                  row; the first to mint spends the record, so the other could never mint",
+                mint.name
+            )));
+        }
+        // ONE PREREQUISITE HAS ONE MODE (CLOUD-2680): a `spend` row would
+        // consume the record a `require` row reads, decided by declaration
+        // order, whatever tool each names.
+        if mints.iter().any(|other| {
+            other.after.as_deref() == Some(after)
+                && other.key == mint.key
+                && other.key_base == mint.key_base
+                && other.effective_after_mode() != mint.effective_after_mode()
+        }) {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` and another row name `after = \"{after}\"` with different \
+                 `after_mode`s; a `spend` row consumes the record a `require` row reads",
                 mint.name
             )));
         }
@@ -976,6 +1038,85 @@ mod tests {
             "a `key_from` a `delta` row never reads is the same inert declaration \
              the `key_base` arm already refuses"
         );
+    }
+
+    /// A row from JSON, for the `after_mode` cases (CLOUD-2680).
+    fn row(value: serde_json::Value) -> Declared {
+        serde_json::from_value(value).expect("shape loads")
+    }
+
+    /// A writer of `gates` keyed on the delta, and a dependent named `name`
+    /// selecting `selects`, in `mode` (`None` for the default).
+    fn bridged(name: &str, tool: &str, selects: &str, mode: Option<&str>) -> Declared {
+        let mut value = serde_json::json!({
+            "name": name, "tool": tool, "key": "delta", "key_base": "origin/main",
+            "selects_at": "skill", "selects": selects, "after": "gates",
+            "mode": "replace", "body": "{now}",
+        });
+        if let Some(mode) = mode {
+            value["after_mode"] = serde_json::json!(mode);
+        }
+        row(value)
+    }
+
+    fn gates() -> Declared {
+        row(serde_json::json!({
+            "name": "gates", "tool": "Bash", "key": "delta", "key_base": "origin/main",
+            "mode": "replace", "body": "{now}",
+        }))
+    }
+
+    /// Two `require` rows on one tool may share a prerequisite; two `spend` rows
+    /// selecting the same call still refuse, since the first spends it.
+    #[test]
+    fn require_rows_share_a_prerequisite_and_spend_rows_still_refuse() {
+        let shared = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "Skill", "x", Some("require")),
+        ];
+        assert!(validate(&shared).is_ok(), "{:?}", validate(&shared));
+        let spent = [
+            gates(),
+            bridged("a", "Skill", "x", None),
+            bridged("b", "Skill", "x", None),
+        ];
+        assert!(validate(&spent).is_err());
+    }
+
+    /// One prerequisite has one mode, on one tool or across two.
+    #[test]
+    fn mixed_after_modes_on_one_prerequisite_refuse() {
+        let same_tool = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "Skill", "y", None),
+        ];
+        assert!(validate(&same_tool).is_err());
+        let across = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "ReportFindings", "y", Some("spend")),
+        ];
+        assert!(validate(&across).is_err());
+    }
+
+    /// An `after_mode` with no `after` modes nothing, in any mode and on a
+    /// `clear` row.
+    #[test]
+    fn an_after_mode_without_an_after_refuses() {
+        for mode in ["spend", "require"] {
+            let orphan = row(serde_json::json!({
+                "name": "r", "tool": "T", "key": "named", "key_from": "id",
+                "after_mode": mode, "mode": "replace", "body": "{id}",
+            }));
+            assert!(validate(&[orphan]).is_err(), "{mode}");
+        }
+        let clear = row(serde_json::json!({
+            "name": "gates", "tool": "T", "key": "delta", "key_base": "origin/main",
+            "after_mode": "require", "mode": "clear", "body": "",
+        }));
+        assert!(validate(&[gates(), clear]).is_err());
     }
 
     /// A row declaring NO selector is judged exactly as it was before the column
@@ -1338,6 +1479,7 @@ mod tests {
             selects: None,
             requires: vec!["id".to_owned()],
             after: None,
+            after_mode: None,
             mode: MintMode::Replace,
             body: "{id} {authority:ready}".to_owned(),
         };
