@@ -33,7 +33,7 @@ The divisor affects absolute token and dollar columns only; every ratio is divis
 
 **Question.** Which files and lines carry the banned pattern?
 
-**Baseline** (1 step(s), `grep -rnF '.unwrap()' src`). The full matched output: one whole source line per hit, every hit. This is what a tree scan puts into an agent's context today, and it carries the matched bytes themselves — the payload rather than a pointer to it, which is what makes the same shape unusable over content nobody wants echoed.
+**Baseline** (1 step(s), `grep -rnF .unwrap() src`). The full matched output: one whole source line per hit, every hit. This is what a tree scan puts into an agent's context today, and it carries the matched bytes themselves — the payload rather than a pointer to it, which is what makes the same shape unusable over content nobody wants echoed.
 
 **Batten** (1 step(s), `batten check`). `path:line rule-id` per finding and nothing else (non-negotiable rule 4). Same question, same file set, same number of findings — only the answer's shape differs.
 
@@ -69,7 +69,7 @@ count for the task is the step count above.
 
 **Baseline** (2 step(s), `tail -n 200 build.log` then `cat build.log`). The same two commands `build-warning`'s baseline costs, because it is the same pain: guess a window, miss the line, re-run to widen. Repeated deliberately rather than cross-referenced — a workload whose baseline lives in another row is a figure a reader has to assemble.
 
-**Batten** (3 step(s), `batten exec --capture-only -- cat build.log` then `batten capture show "$(batten capture list --stream stdout | cut -d' ' -f1)" --grep 'warning[duplicate]'` then `batten capture show "$(batten capture list --stream stdout | cut -d' ' -f1)" --lines 125:130`). Three steps and no second run of the command. `--capture-only` returns handles instead of the log, then the agent greps the frozen capture and widens around the line the grep named. The command substitution is the agent reading a handle out of step one's own pointer output — it costs nothing here because it costs nothing there either, the handle having already been printed. What this measures against the baseline is precisely the re-run the acceptance criterion says handles delete, plus the dump the agent never has to hold.
+**Batten** (3 step(s), `batten exec --capture-only -- cat build.log` then `batten capture show {{handle:stdout}} --grep warning[duplicate]` then `batten capture show {{handle:stdout}} --lines 125:130`). Three steps and no second run of the command. `--capture-only` returns handles instead of the log, then the agent greps the frozen capture and widens around the line the grep named. `{{handle:stdout}}` is the agent reading the handle out of step one's own pointer output — it costs nothing here because it costs nothing there either, the handle having already been printed. What this measures against the baseline is precisely the re-run the acceptance criterion says handles delete, plus the dump the agent never has to hold.
 
 **Method.** measured; 3 runs per arm, byte-identical across all of them; run
 count for the task is the step count above.
@@ -86,7 +86,7 @@ count for the task is the step count above.
 
 **Baseline** (1 step(s), `cat issue.json`). The whole `get_issue` payload, which is what `issue-read-check` demanded before CLOUD-526 — it hashed `.description` and read nothing else from it. THE BYTES ARE PAID ON THE MODEL'S OUTPUT SIDE, and that is the direction that makes this workload worth measuring at all. No tracker credential exists in a task, so the payload cannot be piped from disk: the model reads the row through the connector, carries it in context, and RE-TYPES it into the gate's stdin. The harness counts an arm's stdout, so the number below is the same bytes travelling the other way — metered generation, not ingestion. A table that reported this as context cost would be claiming something it did not measure. The fixture body sits at the small end of real ones (this repository's own issues run two to three times longer), so the ratio is a floor.
 
-**Batten** (1 step(s), `jq -c '{id, updatedAt}' issue.json`). The declared field set, and nothing else: which row was read, and at which revision. `description` is not in it, because after CLOUD-526 the baseline is an optional arm rather than the contract — and the same projection is what stops the honest receipt costing more than a forged one, which is the mechanism-design half of that issue rather than a saving. Narrowing is never a skip: a payload missing one of these two fields is refused by name, so sending less cannot buy a cleaner verdict.
+**Batten** (1 step(s), `jq -c {id, updatedAt} issue.json`). The declared field set, and nothing else: which row was read, and at which revision. `description` is not in it, because after CLOUD-526 the baseline is an optional arm rather than the contract — and the same projection is what stops the honest receipt costing more than a forged one, which is the mechanism-design half of that issue rather than a saving. Narrowing is never a skip: a payload missing one of these two fields is refused by name, so sending less cannot buy a cleaner verdict.
 
 **Method.** measured; 3 runs per arm, byte-identical across all of them; run
 count for the task is the step count above.

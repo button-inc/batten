@@ -2395,7 +2395,19 @@ fn run_bench(
     // a directory per run under `target/`.
     let _sweep = Scratch(scratch.clone());
 
-    let measured = tokens::measure(root, &binary, &scratch)?;
+    // A REFUSED DECLARATION IS A FINDING, exit 2 (CLOUD-2635): a string step
+    // or a handle element nothing printed is the committed workloads being
+    // wrong, not this harness failing to run.
+    let measured = match tokens::measure(root, &binary, &scratch) {
+        Ok(measured) => measured,
+        Err(failure) => {
+            let Some(refused) = failure.downcast_ref::<tokens::Refused>() else {
+                return Err(failure);
+            };
+            writeln!(err, "::error:: bench tokens: {refused}")?;
+            return Ok(ExitCode::Violation);
+        }
+    };
     let rendered = tokens::render(root, &measured)?;
     let committed = root.join(tokens::RESULTS);
 
