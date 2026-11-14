@@ -2591,10 +2591,13 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         census
             .manifests
             .iter()
+            // A carrier's fields, or the row's own keys: `mise.toml:run` reads
+            // the same whether a row names `keys = ["run"]` or the `mise-task`
+            // carrier (CLOUD-2627), so the change is no narrowing.
             .flat_map(|manifest| {
                 manifest
-                    .keys
-                    .iter()
+                    .fields()
+                    .into_iter()
                     .map(move |key| format!("{}:{key}", manifest.path))
             })
             .collect()
@@ -5091,6 +5094,41 @@ mod tests {
             .is_empty()
         );
         assert!(weakenings(&config(""), &full).is_empty());
+    }
+
+    #[test]
+    fn naming_a_carrier_for_the_keys_it_reads_is_no_narrowing() {
+        // CLOUD-2627: `carrier = "mise-task"` reads `run` and `hk-step` reads
+        // `check`/`fix`, so a row moving from `keys` to its carrier compares
+        // equal, both ways; a carrier reading fewer fields than the keys did is
+        // still a removal.
+        let row = |path: &str, fields: &str| {
+            format!("[[census.shell.manifest]]\npath = \"{path}\"\n{fields}\n")
+        };
+        let census = |rows: &[String]| config(&format!("[census.shell]\n{}", rows.concat()));
+        let keyed = census(&[
+            row("m.toml", "keys = [\"run\"]"),
+            row("h.pkl", "keys = [\"check\", \"fix\"]"),
+        ]);
+        let carried = census(&[
+            row("m.toml", "carrier = \"mise-task\""),
+            row("h.pkl", "carrier = \"hk-step\""),
+        ]);
+        assert!(weakenings(&keyed, &carried).is_empty());
+        assert!(weakenings(&carried, &keyed).is_empty());
+        let wider = census(&[
+            row("m.toml", "keys = [\"run\", \"cmd\"]"),
+            row("h.pkl", "keys = [\"check\", \"fix\"]"),
+        ]);
+        assert_eq!(
+            only(&wider, &carried),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.manifest[m.toml:cmd]",
+                "present",
+                "absent",
+            )
+        );
     }
 
     #[test]
