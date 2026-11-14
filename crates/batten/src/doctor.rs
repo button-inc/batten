@@ -2657,7 +2657,7 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
 /// One session's own declared-open work, as `doctor session` renders it.
 ///
 /// `#[non_exhaustive]` for [`WiringReport`]'s reason.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 #[non_exhaustive]
 pub struct SessionReport {
     /// The running binary's version.
@@ -2695,6 +2695,70 @@ pub struct SessionReport {
     /// to the row that went silent and the token names what it wanted, and neither
     /// carries a program name, a task body or a path out of the store.
     pub unminted: Vec<Unminted>,
+    /// Turns in the session's transcript, or `None` for could-not-look
+    /// (CLOUD-415).
+    pub turns: Option<usize>,
+    /// The context the last message was sent with, in tokens, or `None` for
+    /// could-not-look: no transcript declared, or none of its records carries
+    /// usage (CLOUD-415).
+    pub context: Option<usize>,
+    /// Cumulative cache-read tokens, each message counted once.
+    pub cache_read: Option<usize>,
+    /// Cumulative cache-write tokens, each message counted once.
+    pub cache_write: Option<usize>,
+    /// Cumulative uncached input tokens, each message counted once.
+    pub input: Option<usize>,
+    /// Cumulative output tokens, each message counted once.
+    pub output: Option<usize>,
+}
+
+/// The session's own usage, read from the declared transcript (CLOUD-415).
+///
+/// Read BEFORE the task store, for `unminted`'s reason: it answers a different
+/// question and must survive every could-not-look the store can produce.
+#[derive(Clone, Copy, Default)]
+struct UsageReading {
+    turns: Option<usize>,
+    usage: Option<crate::transcript::SessionUsage>,
+}
+
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT usage-absent-reads-zero|s@^            .then(\x7c\x7c tally.usage()),$@            .then(\x7c\x7c tally.usage()).or(Some(crate::transcript::SessionUsage::default())),@|a_transcript_with_no_usage_is_could_not_look_not_zero
+//MUTANT usage-line-behind-the-store|s@^    diagnose_store(dir, resolved.as_ref(), unminted).with_usage(reading)$@    diagnose_store(dir, resolved.as_ref(), unminted)@|doctor_session_prints_usage_with_no_task_store_declared
+fn usage_reading(dir: &Path, resolved: Option<&resolve::Resolved>) -> UsageReading {
+    let Some(transcript) = resolved.and_then(|resolved| resolved.transcript.as_ref()) else {
+        return UsageReading::default();
+    };
+    let (Some(path), Some(harness)) = (transcript.path.as_deref(), transcript.harness) else {
+        return UsageReading::default();
+    };
+    let hook::TranscriptShape::Surveyed(shape) = harness.transcript_shape() else {
+        return UsageReading::default();
+    };
+    let Some(tally) = crate::transcript::tally_appended(&dir.join(path), shape) else {
+        return UsageReading::default();
+    };
+    let records = tally.records();
+    UsageReading {
+        turns: records
+            .contains(&crate::transcript::Kind::Turns)
+            .then(|| tally.counts().turns),
+        usage: records
+            .contains(&crate::transcript::Kind::Usage)
+            .then(|| tally.usage()),
+    }
+}
+
+impl SessionReport {
+    fn with_usage(mut self, reading: UsageReading) -> SessionReport {
+        self.turns = reading.turns;
+        self.context = reading.usage.map(|usage| usage.context);
+        self.cache_read = reading.usage.map(|usage| usage.cache_read);
+        self.cache_write = reading.usage.map(|usage| usage.cache_write);
+        self.input = reading.usage.map(|usage| usage.input);
+        self.output = reading.usage.map(|usage| usage.output);
+        self
+    }
 }
 
 /// One registered rule, and one session-start fact it reads that nothing minted.
@@ -3009,6 +3073,18 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // container it exists to report.
     let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
     let unminted = unminted_facts(dir, resolved.as_ref());
+    // The usage line prints on EVERY return path below (CLOUD-415), so it is
+    // read here, beside `unminted`, and attached once at the end.
+    let reading = usage_reading(dir, resolved.as_ref());
+    diagnose_store(dir, resolved.as_ref(), unminted).with_usage(reading)
+}
+
+/// [`diagnose_session`]'s task-store half.
+fn diagnose_store(
+    dir: &Path,
+    resolved: Option<&resolve::Resolved>,
+    unminted: Vec<Unminted>,
+) -> SessionReport {
     let unreadable = SessionReport {
         version: config::VERSION,
         open: None,
@@ -3016,8 +3092,9 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ids: Vec::new(),
         ok: false,
         unminted: unminted.clone(),
+        ..SessionReport::default()
     };
-    let Some((transcript, link)) = resolved.as_ref().and_then(|resolved| {
+    let Some((transcript, link)) = resolved.and_then(|resolved| {
         let transcript = resolved.transcript.as_ref()?;
         // The template's ABSENCE is could-not-look rather than clean: a
         // consumer that never declared a store has not told us it has no
@@ -3056,6 +3133,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
                 ids: Vec::new(),
                 ok: unminted.is_empty(),
                 unminted,
+                ..SessionReport::default()
             };
         }
         Err(_) => return unreadable,
@@ -3100,6 +3178,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ok: ids.is_empty() && unminted.is_empty(),
         ids,
         unminted,
+        ..SessionReport::default()
     }
 }
 

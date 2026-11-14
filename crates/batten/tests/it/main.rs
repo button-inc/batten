@@ -417,6 +417,7 @@ mod secrets_kind;
 mod semver_gate;
 mod session_drain;
 mod session_provisioning;
+mod session_usage;
 mod shell_banned;
 mod shell_retirement;
 mod shell_retirement_cost;
@@ -441,6 +442,7 @@ mod startup;
 mod startup_bootstrap;
 #[cfg(unix)]
 mod step_receipt;
+mod stop_hold;
 mod stop_posture;
 mod stop_watchdog;
 mod store_lifecycle;

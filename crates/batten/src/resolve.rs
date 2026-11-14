@@ -728,6 +728,11 @@ pub struct Resolved {
     /// relaunch would decide a Stop refusal the committed file never stated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::task::TaskTable>,
+    /// The `[stop]` table (CLOUD-2761), from the committed authority alone, for
+    /// `task`'s reason: a local layer must not lift a hold the committed file
+    /// states.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<crate::stop::StopTable>,
     /// Where a harness keeps its MCP wiring and what a method's reduction is
     /// (CLOUD-1260), as the authority states it.
     ///
@@ -1817,6 +1822,7 @@ fn assemble(
         host: repo.host.clone(),
         prune: repo.prune.clone(),
         task: repo.task.clone(),
+        stop: repo.stop.clone(),
         mcp: repo.mcp.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),

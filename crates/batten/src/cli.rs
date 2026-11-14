@@ -1705,6 +1705,28 @@ pub enum McpCommand {
         /// The method's arguments as a JSON object. `None` is an empty object.
         params: Option<String>,
     },
+    /// Poll one declared method until its declared reduction changes
+    /// (CLOUD-2759).
+    Wait {
+        /// The server to dispatch to, as a `[[mcp.source]]` names it.
+        server: String,
+        /// The method to poll.
+        method: String,
+        /// One argument object per subject, in order.
+        params: Vec<String>,
+        /// Seconds between polls.
+        interval: Option<String>,
+        /// The host's cache-eviction limit; absent is no time limit.
+        evict_after: Option<String>,
+        /// What is subtracted from the eviction limit.
+        buffer: Option<String>,
+        /// The clone's singleton lock to hold while waiting.
+        singleton: Option<String>,
+        /// Read subjects from this mint's receipts on every poll.
+        each_receipt: Option<String>,
+        /// The argument key a receipt's suffix is passed as.
+        arg: Option<String>,
+    },
     /// Record that a client spawned this server, then exec the launch line.
     Spawn {
         /// The server this launch is for, as the ledger names it.
@@ -3551,6 +3573,20 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
             server: matches.get_one::<String>("server").cloned()?,
             method: matches.get_one::<String>("method").cloned()?,
             params: matches.get_one::<String>("params").cloned(),
+        }),
+        ("wait", matches) => Some(McpCommand::Wait {
+            server: matches.get_one::<String>("server").cloned()?,
+            method: matches.get_one::<String>("method").cloned()?,
+            params: matches
+                .get_many::<String>("params")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            interval: matches.get_one::<String>("interval").cloned(),
+            evict_after: matches.get_one::<String>("evict-after").cloned(),
+            buffer: matches.get_one::<String>("buffer").cloned(),
+            singleton: matches.get_one::<String>("singleton").cloned(),
+            each_receipt: matches.get_one::<String>("each-receipt").cloned(),
+            arg: matches.get_one::<String>("arg").cloned(),
         }),
         // The trailing argv is `num_args(1..)` in the surface, so clap has
         // already refused an empty launch line: a spawn verb with nothing to

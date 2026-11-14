@@ -367,32 +367,33 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from help" -f -a "list" -d 'List this repository\'s captures as handles, in a fixed order'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from help" -f -a "prune" -d 'Remove this repository\'s captures — the one removal path; captures never expire on their own'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -f -a "call" -d 'Dispatch one declared method, store the response, and print the declared reduction'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -f -a "spawn" -d 'Record that a client actually spawned this server, then exec the launch line unchanged'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -f -a "grant" -d 'Apply the committed MCP permissions to whichever server name the host exposed this session'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -f -a "posture" -d 'Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for'
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "call" -d 'Dispatch one declared method, store the response, and print the declared reduction'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "wait" -d 'Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "spawn" -d 'Record that a client actually spawned this server, then exec the launch line unchanged'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "grant" -d 'Apply the committed MCP permissions to whichever server name the host exposed this session'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "posture" -d 'Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call wait spawn grant posture help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -414,6 +415,33 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l interval -d 'Seconds between polls (default 30)' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l evict-after -d 'The host\'s cache-eviction limit in seconds; absent, the wait ends only on a change' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l buffer -d 'Seconds subtracted from the eviction limit (default 60)' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l singleton -d 'Hold the clone\'s singleton lock of this name while waiting' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l each-receipt -d 'Read one subject per receipt minted under this name, listed again on every poll' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l arg -d 'The argument key each receipt\'s suffix is passed as, with --each-receipt' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from wait" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -486,6 +514,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from help" -f -a "call" -d 'Dispatch one declared method, store the response, and print the declared reduction'
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from help" -f -a "wait" -d 'Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from help" -f -a "spawn" -d 'Record that a client actually spawned this server, then exec the launch line unchanged'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from help" -f -a "grant" -d 'Apply the committed MCP permissions to whichever server name the host exposed this session'
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from help" -f -a "posture" -d 'Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for'
@@ -5731,6 +5760,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from capture" -f -a "list" -d 'List this repository\'s captures as handles, in a fixed order'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from capture" -f -a "prune" -d 'Remove this repository\'s captures — the one removal path; captures never expire on their own'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from mcp" -f -a "call" -d 'Dispatch one declared method, store the response, and print the declared reduction'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from mcp" -f -a "wait" -d 'Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from mcp" -f -a "spawn" -d 'Record that a client actually spawned this server, then exec the launch line unchanged'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from mcp" -f -a "grant" -d 'Apply the committed MCP permissions to whichever server name the host exposed this session'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from mcp" -f -a "posture" -d 'Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for'

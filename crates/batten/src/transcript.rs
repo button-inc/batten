@@ -454,6 +454,83 @@ pub enum Event {
         /// definition, so the deny's prose still dies inside [`collect`].
         routes: Vec<String>,
     },
+    /// The token usage the host recorded on an assistant record of the main
+    /// stream (CLOUD-415).
+    ///
+    /// **APPENDED, for [`Event::MemoryInjection`]'s reason.** Integers only, so
+    /// rule 4 holds by construction.
+    ///
+    /// **One message is several records.** Claude Code writes one record per
+    /// content block and repeats the message's id and usage on every copy, so a
+    /// fold summing per record over-counts by more than three times (measured
+    /// 2026-11-14: 1,507 records, 590 messages). `message` is what the fold
+    /// de-duplicates on.
+    Usage {
+        /// A fixed-size key of the host's message id, or `None` where the host
+        /// wrote none — a record with no id is its own message.
+        message: Option<u64>,
+        /// What the record reported.
+        usage: TokenUsage,
+    },
+}
+
+/// The four token counts a host records on one message (CLOUD-415).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+pub struct TokenUsage {
+    /// Uncached input tokens.
+    pub input: usize,
+    /// Input tokens read from the prompt cache.
+    pub cache_read: usize,
+    /// Input tokens written to the prompt cache.
+    pub cache_write: usize,
+    /// Output tokens.
+    pub output: usize,
+}
+
+impl TokenUsage {
+    /// Decode a host's `usage` object, or `None` where it is not one.
+    ///
+    /// **`input_tokens` and `output_tokens` must be present**: an object holding
+    /// neither is not a usage report. A cache member may be absent — a host
+    /// without a prompt cache writes none — and reads as zero. Any member present
+    /// with a non-integer value makes the whole object malformed, which skips the
+    /// record silently, as the turn fold skips a malformed line's members.
+    #[must_use]
+    fn read(value: &Value) -> Option<TokenUsage> {
+        let member = |name: &str| -> Option<Option<usize>> {
+            match value.get(name) {
+                None | Some(Value::Null) => Some(None),
+                Some(present) => present
+                    .as_u64()
+                    .and_then(|count| usize::try_from(count).ok())
+                    .map(Some),
+            }
+        };
+        Some(TokenUsage {
+            input: member("input_tokens")??,
+            cache_read: member("cache_read_input_tokens")?.unwrap_or(0),
+            cache_write: member("cache_creation_input_tokens")?.unwrap_or(0),
+            output: member("output_tokens")??,
+        })
+    }
+
+    /// The context this message was sent with: everything on the input side.
+    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+    //MUTANT context-omits-cache-read|s@^        self.input + self.cache_read + self.cache_write$@        self.input + self.cache_write@|a_session_reads_its_exact_usage
+    #[must_use]
+    pub fn context(&self) -> usize {
+        self.input + self.cache_read + self.cache_write
+    }
+}
+
+/// The fixed-size key [`Event::Usage`] carries for a message id, so [`Tally`]
+/// stays `Copy` (CLOUD-415). Within one session the comparison is between
+/// adjacent records, so a 64-bit prefix of a cryptographic digest is ample.
+fn message_key(id: &str) -> u64 {
+    let digest = blake3::hash(id.as_bytes());
+    let mut prefix = [0u8; 8];
+    prefix.copy_from_slice(&digest.as_bytes()[..8]);
+    u64::from_le_bytes(prefix)
 }
 
 /// One event and where it was found.
@@ -601,6 +678,9 @@ pub enum Kind {
     ToolResults,
     /// Hook runs.
     HookDecisions,
+    /// Token usage on assistant records (CLOUD-415). Its absence is what makes a
+    /// usage extraction could-not-look rather than zero.
+    Usage,
 }
 
 impl Kind {
@@ -613,6 +693,7 @@ impl Kind {
             Kind::ToolCalls => 2,
             Kind::ToolResults => 4,
             Kind::HookDecisions => 8,
+            Kind::Usage => 16,
         }
     }
 }
@@ -693,6 +774,29 @@ pub struct Tally {
     operator_marker: Option<bool>,
     calls_since_marker: usize,
     plan_exits: usize,
+    /// The session's token usage, each message counted once (CLOUD-415).
+    usage: SessionUsage,
+    /// The key of the last message whose usage was folded. STORED, so a split
+    /// that falls between two copies of one message does not count it twice.
+    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+    //MUTANT usage-split-recounts-the-message|s@^    last_message: Option<u64>,$@    #[serde(skip)] last_message: Option<u64>,@|usage_sums_across_a_split_fold_as_the_whole_parse
+    last_message: Option<u64>,
+}
+
+/// A session's token usage as integers (CLOUD-415): four cumulative sums, each
+/// message counted once, and the context the last message was sent with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+pub struct SessionUsage {
+    /// The last message's input plus cache read plus cache write.
+    pub context: usize,
+    /// Cumulative uncached input tokens.
+    pub input: usize,
+    /// Cumulative cache-read tokens.
+    pub cache_read: usize,
+    /// Cumulative cache-write tokens.
+    pub cache_write: usize,
+    /// Cumulative output tokens.
+    pub output: usize,
 }
 
 /// The transcript at `path`, tallied by reading only what was appended since the
@@ -797,7 +901,8 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-const TALLY_FORMAT: &str = "batten-transcript-tally-3";
+//MUTANT tally-format-not-bumped|s@^const TALLY_FORMAT: \&str = "batten-transcript-tally-4";$@const TALLY_FORMAT: \&str = "batten-transcript-tally-3";@|a_tally_stored_in_the_old_format_is_folded_again
+const TALLY_FORMAT: &str = "batten-transcript-tally-4";
 
 /// What [`tally_appended`] persists between calls.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -834,6 +939,9 @@ pub trait Summary {
     fn records(&self) -> std::collections::BTreeSet<Kind>;
     /// As [`Stream::repeats`].
     fn repeats(&self) -> Repeats;
+    /// As [`Stream::usage`]. Meaningful only where [`Summary::records`] holds
+    /// [`Kind::Usage`]; the caller decides could-not-look from that.
+    fn usage(&self) -> SessionUsage;
 }
 
 impl Summary for Stream {
@@ -845,6 +953,9 @@ impl Summary for Stream {
     }
     fn repeats(&self) -> Repeats {
         Stream::repeats(self)
+    }
+    fn usage(&self) -> SessionUsage {
+        Stream::usage(self)
     }
 }
 
@@ -858,8 +969,14 @@ impl Summary for Tally {
     fn repeats(&self) -> Repeats {
         Tally::repeats(self)
     }
+    fn usage(&self) -> SessionUsage {
+        Tally::usage(self)
+    }
 }
 
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT usage-last-record-only|s@^                self.usage.input += usage.input;$@                self.usage.input = usage.input;@|a_session_reads_its_exact_usage
+//MUTANT usage-counts-every-record|s@^                if message.is_some() \&\& .message == self.last_message {$@                if false {@|a_message_written_as_three_records_is_counted_once
 //MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
 impl Tally {
     fn fold(&mut self, event: &Event) {
@@ -903,6 +1020,20 @@ impl Tally {
                 self.operator_marker = Some(false);
                 self.calls_since_marker = 0;
             }
+            Event::Usage { message, usage } => {
+                self.seen |= Kind::Usage.bit();
+                // COPIES OF ONE MESSAGE ARE ADJACENT, so the last key is the
+                // whole memory the de-duplication needs.
+                if message.is_some() && *message == self.last_message {
+                    return;
+                }
+                self.last_message = *message;
+                self.usage.context = usage.context();
+                self.usage.input += usage.input;
+                self.usage.cache_read += usage.cache_read;
+                self.usage.cache_write += usage.cache_write;
+                self.usage.output += usage.output;
+            }
             Event::MemoryInjection { .. }
             | Event::HookOutput { .. }
             | Event::SessionBoundary
@@ -930,10 +1061,17 @@ impl Tally {
             Kind::ToolCalls,
             Kind::ToolResults,
             Kind::HookDecisions,
+            Kind::Usage,
         ]
         .into_iter()
         .filter(|kind| self.seen & kind.bit() != 0)
         .collect()
+    }
+
+    /// As [`Stream::usage`].
+    #[must_use]
+    pub fn usage(&self) -> SessionUsage {
+        self.usage
     }
 
     /// As [`Stream::repeats`].
@@ -1061,9 +1199,23 @@ impl Stream {
                 // (CLOUD-2141), and folding it in here would move a field four
                 // landed assertions read.
                 Event::Refused { .. } => {}
+                // Usage is [`Stream::usage`]'s document (CLOUD-415), for
+                // `TurnEnd`'s reason.
+                Event::Usage { .. } => {}
             }
         }
         counts
+    }
+
+    /// The session's token usage, each message counted once (CLOUD-415).
+    ///
+    /// The fold IS the specification here, so the whole parse and the
+    /// incremental [`Tally`] cannot disagree on the de-duplication.
+    #[must_use]
+    pub fn usage(&self) -> SessionUsage {
+        let mut tally = Tally::default();
+        self.fold_into(&mut tally);
+        tally.usage
     }
 
     /// Which event kinds this host records — see [`Records`] for why zero is not
@@ -1077,6 +1229,7 @@ impl Stream {
                 Event::ToolCall { .. } => kinds.insert(Kind::ToolCalls),
                 Event::ToolResult { .. } => kinds.insert(Kind::ToolResults),
                 Event::HookDecision { .. } => kinds.insert(Kind::HookDecisions),
+                Event::Usage { .. } => kinds.insert(Kind::Usage),
                 Event::MemoryInjection { .. }
                 | Event::HookOutput { .. }
                 | Event::SessionBoundary
@@ -1507,6 +1660,21 @@ fn collect(
             event: Event::TurnEnd(StopReason::normalize(reason)),
         });
     }
+    // THE MAIN STREAM'S USAGE ONLY (CLOUD-415): a sidechain record is a
+    // subagent's spend, on `authored_session_id`'s test, and a malformed usage
+    // object yields nothing rather than failing the line.
+    if role == Some(Role::Assistant)
+        && parsed.is_sidechain != Some(true)
+        && let Some(usage) = message.usage.as_ref().and_then(TokenUsage::read)
+    {
+        records.push(Record {
+            line,
+            event: Event::Usage {
+                message: message.id.as_deref().map(message_key),
+                usage,
+            },
+        });
+    }
     // Content is an array of blocks, or a bare string when the turn is plain
     // text. A string carries no tool structure, so it yields the turn alone.
     let Some(Value::Array(blocks)) = &message.content else {
@@ -1889,6 +2057,14 @@ struct Message {
     /// [`StopReason`] on the way in and never stored as text (CLOUD-97).
     #[serde(rename = "stop_reason")]
     stop_reason: Option<String>,
+    /// The host's id for this message (CLOUD-415). A host that writes one
+    /// message as several records repeats it on every copy, which is what lets
+    /// the usage fold count the message once.
+    id: Option<String>,
+    /// The token usage the host recorded for this message (CLOUD-415), kept as
+    /// a [`Value`] so a malformed member skips the usage and never the line:
+    /// [`TokenUsage::read`] is the one decoder, and it decodes integers only.
+    usage: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2411,6 +2587,55 @@ mod tests {
         r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[]}}"#,
         r#"{"type":"queue-operation","sessionId":"s-1","content":"ignored"}"#,
     ];
+
+    /// CLOUD-415: a tally stored under the previous format string is never
+    /// served, even when its body reads as the current shape — the format string
+    /// is the whole of what says a stored body means what this build means.
+    #[test]
+    fn a_tally_stored_in_the_old_format_is_folded_again() {
+        let dir = crate::scratch::scratch("transcript-tally-format");
+        let root = dir.join("cache");
+        let path = dir.join("session.jsonl");
+        let text = concat!(
+            r#"{"type":"assistant","message":{"id":"m1","role":"assistant","content":[],"usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":1000,"output_tokens":5}}}"#,
+            "\n"
+        );
+        std::fs::write(&path, text).expect("the transcript");
+        let canonical = std::fs::canonicalize(&path).expect("canonical");
+        let label = canonical.to_string_lossy().into_owned();
+        let meta = std::fs::metadata(&canonical).expect("meta");
+        let at = root
+            .join("transcript")
+            .join(blake3::hash(label.as_bytes()).to_hex().as_str());
+        let stale = crate::cache::key(
+            "batten-transcript-tally-3",
+            &[label.as_bytes(), file_identity(&meta).as_bytes()],
+        );
+        let head = blake3::hash(text.trim_end().as_bytes())
+            .to_hex()
+            .to_string();
+        // A WRONG tally covering the whole file: served, it would answer zero.
+        let body = serde_json::to_vec(&Tallied {
+            offset: text.len(),
+            head,
+            tally: Tally::default(),
+        })
+        .expect("the body");
+        crate::cache::write(&at, &stale, &body);
+        let tally = tally_under(&path, RecordShape::Jsonl, Some(&root)).expect("tallies");
+        assert_eq!(
+            tally.usage(),
+            parse(text, "t", RecordShape::Jsonl)
+                .expect("parses")
+                .usage(),
+            "the old entry is discarded and the file folded again"
+        );
+        assert_eq!(
+            tally.usage().cache_write,
+            1000,
+            "the premise: a real reading"
+        );
+    }
 
     /// CLOUD-2315: the incremental reader answers what a whole parse answers as
     /// the file grows, could-not-look on a half-written final line, and starts

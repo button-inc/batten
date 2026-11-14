@@ -544,6 +544,44 @@ trace\:"Add everything"))' \
 '::params -- The method'\''s arguments, as a JSON object; omitted is `{}`:_default' \
 && ret=0
 ;;
+(wait)
+_arguments "${_arguments_options[@]}" : \
+'--interval=[Seconds between polls (default 30)]:interval:_default' \
+'--evict-after=[The host'\''s cache-eviction limit in seconds; absent, the wait ends only on a change]:evict-after:_default' \
+'--buffer=[Seconds subtracted from the eviction limit (default 60)]:buffer:_default' \
+'--singleton=[Hold the clone'\''s singleton lock of this name while waiting]:singleton:_default' \
+'--each-receipt=[Read one subject per receipt minted under this name, listed again on every poll]:each-receipt:_default' \
+'--arg=[The argument key each receipt'\''s suffix is passed as, with --each-receipt]:arg:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':server -- The server to dispatch to, as a `\[\[mcp.source\]\]` names it:_default' \
+':method -- The method to poll; it must have a `\[\[mcp.result\]\]` row:_default' \
+'::params -- One JSON argument object per subject; the wait ends when any one'\''s reduction changes:_default' \
+&& ret=0
+;;
 (spawn)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -655,6 +693,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-mcp-help-command-$line[1]:"
         case $line[1] in
             (call)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(wait)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9541,6 +9583,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(wait)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (spawn)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -12678,6 +12724,7 @@ _batten__subcmd__help__subcmd__lint__subcmd__brief_commands() {
 _batten__subcmd__help__subcmd__mcp_commands() {
     local commands; commands=(
 'call:Dispatch one declared method, store the response, and print the declared reduction' \
+'wait:Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes' \
 'spawn:Record that a client actually spawned this server, then exec the launch line unchanged' \
 'grant:Apply the committed MCP permissions to whichever server name the host exposed this session' \
 'posture:Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for' \
@@ -12703,6 +12750,11 @@ _batten__subcmd__help__subcmd__mcp__subcmd__posture_commands() {
 _batten__subcmd__help__subcmd__mcp__subcmd__spawn_commands() {
     local commands; commands=()
     _describe -t commands 'batten help mcp spawn commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__mcp__subcmd__wait_commands] )) ||
+_batten__subcmd__help__subcmd__mcp__subcmd__wait_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help mcp wait commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__mutate_commands] )) ||
 _batten__subcmd__help__subcmd__mutate_commands() {
@@ -13837,6 +13889,7 @@ _batten__subcmd__lint__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__mcp_commands() {
     local commands; commands=(
 'call:Dispatch one declared method, store the response, and print the declared reduction' \
+'wait:Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes' \
 'spawn:Record that a client actually spawned this server, then exec the launch line unchanged' \
 'grant:Apply the committed MCP permissions to whichever server name the host exposed this session' \
 'posture:Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for' \
@@ -13858,6 +13911,7 @@ _batten__subcmd__mcp__subcmd__grant_commands() {
 _batten__subcmd__mcp__subcmd__help_commands() {
     local commands; commands=(
 'call:Dispatch one declared method, store the response, and print the declared reduction' \
+'wait:Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes' \
 'spawn:Record that a client actually spawned this server, then exec the launch line unchanged' \
 'grant:Apply the committed MCP permissions to whichever server name the host exposed this session' \
 'posture:Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for' \
@@ -13890,6 +13944,11 @@ _batten__subcmd__mcp__subcmd__help__subcmd__spawn_commands() {
     local commands; commands=()
     _describe -t commands 'batten mcp help spawn commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__mcp__subcmd__help__subcmd__wait_commands] )) ||
+_batten__subcmd__mcp__subcmd__help__subcmd__wait_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mcp help wait commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__mcp__subcmd__posture_commands] )) ||
 _batten__subcmd__mcp__subcmd__posture_commands() {
     local commands; commands=()
@@ -13899,6 +13958,11 @@ _batten__subcmd__mcp__subcmd__posture_commands() {
 _batten__subcmd__mcp__subcmd__spawn_commands() {
     local commands; commands=()
     _describe -t commands 'batten mcp spawn commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__mcp__subcmd__wait_commands] )) ||
+_batten__subcmd__mcp__subcmd__wait_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mcp wait commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate_commands] )) ||
 _batten__subcmd__mutate_commands() {

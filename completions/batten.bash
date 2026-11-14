@@ -1012,6 +1012,9 @@ _batten() {
             batten__subcmd__help__subcmd__mcp,spawn)
                 cmd="batten__subcmd__help__subcmd__mcp__subcmd__spawn"
                 ;;
+            batten__subcmd__help__subcmd__mcp,wait)
+                cmd="batten__subcmd__help__subcmd__mcp__subcmd__wait"
+                ;;
             batten__subcmd__help__subcmd__mutate,census)
                 cmd="batten__subcmd__help__subcmd__mutate__subcmd__census"
                 ;;
@@ -1495,6 +1498,9 @@ _batten() {
             batten__subcmd__mcp,spawn)
                 cmd="batten__subcmd__mcp__subcmd__spawn"
                 ;;
+            batten__subcmd__mcp,wait)
+                cmd="batten__subcmd__mcp__subcmd__wait"
+                ;;
             batten__subcmd__mcp__subcmd__help,call)
                 cmd="batten__subcmd__mcp__subcmd__help__subcmd__call"
                 ;;
@@ -1509,6 +1515,9 @@ _batten() {
                 ;;
             batten__subcmd__mcp__subcmd__help,spawn)
                 cmd="batten__subcmd__mcp__subcmd__help__subcmd__spawn"
+                ;;
+            batten__subcmd__mcp__subcmd__help,wait)
+                cmd="batten__subcmd__mcp__subcmd__help__subcmd__wait"
                 ;;
             batten__subcmd__mutate,census)
                 cmd="batten__subcmd__mutate__subcmd__census"
@@ -7481,7 +7490,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__mcp)
-            opts="call spawn grant posture"
+            opts="call wait spawn grant posture"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -7537,6 +7546,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__mcp__subcmd__spawn)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__mcp__subcmd__wait)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -10727,7 +10750,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__mcp)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help call spawn grant posture help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help call wait spawn grant posture help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -10825,7 +10848,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__mcp__subcmd__help)
-            opts="call spawn grant posture help"
+            opts="call wait spawn grant posture help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -10908,6 +10931,20 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__mcp__subcmd__help__subcmd__wait)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__mcp__subcmd__posture)
             opts="-q -v -y -h --settings --config --logs --spawns --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -10961,6 +10998,60 @@ _batten() {
                 return 0
             fi
             case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__mcp__subcmd__wait)
+            opts="-q -v -y -h --interval --evict-after --buffer --singleton --each-receipt --arg --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --interval)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --evict-after)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --buffer)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --singleton)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --each-receipt)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --arg)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0

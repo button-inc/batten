@@ -340,6 +340,21 @@ fn a_credential_row_that_cannot_mean_one_thing_is_refused_at_load() {
 }
 
 #[test]
+fn mcp_wait_over_a_method_with_no_result_row_exits_one_without_dispatching() {
+    // CLOUD-2759. The same wired source fails at the SOCKET when dispatched (the
+    // case below), so a waiter that polled would answer 3; 1 is only reachable
+    // by refusing before the first read.
+    let repo = repo_with_credential("mcp-wait-unrowed", "");
+    let answer = run(&repo, &["mcp", "wait", "srv", "no_row_declared", "{}"]);
+    assert_eq!(answer.status.code(), Some(1), "got: {}", stderr(&answer));
+    assert!(
+        stderr(&answer).contains("declares no [[mcp.result]] row"),
+        "got: {}",
+        stderr(&answer)
+    );
+}
+
+#[test]
 fn a_source_declaring_no_credential_behaves_exactly_as_before() {
     // The byte-identical arm (CLOUD-418's mirror, and CLOUD-1261's acceptance by
     // name). Adding this key must not change what a source that does not use it

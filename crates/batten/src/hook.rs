@@ -275,7 +275,24 @@ impl Harness {
             Harness::ClaudeCode | Harness::CodexCli => {
                 &["Write", "Edit", "MultiEdit", "NotebookEdit"]
             }
-            Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
+            // `write_file` and `replace` are FROM DOCUMENTATION, not from a
+            // captured payload (CLOUD-2744): the project's own tool reference,
+            // `docs/tools/file-system.md` and `docs/reference/tools.md` in
+            // google-gemini/gemini-cli, read 2026-11-14. A spike capturing a real
+            // payload confirms them; the older names stay, since removing one can
+            // only stop judging something.
+            //MUTANT-SUITE crates/batten/src/hook.rs
+            //MUTANT gemini-write-file-unnamed|s@^                "write_file",$@@|gemini_write_file_against_a_protected_path_is_denied
+            //MUTANT gemini-replace-unnamed|s@^                "replace",$@@|gemini_replace_against_a_protected_path_is_denied
+            Harness::GeminiCli => &[
+                "WriteFile",
+                "Edit",
+                "Write",
+                "MultiEdit",
+                "NotebookEdit",
+                "write_file",
+                "replace",
+            ],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
             // The neutral contract: a caller composing the envelope by hand is
@@ -656,6 +673,14 @@ pub struct Capabilities {
     /// [`Capabilities::events`] is, and [`Capabilities::fidelity`] is its
     /// projection. See [`Capability`]'s own doc: the scalar columns only.
     pub capture: CaptureCapabilities,
+    /// When this host evicts a session's cached context, and what a write and a
+    /// read cost (CLOUD-2763).
+    ///
+    /// A field of its own for [`Capabilities::capture`]'s reason: a
+    /// [`Declaration`] cannot carry numbers. `None` where the host's CLI
+    /// publishes no limit, even where its provider's API publishes one: no
+    /// figure is invented, and with none there is no wake.
+    pub cache_eviction: Option<&'static crate::prompt_cache::Eviction>,
 }
 
 /// How faithfully one host's responses can be captured, per response shape
@@ -1647,6 +1672,11 @@ impl Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // THE PUBLISHED PROMPT-CACHE FIGURES (CLOUD-2763), read
+                // 2026-11-14; `prompt_cache::CLAUDE_CODE` carries the sources.
+                //MUTANT-SUITE crates/batten/src/hook.rs
+                //MUTANT eviction-limit-invented|s@^                cache_eviction: None,$@                cache_eviction: Some(\&crate::prompt_cache::CLAUDE_CODE),@|only_claude_code_declares_an_eviction_limit
+                cache_eviction: Some(&crate::prompt_cache::CLAUDE_CODE),
             },
             Harness::Cursor => Capabilities {
                 // Searched 2026-09-01 and NOT fetched: the host has a Todos
@@ -1688,6 +1718,9 @@ impl Harness {
                 // deny explained there would explain itself to nobody.
                 reason_travels_in_band: true,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CopilotCli => Capabilities {
@@ -1722,6 +1755,9 @@ impl Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::GeminiCli => Capabilities {
@@ -1788,6 +1824,9 @@ impl Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CodexCli => Capabilities {
@@ -1813,6 +1852,9 @@ impl Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::ExitCode => Capabilities {
@@ -1867,6 +1909,8 @@ impl Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // No host behind the normalized envelope publishes a cache.
+                cache_eviction: None,
             },
         }
     }
@@ -5227,12 +5271,17 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
     edit_spans(input)
 }
 
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT allow-multiple-unread|s@^        \["/replace_all", "/allow_multiple"\]$@        ["/replace_all"]@|allow_multiple_reads_as_replace_all
+//MUTANT allow-multiple-as-fallback|s@^            .any(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool) == Some(true))$@            .find_map(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool)).unwrap_or(false)@|a_false_replace_all_does_not_hide_allow_multiple
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    // EITHER KEY TRUE MEANS EVERY OCCURRENCE (CLOUD-2744): Gemini CLI's `replace`
+    // spells it `allow_multiple`. An `any` over the two, never a fallback, so a
+    // `replace_all: false` cannot hide an `allow_multiple: true`.
     let replace_all = |value: &Value| {
-        value
-            .pointer("/replace_all")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+        ["/replace_all", "/allow_multiple"]
+            .iter()
+            .any(|key| value.pointer(key).and_then(Value::as_bool) == Some(true))
     };
     let span = |value: &Value| {
         let old = value.pointer("/old_string").and_then(Value::as_str)?;
@@ -6056,6 +6105,90 @@ fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &SegmentLine)> {
 /// `&&` is absent by construction rather than by exclusion: it is the one
 /// separator that preserves a non-zero status, so there is no false green to
 /// refuse and denying it would be a pure false positive.
+/// Whether one line runs a verdict-bearing program, by the row's `verdict`
+/// entries, read exactly as [`pipeline_rules`] reads them.
+fn line_bears_a_verdict(line: &SegmentLine, verdicts: &[crate::rules::VerdictProgram]) -> bool {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let Some(program_index) = effective_program(&tokens) else {
+        return false;
+    };
+    let words: Vec<&str> = tokens[program_index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .filter(|token| !token.starts_with('-'))
+        .collect();
+    verdicts
+        .iter()
+        .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
+}
+
+/// The call with its trailing output filters removed, where removing them is the
+/// whole fix for `verdict read dropped` (CLOUD-1939), or `None`.
+///
+/// **One shape.** A verdict-bearing segment piped into a run of stages that are
+/// ALL configured filters, joined by pipes, ending the command: `verb | tail`,
+/// `cd x && verb 2>&1 | grep a | tail`. A stage that is not a filter, or any later
+/// list element, is a command the cut would drop, so it answers `None` and the
+/// refusal stands.
+///
+/// **A prefix of what the agent wrote, never a re-spelling.** Each trailing
+/// stage's own text, and the pipe before it, is stripped from the end of the
+/// original; a stage whose text is not where the parse says ends the attempt.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT cut-drops-a-command|s@^            joined \&\& filter$@            joined@|a_stage_that_is_not_a_filter_keeps_its_deny
+//MUTANT cut-at-first-segment|s@^    let mut text = envelope.command.trim_end();$@    let mut text = parsed.first().map_or("", \x7cfirst\x7c first.raw.as_str()).trim_end();@|the_cut_keeps_what_came_before_the_verdict
+#[must_use]
+pub fn filter_free_command(policy: &Policy, envelope: &Envelope) -> Option<String> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let (index, rule) = policy
+        .shapes
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Pipeline)
+        .find_map(|rule| {
+            let verdicts = rule.verdict.as_deref().unwrap_or_default();
+            parsed
+                .iter()
+                .position(|segment| {
+                    segment.terminator == Some(Separator::Pipe)
+                        && segment
+                            .lines
+                            .iter()
+                            .any(|line| line_bears_a_verdict(line, verdicts))
+                })
+                .map(|index| (index, rule))
+        })?;
+    let filters = rule.filters.as_deref().unwrap_or_default();
+    let rest = parsed.get(index + 1..)?;
+    let only_filters = !rest.is_empty()
+        && rest.iter().enumerate().all(|(at, stage)| {
+            let joined = if at + 1 == rest.len() {
+                stage.terminator.is_none()
+            } else {
+                stage.terminator == Some(Separator::Pipe)
+            };
+            let filter = stage.lines.len() == 1
+                && stage.lines.iter().all(|line| {
+                    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+                    effective_program(&tokens).is_some_and(|at| {
+                        let named = program_token(tokens[at]);
+                        filters.iter().any(|filter| filter == named)
+                    })
+                });
+            joined && filter
+        });
+    if !only_filters {
+        return None;
+    }
+    let mut text = envelope.command.trim_end();
+    for stage in rest.iter().rev() {
+        text = text.strip_suffix(stage.raw.trim())?.trim_end();
+        text = text.strip_suffix('|')?.trim_end();
+    }
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
     let rows: Vec<&Rule> = policy
         .shapes
@@ -11594,6 +11727,35 @@ mod tests {
         }
     }
     use super::*;
+
+    /// CLOUD-2763: every host but Claude Code declares no eviction limit, and
+    /// Claude Code's column holds exactly the published figures.
+    #[test]
+    fn only_claude_code_declares_an_eviction_limit() {
+        for harness in Harness::ALL {
+            if *harness != Harness::ClaudeCode {
+                assert!(
+                    harness.capabilities().cache_eviction.is_none(),
+                    "{harness:?} publishes no limit"
+                );
+            }
+        }
+        let eviction = Harness::ClaudeCode
+            .capabilities()
+            .cache_eviction
+            .expect("Claude Code publishes its buckets");
+        let buckets: Vec<(u64, u64)> = eviction
+            .buckets
+            .iter()
+            .map(|bucket| (bucket.lifetime_secs, bucket.write_milli))
+            .collect();
+        assert_eq!(buckets, vec![(300, 1250), (3600, 2000)]);
+        assert_eq!(eviction.read_milli("claude-fable-5-2"), Some(25));
+        assert_eq!(eviction.read_milli("claude-opus-5-5"), Some(50));
+        assert_eq!(eviction.read_milli("claude-sonnet-5-5"), Some(50));
+        assert_eq!(eviction.read_milli("claude-haiku-5-5"), Some(100));
+        assert_eq!(eviction.read_milli("gpt-5"), None, "not a Claude model");
+    }
 
     /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
     /// alone never makes a relative word absolute. Fails by: either operator
@@ -17435,6 +17597,57 @@ deny contains "refused by themodule" if {
                 harness.as_str()
             );
         }
+    }
+
+    /// A Gemini CLI write under one of its documented tool names, against a
+    /// protected path (CLOUD-2744).
+    fn gemini_write_denies(tool: &str) -> bool {
+        let policy = protected_policy_with(
+            vec![verb("Write", Some("use the surface that owns the file"))],
+            vec![Redirect {
+                glob: "batten.toml".to_owned(),
+                mutation: "change it in a pull request".to_owned(),
+                read: None,
+                read_server: None,
+            }],
+        );
+        matches!(
+            adjudicate(
+                &policy,
+                &write_envelope_on(Harness::GeminiCli, tool, "batten.toml"),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        )
+    }
+
+    #[test]
+    fn gemini_write_file_against_a_protected_path_is_denied() {
+        assert!(gemini_write_denies("write_file"));
+    }
+
+    #[test]
+    fn gemini_replace_against_a_protected_path_is_denied() {
+        assert!(gemini_write_denies("replace"));
+    }
+
+    #[test]
+    fn allow_multiple_reads_as_replace_all() {
+        let spans = edit_spans_of(&serde_json::json!({
+            "old_string": "a", "new_string": "b", "allow_multiple": true
+        }));
+        assert_eq!(spans, Some(vec![("a".to_owned(), "b".to_owned(), true)]));
+    }
+
+    #[test]
+    fn a_false_replace_all_does_not_hide_allow_multiple() {
+        let spans = edit_spans_of(&serde_json::json!({
+            "old_string": "a", "new_string": "b",
+            "replace_all": false, "allow_multiple": true
+        }));
+        assert_eq!(spans, Some(vec![("a".to_owned(), "b".to_owned(), true)]));
     }
 
     #[test]
