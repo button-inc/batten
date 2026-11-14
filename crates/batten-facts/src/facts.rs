@@ -4118,6 +4118,16 @@ pub enum Extraction {
     /// (CLOUD-2383). A count over `Event::ToolCall` names, which the transcript
     /// already types; no argument is read.
     PlanExits,
+    /// The context the session's last message was sent with: its input plus
+    /// cache read plus cache write (CLOUD-415). Exact, from the host's own
+    /// usage record, never an estimate over bytes.
+    ContextTokens,
+    /// Cumulative cache-read tokens, each message counted once (CLOUD-415).
+    CacheReadTokens,
+    /// Cumulative cache-write tokens, each message counted once (CLOUD-415).
+    CacheWriteTokens,
+    /// Cumulative output tokens, each message counted once (CLOUD-415).
+    OutputTokens,
 }
 
 // ---------------------------------------------------------------------------
