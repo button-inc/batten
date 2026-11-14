@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-offbox-rotate 1  batten 
+.SH NAME
+batten\-offbox\-rotate \- Rotate the state repository\*(Aqs finished sessions into its archive and remove their branches, discarding nothing
+.SH SYNOPSIS
+\fBbatten offbox rotate\fR [\fB\-\-remote\fR] [\fB\-\-quiet\-runs\fR] [\fB\-\-print\-workflow\fR] [\fB\-\-install\-url\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Rotate the state repository\*(Aqs finished sessions into its archive and remove their branches, discarding nothing
+.SH OPTIONS
+.TP
+\fB\-\-remote\fR \fI<remote>\fR
+The state repository\*(Aqs URL, whose finished sessions are rotated into its archive
+.TP
+\fB\-\-quiet\-runs\fR \fI<quiet_runs>\fR
+How many consecutive passes a session\*(Aqs branch must go unchanged before it is rotated (default 6)
+.TP
+\fB\-\-print\-workflow\fR
+Print the workflow file that runs a pass on a schedule, and do nothing else
+.TP
+\fB\-\-install\-url\fR \fI<install_url>\fR
+The install script\*(Aqs URL, which the printed workflow downloads and runs for this version
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

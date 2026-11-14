@@ -1156,6 +1156,7 @@ mod tests {
             "offbox".to_owned(),
             "offbox push".to_owned(),
             "offbox restore".to_owned(),
+            "offbox rotate".to_owned(),
             "offbox run".to_owned(),
             "offbox status".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
