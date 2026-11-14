@@ -207,10 +207,44 @@ const PART: usize = 50 * 1024 * 1024;
 /// How many record bytes are asked of a source at a time, whatever the cap.
 const READ: u64 = 8 * MIB;
 
-/// The entries of the state directory that are stores. An allow-list of one:
-/// everything else there is rebuilt (`provision/`, `cache/`) or is this
-/// feature's own working state.
-const STATE_STORES: [&str; 1] = ["captures"];
+/// The entries of the state directory that are NOT stores. An exclude-list, as
+/// [`GIT_EXCLUDED`] is and for its reason: a store added later is shipped by
+/// default, and leaving one out is a decision somebody wrote down here.
+///
+/// It was once an allow-list of one, `captures`, on the claim that everything
+/// else was rebuilt. The journal, the receipts, the findings, the session
+/// stamps and the drain records are not rebuilt, and none of them left the
+/// machine.
+///
+/// - `cache`, `provision`: rebuilt from the tree and from pinned downloads.
+/// - `offbox` and every entry whose name starts with it: this feature's own
+///   working state — where the snapshot is built from, its lock and its
+///   record of which sessions it has imported — which cannot be in it.
+/// - `identity`: a secret key. It is never content and never leaves the
+///   machine, whatever the scanner would have made of it.
+/// - `store.json`: where this checkout is on this machine, written on first
+///   use; another machine's is wrong here.
+/// - `mutate`: a staged checkout and a build directory, apart from the files
+///   [`STATE_FILES_UNDER`] names.
+const STATE_EXCLUDED: [&str; 6] = [
+    "cache",
+    "provision",
+    "offbox",
+    "identity",
+    "store.json",
+    "mutate",
+];
+
+/// Whether an entry of the state directory is a store: any name of one path
+/// segment that [`STATE_EXCLUDED`] does not list.
+fn state_store(entry: &str) -> bool {
+    !entry.is_empty()
+        && entry != "."
+        && entry != ".."
+        && !entry.contains(['/', '\\'])
+        && !entry.starts_with("offbox")
+        && !STATE_EXCLUDED.contains(&entry)
+}
 
 /// State entries taken in part: only the files DIRECTLY under each prefix
 /// (CLOUD-2723). The mutation sweep's verdict journal and reach seal live
@@ -563,10 +597,12 @@ fn git_excluded(entry: &str) -> bool {
 
 /// Every store file this checkout has, as its tree path and where it is.
 ///
-/// `state/<entry>/…` from the state directory, by allow-list; `git/<entry>/…`
-/// from the project's per-worktree git directory, by exclude-list.
+/// `state/<entry>/…` from the state directory and `git/<entry>/…` from the
+/// project's per-worktree git directory, each by exclude-list.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT provision-dir-included|s@^            if !STATE_STORES.contains(\&entry.as_str()) \&\& !listed_file(\&relative) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT provision-dir-included|s@^            if !state_store(\&entry) \&\& !listed_file(\&relative) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT secret-key-shipped|s@^    "identity",$@    "identity-is-shipped",@|every_state_store_ships_and_the_secret_key_never_does
+//MUTANT state-stores-allow-listed|s@^        \&\& !STATE_EXCLUDED.contains(\&entry)$@        \&\& entry == "captures"@|every_state_store_ships_and_the_secret_key_never_does
 //MUTANT lock-entry-included|s@^            if excluded \x7c\x7c relative.ends_with(".lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 #[expect(
     clippy::case_sensitive_file_extension_comparisons,
@@ -577,7 +613,7 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
     if let Ok(state) = crate::state::repo_state_dir(project_root) {
         for (relative, path) in files_under(&state) {
             let entry = relative.split('/').next().unwrap_or_default().to_owned();
-            if !STATE_STORES.contains(&entry.as_str()) && !listed_file(&relative) {
+            if !state_store(&entry) && !listed_file(&relative) {
                 continue;
             }
             // A lock is never content, wherever it sits.
@@ -1297,7 +1333,7 @@ fn destination(project_root: &Path, store: &str) -> Option<PathBuf> {
     let (root, entry) = store.split_once('/')?;
     match root {
         "state"
-            if STATE_STORES.contains(&entry)
+            if state_store(entry)
                 || STATE_FILES_UNDER
                     .iter()
                     .any(|prefix| prefix.split('/').next() == Some(entry)) =>

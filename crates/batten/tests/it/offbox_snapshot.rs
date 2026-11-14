@@ -384,6 +384,56 @@ fn a_second_snapshot_holds_everything_the_first_did() {
     );
 }
 
+/// Fails by: a store of the state directory left on the machine — the journal,
+/// the receipts, the findings, the session stamps, the drain records, or one
+/// this build has never heard of — or the secret key, a rebuilt directory or
+/// this feature's own working state shipped.
+#[test]
+fn every_state_store_ships_and_the_secret_key_never_does() {
+    let rig = Rig::new("offbox-snapshot-state-stores");
+    let meta = Rig::meta("state-stores");
+    let shipped = [
+        "captures/a/one.txt",
+        "drain/d.json",
+        "findings/f.json",
+        "journal/merged.jsonl",
+        "journal/shards/s.jsonl",
+        "receipts/r.json",
+        "sessions/s.json",
+        "a-store-added-later/x.json",
+        "mutate/schema/journal.jsonl",
+    ];
+    let kept = [
+        "identity/secret-key",
+        "identity/custody.jsonl",
+        "cache/rebuilt.bin",
+        "provision/tool/1.0/bin/tool",
+        "store.json",
+        "journal/merge.lock",
+        "mutate/schema/tree/src/lib.rs",
+    ];
+    for path in shipped.iter().chain(&kept) {
+        rig.state_file(path, "body\n");
+    }
+    let path = rig.source("main");
+    write(&path, &records(0, 3, 100));
+    let source = JsonlFile::at(&path);
+
+    let (commit, ..) = built(rig.snap(&meta, &[feed(MAIN, &source)], TIME, NO_CAP));
+    let tree = rig.tree(&meta, &commit);
+
+    let state: Vec<&str> = tree
+        .keys()
+        .filter_map(|path| path.strip_prefix("state/"))
+        .collect();
+    let mut expected = shipped.to_vec();
+    expected.sort_unstable();
+    assert_eq!(state, expected, "exactly the stores, and nothing kept back");
+    for path in shipped {
+        assert_eq!(rig.blob(&meta, &tree[&format!("state/{path}")]), b"body\n");
+    }
+}
+
 /// Fails by: any snapshot whose tree is not the source, byte for byte — a
 /// segment that was open at one snapshot and had filled and closed by the next
 /// kept at the length the earlier one saw, above all.
