@@ -1955,6 +1955,16 @@ pub fn read_blob(dir: &Path, id: &str) -> Result<Vec<u8>> {
     Ok(object.data.clone())
 }
 
+/// How many bytes the blob `id` holds, read from its header alone, or `None`
+/// where the bare repository `dir` holds no such blob.
+#[must_use]
+pub fn blob_len(dir: &Path, id: &str) -> Option<u64> {
+    let repo = open_bare(dir).ok()?;
+    let named = gix::ObjectId::from_hex(id.as_bytes()).ok()?;
+    let header = repo.find_header(named).ok()?;
+    (header.kind() == gix::object::Kind::Blob).then(|| header.size())
+}
+
 /// Delete one loose object file. Windows will not delete a file marked
 /// read-only, which is how a loose object is stored, so the mark is cleared
 /// where the first try is refused.
