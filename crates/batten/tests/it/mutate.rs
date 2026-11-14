@@ -128,10 +128,14 @@ use common::{stderr, stdout};
 /// (CLOUD-2160). The harness is suite-agnostic above `run_suite`: every verdict
 /// this file's decision table asserts is decided by `judge_row` over a
 /// `Selection`, which every arm produces.
-// Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
-// off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
-const TOY_GATE: &str = r#"#!/usr/bin/env bash
-#MISE description="Gate: the toy"
+///
+/// **TEXT, NEVER EXECUTED (CLOUD-2336).** `mutate` never runs a gate: a program
+/// gate is tracked text at `mise-tasks/<name>.sh`, mutated as text, and the
+/// sweep runs the declared suite. So the gate carries no shebang and is not
+/// executable; [`GATE_HELPER`] reads its `LIMIT=` line and decides as the
+/// script's `[ "$1" -le "$LIMIT" ]` did. Every other line stays, because rows
+/// below mutate `exit 0` and `set -uo pipefail` as text.
+const TOY_GATE: &str = r#"#MISE description="Gate: the toy"
 #MUTANT-SUITE tests/toy.rs
 set -uo pipefail
 LIMIT=10
@@ -139,17 +143,33 @@ LIMIT=10
 exit 0
 "#;
 
-/// The helper every toy tier opens with: run the staged gate named `@GATE@`
-/// with one argument and answer its exit code.
+/// The helper every toy tier opens with: read the staged gate named `@GATE@`
+/// and answer the exit code it declares for one argument — `1` over its
+/// `LIMIT=`, `0` otherwise. A composer's `DELEGATE=1` defers to the gate its
+/// `SIBLING=` names, refusing what that one refuses; any other `DELEGATE=`
+/// passes everything.
 ///
 /// `CARGO_MANIFEST_DIR` is the STAGED tree, because the sweep runs `cargo` there
-/// — so the tier executes the mutated gate, never the source tree's.
+/// — so the tier reads the mutated gate, never the source tree's. No gate is
+/// executed (CLOUD-2336): the gate is text, and so is the mutation.
 const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
-    std::process::Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
-        .arg(input)
-        .status()
-        .expect("run the toy gate")
-        .code()
+    judge("@GATE@", input)
+}
+
+fn judge(name: &str, input: &str) -> Option<i32> {
+    let text = std::fs::read_to_string(format!("{}/mise-tasks/{name}", env!("CARGO_MANIFEST_DIR")))
+        .expect("read the toy gate");
+    let value = |key: &str| text.lines().find_map(|line| line.strip_prefix(key)).map(str::trim);
+    if let Some(delegate) = value("DELEGATE=") {
+        let sibling = value("SIBLING=").expect("a composer names its sibling");
+        return Some(i32::from(delegate == "1" && judge(sibling, input) != Some(0)));
+    }
+    let limit: i64 = value("LIMIT=")
+        .expect("the toy gate declares LIMIT")
+        .parse()
+        .expect("LIMIT is a number");
+    let asked: i64 = input.parse().unwrap_or(0);
+    Some(i32::from(asked > limit))
 }
 "#;
 
@@ -184,15 +204,10 @@ fn cargo_package(root: &Path) {
     write(root, "src/lib.rs", "");
 }
 
-/// Write an executable program.
-fn write_program(root: &Path, path: &str, body: &str) {
-    common::write(root, path, body);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(root.join(path), fs::Permissions::from_mode(0o755))
-            .expect("make the toy gate executable");
-    }
+/// Install the test stand-in at `root/path`, driven by `rules`: every program a
+/// case needs on `PATH` or in a config, never authored shell (CLOUD-2336).
+fn stand_in(root: &Path, path: &str, rules: &serde_json::Value) {
+    common::stub_at(&root.join(path), rules);
 }
 
 /// Track everything written so far. The staged tree is the TRACKED set, so a
@@ -232,7 +247,7 @@ fn toy_suite(gate: &str, prefix: &str) -> String {
 
 /// A toy repository carrying one gate, one suite and the declared rows.
 ///
-/// Unix only: the gate is a bash program the tier executes.
+/// The gate is text the tier reads (CLOUD-2336), never a program it executes.
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
@@ -240,7 +255,7 @@ fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
         gate.push_str(row);
         gate.push('\n');
     }
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     write(&root, "tests/toy.rs", &toy_suite("toy.sh", ""));
     cargo_package(&root);
     track(&root);
@@ -413,7 +428,11 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
 fn a_mutation_whose_sed_times_out_is_not_unappliable() {
     let root = toy_repo("sed-hangs", &[CAUGHT]);
     let bin = common::scratch("mutate-sed-hangs-bin");
-    write_program(&bin, "sed", "#!/bin/sh\nexec sleep 3600\n");
+    stand_in(
+        &bin,
+        "sed",
+        &serde_json::json!([{ "steps": [{ "sleep": 3_600_000 }] }]),
+    );
     let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
@@ -739,7 +758,7 @@ fn hung_toy(name: &str, note: &Path) -> PathBuf {
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     let note = note.display().to_string();
     let hang = format!(
         "let held = std::process::Command::new(\"sleep\").arg(\"3600\").spawn().expect(\"spawn \
@@ -1187,7 +1206,7 @@ fn a_filter_selecting_one_case_of_a_single_case_suite_is_not_read_as_too_wide() 
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
         "tests/toy.rs",
@@ -1224,22 +1243,21 @@ fn the_tree_is_restored_between_rows_so_a_gate_is_judged_against_a_pristine_sibl
     );
     let mut sibling = TOY_GATE.replace("tests/toy.rs", "tests/sibling.rs");
     sibling.push_str("#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit\n");
-    write_program(&root, "mise-tasks/sibling.sh", &sibling);
+    write(&root, "mise-tasks/sibling.sh", &sibling);
 
     // The mutation is `|`-free and anchored on a line carrying no `$`, so the
     // three-field rule and sed's own metacharacters both stay out of the way.
-    let composer = r#"#!/usr/bin/env bash
-#MISE description="Gate: the composer"
+    // TEXT, NEVER EXECUTED (CLOUD-2336): `GATE_HELPER` reads `DELEGATE=` and
+    // `SIBLING=` and defers to the sibling's text as the script once ran it.
+    let composer = r#"#MISE description="Gate: the composer"
 #MUTANT-SUITE tests/composer.rs
 set -uo pipefail
 DELEGATE=1
-if [ "${DELEGATE}" = 1 ]; then
-	"$(dirname "$0")/sibling.sh" "${1:-0}" || exit 1
-fi
+SIBLING=sibling.sh
 exit 0
 #MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit
 "#;
-    write_program(&root, "mise-tasks/composer.sh", composer);
+    write(&root, "mise-tasks/composer.sh", composer);
     write(
         &root,
         "tests/composer.rs",
@@ -1276,7 +1294,7 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
         "tests/toy.rs",
@@ -1365,7 +1383,7 @@ fn a_gate_named_with_no_suite_is_reported_and_is_could_not_look() {
     // The gate declares `tests/toy.rs` and nothing writes it, so the declared
     // suite is absent — the predecessor's shape was the defaulted
     // `tests/toy.bats` absent, and both are one verdict about the same fact.
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     cargo_package(&root);
     track(&root);
     let (code, out, _) = sweep(&root, "toy");
@@ -1445,7 +1463,7 @@ fn two_gate_repo(name: &str) -> PathBuf {
     let gate = TOY_GATE
         .replace("the toy", "the other")
         .replace("tests/toy.rs", "tests/other.rs");
-    write_program(
+    write(
         &root,
         "mise-tasks/other.sh",
         &format!("{gate}{OTHER_SURVIVES}\n"),
@@ -1505,7 +1523,7 @@ fn answered(command: &mut common::Batten) -> (i32, String, String) {
 
 /// `toy`'s gate, edited: the one change most cases below judge.
 fn edit_toy(root: &Path) {
-    write_program(
+    write(
         root,
         "mise-tasks/toy.sh",
         &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
@@ -1556,7 +1574,7 @@ fn a_change_to_a_suite_sweeps_its_gate() {
 fn a_change_to_a_sources_second_suite_sweeps_its_gate() {
     let root = two_gate_repo("since-second-suite");
     let other = std::fs::read_to_string(root.join("mise-tasks/other.sh")).expect("other.sh");
-    write_program(
+    write(
         &root,
         "mise-tasks/other.sh",
         &format!("{other}#MUTANT-SUITE tests/extra.rs\n"),
@@ -1672,7 +1690,7 @@ fn a_change_whose_patch_moved_is_swept_again() {
         return;
     }
     let root = passed_change("pass-patch-moved");
-    write_program(
+    write(
         &root,
         "mise-tasks/toy.sh",
         &format!("{TOY_GATE}{CAUGHT}\n# edited twice\n"),
@@ -1913,8 +1931,10 @@ fn rust_gate_repo(name: &str) -> PathBuf {
 /// not reach the row, and says which runner judges the change.
 #[test]
 fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -1945,8 +1965,10 @@ fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
 /// included, so the same change reaches the row and its failure is reported.
 #[test]
 fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -1963,8 +1985,10 @@ fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
 /// installed.
 #[test]
 fn a_registered_runner_that_does_not_resolve_cannot_look() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -1996,10 +2020,14 @@ fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
         "batten.toml",
         "version = 1\n\n[mutate]\ncommand = [\"./mutscore.sh\", \"--fail-over\", \"0\"]\n",
     );
-    write_program(
+    // The stand-in records its argv, space-joined, in the directory it runs in.
+    stand_in(
         &root,
         "mutscore.sh",
-        &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\nexit {code}\n"),
+        &serde_json::json!([{ "steps": [
+            { "write": ["argv.txt", "{argv}\n"] },
+            { "exit": code },
+        ] }]),
     );
     let (status, out, err) = sweep_registered(
         &root,
@@ -2013,8 +2041,10 @@ fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
 
 #[test]
 fn a_command_runner_exit_zero_is_caught() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2026,15 +2056,17 @@ fn a_command_runner_exit_zero_is_caught() {
     );
     let argv = fs::read_to_string(root.join("argv.txt")).expect("the stub ran");
     assert_eq!(
-        argv, "--fail-over\n0\ncrates/batten/src/rusty.rs\n",
+        argv, "--fail-over 0 crates/batten/src/rusty.rs\n",
         "the declared argv, then the owned sources"
     );
 }
 
 #[test]
 fn a_command_runner_exit_two_is_survived() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2047,8 +2079,10 @@ fn a_command_runner_exit_two_is_survived() {
 /// never every mutant caught.
 #[test]
 fn a_command_runner_that_errors_cannot_look() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2062,8 +2096,10 @@ fn a_command_runner_that_errors_cannot_look() {
 
 #[test]
 fn a_command_entry_without_a_declared_argv_is_refused() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2084,8 +2120,10 @@ fn a_command_entry_without_a_declared_argv_is_refused() {
 /// runner off the Rust row it cannot apply.
 #[test]
 fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2107,8 +2145,10 @@ fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
 /// An id no runner carries is a usage error, never an empty registry.
 #[test]
 fn an_unknown_runner_is_refused() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
+    // UNIX ONLY, as it was while the toy gates were `sh` scripts. They are text
+    // a Rust helper reads now (CLOUD-2336); whether the sweep runs off unix is
+    // not this case's to establish. It compiles everywhere so the other target
+    // type-checks it.
     if !cfg!(unix) {
         return;
     }
@@ -2185,7 +2225,7 @@ fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
         "tests/toy.rs",
@@ -2470,27 +2510,67 @@ enum Mutant {
 /// The stub standing in for one harness. It replays the recorded output the
 /// staged subject's sentinel selects, minus the version line; for pytest the
 /// report is the `--junitxml` file rather than the stream.
+///
+/// The test stand-in's rules (CLOUD-2336): `subject` is the sentinel's file as
+/// the harness's working directory names it, `bin` holds the recordings
+/// [`stage_recordings`] wrote, and each rule after `prefix` holds only where
+/// `guard` (a path, relative to that directory) exists, when one is given.
 #[cfg(unix)]
-fn native_stub(native: &Native) -> String {
+fn native_stub(
+    native: &Native,
+    subject: &str,
+    bin: &Path,
+    prefix: Vec<serde_json::Value>,
+    guard: Option<&str>,
+) -> serde_json::Value {
+    stage_recordings(native, bin);
+    // pytest's report is the `--junitxml` file `mutate` always hands it; every
+    // other harness's is its stream.
+    let replay = |state: &str| {
+        let recording = bin.join(state);
+        let recording = recording.to_str().expect("utf-8").to_owned();
+        if native.arm == "pytest" {
+            serde_json::json!({ "run": ["cp", recording, "{argv-strip:--junitxml=}"] })
+        } else {
+            serde_json::json!({ "cat": recording })
+        }
+    };
+    let rule = |sentinel: Option<&str>, state: &str| {
+        let mut steps = vec![replay(state)];
+        if state != "pass" {
+            steps.push(serde_json::json!({ "exit": 1 }));
+        }
+        let mut rule = serde_json::json!({ "steps": steps });
+        if let Some(sentinel) = sentinel {
+            rule["file_contains"] = serde_json::json!([subject, format!("\n# {sentinel}\n")]);
+        }
+        if let Some(guard) = guard {
+            rule["file_exists"] = serde_json::json!(guard);
+        }
+        rule
+    };
+    let mut rules = prefix;
+    rules.extend([
+        rule(Some("BREAK"), "error"),
+        rule(Some("KILL"), "fail"),
+        rule(None, "pass"),
+    ]);
+    serde_json::Value::Array(rules)
+}
+
+/// Each recording `native` replays, minus its version line — what the shell
+/// stub's `tail -n +2` printed — written into `bin` under its state's name.
+#[cfg(unix)]
+fn stage_recordings(native: &Native, bin: &Path) {
     let fixtures = common::at_root("crates/batten/tests/fixtures/mutate").join(native.fixtures);
-    format!(
-        "#!/bin/sh\n\
-         state=pass\n\
-         if grep -q '^# KILL$' '{subject}'; then state=fail; fi\n\
-         if grep -q '^# BREAK$' '{subject}'; then state=error; fi\n\
-         report=''\n\
-         for arg in \"$@\"; do\n\
-         \x20 case $arg in --junitxml=*) report=${{arg#--junitxml=}} ;; esac\n\
-         done\n\
-         if [ -n \"$report\" ]; then\n\
-         \x20 tail -n +2 '{fixtures}'/\"$state\" > \"$report\"\n\
-         else\n\
-         \x20 tail -n +2 '{fixtures}'/\"$state\"\n\
-         fi\n\
-         [ \"$state\" = pass ]\n",
-        subject = native.subject,
-        fixtures = fixtures.display(),
-    )
+    fs::create_dir_all(bin).expect("make the stub bin");
+    for state in ["pass", "fail", "error"] {
+        let Ok(recording) = fs::read_to_string(fixtures.join(state)) else {
+            continue;
+        };
+        let body = recording.split_once('\n').map_or("", |(_, rest)| rest);
+        fs::write(bin.join(state), body).expect("stage a recording");
+    }
 }
 
 /// A repository whose gate is `native`'s subject, declaring one row, with the
@@ -2518,7 +2598,8 @@ fn native_repo(native: &Native, mutant: Mutant, case: &str) -> (PathBuf, PathBuf
     write(&root, native.suite, native.suite_body);
     track(&root);
     let bin = root.join(".stub-bin");
-    write_program(&bin, native.arm, &native_stub(native));
+    let rules = native_stub(native, native.subject, &bin, Vec::new(), None);
+    stand_in(&bin, native.arm, &rules);
     (root, bin)
 }
 
@@ -2609,18 +2690,31 @@ fn a_tofu_suite_is_initialised_before_it_runs() {
         ..TOFU
     };
     let (root, bin) = native_repo(&NESTED, Mutant::Kill, "initialised");
-    let stub = native_stub(&NESTED).replacen(
-        "state=pass\n",
-        "case \"$1\" in init) [ \"$2\" = -backend=false ] && mkdir -p .terraform; exit 0 ;; esac\n\
-         state=pass\n\
-         if [ ! -d .terraform ]; then tail -n +2 \"$(dirname \"$0\")/error\"; exit 1; fi\n",
-        1,
-    )
-    // The stub runs in the module's root, where the subject is `main.tf`.
-    .replace("'infra/main.tf'", "'main.tf'");
-    write_program(&bin, NESTED.arm, &stub);
-    let fixtures = common::at_root("crates/batten/tests/fixtures/mutate/tofu");
-    fs::copy(fixtures.join("error"), bin.join("error")).expect("stage the recorded error");
+    // `init -backend=false` makes `.terraform/`, any other `init` only passes,
+    // and every `test` rule holds only where `.terraform/` exists — past them,
+    // the recorded error. The stub runs in the module's root, where the subject
+    // is `main.tf`.
+    let mut rules = native_stub(
+        &NESTED,
+        "main.tf",
+        &bin,
+        vec![
+            serde_json::json!({
+                "argv_prefix": ["init", "-backend=false"],
+                "steps": [{ "mkdir": ".terraform" }],
+            }),
+            serde_json::json!({ "argv_prefix": ["init"], "steps": [] }),
+        ],
+        Some(".terraform"),
+    );
+    rules
+        .as_array_mut()
+        .expect("the rules are a list")
+        .push(serde_json::json!({ "steps": [
+            { "cat": bin.join("error").to_str().expect("utf-8") },
+            { "exit": 1 },
+        ] }));
+    stand_in(&bin, NESTED.arm, &rules);
     let (code, out, err) = sweep_with(&root, NESTED.subject, &bin);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
@@ -2807,10 +2901,10 @@ fn an_errored_pytest_run_is_could_not_look() {
 /// A stub that records it was invoked, for the cases asserting no runner ran.
 #[cfg(unix)]
 fn tripwire(bin: &Path, program: &str, marker: &Path) {
-    write_program(
+    stand_in(
         bin,
         program,
-        &format!("#!/bin/sh\n: > '{}'\nexit 0\n", marker.display()),
+        &serde_json::json!([{ "steps": [{ "write": [marker.to_str().expect("utf-8"), ""] }] }]),
     );
 }
 
@@ -2900,10 +2994,12 @@ fn a_harness_missing_from_path_did_not_run_and_the_sweep_still_reports() {
 fn census_repo(name: &str, tasks: &[(&str, &str)]) -> PathBuf {
     let root = toy(name);
     for (task, description) in tasks {
-        write_program(
+        // Text the census reads, never executed: no case asserts on a shebang,
+        // so none is written (CLOUD-2336).
+        write(
             &root,
             &format!("mise-tasks/{task}.sh"),
-            &format!("#!/usr/bin/env bash\n#MISE description=\"{description}\"\nexit 0\n"),
+            &format!("#MISE description=\"{description}\"\nexit 0\n"),
         );
     }
     track(&root);
@@ -3058,16 +3154,16 @@ fn a_row_that_cannot_apply_is_refused_by_the_census() {
 #[test]
 fn a_filed_exemption_is_a_closed_census_not_a_gap() {
     let root = toy("census-exempt");
-    write_program(
+    write(
         &root,
         "mise-tasks/alpha-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT CLOUD-931|its \
+        "#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT CLOUD-931|its \
          suite runs no arm that can go red\nexit 0\n",
     );
-    write_program(
+    write(
         &root,
         "mise-tasks/beta-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something else\"\nexit 0\n",
+        "#MISE description=\"Gate: something else\"\nexit 0\n",
     );
     track(&root);
     let (code, out, err) = census(&root, "beta-check");
@@ -3078,10 +3174,10 @@ fn a_filed_exemption_is_a_closed_census_not_a_gap() {
 #[test]
 fn an_exemption_naming_no_issue_is_unfiled_which_is_the_whole_difference_from_a_todo() {
     let root = toy("census-unfiled-key");
-    write_program(
+    write(
         &root,
         "mise-tasks/alpha-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT later|a \
+        "#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT later|a \
          reason\nexit 0\n",
     );
     track(&root);
@@ -3096,10 +3192,10 @@ fn an_exemption_naming_no_issue_is_unfiled_which_is_the_whole_difference_from_a_
 #[test]
 fn an_exemption_with_no_reason_is_unfiled_as_well() {
     let root = toy("census-unfiled-reason");
-    write_program(
+    write(
         &root,
         "mise-tasks/alpha-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT \
+        "#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT \
          CLOUD-931\nexit 0\n",
     );
     track(&root);
@@ -3111,10 +3207,10 @@ fn an_exemption_with_no_reason_is_unfiled_as_well() {
 #[test]
 fn declared_and_exempt_is_refused_because_the_reason_would_be_a_dead_letter() {
     let root = toy("census-both");
-    write_program(
+    write(
         &root,
         "mise-tasks/alpha-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT CLOUD-931|a \
+        "#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT CLOUD-931|a \
          reason\nexit 0\n",
     );
     track(&root);
@@ -3149,10 +3245,10 @@ fn an_unset_set_is_could_not_look_never_a_closed_census() {
 #[test]
 fn output_is_pointer_only_so_the_exemptions_reason_never_reaches_the_log() {
     let root = toy("census-pointer");
-    write_program(
+    write(
         &root,
         "mise-tasks/alpha-check.sh",
-        "#!/usr/bin/env bash\n#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT \
+        "#MISE description=\"Gate: something\"\n#MUTANT-EXEMPT \
          CLOUD-931|SECRETPROSE\nexit 0\n",
     );
     track(&root);

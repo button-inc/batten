@@ -362,14 +362,10 @@ fn committed_config_fixture_git(dir: &std::path::Path) -> PathBuf {
     let home = dir.join(".batten-test-home");
     let bin = fixture_state_dir(dir, &home).join("provision/ripsecrets/0.1.11/bin");
     fs::create_dir_all(&bin).expect("create the fixture provision cache");
-    let scanner = bin.join("ripsecrets");
-    fs::write(&scanner, "#!/bin/sh\nexit 0\n").expect("write the stub scanner");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&scanner, fs::Permissions::from_mode(0o755))
-            .expect("mark the stub scanner executable");
-    }
+    common::stub_at(
+        &bin.join("ripsecrets"),
+        &serde_json::json!([{ "steps": [] }]),
+    );
     home
 }
 
@@ -4794,21 +4790,17 @@ fn captures_in(home: &std::path::Path) -> Vec<String> {
     found
 }
 
-/// A `#!/bin/sh` fixture child, executable, that runs `body`.
+/// A fixture child that runs `steps`: the test stand-in, never authored shell
+/// (CLOUD-2336).
 ///
-/// The `tests/doctor.rs` idiom. Unix-only: `PermissionsExt` is the only portable
-/// way to set the mode, so these cases skip on Windows rather than fail there
-/// (CLOUD-113 owns the real matrix).
+/// Unix-only, as the cases using it always were (CLOUD-113 owns the real
+/// matrix).
 #[cfg(unix)]
-fn child_script(name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
+fn child_script(name: &str, steps: &serde_json::Value) -> PathBuf {
     let dir = common::scratch_repo(name);
     fs::create_dir_all(&dir).expect("create dir");
-    let script = dir.join("child.sh");
-    fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write child");
-    let mut mode = fs::metadata(&script).expect("stat child").permissions();
-    mode.set_mode(0o755);
-    fs::set_permissions(&script, mode).expect("chmod child");
+    let script = dir.join("child");
+    common::stub_at(&script, &serde_json::json!([{ "steps": steps }]));
     script
 }
 
@@ -4818,7 +4810,10 @@ fn exec_passes_through_a_code_outside_the_table() {
     // The exception, stated as a test so it cannot be mistaken for a bug. §7's
     // table is 0/1/2/3; a wrapped command's code is not Batten's to choose, and
     // reporting `7` as anything else would make the wrapper lie.
-    let script = child_script("exec-codes", "exit \"$1\"");
+    let script = child_script(
+        "exec-codes",
+        &serde_json::json!([{ "exit-with": "{argv:1}" }]),
+    );
     for code in [0, 1, 2, 3, 7, 42, 255] {
         let output = batten()
             .args([
@@ -4854,7 +4849,7 @@ fn an_exec_two_is_the_childs_verdict_not_battens() {
     // the child, and no mediation path can reach it: `hook` adjudicates a mediated
     // call, and `exec` is not reachable from `hook`. Pinned because a host reading
     // codes alone could otherwise take a wrapped command's `2` for a deny.
-    let script = child_script("exec-two", "exit 2");
+    let script = child_script("exec-two", &serde_json::json!([{ "exit": 2 }]));
     let (output, _) = exec_cmd(
         "exec-two-home",
         &[
@@ -4878,7 +4873,10 @@ fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
     // The hazard the §3 ladder created: without `allow_hyphen_values` a child's
     // `-v` is parsed as Batten's verbosity rung, so the flag the caller meant for
     // `cargo` vanishes and Batten gets louder for no reason anyone typed.
-    let script = child_script("exec-argv", r#"printf '%s\n' "$@""#);
+    let script = child_script(
+        "exec-argv",
+        &serde_json::json!([{ "exec": ["printf", "%s\n", "{argv-from:1}"] }]),
+    );
     let output = batten()
         .args([
             "exec",
@@ -4917,7 +4915,10 @@ fn exec_inherits_both_child_streams_unchanged() {
     // nothing of Batten's interleaved — is the one the module docs call the test
     // that governs this design. What changed is that it must now be asked for;
     // deleting the case would have retired the property along with the default.
-    let script = child_script("exec-streams", "echo out; echo err >&2");
+    let script = child_script(
+        "exec-streams",
+        &serde_json::json!([{ "stdout": "out\n" }, { "stderr": "err\n" }]),
+    );
     let (output, _) = exec_cmd(
         "exec-streams-home",
         &[
@@ -4941,7 +4942,7 @@ fn the_default_charges_the_caller_a_record_rather_than_the_childs_bytes() {
     // record that replaces them must name the bytes without carrying them.
     let script = child_script(
         "exec-tokenkind",
-        "echo Q7v-stdout-x9nK; echo Q7v-stderr-x9nK >&2",
+        &serde_json::json!([{ "stdout": "Q7v-stdout-x9nK\n" }, { "stderr": "Q7v-stderr-x9nK\n" }]),
     );
     let (output, home) = exec_cmd(
         "exec-tokenkind-home",
@@ -4976,7 +4977,10 @@ fn silent_suppresses_both_speakers_and_quiet_only_battens() {
     // mise's `style_only()` distinction, which the issue is explicit must not be
     // collapsed into one key: suppressing the TOOL's metadata is a different
     // question from choosing a stream style, and `silent` answers both.
-    let script = child_script("exec-suppression", "echo Q7v-said-x9nK");
+    let script = child_script(
+        "exec-suppression",
+        &serde_json::json!([{ "stdout": "Q7v-said-x9nK\n" }]),
+    );
 
     let (quiet, _) = exec_cmd(
         "exec-quiet-home",
@@ -5018,7 +5022,10 @@ fn the_prefixed_styles_dress_every_line_including_across_chunks() {
     // A pipe splits wherever it likes, so the prefix has to be a function of
     // where the last byte left the line rather than of where a read happened to
     // end. Two lines is the smallest case that can tell those apart.
-    let script = child_script("exec-prefix", "printf 'one\ntwo\n'");
+    let script = child_script(
+        "exec-prefix",
+        &serde_json::json!([{ "stdout": "one\ntwo\n" }]),
+    );
     let program = script.to_str().expect("utf-8").to_owned();
     for style in ["prefix", "replacing", "timed"] {
         let (output, _) = exec_cmd(
@@ -5040,7 +5047,12 @@ fn keep_order_lays_each_stream_down_whole() {
     // stream appears WHOLE, so an interleaving is the thing it exists to refuse.
     let script = child_script(
         "exec-keep-order",
-        "echo out-1; echo err-1 >&2; echo out-2; echo err-2 >&2",
+        &serde_json::json!([
+            { "stdout": "out-1\n" },
+            { "stderr": "err-1\n" },
+            { "stdout": "out-2\n" },
+            { "stderr": "err-2\n" },
+        ]),
     );
     let (output, _) = exec_cmd(
         "exec-keep-order-home",
@@ -5067,7 +5079,10 @@ fn every_format_is_byte_stable_over_the_same_run() {
     // clock or a duration would pass any assertion about its fields and still
     // print differently twice. `timed` is in the sweep on purpose — it is the
     // style whose name promises the thing byte-stability forbids.
-    let script = child_script("exec-stable", "echo Q7v-out-x9nK; echo Q7v-err-x9nK >&2");
+    let script = child_script(
+        "exec-stable",
+        &serde_json::json!([{ "stdout": "Q7v-out-x9nK\n" }, { "stderr": "Q7v-err-x9nK\n" }]),
+    );
     let program = script.to_str().expect("utf-8").to_owned();
     for format in ["human", "json", "jsonl"] {
         for style in ["interleave", "timed", "keep-order"] {
@@ -5099,7 +5114,10 @@ fn the_record_survives_a_child_that_failed() {
     // emitted before it — a caller debugging a failure is exactly the caller who
     // needs the handle, and losing it there would make the default useless in
     // the one case it matters most.
-    let script = child_script("exec-record-fail", "echo nope >&2; exit 7");
+    let script = child_script(
+        "exec-record-fail",
+        &serde_json::json!([{ "stderr": "nope\n" }, { "exit": 7 }]),
+    );
     let (output, _) = exec_cmd(
         "exec-record-fail-home",
         &["exec", "--", script.to_str().expect("utf-8")],
@@ -5120,7 +5138,7 @@ fn no_exec_failure_path_can_deny() {
         &["exec", "--", "batten-no-such-program-exists"],
         // The separator omitted: `--` is mandatory precisely so the ladder scan
         // can tell Batten's argv from the child's.
-        &["exec", "sh", "-c", "true"],
+        &["exec", "true"],
     ];
     for args in cases {
         let (output, _) = exec_cmd("exec-failopen-home", args);
@@ -5176,7 +5194,10 @@ fn a_captured_run_still_hands_the_caller_the_childs_own_bytes() {
     // wrapped command's caller sees. This is the same assertion
     // `exec_inherits_both_child_streams_unchanged` makes, restated here because it
     // is what the capture must not break.
-    let script = child_script("capture-tee", "echo out; echo err >&2; exit 5");
+    let script = child_script(
+        "capture-tee",
+        &serde_json::json!([{ "stdout": "out\n" }, { "stderr": "err\n" }, { "exit": 5 }]),
+    );
     let (output, home) = exec_cmd(
         "capture-tee-home",
         &[
@@ -5208,7 +5229,10 @@ fn a_capture_is_content_addressed_so_an_identical_rerun_adds_nothing() {
     // Acceptance: "re-running over identical child output yields a byte-identical
     // capture and digest." Content addressing makes that structural rather than a
     // promise — the digest IS the key, so identical bytes are one record.
-    let script = child_script("capture-stable", "echo same");
+    let script = child_script(
+        "capture-stable",
+        &serde_json::json!([{ "stdout": "same\n" }]),
+    );
     let argv = ["exec", "--", script.to_str().expect("utf-8")];
 
     let home = scratch("capture-stable-home");
@@ -5242,8 +5266,11 @@ fn different_output_is_a_different_capture() {
     // eight bytes, so the old name put both scripts in one fixture directory
     // that `child_script` wipes on entry. Sequentially it happened to work; it is
     // a latent collision of exactly the kind CLOUD-412 was chasing.
-    for (index, body) in ["echo one", "echo two"].iter().enumerate() {
-        let script = child_script(&format!("capture-differs-{index}"), body);
+    for (index, line) in ["one\n", "two\n"].iter().enumerate() {
+        let script = child_script(
+            &format!("capture-differs-{index}"),
+            &serde_json::json!([{ "stdout": line }]),
+        );
         batten()
             .args(["exec", "--", script.to_str().expect("utf-8")])
             .state_home(&home)
@@ -5267,7 +5294,7 @@ fn an_empty_stream_is_still_captured() {
     // "The command said nothing" is an answer, and it must be distinguishable
     // from a run nobody captured — otherwise a consumer cannot tell a silent
     // success from a missing record.
-    let script = child_script("capture-empty", "true");
+    let script = child_script("capture-empty", &serde_json::json!([]));
     let (output, home) = exec_cmd(
         "capture-empty-home",
         &["exec", "--", script.to_str().expect("utf-8")],
@@ -5360,14 +5387,23 @@ fn exec_pattern_repo(name: &str, patterns: &str) -> (PathBuf, PathBuf) {
 const ONE_PATTERN: &str = "\n[[exec_pattern]]\nid = \"lying-zero\"\n                           pattern = \"warning[duplicate]\"\nstream = \"both\"\n                           reason = \"configure the tool to fail instead\"\n";
 
 #[cfg(unix)]
-fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Output {
+fn run_exec(repo: &std::path::Path, home: &std::path::Path, steps: &serde_json::Value) -> Output {
+    // The child is the test stand-in running `steps`, never authored shell
+    // (CLOUD-2336).
+    let child = home.join("child");
+    common::stub_at(&child, &serde_json::json!([{ "steps": steps }]));
     // `--tee --style quiet` keeps these cases about the OUTPUT PREDICATE: the
     // child's bytes on the caller's streams, and nothing of Batten's except the
     // refusal a match produces. CLOUD-429's record would otherwise be the only
     // thing on stderr in the clean case and a second thing in the matched one.
     batten()
         .args([
-            "exec", "--tee", "--style", "quiet", "--", "sh", "-c", script,
+            "exec",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            child.to_str().expect("utf-8"),
         ])
         .current_dir(repo)
         .state_home(home)
@@ -5380,7 +5416,11 @@ fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Out
 #[test]
 fn an_exit_zero_child_whose_output_matches_is_promoted_to_a_failure() {
     let (repo, home) = exec_pattern_repo("exec-pred-match", ONE_PATTERN);
-    let output = run_exec(&repo, &home, "echo 'warning[duplicate] serde'");
+    let output = run_exec(
+        &repo,
+        &home,
+        &serde_json::json!([{ "stdout": "warning[duplicate] serde\n" }]),
+    );
     assert_eq!(output.status.code(), Some(1));
     let report = String::from_utf8_lossy(&output.stderr);
     // Pointer-only: stream, line, and the pattern id — the same `path:line rule-id`
@@ -5398,7 +5438,11 @@ fn the_refusal_never_echoes_the_line_that_matched() {
     // than stylistic. The child's own stdout still carries it — that is the
     // child's channel — but Batten's report must not repeat it.
     let (repo, home) = exec_pattern_repo("exec-pred-pointer", ONE_PATTERN);
-    let output = run_exec(&repo, &home, "echo 'warning[duplicate] SUPERSECRET'");
+    let output = run_exec(
+        &repo,
+        &home,
+        &serde_json::json!([{ "stdout": "warning[duplicate] SUPERSECRET\n" }]),
+    );
     assert_eq!(output.status.code(), Some(1));
     assert!(
         !String::from_utf8_lossy(&output.stderr).contains("SUPERSECRET"),
@@ -5410,7 +5454,11 @@ fn the_refusal_never_echoes_the_line_that_matched() {
 #[test]
 fn an_exit_zero_child_with_no_match_is_still_clean() {
     let (repo, home) = exec_pattern_repo("exec-pred-clean", ONE_PATTERN);
-    let output = run_exec(&repo, &home, "echo 'all good'");
+    let output = run_exec(
+        &repo,
+        &home,
+        &serde_json::json!([{ "stdout": "all good\n" }]),
+    );
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "all good\n");
     assert!(output.stderr.is_empty(), "a clean run says nothing");
@@ -5423,7 +5471,11 @@ fn batten_only_adds_failure_so_a_non_zero_child_is_untouched() {
     // diagnose would make the wrapper's verdict unreadable. The child's own code
     // survives even though its output matches.
     let (repo, home) = exec_pattern_repo("exec-pred-nonzero", ONE_PATTERN);
-    let output = run_exec(&repo, &home, "echo 'warning[duplicate] x'; exit 7");
+    let output = run_exec(
+        &repo,
+        &home,
+        &serde_json::json!([{ "stdout": "warning[duplicate] x\n" }, { "exit": 7 }]),
+    );
     assert_eq!(
         output.status.code(),
         Some(7),
@@ -5437,12 +5489,16 @@ fn a_pattern_scoped_to_one_stream_does_not_fire_on_the_other() {
     let stderr_only = "\n[[exec_pattern]]\nid = \"err-only\"\npattern = \"boom\"\n                       stream = \"stderr\"\nreason = \"look at stderr\"\n";
     let (repo, home) = exec_pattern_repo("exec-pred-stream", stderr_only);
     assert_eq!(
-        run_exec(&repo, &home, "echo boom").status.code(),
+        run_exec(&repo, &home, &serde_json::json!([{ "stdout": "boom\n" }]))
+            .status
+            .code(),
         Some(0),
         "a stderr-scoped pattern must ignore stdout"
     );
     assert_eq!(
-        run_exec(&repo, &home, "echo boom >&2").status.code(),
+        run_exec(&repo, &home, &serde_json::json!([{ "stderr": "boom\n" }]))
+            .status
+            .code(),
         Some(1),
         "and must fire on stderr"
     );
@@ -5455,7 +5511,7 @@ fn every_match_is_reported_not_only_the_first() {
     let output = run_exec(
         &repo,
         &home,
-        "echo 'warning[duplicate] a'; echo ok; echo 'warning[duplicate] b'",
+        &serde_json::json!([{ "stdout": "warning[duplicate] a\nok\nwarning[duplicate] b\n" }]),
     );
     assert_eq!(output.status.code(), Some(1));
     let report = String::from_utf8_lossy(&output.stderr);
@@ -5478,7 +5534,7 @@ fn exec_still_runs_where_no_authority_is_configured() {
     // `.git` resolved to this checkout's authority — the opposite of the subject.
     let elsewhere = common::scratch_repo("exec-pred-elsewhere");
     let output = batten()
-        .args(["exec", "--tee", "--", "sh", "-c", "echo fine"])
+        .args(["exec", "--tee", "--", "printf", "%s\n", "fine"])
         .current_dir(&elsewhere)
         .state_home(&home)
         .output()
@@ -5494,7 +5550,7 @@ fn an_unreadable_authority_stops_exec_rather_than_silently_ungating_it() {
     // table nobody could parse is a gate that silently did not run.
     let (repo, home) = exec_pattern_repo("exec-pred-broken", ONE_PATTERN);
     fs::write(repo.join("batten.toml"), "version = 1\nbogus = true\n").expect("break the config");
-    let output = run_exec(&repo, &home, "echo fine");
+    let output = run_exec(&repo, &home, &serde_json::json!([{ "stdout": "fine\n" }]));
     assert_eq!(output.status.code(), Some(1));
     assert_ne!(
         output.status.code(),
@@ -5517,9 +5573,13 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
     )
     .expect("write local");
     assert_eq!(
-        run_exec(&repo, &home, "echo 'deprecated api'")
-            .status
-            .code(),
+        run_exec(
+            &repo,
+            &home,
+            &serde_json::json!([{ "stdout": "deprecated api\n" }])
+        )
+        .status
+        .code(),
         Some(1),
         "a locally added pattern is a gate the run applies"
     );
@@ -5529,7 +5589,7 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
         "version = 1\n\n[[exec_pattern]]\nid = \"lying-zero\"\npattern = \"never\"\n         stream = \"both\"\nreason = \"weaken it\"\n",
     )
     .expect("write local");
-    let output = run_exec(&repo, &home, "echo fine");
+    let output = run_exec(&repo, &home, &serde_json::json!([{ "stdout": "fine\n" }]));
     assert_eq!(output.status.code(), Some(1), "redefining is refused");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
@@ -10021,10 +10081,16 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
     // Acceptance (a). Observed through the command's own side effect in a temp
     // dir, because `fire` returns nothing there is no return value to inspect —
     // which is the design, not a limitation of the test.
+    // The stand-in writes its first argument to `fired.txt` in the directory the
+    // action runs in, which is what the shell fixture's `> fired.txt` did.
     let dir = action_repo(
         "action-fires",
         "task-completed",
-        r#"["sh", "-c", "printf %s \"$1\" > fired.txt", "sh", "{event}"]"#,
+        &stand_in_run(
+            "action-fires",
+            &serde_json::json!([{ "write": ["fired.txt", "{argv:1}"] }]),
+            &["{event}"],
+        ),
     );
     let output = run_hook_in(&dir, "claude-code", &claude_event_payload("Stop"));
 
@@ -10054,7 +10120,7 @@ fn a_host_without_the_capability_fires_nothing_and_still_answers() {
     let dir = action_repo(
         "action-uncapable",
         "task-completed",
-        r#"["sh", "-c", "touch fired.txt"]"#,
+        r#"["touch", "fired.txt"]"#,
     );
     let output = run_hook_in(
         &dir,
@@ -10099,7 +10165,11 @@ fn an_actions_output_never_reaches_either_channel() {
     let dir = action_repo(
         "action-quiet",
         "task-completed",
-        r#"["sh", "-c", "echo SECRET-ON-STDOUT; echo SECRET-ON-STDERR >&2"]"#,
+        &stand_in_run(
+            "action-quiet",
+            &serde_json::json!([{ "stdout": "SECRET-ON-STDOUT\n" }, { "stderr": "SECRET-ON-STDERR\n" }]),
+            &[],
+        ),
     );
     let output = run_hook_in(
         &dir,
@@ -10503,6 +10573,18 @@ fn handler_repo(name: &str, event: &str, run: &str) -> PathBuf {
         .build()
 }
 
+/// A `run` array (TOML) that dispatches the test stand-in running `steps`, so a
+/// handler or action that must do more than exit is never authored shell
+/// (CLOUD-2336). `args` follow the program.
+fn stand_in_run(name: &str, steps: &serde_json::Value, args: &[&str]) -> String {
+    let program = scratch(&format!("{name}-stand-in")).join("handler");
+    common::stub_at(&program, &serde_json::json!([{ "steps": steps }]));
+    let mut run = vec![program.to_str().expect("utf-8").to_owned()];
+    run.extend(args.iter().map(|arg| (*arg).to_owned()));
+    // A JSON array of plain strings is a TOML inline array.
+    serde_json::to_string(&run).expect("an argv serialises")
+}
+
 /// A Claude Code `UserPromptSubmit` payload.
 fn prompt_payload() -> String {
     serde_json::json!({ "hook_event_name": "UserPromptSubmit", "session_id": "h-1" }).to_string()
@@ -10550,7 +10632,11 @@ fn a_matcher_keeps_a_pre_tool_handler_off_the_calls_it_does_not_name() {
     let dir = narrowed_handler_repo(
         "handler-matcher",
         "^mcp__",
-        r#"["sh", "-c", "echo dispatched >&2; exit 2"]"#,
+        &stand_in_run(
+            "handler-matcher",
+            &serde_json::json!([{ "stderr": "dispatched\n" }, { "exit": 2 }]),
+            &[],
+        ),
     );
 
     let named = run_hook_in(
@@ -10583,7 +10669,11 @@ fn a_handler_with_no_matcher_still_runs_for_every_call_at_its_event() {
     let dir = handler_repo(
         "handler-unnarrowed",
         "pre-tool",
-        r#"["sh", "-c", "echo dispatched >&2; exit 2"]"#,
+        &stand_in_run(
+            "handler-unnarrowed",
+            &serde_json::json!([{ "stderr": "dispatched\n" }, { "exit": 2 }]),
+            &[],
+        ),
     );
     for tool in ["Bash", "mcp__x__get_session"] {
         let output = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool));
@@ -10603,7 +10693,11 @@ fn a_handler_that_refuses_reaches_the_host_channel_the_engine_uses() {
     let dir = handler_repo(
         "handler-deny",
         "user-prompt-submit",
-        r#"["sh", "-c", "echo refused-by-handler >&2; exit 2"]"#,
+        &stand_in_run(
+            "handler-deny",
+            &serde_json::json!([{ "stderr": "refused-by-handler\n" }, { "exit": 2 }]),
+            &[],
+        ),
     );
     let output = run_hook_in(&dir, "claude-code", &prompt_payload());
     let document = common::stdout(&output);
@@ -10644,7 +10738,11 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
     let dir = handler_repo(
         "handler-silent-deny",
         "post-tool-batch",
-        r#"["sh", "-c", "exit 2"]"#,
+        &stand_in_run(
+            "handler-silent-deny",
+            &serde_json::json!([{ "exit": 2 }]),
+            &[],
+        ),
     );
     let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
@@ -10665,7 +10763,7 @@ fn a_handler_that_exits_zero_with_stdout_advises_rather_than_deciding() {
     let dir = handler_repo(
         "handler-advise",
         "post-tool-batch",
-        r#"["sh", "-c", "echo a-pointer-line"]"#,
+        r#"["printf", '%s\n', "a-pointer-line"]"#,
     );
     let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
@@ -10695,7 +10793,7 @@ fn an_advisory_at_an_event_with_no_channel_reaches_the_operator_not_the_model() 
     let dir = handler_repo(
         "handler-no-channel",
         "user-prompt-submit",
-        r#"["sh", "-c", "echo a-pointer-line"]"#,
+        r#"["printf", '%s\n', "a-pointer-line"]"#,
     );
     let output = run_hook_in(&dir, "claude-code", &prompt_payload());
     assert_eq!(output.status.code(), Some(0));
@@ -10718,21 +10816,23 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
     // by the host. Through the door nothing forwards them, so the author is told
     // rather than left believing they decided something.
     //
-    // `printf` RATHER THAN `echo`, and the difference is the whole test. `sh`
-    // strips the inner quotes from `echo {"hookSpecificOutput":1}`, so the
+    // The EXACT BYTES, and the difference is the whole test. A shell once
+    // stripped the inner quotes from `echo {"hookSpecificOutput":1}`, so the
     // fixture emitted `{hookSpecificOutput:1}` — detected, because
     // `impersonates_host` matches a leading brace plus a bare key substring, but
     // it meant the NEGATIVE assertion below named a quoted string the handler
     // could never produce, and an assertion that cannot fail is not one
     // (CLOUD-251, raised in review on #632).
     //
-    // So the handler now emits a document the host would really obey, and the
-    // absence check names the bytes it actually wrote. Registered directly, these
-    // bytes decide the call; through the door nothing forwards them.
+    // So the handler emits a document the host would really obey — `printf`'s
+    // argument is a TOML literal string, with no shell between it and the bytes —
+    // and the absence check names the bytes it actually wrote. Registered
+    // directly, these bytes decide the call; through the door nothing forwards
+    // them.
     let dir = handler_repo(
         "handler-impersonates",
         "post-tool-batch",
-        r#"["sh", "-c", 'printf %s "{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"}}"']"#,
+        r#"["printf", "%s", '{"hookSpecificOutput":{"permissionDecision":"deny"}}']"#,
     );
     let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
@@ -10777,7 +10877,7 @@ fn an_event_no_handler_selects_for_dispatches_nothing() {
     let dir = handler_repo(
         "handler-narrowed",
         "user-prompt-submit",
-        r#"["sh", "-c", "echo should-not-run"]"#,
+        r#"["printf", '%s\n', "should-not-run"]"#,
     );
     let output = run_hook_in(&dir, "claude-code", &stop_payload());
     assert_eq!(output.status.code(), Some(0));
@@ -11168,13 +11268,22 @@ fn capture_repo(name: &str) -> (PathBuf, PathBuf) {
 /// Run the counter child, appending a tick per execution.
 #[cfg(unix)]
 fn run_counted(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
-    let script = format!(
-        "printf 'x' >>{}/runs; printf 'alpha\\nbravo warning here\\ncharlie\\ndelta\\n'",
-        repo.display()
+    // The test stand-in, beside the repo rather than in it, so the counter child
+    // is never authored shell (CLOUD-2336).
+    let child = repo
+        .parent()
+        .expect("the repo has a parent")
+        .join("counter");
+    common::stub_at(
+        &child,
+        &serde_json::json!([{ "steps": [
+            { "append": [repo.join("runs").to_str().expect("utf-8"), "x"] },
+            { "stdout": "alpha\nbravo warning here\ncharlie\ndelta\n" },
+        ] }]),
     );
     batten()
         .args(args)
-        .args(["--", "sh", "-c", &script])
+        .args(["--", child.to_str().expect("utf-8")])
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
@@ -11449,7 +11558,7 @@ fn the_navigation_verbs_declare_themselves_read_in_the_spec() {
 fn run_raw_bytes(repo: &std::path::Path, home: &std::path::Path, escaped: &str) -> Output {
     batten()
         .args(["exec", "--capture-only"])
-        .args(["--", "sh", "-c", &format!("printf '{escaped}'")])
+        .args(["--", "printf", escaped])
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")

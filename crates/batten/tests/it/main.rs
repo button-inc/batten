@@ -446,7 +446,6 @@ mod stop_posture;
 mod stop_watchdog;
 mod store_lifecycle;
 mod stub;
-mod stub_portability;
 mod submodule;
 mod surface;
 mod sweep_exit_table;

@@ -5017,10 +5017,6 @@ scope = "tree"
 # leading spaces into whatever it is spliced into (CLOUD-2055, measured on
 # #1056's macOS leg: `crate       1` where `crate1` was meant). Piping through a
 # trim is the portable spelling, and the `[^|)]` is what admits it.
-#
-# `stub_portability.rs` holds the test suite's shell stubs to every `shell *
-# unsafe` row, this one included, because the shell those rows governed moved
-# out of `mise-tasks/` into test string literals.
 [[rule]]
 id = "shell count unsafe"
 no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"

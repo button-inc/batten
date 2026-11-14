@@ -424,8 +424,7 @@ provably reach the value the code reads, the run measured nothing.
   (`PRESET_SCOPES`) and `scratch_names` caught registration gaps that every
   targeted tier passed. `semver` catches a changed `pub` signature, which needs
   `!` and a `BREAKING CHANGE:` footer.
-- **Test stubs and truncation are portable by gate** (CLOUD-2055).
-  `stub_portability.rs` holds every `#!` literal to the `shell * unsafe` rows, and
+- **Truncation is portable by gate** (CLOUD-2055).
   `truncate_handle.rs` holds every `set_len` to an inline `.write(true)` handle.
   A clippy `disallowed-methods` ban is the wrong shape here: its per-site waiver
   is what `waiver add refused` forbids.
