@@ -257,6 +257,26 @@ pub fn probe(remote: &str, service: Service) -> Result<u16> {
     Ok(response.status)
 }
 
+/// One discovery, read both ways: the advertisement where the remote served
+/// one, and the status where it refused — [`probe`]'s answer and
+/// [`advertise`]'s from a single request.
+///
+/// For a caller that must know the remote answers AND what it holds before it
+/// decides anything, and has no business asking twice.
+///
+/// # Errors
+///
+/// A transport failure, a [`Throttled`] answer, or a `200` whose body is not a
+/// well-formed advertisement — all could-not-look.
+pub fn survey(remote: &str, service: Service) -> Result<std::result::Result<Advertisement, u16>> {
+    let response = discover(remote, service)?;
+    refuse_throttle(&response)?;
+    if response.status != 200 {
+        return Ok(Err(response.status));
+    }
+    parse_advertisement(&response.body, service).map(Ok)
+}
+
 /// One discovery exchange, unjudged: the request [`advertise`] and [`probe`]
 /// share, so the two cannot come to spell the endpoint differently.
 fn discover(remote: &str, service: Service) -> Result<fetch::Response> {

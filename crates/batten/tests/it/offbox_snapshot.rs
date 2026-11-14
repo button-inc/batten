@@ -490,6 +490,49 @@ fn every_snapshot_holds_the_source_whole_whatever_closed_in_between() {
     );
 }
 
+/// Fails by: content this disk lost after it was pushed — a segment cut short,
+/// or the open segment gone — taken to the next snapshot as the session.
+#[test]
+fn a_file_this_disk_lost_part_of_is_put_back_and_never_pushed_short() {
+    for (case, lose) in [("cut", false), ("gone", true)] {
+        let rig = Rig::new(&format!("offbox-snapshot-healed-{case}"));
+        let meta = Rig::meta("healed");
+        let path = rig.source("main");
+        write(&path, &records(0, 1500, 1000));
+        let source = JsonlFile::at(&path);
+        let (first, ..) = built(rig.snap(&meta, &[feed(MAIN, &source)], TIME, NO_CAP));
+        rig.pushed(&meta, &first);
+        let segments = rig.dir(&meta).join("transcript/main/0");
+        let (closed, open) = (segments.join("000000.jsonl"), segments.join("000001.jsonl"));
+        // THE LOSS: half of a closed segment, and the open one cut or removed.
+        let cut = |path: &Path| {
+            let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_len(fs::metadata(path).unwrap().len() / 2).unwrap();
+        };
+        cut(&closed);
+        if lose {
+            fs::remove_file(&open).unwrap();
+        } else {
+            cut(&open);
+        }
+
+        append(&path, &records(1500, 20, 1000));
+        let (second, ..) = built(rig.snap(&meta, &[feed(MAIN, &source)], TIME + 60, NO_CAP));
+        let after = rig.tree(&meta, &second);
+
+        assert_eq!(
+            rig.joined(&meta, &after, "transcript/main/0"),
+            fs::read(&path).unwrap(),
+            "{case}: the tree is the source, whole"
+        );
+        assert_eq!(
+            fs::read(&closed).unwrap(),
+            rig.blob(&meta, &after["transcript/main/0/000000.jsonl"]),
+            "{case}: the disk was put back"
+        );
+    }
+}
+
 /// Fails by: the tree depending on the commit time, or on being built twice.
 #[test]
 fn an_unchanged_session_gives_the_same_tree() {

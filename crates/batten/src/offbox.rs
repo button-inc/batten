@@ -184,6 +184,11 @@ const REPO: &str = "repo.git";
 /// absorbed. The push slice moves it; a snapshot only reads it.
 pub const LAST: &str = "refs/offbox/last";
 
+/// The ref naming the commit a push is about to send, written before the
+/// request: what tells this machine's own commit, applied by the remote and
+/// never recorded here, from another writer's.
+const SENT: &str = "refs/offbox/sent";
+
 /// The file recording, for each feed, how far it has been shipped.
 const CURSORS: &str = "cursor.json";
 
@@ -498,6 +503,18 @@ fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
 /// exactly. A file already has its final name while it is being appended to,
 /// and a closed file is never written again — so its blob id is stable and it
 /// is sent once.
+///
+/// **EVERY FILE THIS TOUCHES IS REPLACED WHOLE, AND SYNCED, BEFORE IT RETURNS.**
+/// The caller replaces the cursor only after, so the cursor never covers a
+/// byte that is not on the disk: a kill leaves a file as it was or as it is
+/// to be, and a machine going down takes nothing the cursor had counted. An
+/// open file is at most a segment long, so replacing it costs one segment.
+///
+/// # Errors
+///
+/// Where the open file is SHORTER than its cursor entry says. That is content
+/// gone from under the cursor, which nothing here can put back, and it is
+/// refused aloud: appending would bury the hole under new records.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
 //MUTANT closed-segment-rewritten|s@^            .filter(\x7cname\x7c name.ends_with(".jsonl") \&\& position.length < SEGMENT);$@            .filter(\x7cname\x7c name.ends_with(".jsonl"));@|the_tree_holds_the_stores_and_the_transcript_in_segments
 //MUTANT oversized-record-replaced-by-a-digest|s@^            for (at, chunk) in piece.chunks(PART).enumerate() {$@            for (at, chunk) in piece.chunks(PART).take(1).enumerate() {@|an_oversized_record_is_cut_into_parts_and_never_replaced
@@ -506,8 +523,6 @@ fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
     reason = "the names compared are this function's own, written three lines below in lower case"
 )]
 fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8]) -> Result<u64> {
-    use std::io::Write as _;
-
     let generation = dir.join(prefix).join(position.generation.to_string());
     let refused = |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not write: {err}");
     std::fs::create_dir_all(&generation).map_err(refused)?;
@@ -517,6 +532,8 @@ fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8
         .and_then(segment_index)
         .map_or(0, |index| index + 1);
     let mut written = 0_u64;
+    // Every file this call touches, oldest first, with ALL it is to hold.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for piece in stream.split_inclusive(|byte| *byte == b'\n') {
         if piece.len() > PART {
             let parts = piece.len().div_ceil(PART);
@@ -524,7 +541,7 @@ fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8
                 let ending = if at + 1 == parts { "jsonl" } else { "part" };
                 let name = format!("{next:06}.{ending}");
                 next += 1;
-                std::fs::write(generation.join(&name), chunk).map_err(refused)?;
+                files.push((name.clone(), chunk.to_vec()));
                 position.file = Some(name);
                 position.length = chunk.len() as u64;
                 written += chunk.len() as u64;
@@ -535,21 +552,39 @@ fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8
             .file
             .clone()
             .filter(|name| name.ends_with(".jsonl") && position.length < SEGMENT);
-        let name = open.unwrap_or_else(|| {
-            let name = format!("{next:06}.jsonl");
-            next += 1;
-            position.length = 0;
-            name
-        });
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(generation.join(&name))
-            .map_err(refused)?;
-        file.write_all(piece).map_err(refused)?;
-        position.file = Some(name);
+        match open {
+            Some(name) if files.last().is_some_and(|(last, _)| *last == name) => {}
+            Some(name) => {
+                // OPENED BY AN EARLIER CALL: what the cursor covers of it, and
+                // not a byte past — a kill's leftovers are cut here.
+                let mut held = std::fs::read(generation.join(&name)).map_err(refused)?;
+                let covered = usize::try_from(position.length).unwrap_or(usize::MAX);
+                if held.len() < covered {
+                    return Err(anyhow::anyhow!(
+                        "offbox: {prefix}/{}/{name} holds {} bytes and its cursor covers {covered}",
+                        position.generation,
+                        held.len()
+                    ));
+                }
+                held.truncate(covered);
+                files.push((name, held));
+            }
+            None => {
+                let name = format!("{next:06}.jsonl");
+                next += 1;
+                position.length = 0;
+                position.file = Some(name.clone());
+                files.push((name, Vec::new()));
+            }
+        }
+        if let Some((_, held)) = files.last_mut() {
+            held.extend_from_slice(piece);
+        }
         position.length += piece.len() as u64;
         written += piece.len() as u64;
+    }
+    for (name, held) in &files {
+        crate::durable::replace(generation.join(name), held).map_err(refused)?;
     }
     Ok(written)
 }
@@ -729,6 +764,61 @@ pub fn snapshot(
     outcome
 }
 
+/// Put back, from the last snapshot, every file of a feed that this disk holds
+/// LESS of than that snapshot did.
+///
+/// A feed's files only grow. One that is shorter here than in the last
+/// snapshot — or, for the file a feed is still appending to, not here at all —
+/// is content this machine lost: a disk that went down with it unwritten, a
+/// directory emptied by hand. The tree is built from the disk, so without this
+/// the next push would take the loss to the remote and call it the session.
+/// With it, the disk is made whole from what was pushed BEFORE anything is
+/// appended, and the next snapshot holds everything the last one did.
+///
+/// A closed file that is absent altogether is left absent: it is carried
+/// forward by the id it had, and nothing is appended to it.
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT local-loss-pushed-over-the-remote|s@^            if held > have.unwrap_or(0) {$@            if false {@|a_file_this_disk_lost_part_of_is_put_back_and_never_pushed_short
+fn heal(
+    dir: &Path,
+    repo: &Path,
+    cursors: &Cursors,
+    (last_commit, last): (Option<&str>, &BTreeMap<String, String>),
+) -> Result<()> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not be put back: {err}");
+    for (prefix, position) in cursors {
+        let under = format!("{prefix}/{}/", position.generation);
+        for (path, id) in last.range(under.clone()..) {
+            let Some(name) = path.strip_prefix(&under) else {
+                break;
+            };
+            // ANOTHER WRITER'S STREAM AT THIS PATH IS NOT THIS DISK'S FILE: the
+            // absorb kept it aside, and it is longer or shorter than ours for
+            // no reason that is a loss.
+            if foreign(dir, last_commit, path) {
+                continue;
+            }
+            let local = dir.join(path);
+            let have = std::fs::metadata(&local).map(|meta| meta.len()).ok();
+            let open = position.file.as_deref() == Some(name);
+            if have.is_none() && !open {
+                continue;
+            }
+            let Some(held) = gitwrite::blob_len(repo, id) else {
+                continue;
+            };
+            if held > have.unwrap_or(0) {
+                if let Some(parent) = local.parent() {
+                    std::fs::create_dir_all(parent).map_err(refused)?;
+                }
+                crate::durable::replace(&local, gitwrite::read_blob(repo, id)?).map_err(refused)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// [`snapshot`]'s body, apart from it so the staging directory is removed on
 /// every path out — a refusal and an error as much as a build.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
@@ -767,7 +857,7 @@ fn build(
     let stores = store_files(project_root);
     let mut staged: Vec<String> = vec![String::from("meta.json")];
     std::fs::create_dir_all(staging).map_err(unwritten)?;
-    std::fs::write(staging.join("meta.json"), &meta_body).map_err(unwritten)?;
+    crate::durable::replace(staging.join("meta.json"), &meta_body).map_err(unwritten)?;
     for (tree_path, source) in &stores {
         let target = staging.join(tree_path);
         if let Some(parent) = target.parent() {
@@ -798,6 +888,7 @@ fn build(
         cursors.entry(feed.prefix.clone()).or_default();
     }
     persist(&dir, &cursors)?; // every feed has its entry before any append
+    heal(&dir, repo, &cursors, (last_commit.as_deref(), &last))?;
 
     let pending = pending_bytes(&dir, &last);
     let mut added = 0_u64;
@@ -847,7 +938,7 @@ fn build(
                 stream.extend_from_slice(&record.bytes);
                 stream.push(b'\n');
             }
-            std::fs::write(staging.join(INCOMING), &stream).map_err(unwritten)?;
+            crate::durable::replace(staging.join(INCOMING), &stream).map_err(unwritten)?;
             match scrub(provisions, project_root, staging, &[String::from(INCOMING)]) {
                 Ok(spans) => spans_redacted += spans,
                 Err(refusal) => return Ok(Snapshot::Refused(refusal)),
@@ -1147,7 +1238,8 @@ fn own_prefix(sub: &str) -> String {
 //MUTANT push-ignores-the-push-lock|s@^    if pushing.is_none() {$@    if false {@|a_push_waits_for_the_push_lock_and_writes_nothing
 //MUTANT prune-after-a-failed-push|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                gitwrite::prune_unreachable(\&repo, std::slice::from_ref(\&commit))?; return Ok(Push::only(Pushed::Throttled(throttle)));@|nothing_is_pruned_after_a_throttled_or_a_rejected_push
 //MUTANT throttled-push-retried-at-once|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                let _ = throttle;@|a_throttled_push_returns_at_once_and_loses_nothing
-//MUTANT unchanged-snapshot-still-sent|s@^        if unchanged {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
+//MUTANT unchanged-snapshot-still-sent|s@^        if unchanged \&\& last.as_deref() == Some(tip.as_str()) {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
+//MUTANT unchanged-said-from-memory|s@^        if unchanged \&\& last.as_deref() == Some(tip.as_str()) {$@        if unchanged {@|unchanged_is_never_said_of_a_remote_that_lost_the_ref
 //MUTANT pushed-cursor-recorded-before-the-swap|s@^        let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;$@        record_pushed(\&dir, \&repo, \&commit)?; let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;@|a_throttled_push_returns_at_once_and_loses_nothing
 //MUTANT rejected-swap-retried-without-bound|s@^    for _ in 0..ATTEMPTS {$@    for _ in 0..ATTEMPTS + 2 {@|three_rejected_swaps_are_contended_after_three_posts
 pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
@@ -1156,25 +1248,31 @@ pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
 
 /// [`push_once`] with the most new record bytes it may add named outright.
 fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Result<Push> {
-    match lease::probe(&session.remote, Service::ReceivePack) {
-        Ok(200) => {}
-        Ok(401 | 403 | 404) => return Ok(Push::only(Pushed::Unattached)),
-        Ok(other) => {
+    let advertised = match lease::survey(&session.remote, Service::ReceivePack) {
+        Ok(Ok(advertised)) => advertised,
+        Ok(Err(401 | 403 | 404)) => return Ok(Push::only(Pushed::Unattached)),
+        Ok(Err(other)) => {
             return Err(anyhow::anyhow!(
                 "offbox: the state repository answered {other} to discovery"
             ));
         }
         Err(err) => return throttled(err),
-    }
+    };
     let dir = session_dir(session.project_root, &session.meta)?;
     let repo = local_repo(&dir);
     let name = reference(&session.meta);
+    // WHAT THE REMOTE HOLDS, FROM THE REMOTE. Every decision below that says
+    // the two sides agree is made against this, never against what this
+    // machine remembers having pushed.
+    let mut tip = advertised.head_of(&name).to_owned();
     // ONE PUSHER AT A TIME (CLOUD-2738), for the whole run: the prune below
     // must never meet a commit another process is part-way through building.
     let pushing = take_push_lock(&dir)?;
     if pushing.is_none() {
         return Ok(Push::only(Pushed::Contended));
     }
+
+    own_push_recorded(&dir, &repo, &tip)?;
 
     let source =
         crate::sessions::source_named(&session.meta.harness, session.transcript.as_deref());
@@ -1207,7 +1305,12 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
             Some(last) => gitwrite::tree_id(&repo, last)? == tree,
             None => false,
         };
-        if unchanged {
+        // `UNCHANGED` IS A STATEMENT ABOUT THE REMOTE: its ref names a commit
+        // whose tree is this directory's. A tree equal to the one this machine
+        // remembers pushing says nothing where the remote's ref is gone, or is
+        // another writer's; the push goes on, and either recreates the ref or
+        // is rejected into the fetch below.
+        if unchanged && last.as_deref() == Some(tip.as_str()) {
             return Ok(Push {
                 outcome: Pushed::Unchanged,
                 ended,
@@ -1217,6 +1320,12 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
         // absorbed, or nothing at all. An absent ref has nothing to lose — it
         // is a first push, or the branch was rotated away.
         let admit = |old: &str| old == lease::ZERO || last.as_deref() == Some(old);
+        // THE INTENT, BEFORE THE REQUEST. A kill after the remote applied the
+        // swap and before `LAST` moved leaves the remote holding a commit this
+        // machine does not remember pushing; this ref is how the next run
+        // knows it for its own, where it would otherwise absorb its own
+        // session as another writer's.
+        gitwrite::set_ref(&repo, SENT, &commit)?;
         let outcome = lease::push(&session.remote, &repo, &name, &commit, &admit)?;
         match outcome {
             lease::Outcome::Applied => {
@@ -1254,6 +1363,7 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
             Ok(advertisement) => advertisement.head_of(&name).to_owned(),
             Err(err) => return throttled(err),
         };
+        tip.clone_from(&theirs);
         if theirs == lease::ZERO || last.as_deref() == Some(theirs.as_str()) {
             continue;
         }
@@ -1267,6 +1377,31 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
         outcome: Pushed::Contended,
         ended,
     })
+}
+
+/// Record a push the remote applied and this machine never did: where the
+/// remote's ref is the commit [`SENT`] names, and this repository holds it,
+/// `LAST` and the pushed cursor are moved to it.
+///
+/// A kill between the remote applying a swap and `LAST` moving leaves exactly
+/// that. Without this the next push meets a ref it does not remember writing,
+/// is rejected, and absorbs its own session as another writer's.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT own-push-absorbed-as-anothers|s@^    if sent.as_deref() != Some(tip) \x7c\x7c last.as_deref() == Some(tip) {$@    if true {@|a_push_the_remote_applied_and_this_machine_never_recorded_is_its_own
+fn own_push_recorded(dir: &Path, repo: &Path, tip: &str) -> Result<()> {
+    if !repo.exists() {
+        return Ok(()); // a first push: nothing was ever sent from here
+    }
+    let sent = crate::git::resolve_ref(repo, SENT)?;
+    let last = crate::git::resolve_ref(repo, LAST)?;
+    if sent.as_deref() != Some(tip) || last.as_deref() == Some(tip) {
+        return Ok(());
+    }
+    if gitwrite::tree_id(repo, tip).is_err() {
+        return Ok(());
+    }
+    gitwrite::set_ref(repo, LAST, tip)?;
+    record_pushed(dir, repo, tip)
 }
 
 /// The lock a push or a restore of one session holds for its whole run, in the
@@ -3737,6 +3872,77 @@ mod push_tests {
         assert_eq!(second.outcome.token(), "unchanged");
         assert_eq!(second.ended, ["transcript/main"]);
         assert_eq!(receives(&stand), 1);
+    }
+
+    /// Fails by: `unchanged` answered from what this machine remembers pushing
+    /// while the remote no longer has the ref.
+    #[test]
+    fn unchanged_is_never_said_of_a_remote_that_lost_the_ref() {
+        let base = base("offbox-push-unchanged-gone");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        stand.borrow_mut().refs.clear();
+
+        assert_eq!(one.push().outcome, Pushed::Applied);
+
+        assert_eq!(Some(head(&stand, &one.meta)), one.last());
+        assert_eq!(one.push().outcome, Pushed::Unchanged);
+    }
+
+    /// Fails by: `unchanged` answered while the remote's ref is another
+    /// writer's, or that writer's snapshot replaced unread.
+    #[test]
+    fn unchanged_is_never_said_over_another_writers_ref() {
+        let (stand, one, two, _) = two_writers("offbox-push-unchanged-theirs");
+        let theirs = head(&stand, &two.meta);
+        // THE PREMISE: `one` has nothing new, and the ref is not what it pushed.
+        assert_ne!(one.last(), Some(theirs.clone()));
+
+        assert_eq!(one.push().outcome, Pushed::Applied);
+
+        let tree = one.tree(&head(&stand, &one.meta));
+        assert!(
+            tree.keys()
+                .any(|path| path.starts_with(&format!("absorbed/{theirs}/"))),
+            "the other writer's snapshot is kept: {:?}",
+            tree.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(Some(head(&stand, &one.meta)), one.last());
+        assert_eq!(one.push().outcome, Pushed::Unchanged);
+    }
+
+    /// Fails by: a push the remote applied, whose reply never arrived, absorbed
+    /// on the next run as another writer's — the session stored twice.
+    #[test]
+    fn a_push_the_remote_applied_and_this_machine_never_recorded_is_its_own() {
+        let base = base("offbox-push-own-unrecorded");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let first = one.last();
+        add(&one.transcript, "{\"n\":2}\n");
+        stand.borrow_mut().lose_next_reply = true;
+        let _ = push_once(&one.session(), &[]);
+        // THE PREMISE: the remote moved and this machine did not record it.
+        assert_eq!(one.last(), first);
+        assert_ne!(Some(head(&stand, &one.meta)), first);
+        add(&one.transcript, "{\"n\":3}\n");
+
+        assert_eq!(one.push().outcome, Pushed::Applied);
+
+        let tree = one.tree(&head(&stand, &one.meta));
+        assert!(
+            !tree.keys().any(|path| path.starts_with("absorbed/")),
+            "its own push is not another writer's: {:?}",
+            tree.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tree["transcript/main/0/000000.jsonl"],
+            std::fs::read(&one.transcript).unwrap()
+        );
     }
 
     /// Fails by: a throttle at discovery reading as a failure, or anything
