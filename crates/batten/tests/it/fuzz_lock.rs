@@ -19,6 +19,12 @@
 //! why `deny` is not pointed at `fuzz/Cargo.toml` directly: unlocked it
 //! rewrites the tracked lock after every release, and `--locked` refuses it.
 
+// The row this suite kills: a crate both locks share, declared harness-only,
+// would be judged by no gate (CLOUD-2747).
+/*
+#MUTANT-SUITE crates/batten/tests/it/fuzz_lock.rs
+#MUTANT shared-crate-declared-harness-only|s@^const HARNESS: \[&str; 3\] = \["arbitrary", "jobserver", "libfuzzer-sys"\];$@const HARNESS: [\&str; 3] = ["arbitrary", "jobserver", "rustix"];@|the_fuzz_lock_resolves_shared_crates_as_the_root_does
+*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
