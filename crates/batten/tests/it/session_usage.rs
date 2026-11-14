@@ -15,7 +15,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{StateHome as _, batten, git_in, scratch, stdout, write};
+use common::{Fixture, StateHome as _, batten, scratch, stdout, write};
 
 /// Prose distinctive enough that finding it anywhere is unambiguous.
 const PROSE: &str = "SESSION-USAGE-PROSE-THAT-MUST-NOT-REACH-ANY-OUTPUT";
@@ -79,9 +79,10 @@ const THREE_MESSAGES_LINE: &str =
     "doctor session: turns=4 context=3330 cache_read=600 cache_write=6000 input=60 output=18";
 
 fn repository(name: &str, transcript: &str) -> (PathBuf, PathBuf) {
-    let dir = scratch(&format!("session-usage-{name}"));
+    let dir = Fixture::new(&format!("session-usage-{name}"))
+        .path()
+        .to_path_buf();
     let home = scratch(&format!("session-usage-home-{name}"));
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
     write(&dir, "batten.toml", DECLARED);
     write(&dir, "session.jsonl", transcript);
     (dir, home)
@@ -326,9 +327,10 @@ target = "probe.rego"
 "#;
 
 fn adjudicated(name: &str, transcript: &str) -> String {
-    let dir = scratch(&format!("session-usage-policy-{name}"));
+    let dir = Fixture::new(&format!("session-usage-policy-{name}"))
+        .path()
+        .to_path_buf();
     let home = scratch(&format!("session-usage-policy-home-{name}"));
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
     write(&dir, "batten.toml", POLICY);
     write(&dir, "probe.rego", PROBE);
     write(&dir, "session.jsonl", transcript);
