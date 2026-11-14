@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "BeforeTool",
+  "session_id": "sess-gemini-replace",
+  "cwd": "/repo",
+  "tool_name": "replace",
+  "tool_input": {
+    "file_path": "guarded.txt",
+    "instruction": "replace the first line",
+    "old_string": "before",
+    "new_string": "after",
+    "allow_multiple": false
+  }
+}

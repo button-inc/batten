@@ -275,7 +275,24 @@ impl Harness {
             Harness::ClaudeCode | Harness::CodexCli => {
                 &["Write", "Edit", "MultiEdit", "NotebookEdit"]
             }
-            Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
+            // `write_file` and `replace` are FROM DOCUMENTATION, not from a
+            // captured payload (CLOUD-2744): the project's own tool reference,
+            // `docs/tools/file-system.md` and `docs/reference/tools.md` in
+            // google-gemini/gemini-cli, read 2026-11-14. A spike capturing a real
+            // payload confirms them; the older names stay, since removing one can
+            // only stop judging something.
+            //MUTANT-SUITE crates/batten/src/hook.rs
+            //MUTANT gemini-write-file-unnamed|s@^                "write_file",$@@|gemini_write_file_against_a_protected_path_is_denied
+            //MUTANT gemini-replace-unnamed|s@^                "replace",$@@|gemini_replace_against_a_protected_path_is_denied
+            Harness::GeminiCli => &[
+                "WriteFile",
+                "Edit",
+                "Write",
+                "MultiEdit",
+                "NotebookEdit",
+                "write_file",
+                "replace",
+            ],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
             // The neutral contract: a caller composing the envelope by hand is
@@ -5254,12 +5271,17 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
     edit_spans(input)
 }
 
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT allow-multiple-unread|s@^        \["/replace_all", "/allow_multiple"\]$@        ["/replace_all"]@|allow_multiple_reads_as_replace_all
+//MUTANT allow-multiple-as-fallback|s@^            .any(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool) == Some(true))$@            .find_map(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool)).unwrap_or(false)@|a_false_replace_all_does_not_hide_allow_multiple
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    // EITHER KEY TRUE MEANS EVERY OCCURRENCE (CLOUD-2744): Gemini CLI's `replace`
+    // spells it `allow_multiple`. An `any` over the two, never a fallback, so a
+    // `replace_all: false` cannot hide an `allow_multiple: true`.
     let replace_all = |value: &Value| {
-        value
-            .pointer("/replace_all")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+        ["/replace_all", "/allow_multiple"]
+            .iter()
+            .any(|key| value.pointer(key).and_then(Value::as_bool) == Some(true))
     };
     let span = |value: &Value| {
         let old = value.pointer("/old_string").and_then(Value::as_str)?;
@@ -17491,6 +17513,57 @@ deny contains "refused by themodule" if {
                 harness.as_str()
             );
         }
+    }
+
+    /// A Gemini CLI write under one of its documented tool names, against a
+    /// protected path (CLOUD-2744).
+    fn gemini_write_denies(tool: &str) -> bool {
+        let policy = protected_policy_with(
+            vec![verb("Write", Some("use the surface that owns the file"))],
+            vec![Redirect {
+                glob: "batten.toml".to_owned(),
+                mutation: "change it in a pull request".to_owned(),
+                read: None,
+                read_server: None,
+            }],
+        );
+        matches!(
+            adjudicate(
+                &policy,
+                &write_envelope_on(Harness::GeminiCli, tool, "batten.toml"),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        )
+    }
+
+    #[test]
+    fn gemini_write_file_against_a_protected_path_is_denied() {
+        assert!(gemini_write_denies("write_file"));
+    }
+
+    #[test]
+    fn gemini_replace_against_a_protected_path_is_denied() {
+        assert!(gemini_write_denies("replace"));
+    }
+
+    #[test]
+    fn allow_multiple_reads_as_replace_all() {
+        let spans = edit_spans_of(&serde_json::json!({
+            "old_string": "a", "new_string": "b", "allow_multiple": true
+        }));
+        assert_eq!(spans, Some(vec![("a".to_owned(), "b".to_owned(), true)]));
+    }
+
+    #[test]
+    fn a_false_replace_all_does_not_hide_allow_multiple() {
+        let spans = edit_spans_of(&serde_json::json!({
+            "old_string": "a", "new_string": "b",
+            "replace_all": false, "allow_multiple": true
+        }));
+        assert_eq!(spans, Some(vec![("a".to_owned(), "b".to_owned(), true)]));
     }
 
     #[test]
