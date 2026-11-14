@@ -82,7 +82,7 @@ pub fn pristine(root: &Path, dest: &Path) -> Result<String> {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&to, &bytes).with_context(|| format!("copy {path}"))?;
+        crate::durable::replace(&to, &bytes).with_context(|| format!("copy {path}"))?;
         digest_one(&mut digest, &path, &bytes);
     }
     Ok(digest.finalize().to_hex().to_string())
