@@ -1332,7 +1332,7 @@ fn check_claims(
     // A `docs` OR COMMITLESS ROW MAY DECLARE NO TESTS (CLOUD-1938), and only
     // those. A change to prose alone has no behaviour a mutation could kill —
     // measured on CLOUD-1931, two memory files and one sentence, where the memory
-    // graph's own gate is `#MUTANT-EXEMPT` — and `none` lands nothing at all, so
+    // graph's own gate was `#MUTANT-EXEMPT` — and `none` lands nothing at all, so
     // demanding an entry bought a fabricated one or `--bypass-sequence`, and
     // neither is a claim. Narrow on purpose: `refactor`, `perf`, `test` and the
     // other non-releasing types change code, so an empty list there is still an

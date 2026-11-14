@@ -380,6 +380,7 @@ mod release_rehearsal;
 mod release_settings_gate;
 mod release_token_precedence;
 mod release_tracking;
+mod release_trigger_independent;
 mod release_verify;
 #[cfg(unix)]
 mod released;

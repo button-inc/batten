@@ -22,7 +22,7 @@
 //! * `a_tree_granting_nothing_raw_is_clean` — the positive.
 //! * `a_named_raw_grant_is_refused` — the class the row exists for, and the
 //!   reachability proof above.
-//! * `a_globbed_server_grant_is_refused` — the anti-vacuity mirror. Without it the
+//! * `a_wildcard_server_grant_is_refused` — the anti-vacuity mirror. Without it the
 //!   positive is satisfied by a predicate matching one exact string, and the
 //!   strictly WIDER grant ships past the gate built to refuse it.
 //! * `an_absent_settings_file_answers_nothing` — could-not-look is not a refusal.
@@ -153,7 +153,7 @@ fn a_named_raw_grant_is_refused() {
 }
 
 #[test]
-fn a_globbed_server_grant_is_refused() {
+fn a_wildcard_server_grant_is_refused() {
     // THE ANTI-VACUITY MIRROR. A predicate matching only that one exact string
     // satisfies both cases above and is silent here — and a wildcard grant is
     // STRICTLY WIDER than the named one, so it would ship past the gate built to

@@ -1,3 +1,9 @@
+#MUTANT-SUITE crates/batten/tests/it/release_trigger_independent.rs
+#MUTANT clock-alone-passes|s@^\tnot independent(path)$@\tfalse@|the_engine_refuses_a_clock_alone
+#MUTANT push-not-independent|s@^independent(path) if _ := triggers(path).push$@independent(path) if false@|the_engine_reads_a_push_trigger_as_independent
+#MUTANT workflow-run-not-independent|s@^independent(path) if _ := triggers(path).workflow_run$@independent(path) if false@|the_engine_reads_a_workflow_run_trigger_as_independent
+#MUTANT every-workflow-watched|s@^\tcontains(step.run, "release-assets-check")$@\ttrue@|the_engine_leaves_a_workflow_watching_nothing_untouched
+
 # METADATA
 # description: |
 #   A gate must not share a trigger with the failure it watches (CLOUD-1777).
@@ -100,9 +106,9 @@ violation contains {
 # These pin the PREDICATE. They cannot pin that the ENGINE builds
 # `input.tree.documents` for a workflow path, or that it parses `on:` as the
 # string key rather than YAML 1.1's boolean `true` — a `with input as` case
-# fabricates the very shape the engine may be unable to produce. `batten-check`
-# over this repository's own committed workflow is what answers that, and it is
-# why the arm is enabled on this tree rather than only tested here.
+# fabricates the very shape the engine may be unable to produce.
+# `crates/batten/tests/it/release_trigger_independent.rs` answers that over the
+# compiled binary and a real workflow file, and the `#MUTANT` rows name its cases.
 
 wf(on) := {"tree": {"documents": {".github/workflows/release-assets.yml": {
 	"on": on,
@@ -145,5 +151,3 @@ test_a_workflow_that_does_not_watch_releases_is_untouched if {
 test_no_workflow_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
-
-#MUTANT-EXEMPT CLOUD-1260|no `tests/release-trigger-independent.bats` exists and none may be added: `mutate` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. Measured rather than assumed — a `#MUTANT` row WAS declared here first, and `mutate sweep` answered `release-trigger-independent no-suite`, which is could-not-look and not a pass. The load-time tier is this file's own `test_` rules, and the engine tier is `batten-check` over this repository's committed workflow, neither of which is what the mutation runner drives. Same exemption and same reason as `policy/connector-not-granted.rego`

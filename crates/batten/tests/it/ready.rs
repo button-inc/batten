@@ -766,7 +766,7 @@ fn an_empty_value_is_an_omission_wearing_a_declarations_shape() {
 /// A change to prose alone has no behaviour a mutation could kill, so the
 /// required non-empty `tests` list could only be met with a fabricated entry or a
 /// `--bypass-sequence`. Measured on CLOUD-1931: two memory files and one
-/// sentence, whose own gate is `#MUTANT-EXEMPT`. The row still names a gate.
+/// sentence, whose own gate was `#MUTANT-EXEMPT` then. The row still names a gate.
 #[test]
 fn a_docs_row_may_declare_no_tests() {
     let dir = with_tasks("ready-claims-docs-no-tests");
