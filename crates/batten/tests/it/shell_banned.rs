@@ -433,11 +433,7 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
         .collect();
     assert_eq!(
         exempt,
-        BTreeSet::from([
-            ".claude/hooks/git-hook.sh",
-            "completions/batten.bash",
-            "setup.sh",
-        ])
+        BTreeSet::from([".claude/hooks/git-hook.sh", "completions/batten.bash",])
     );
 }
 

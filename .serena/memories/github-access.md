@@ -214,20 +214,19 @@ released hours earlier. Measured: 34 identical refusals, 120s apart, zero
 successes, against a lease `status` reads as `released`. No session can take over
 a lease minted by a different VM while `github.com` is proxied — CLOUD-1569.
 
-**THE WIRING IS ON THREE SURFACES, AND NAMING ONLY TWO IS HOW #889 "FIXED" THIS
-AND CHANGED NOTHING:**
+**THE WIRING IS ON TWO SURFACES. #889 "FIXED" THIS ON A THIRD, A PROVISIONING
+SCRIPT'S WRAPPER THAT IS GONE (CLOUD-2739), AND CHANGED NOTHING:**
 
 | surface                           | reaches                                                                  | note                                                      |
 | --------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
 | `batten.toml` `[[provision.env]]` | the provisioned wrapper at `~/.local/bin/mise`                           | **the one that actually runs in a provisioned container** |
-| `setup.sh` heredoc wrapper        | the same path, when setup.sh writes it                                   | what #889 edited                                          |
 | `mise.toml` `[env]`               | task bodies and what mise SPAWNS, never mise's own resolver (CLOUD-1455) | carries `GH_TOKEN`                                        |
 
-The real defect (CLOUD-1474) was ONE missing name in the token chain: all three
-read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
-`BATTEN_GITHUB_TOKEN`, so no token was set and the placeholder fell through. The
-`NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in all three
-chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
+The real defect (CLOUD-1474) was ONE missing name in the token chain: every
+surface read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container
+injects `BATTEN_GITHUB_TOKEN`, so no token was set and the placeholder fell
+through. The `NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now
+in both chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
 
 **NO PAT IS A SUPPORTED STATE, AND THE PROXY IS ITS ROUTE (CLOUD-2122).**
 Measured 2026-10-07 with neither `BATTEN_GITHUB_TOKEN` nor any PAT injected:
