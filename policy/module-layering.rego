@@ -407,6 +407,15 @@ declared_modules := {
 	# module the chain adds is reached through this one, and a mediated call
 	# that could reach it would wait on a remote inside CLOUD-689's ceiling.
 	"offbox",
+	# `sessions` arrived with CLOUD-1010: the session-source contract, the
+	# reading half of an agent's session store. It reaches `hook` for the
+	# harness table and `error`, and nothing else in the crate.
+	#
+	# The mediated path may not reach it, below. A source may make a network
+	# call inside its own implementation, and only the off-box daemon may use
+	# one; a `hook` that could read a session source would put that call on
+	# every tool call.
+	"sessions",
 	# `pipeline` arrived with CLOUD-1338's declared composition, and this rule
 	# named it before a human did. It sits ABOVE `land` and reaches it alone: the
 	# composition is a list of that module's `Step`s with a compensation per row,
@@ -993,7 +1002,7 @@ forbidden[from] contains to if {
 		# network through `fetch`, the second runs a caller's program.
 		# `ci_step` joins for `probe`'s reason: it runs a caller's program.
 		"hook": {
-			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox",
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox", "sessions",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
 			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
@@ -1019,7 +1028,7 @@ forbidden[from] contains to if {
 		# one hop is not one, which is why the effect bounds in
 		# `crate::repair`'s header carry the other half.
 		"repair": {
-			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox",
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox", "sessions",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
 			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
@@ -1484,6 +1493,25 @@ test_the_mediated_path_must_not_reach_offbox if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/offbox.rs",
 		[internal("lease", 10), internal("state", 11), internal("git", 12), internal("session", 13)],
+	)
+}
+
+# CLOUD-1010's session-source contract. The mediated path must not reach it, and
+# it reaches the harness table it is keyed by.
+test_the_mediated_path_must_not_reach_a_session_source if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("sessions", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("sessions", 31)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/sessions.rs",
+		[internal("hook", 10)],
 	)
 }
 

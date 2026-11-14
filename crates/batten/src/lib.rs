@@ -173,6 +173,7 @@ pub mod selfwrite;
 /// longer resolve one.
 pub mod semver;
 pub mod session;
+pub mod sessions;
 pub mod severity;
 pub mod signer_posture;
 pub mod sink;
