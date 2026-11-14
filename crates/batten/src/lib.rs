@@ -205,6 +205,7 @@ pub mod semver;
 pub mod session;
 /// A parent session's children, followed to done or dead (CLOUD-2826).
 pub mod session_watch;
+pub mod sessions;
 pub use batten_core::severity;
 pub use batten_core::shell;
 pub use batten_core::shell_logic;

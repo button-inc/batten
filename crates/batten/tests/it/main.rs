@@ -447,6 +447,7 @@ mod secrets_kind;
 mod semver_gate;
 mod session_drain;
 mod session_provisioning;
+mod session_source;
 mod session_start;
 mod session_watch;
 mod shell_authored;
