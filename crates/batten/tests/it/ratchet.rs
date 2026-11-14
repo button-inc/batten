@@ -608,8 +608,7 @@ fn retirement_repo(name: &str, retires_with: Option<&str>) -> PathBuf {
 /// The same, with `alpha` declaring whatever the caller needs **at base**.
 ///
 /// The base state is the FIRST commit rather than a second one plus a moved
-/// branch: git refuses to force a branch that is checked out, which is the same
-/// defect `branch edit unsafe` gates on the bats corpus.
+/// branch: git refuses to force a branch that is checked out.
 fn retirement_repo_declaring(name: &str, retires_with: Option<&str>, alpha: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(&retirement_config(retires_with))

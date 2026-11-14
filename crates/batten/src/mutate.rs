@@ -1103,8 +1103,7 @@ fn subject_name(root: &Path, path: &str) -> String {
 /// never judged by two runners, and never passed over by both.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
-/// sweep's `no-such-gate` report into silence; could-not-look widens here as it
-/// does in `ci suites`.
+/// sweep's `no-such-gate` report into silence; could-not-look widens.
 #[must_use]
 pub fn touched(
     root: &Path,

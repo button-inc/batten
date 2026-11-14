@@ -11,7 +11,7 @@ row here, so a new module lands with its line.
 - `install.rs` — whether a published release is actually installable (CLOUD-1753), retired out of the install-check script.
 - `lib.rs` — library entry point, declares the module tree.
 - `preset_catalog.rs` — the vendored preset manifests as data (CLOUD-2789), with the vocabulary they are written in (`RuleScope`, `RouteKind`, `Applicability`, `VendoredVerdict`, the `run`/`read`/`admit` route constructors): a leaf below the config model, which reads it for the presets a row may enable.
-- `suites.rs` (crate `batten-base`) — the per-suite cost corpus (CLOUD-352), derived from the report the bats runner already wrote.
+- `suites.rs` (crate `batten-base`) — the per-module cost table (CLOUD-352, CLOUD-2059), derived from the JUnit report nextest already wrote.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared once, as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each flag's env equivalent, so §8 precedence is inspectable data).
 - `board.rs` (crate `batten-base`) — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
 - `bot.rs` — the bot lane, retired off the bot-issue script (CLOUD-1295).

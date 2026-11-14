@@ -468,7 +468,6 @@ mod tests {
         // deliberately absent: it polls the forge and is not read-only in
         // this sense.
         "ci slow-needed",
-        "ci suites",
         "claim keys",
         "claim merged",
         "claim race",
@@ -711,6 +710,10 @@ mod tests {
         // stored and open nothing.
         "record fold",
         "record show",
+        // The per-module cost table (CLOUD-352): it reads nextest's
+        // report and prints it. Its `--write`, which committed the bats
+        // corpus, went with the last suite (CLOUD-2634).
+        "record suites",
         // The release path's five readers (CLOUD-2033): each asks the
         // forge or git a question and prints one answer; none writes.
         // `settings` joined when `--probe`, its one write, went
@@ -926,17 +929,15 @@ mod tests {
             // that reads the code alone holds instead of landing.
             "checks".to_owned(),
             "checks green".to_owned(),
-            // The CI noun and its two readers (CLOUD-1716), retired out of
-            // `mise-tasks/ci-slow-needed.sh` and `mise-tasks/suite-select.sh`.
-            // Both are on the read-only allowlist above: each decides over the
-            // diff and the declared headers and runs nothing.
+            // The CI noun and its reader (CLOUD-1716), retired out of
+            // `mise-tasks/ci-slow-needed.sh`. It is on the read-only allowlist
+            // above: it decides over the diff and runs nothing.
             "ci".to_owned(),
             "ci slow-needed".to_owned(),
             // The runner-file glue a workflow step used a shell for (CLOUD-843,
             // Phase 4). OFF the read-only allowlist: it runs the command it is
             // handed, so its effect is `step run`'s, not a reader's.
             "ci step".to_owned(),
-            "ci suites".to_owned(),
             // The pull-time claim noun (CLOUD-1121), ported off
             // `mise-tasks/claim-check.sh` on the terms `semver` below
             // records: CLOUD-1059 made editing a shell rule refusable, so a
@@ -1312,10 +1313,9 @@ mod tests {
             // so off the allowlist for `record query`'s reason.
             "record release".to_owned(),
             "record show".to_owned(),
-            // The per-suite cost corpus (CLOUD-352), whose store is a COMMITTED
-            // file rather than the out-of-tree record tree: its reader is a
-            // person deciding whether the suite they are adding a case to is
-            // expensive.
+            // The per-module cost table (CLOUD-352): its reader is a person
+            // deciding whether the module they are adding a case to is
+            // expensive. On the read-only allowlist above.
             "record suites".to_owned(),
             "record tool".to_owned(),
             // CLOUD-843's validator door: it RUNS the row's declared argv, so it
