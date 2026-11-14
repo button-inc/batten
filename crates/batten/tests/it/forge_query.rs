@@ -32,6 +32,41 @@ use std::process::Output;
 
 use common::{git_in, init_repo, scratch, stderr, write};
 
+/// CLOUD-2746: every `record query <id>` a committed task runs names a
+/// `[[forge.query]]` row the committed `batten.toml` declares. An undeclared id is
+/// a usage error at the record step, which turned two workflow jobs red.
+#[test]
+fn every_task_query_id_is_declared() {
+    let tasks = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
+    let config = std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml");
+    let document: toml::Value = toml::from_str(&config).expect("batten.toml parses");
+    let declared: Vec<&str> = document
+        .get("forge")
+        .and_then(|forge| forge.get("query"))
+        .and_then(toml::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.get("id").and_then(toml::Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    let named: Vec<&str> = tasks
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once("record query ").map(|(_, rest)| rest))
+        .filter_map(|rest| {
+            rest.split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                .find(|token| !token.is_empty())
+        })
+        .collect();
+    assert!(named.len() >= 9, "the scan finds the task lines: {named:?}");
+    let undeclared: Vec<&&str> = named.iter().filter(|id| !declared.contains(id)).collect();
+    assert!(
+        undeclared.is_empty(),
+        "record query ids no [[forge.query]] row declares: {undeclared:?}"
+    );
+}
+
 /// The repository a case names — deliberately not this one, so a placeholder
 /// that leaked through reads as a literal `{owner}` rather than a real slug.
 const REPO: &str = "acme/widgets";
