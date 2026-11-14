@@ -319,6 +319,8 @@ mod nonverdict;
 #[cfg(unix)]
 mod ntia;
 mod obligations_bound;
+#[cfg(unix)]
+mod offbox_daemon;
 mod offbox_push;
 #[cfg(unix)]
 mod offbox_snapshot;
