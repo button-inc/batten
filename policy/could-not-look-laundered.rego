@@ -21,13 +21,13 @@
 # ─── THIS JUDGES THE CHANGE, NOT THE STATE, AND THAT IS THE WHOLE DESIGN ──────
 #
 # `input.tree["base-delta"]`, exactly as `shell-retirement` reads it. Three
-# instances are live on `main` today — `closing-key-check.sh:193,195` and
+# instances were live on `main` then — `closing-key-check.sh:193,195` and
 # `deferral-check.sh:117`, all three landed by the retirement this row was filed
-# against — and NONE of them is repairable here: `mise-tasks/**` is governed by
-# `shell edit refused`, whose landable shapes are retire-whole or leave-alone,
+# against — and NONE of them was repairable here: `mise-tasks/**` was governed by
+# `shell edit refused`, whose landable shapes were retire-whole or leave-alone,
 # with no override route and no `bypass_env`.
 #
-# A state-scoped rule would therefore be red on landing day with no spelling that
+# A state-scoped rule would therefore have been red on landing day with no spelling that
 # could make it green. The obvious escapes are both worse. A ceiling COUNT is a
 # number nothing derives, and it goes stale in the direction that reads healthy.
 # An `admits_with` marker is `shell count ahead`'s idiom and unreachable here for
@@ -50,7 +50,7 @@
 #
 # TWO PATTERNS AND A NEGATION, BECAUSE ONE REGEX MEASURABLY OVER-MATCHES. Tested
 # against the corpus rather than reasoned about: `batten` plus `|| true` alone
-# also hits `batten-receipts` in a PATH (`graph-check.sh:924`) and the existence
+# also hit `batten-receipts` in a PATH (`graph-check.sh:924`) and the existence
 # probe `command -v batten` (`payload-field.sh:72`), where empty IS the answer and
 # is what the probe is asking. Requiring whitespace after the callee kills the
 # path case — `batten-` is not `batten ` — and the probe needs its own pattern and
@@ -59,16 +59,16 @@
 #
 # THE EVASION THIS CANNOT SEE, stated because a ratchet whose gap is undeclared is
 # worse than one whose gap is named. The callee must appear as a bare word: this
-# does not match variable indirection (`"${batten_bin[@]}"`, live at
+# does not match variable indirection (`"${batten_bin[@]}"`, once at
 # `mcp-allow-check.sh:228`) or a quote-terminated path (`…/target/debug/batten"`).
-# Both are real spellings in this corpus, so a new laundering site can be written
+# Both were real spellings in that corpus, so a new laundering site can be written
 # past this rule by naming the binary differently. A `#MUTANT` proves only what a
 # case exercises and cannot close that; widening the callee pattern is the repair,
 # and it is deliberately not attempted here because every widening tried so far
 # re-admitted one of the two false positives above.
 #
-# The corpus already carries the correct spelling — `landed-check.sh:214` and
-# `mcp-allow-check.sh:226-231` both keep the status and branch on it — so this
+# The corpus already carried the correct spelling — `landed-check.sh:214` and
+# `mcp-allow-check.sh:226-231` both kept the status and branched on it — so this
 # names an idiom the repository has, rather than inventing one.
 #
 #MUTANT-SUITE crates/batten/tests/it/could_not_look_laundered.rs

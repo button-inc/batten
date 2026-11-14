@@ -62,10 +62,10 @@
 //! build — the same split `perf`/`perf-assert` keeps, and what lets CLOUD-875's
 //! cases be asserted at all.
 //!
-//! `mise-tasks/perf-gate.sh` composes this with `perf-compare` and is itself
-//! frozen, so its reading is a contract rather than a convention: **a skip prints
+//! `mise-tasks/perf-gate.sh` composed this with `perf-compare` and was itself
+//! frozen, so its reading was a contract rather than a convention: **a skip prints
 //! one human line, no `arm=` record, and exits 0**; a could-not-look exits
-//! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
+//! non-zero and explains itself on stderr. `perf-gate` distinguished the two by
 //! looking for `^arm=`, never by a second exit code.
 
 use std::collections::BTreeSet;
@@ -946,8 +946,8 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// from the job log, and `--quiet` suppresses every one of them — so the count
 /// answered `0` on a run that compiled the whole closure twice and would answer
 /// `0` again after the fix, which is a reading that cannot tell the two apart.
-/// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
-/// redirects this command's STDOUT to a file and greps `^arm=`.
+/// Cargo's progress goes to stderr, so nothing changed for `perf-gate.sh`, which
+/// redirected this command's STDOUT to a file and grepped `^arm=`.
 ///
 /// Returns whether it dropped the other arm's `batten` units first, which is
 /// what lets [`arms_suspect`] tell a clean head from an inherited one.

@@ -283,10 +283,10 @@ impl Reclaimed {
 /// seventh adapter is reclaimed the day it lands instead of silently skipped.
 ///
 /// **The at-load record is written before the first byte changes**, and only when
-/// none exists. The assertion is `tests/wiring-reclaim.bats`'s `RECORD BEFORE
-/// REPAIR: the record carries the pre-repair count`, plus `the record is written
-/// ONCE, so a second run cannot report the repair` for the only-when-none-exists
-/// half — over the compiled binary and a real `$HOME` on disk, which is the tier
+/// none exists. The assertion is `crates/batten/tests/it/wiring_reclaim.rs`'s
+/// `record_before_repair_so_it_carries_the_pre_repair_count`, plus
+/// `the_record_is_written_once_so_a_second_run_cannot_report_the_repair` for the
+/// only-when-none-exists half — over the compiled binary and a real `$HOME` on disk, which is the tier
 /// that can see this at all. A unit case here would build the document the engine
 /// may be unable to locate, which is the shape `rules/policy-modules.md`
 /// names. An earlier draft of this comment cited a Rust test name that was never

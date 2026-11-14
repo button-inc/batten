@@ -768,7 +768,7 @@ local gate = new Mapping<String, Step> {
   // `run_check_with`):
   //
   //   1. every [[rule]], over that rule's own `glob` — and those reach well
-  //      outside crates/: mise.toml, .github/workflows/*.yml, tests/*.bats
+  //      outside crates/: mise.toml, .github/workflows/*.yml
   //   2. `budget::measure_all`, because a declared budget is a gate under
   //      `check` and not only under `policy budget` (CLOUD-50) — so AGENTS.md
   //      and .serena/project.yml are genuine inputs, and "a Markdown-only change

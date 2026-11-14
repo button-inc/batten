@@ -8508,7 +8508,7 @@ pub(crate) fn parse_node(
 /// The most documents one run may acquire before it refuses (CLOUD-850).
 ///
 /// **A backstop, not a tuned threshold, and the distinction is the whole
-/// justification.** `mise-tasks/perf-assert.sh` budgets four paths and deliberately
+/// justification.** `perf-assert` budgets four paths and deliberately
 /// budgets no `check` path, on a reason that is sound and stays: *"`check` is
 /// bounded by the repository it is pointed at — a tree walk over a large
 /// consumer repo is legitimately slower and no ceiling here could tell that
@@ -11427,7 +11427,7 @@ fn unconserved_cases(
             continue;
         }
         // THE SUITE-QUALIFIED ARM IS TRIED FIRST, then the bare one — the same
-        // resolution order `mise-tasks/replay.sh` uses over the same arms, because
+        // resolution order `mise-tasks/replay.sh` used over the same arms, because
         // one ledger with two readers and two grammars is a ledger that reports
         // different things to different gates.
         //

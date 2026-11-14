@@ -378,8 +378,8 @@ pub enum Command {
         /// Whether the data channel was asked for.
         json: bool,
     },
-    /// The landing lap (CLOUD-1335, CLOUD-1338), beside `mise-tasks/land.sh`
-    /// rather than replacing it.
+    /// The landing lap (CLOUD-1335, CLOUD-1338), the loop in
+    /// `crates/batten/src/land.rs`.
     ///
     /// Appended for the reason `Lease` records: this enum carries no `repr`, so a
     /// variant placed beside its neighbours shifts every later discriminant and

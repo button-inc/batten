@@ -270,7 +270,7 @@ mutation = "change it in a pull request — a registered module is protected bec
 # path no committed value can name. A layered override would let a branch point
 # the detector at evidence of its choosing, which is the weakening `trust.rs`
 # compares committed bytes for. So the committed value stays fixed and the
-# INDIRECTION moves out of the config: `mise-tasks/stop-guard.sh` refreshes this
+# INDIRECTION moves out of the config: `batten hook` refreshes this
 # path from the Stop payload's own `transcript_path` at each turn end. The
 # authority names one file forever; which session it is, is the host's fact.
 #
@@ -701,7 +701,7 @@ reason = "Run `mise run ci-wait` (backgrounded): it waits until every check on H
 # committed.
 #
 # THE PREDICATE IS BARE-VERSUS-EXPLICIT, NOT THE FLAG, and `land-lock.sh` already
-# states why in its own words: "The expected value is passed EXPLICITLY
+# stated why in its own words: "The expected value is passed EXPLICITLY
 # (`<ref>:<sha>`) and must stay that way. Bare `--force-with-lease` compares
 # against this clone's remote-tracking ref — what the last fetch happened to see —
 # which for a ref other sessions are actively rewriting is precisely the stale
@@ -978,7 +978,7 @@ mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
 # — is not here and cannot be: it needs `gh pr list` plus a `gh pr view` per
 # competitor, and `RuleKind::scopes` pairs every spawning kind with
 # `RuleScope::Tree` alone. It lands as a `tree`-scoped `command` rule under
-# `batten enforce`, which is why `mise-tasks/issue-guard.sh` still exists.
+# `batten enforce`, which is why `mise-tasks/issue-guard.sh` outlived this row.
 [[rule]]
 id = "review name unnamed"
 kind = "shape"
@@ -1533,7 +1533,7 @@ mode = "replace"
 body = "{id} {updatedAt} {now} {digest:description} {slug:status} {authority:ready}"
 
 # `issue-search.<branch>`, appending: a search receipt accumulates what the author
-# has seen, which is what `issue-search-check.sh` writes and why its mode differs
+# has seen, which is what `issue-search-check.sh` wrote and why its mode differs
 # from the row above.
 #
 # `hasNextPage` IS THE DISCRIMINATOR, and it is required rather than rendered. It
@@ -3180,8 +3180,8 @@ regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]
 #
 # The row above is a SIBLING directory — a shell program resolving the file next
 # to it, which is why its own comment excludes the parent form by construction. A
-# `.bats` suite does not live next to its subject: every suite in `tests/` names a
-# program in `mise-tasks/`, so the traversal is inherent to the shape rather than
+# `.bats` suite did not live next to its subject: every suite in `tests/` named a
+# program in `mise-tasks/`, so the traversal was inherent to the shape rather than
 # a widening of it. And `$(dirname "$0")` is unavailable there at all — `$0` is
 # the bats runner, so bats hands the suite its own directory as
 # `$BATS_TEST_DIRNAME` instead.
@@ -4949,8 +4949,8 @@ no_fix_reason = "class 1 (config_edit's YAML backend): pin the tool in mise.toml
 #
 # WHAT IS DELIBERATELY NOT HERE, and why it is a gap rather than an oversight:
 # the `tests/**/*.bats` half of the sed and flock rows. `tests/target-ensure.bats`
-# names the util-linux lock in a test title, and a `forbid` pattern is a literal
-# substring with no `exclude` column, so that row cannot be written today without
+# named the util-linux lock in a test title, and a `forbid` pattern is a literal
+# substring with no `exclude` column, so that row could not be written then without
 # firing on the test that proves the guard works. That is exactly CLOUD-283. The
 # `mise-tasks/**` half — the layer that actually could not run — lands now.
 #
@@ -5941,11 +5941,11 @@ base = "origin/main"
 # retirement. Net effect of the swap is a STRONGER ratchet, not a weaker one.
 #
 # The subject is DECLARED, never inferred from the filename. Measured: 19 of the
-# 142 suites have no same-named `mise-tasks/` program and every one is
-# legitimate — `verify.bats` and `cross-check.bats` cover `mise.toml` tasks,
-# `git-hook.bats` covers a hook body, and the rest are aspect suites over a
+# 142 suites had no same-named `mise-tasks/` program and every one was
+# legitimate — `verify.bats` and `cross-check.bats` covered `mise.toml` tasks,
+# `git-hook.bats` covered a hook body, and the rest were aspect suites over a
 # subject the filename only hints at. A filename heuristic would block those
-# retirements and admit real deletions elsewhere: `gh-guard.bats` drives
+# retirements and admit real deletions elsewhere: `gh-guard.bats` drove
 # `gh-guard-check` too, and retiring only half of that pair must not buy the
 # suite's deletion.
 retires_with = "# subject:"
@@ -6098,10 +6098,10 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 
 # CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `shell add refused`
 # (CLOUD-1059) covers `mise-tasks/**` and `tests/**/*.bats`. Those globs were the
-# whole enforced perimeter against new bash, and two surfaces sit outside it: a
+# whole enforced perimeter against new bash, and two surfaces sat outside it: a
 # `run = '''…'''` body in `mise.toml` is bash, and `.claude/hooks/session-start.sh`
-# is bash. Both are gates and effects doing what `mise-tasks/*.sh` does, and
-# neither is a file under `mise-tasks/` — so the census could report an honest
+# was bash. Both were gates and effects doing what `mise-tasks/*.sh` did, and
+# neither was a file under `mise-tasks/` — so the census could report an honest
 # decrease while the repository's total shell rose.
 #
 # NOT the laundering path, which was already closed: `policy/shell-retirement.rego`
@@ -6668,7 +6668,7 @@ no_fix_reason = "class 1 (an SBOM enricher reading `cargo metadata`): the missin
 # is not. And it must not match inside a FIXTURE tree: a `check` spelled `mise run`
 # resolves only where a mise.toml is findable, so a row matching a fixture reports
 # the launcher rather than the tree. Two suites caught the two wider spellings —
-# `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into its fixture,
+# `tests/prebuilt-lint.bats` copied `mise.toml` and the workflows into its fixture,
 # and `cli.rs`'s portability case writes a `mise-tasks/seed.sh` — and neither failure
 # had anything to do with attestation. CLOUD-614 carries the general defect; naming
 # the file the row exists to run is what makes the trigger and the mechanism the
@@ -6719,7 +6719,7 @@ no_fix_reason = "class 3 (an installed, authenticated `gh`): install the pinned 
 # `.github/workflows/release-plz.yml` is not provable. And it must not match
 # inside a FIXTURE tree: a `check` spelled `mise run` resolves only where a
 # mise.toml is findable, so a row matching a fixture reports the launcher rather
-# than the tree — `tests/prebuilt-lint.bats` copies the workflows into its
+# than the tree — `tests/prebuilt-lint.bats` copied the workflows into its
 # fixture, which is exactly the wider spelling that would have caught this one.
 # Naming the file the row exists to run keeps the trigger and the mechanism the
 # same object. The workflow it JUDGES is globbed on the hk step instead, where a
@@ -7504,12 +7504,12 @@ severity = "deny"
 # remaining retirements each moving a decider behind the same resolver.
 #
 # A DELTA RATCHET RATHER THAN A STATE RULE, and the choice is forced. Three
-# instances are live on `main` — `closing-key-check.sh:193,195` and
-# `deferral-check.sh:117` — and none is repairable, because `mise-tasks/**` is
-# governed by `shell edit refused`, whose landable shapes are retire-whole or
-# leave-alone. A state-scoped row would be red on landing day with no spelling
-# that could make it green; reading the delta grandfathers the three and refuses
-# the fourth.
+# instances were live on `main` — `closing-key-check.sh:193,195` and
+# `deferral-check.sh:117` — and none was repairable, because `mise-tasks/**` was
+# governed by `shell edit refused`, whose landable shapes were retire-whole or
+# leave-alone. A state-scoped row would have been red on landing day with no
+# spelling that could make it green; reading the delta grandfathered the three
+# and refuses the fourth.
 #
 # `line_sources` MATCHES `delta_sources` HERE, unlike the row above, because this
 # module reads lines for exactly the paths it governs and no others. The row above
@@ -12138,7 +12138,7 @@ wiring = [".claude/settings.json"]
 # -J`: `siblings: 2`, `merged_siblings: 2` for claude-code). **THIS COMMIT
 # CLEARS ONE OF THEM** — the `session-*` handler rows below retire
 # `.claude/hooks/session-start.sh`, so the committed surface now carries one
-# sibling rather than two. Three remain:
+# sibling rather than two. Three remained:
 #
 #   mise-tasks/run-shape-guard.sh      committed   CLOUD-856
 #   session-start-git-identity.sh      $HOME       CLOUD-1079

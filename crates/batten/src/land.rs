@@ -857,7 +857,7 @@ pub enum Waited {
     /// pending one: the loop asked its whole count — 3600 by default — and then
     /// reported [`Waited::Unanswered`], which laps. A branch with one failing
     /// test therefore bought a fresh matrix per lap and waited out an hour on
-    /// each. The predecessor stopped on red, and `tests/land.bats` says so in as
+    /// each. The predecessor stopped on red, and `tests/land.bats` said so in as
     /// many words: *"red CI stops the lap without asking for the merge"*.
     Red {
         /// Which required checks failed, as pointers. Never a log line —
@@ -3181,7 +3181,7 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
 ///
 /// # This is only ever reached from the LANDED path, and that is the whole guard
 ///
-/// `mise-tasks/land.sh` states it: *"ONLY here, never on a `die` path — an
+/// `mise-tasks/land.sh` stated it: *"ONLY here, never on a `die` path — an
 /// abandoned branch is evidence and has to survive."* Trunk-based development is
 /// explicit that a short-lived branch should not outlive its pull request
 /// (CLOUD-349), and a name left behind is how one becomes long-lived; but a
@@ -3786,7 +3786,7 @@ pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, cancel): Forge
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
     // context is not an answer and wedges the branch. `abandon-matrix.bats`
-    // refuses to run at all without the declaration for exactly this reason, and
+    // refused to run at all without the declaration for exactly this reason, and
     // the first port of this dropped the arm.
     if !fanin.declared() {
         return Abandoned::NONE;
@@ -5961,7 +5961,7 @@ mod tests {
     /// the fan-in's, whose cancelled context is not an answer and wedges the
     /// branch.
     ///
-    /// `abandon-matrix.bats` refuses to run at all without the declaration.
+    /// `abandon-matrix.bats` refused to run at all without the declaration.
     /// The refusal lives in `abandon` now; this case pins the pure half's shape
     /// so the guard cannot quietly move back down here and stop refusing.
     #[test]
@@ -6331,7 +6331,7 @@ mod tests {
     /// **A DRAFT IS READIED WHATEVER ITS RUNS SAY**, and the case that forces it
     /// is the tap's own leftover: a pull request the tap drafted carries a
     /// cancelled set, and reading the runs first would leave it a draft forever.
-    /// `tests/land.bats` states it as *"the re-drafted PR a cancelled set left
+    /// `tests/land.bats` stated it as *"the re-drafted PR a cancelled set left
     /// behind is readied, not stuck"*.
     #[test]
     fn a_draft_is_readied_whatever_its_head_carries() {

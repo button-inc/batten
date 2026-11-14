@@ -1,6 +1,6 @@
 # Read by shfmt (via --apply-ignore) and by editors. The shell settings here are
 # the ones the gate enforces: shfmt takes its indent from this file, so changing
-# a value reformats mise-tasks/ and tests/*.bats on the next `mise run fmt`.
+# a value reformats the tracked shell files on the next `mise run fmt`.
 root = true
 
 [*]
@@ -12,7 +12,7 @@ trim_trailing_whitespace = true
 # Tabs, because a tab is what shfmt writes when no width is set, and a shell
 # heredoc indented with spaces is not the same program as one indented with
 # tabs (<<- strips tabs only).
-[{mise-tasks/*,*.sh,*.bash,*.bats}]
+[{*.sh,*.bash}]
 indent_style = tab
 
 [*.{rs,toml,md,json,yml,yaml,pkl}]

@@ -148,7 +148,7 @@ const ENGINE: &str = "crates/batten/src";
 /// The namespace an engine subject's name carries.
 ///
 /// **A PREFIX RATHER THAN THE BARE MODULE NAME, BECAUSE THE NAMES COLLIDE.**
-/// `mise-tasks/doctor.sh` is a gate called `doctor` and `crates/batten/src/
+/// `mise-tasks/doctor.sh` was a gate called `doctor` and `crates/batten/src/
 /// doctor.rs` transliterates to `doctor` too — so a bare name would have made
 /// `subjects` overwrite the shell gate's row with the module's, and left
 /// `sources_for` still resolving the shell task, which means the module's

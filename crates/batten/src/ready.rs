@@ -1193,12 +1193,12 @@ fn check_bump(
     // non-releasing TYPE releases nothing and still lands a commit, and says so
     // with its own token.
     //
-    // **The consumer is not touched, and that is the point rather than a
-    // shortcut.** `graph-check.sh` keys its exemption on the literal `none`; it
-    // is a governed shell rule that cannot retire, so `shell edit refused`
-    // refuses any edit to it with one route and no override. Changing which rows
-    // the producer spends that token on fixes the contradiction with the consumer
-    // byte-unchanged — which also makes its unedited suite the evidence that the
+    // **The consumer was not touched, and that is the point rather than a
+    // shortcut.** `graph-check.sh` keyed its exemption on the literal `none`; it
+    // was a governed shell rule that could not retire, so `shell edit refused`
+    // refused any edit to it with one route and no override. Changing which rows
+    // the producer spends that token on fixed the contradiction with the consumer
+    // byte-unchanged — which also made its unedited suite the evidence that the
     // repair reached it.
     let emitted = match (declared.as_str(), commit_type.is_empty()) {
         ("", _) => "-",
@@ -1773,7 +1773,7 @@ pub const VERDICT_UNREADY: &str = "unready";
 ///
 /// # Why the codes are inverted here, deliberately
 ///
-/// CLOUD-909 records the trap: `mise-tasks/ready-lint.sh` spells `0` pass, `1`
+/// CLOUD-909 records the trap: `mise-tasks/ready-lint.sh` spelled `0` pass, `1`
 /// violation, `2` could-not-look, and batten's own `0/1/2/3` table spells `2` for
 /// the policy verdict and `1` for a usage error. This function answers in the
 /// SHELL program's codes, because its callers are the `[[recorder]]` columns

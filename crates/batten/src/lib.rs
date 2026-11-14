@@ -11247,7 +11247,7 @@ fn report_comparison(
 /// # The exit vocabulary is uniform, and this paragraph used to claim it was not
 ///
 /// It read: _"`authorises` answers `0` run / `3` stop / `2` could not look,
-/// because `1` already means held by someone else."_ That is
+/// because `1` already means held by someone else."_ That was
 /// `mise-tasks/land-lock.sh`'s table, transcribed rather than ported, and the
 /// landed arm never spoke it — `Authority::Stop` returns
 /// [`ExitCode::Violation`] and an unresolvable terms read returns
@@ -12385,7 +12385,7 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
     // at the constructor rather than anywhere in 6,000 lines.
     // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
     // run (non-negotiable rule 4). The predecessor carried the
-    // pointer too — `abandon-matrix.bats` pins it — because three
+    // pointer too — `abandon-matrix.bats` pinned it — because three
     // counts with no subject cannot be told from another head's.
     let fanin =
         land::FanIn::from_workflow_path(std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default());
@@ -12749,7 +12749,7 @@ fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write)
 /// # Every arm is a DURABLE EXTERNAL WRITE, which is why none of them is a trap
 ///
 /// [`crate::pipeline::Compensation`]'s header carries the argument and
-/// `land.sh:353` carries the measurement — *"a trap runs on the container kill
+/// `land.sh:353` carried the measurement — *"a trap runs on the container kill
 /// too"* — so an in-process rollback does not run in the one case compensation
 /// exists for. Each arm here lands on the forge or on a remote ref.
 ///
@@ -12890,7 +12890,7 @@ fn unwind_lap(
 ///
 /// That module is a complete decision layer — `settle`, `recover`, `carries`,
 /// `Bet`, `Live`, with its own suite — and it was reachable from nothing but
-/// `pub mod`. Twenty-one cases in `tests/land.bats` describe behaviour no call
+/// `pub mod`. Twenty-one cases in `tests/land.bats` described behaviour no call
 /// site could produce, which is the shape PR #848's review found for the
 /// compensation cluster and the ready event before it.
 ///
@@ -15318,7 +15318,7 @@ fn spend_the_matrix(
 ///
 /// **A ready that did not fire STOPS the lap**, which is the one place this
 /// family does not swallow a forge failure: pushing after it would spend the
-/// wait's whole ask count on a matrix nobody started. `tests/land.bats` states
+/// wait's whole ask count on a matrix nobody started. `tests/land.bats` stated
 /// it as *"a ready that fails stops before the push rather than pushing into
 /// silence"*.
 fn fired(
@@ -15775,7 +15775,7 @@ fn say_what_the_wait_saw(
                 &format!("::error:: land: {}", red.render_finding(refusal::Arm::Full)),
             )?;
             // THE RE-RUN ECONOMY, and it is what `failed_runs`/`rerun_failed`
-            // were built for and never reached. `tests/land.bats` splits it in
+            // were built for and never reached. `tests/land.bats` split it in
             // two: *"a run that died before any mise step is re-run, not
             // reported red"* against *"a job that reached a verdict is red, and
             // is never re-run"*. This engine cannot yet tell those apart — that
@@ -18715,8 +18715,8 @@ const UNDECODABLE_PAYLOAD: &str =
 /// The failure a caller genuinely must NOT miss — the binary being absent
 /// entirely — cannot reach this function, and since CLOUD-824 there is no
 /// launcher to report it either. `mise-tasks/stop-guard.sh` and
-/// `mise-tasks/contract-drift.sh` still carry that half themselves, which is the
-/// shape they always had; what is gone is the shell copy they inherited it from.
+/// `mise-tasks/contract-drift.sh` still carried that half themselves, which was the
+/// shape they always had; what was gone was the shell copy they inherited it from.
 ///
 /// Exit is always `Success`: this renders no verdict, so it has none to signal.
 fn run_hook_field(
@@ -22917,12 +22917,12 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// `finding-sink` at 1/1, with the three unmeasured below — and the caller emits
 /// the first that speaks.
 ///
-/// # The siblings are spawned unchanged, which is a deliberate bound
+/// # The siblings were spawned unchanged, which was a deliberate bound
 ///
-/// `finding-sink-check.sh` and `unlanded-check.sh` are invoked exactly as the
-/// bash invoked them, with the same stdin. Neither enters this change's
-/// changed-file set, so `shell-retirement` never fires on them and the cascade
-/// stops at the program actually being retired. A `[[hook.handler]]` row cannot
+/// `finding-sink-check.sh` and `unlanded-check.sh` were invoked exactly as the
+/// bash invoked them, with the same stdin. Neither entered this change's
+/// changed-file set, so `shell-retirement` never fired on them and the cascade
+/// stopped at the program actually being retired. A `[[hook.handler]]` row cannot
 /// serve here: that door pipes the host's own payload, and the first of those
 /// two reads a transcript PATH on stdin — it would answer "no readable
 /// transcript path" every turn, which is a broken gate wearing a nudge's shape.

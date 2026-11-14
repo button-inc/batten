@@ -775,7 +775,7 @@ the preset half alone.
 
 The module's own `test_` rules are the **load-time** tier. They pin the predicate.
 
-`tests/<gate>.bats` over the **compiled binary** is the tier that proves the
+`crates/batten/tests/*.rs` over the **compiled binary** is the tier that proves the
 ENGINE builds the input the predicate reads. A `with input as` case cannot do
 this: it fabricates the very shape the engine may be unable to produce, so it
 passes over a key nothing fills and over a channel nothing populates. Both live

@@ -7,8 +7,8 @@
 //! second-authority class CLOUD-857 measured.
 //!
 //! **The writer nearly did not land, and the reason is worth keeping.** The
-//! caller in `mise-tasks/land-lock.sh` binds this program to a variable and
-//! spends it with arguments, and `shell-retirement`'s
+//! caller in `mise-tasks/land-lock.sh` bound this program to a variable and
+//! spent it with arguments, and `shell-retirement`'s
 //! `repoints_at_the_declared_invocation` looked as though it reached the binding
 //! and not the spend. It reaches both: the clause decomposes the ADDED line
 //! against the declared invocation, so with `runs:batten+task` the derived span

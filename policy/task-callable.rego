@@ -109,8 +109,8 @@ defined contains name if {
 }
 
 # A FILE TASK'S NAME IS ITS PATH UNDER `mise-tasks/` WITH THE SEPARATOR SPELLED
-# `:`, AND THE NESTED ARM IS NOT DECORATION. `mise-tasks/render/cli.sh` is
-# `mise run render:cli`, which `release-artifacts.yml` calls. A reading that took
+# `:`, AND THE NESTED ARM IS NOT DECORATION. `mise-tasks/render/cli.sh` was
+# `mise run render:cli`, which `release-artifacts.yml` called. A reading that took
 # only the last path component would resolve it as `cli`, leave `render:cli`
 # undefined, and refuse a caller that works — a false positive on the first run,
 # which is the failure mode `verdict-routes-resolve`'s own header says gets an
@@ -349,7 +349,7 @@ test_a_task_backed_by_a_program_resolves if {
 	count(found) == 0
 }
 
-# THE NESTED ARM'S OWN CASE. `mise-tasks/render/cli.sh` is `mise run render:cli`,
+# THE NESTED ARM'S OWN CASE. `mise-tasks/render/cli.sh` was `mise run render:cli`,
 # and a reading that took the last path component alone would refuse it.
 test_a_task_backed_by_a_nested_program_resolves if {
 	found := violation with input as {"tree": {

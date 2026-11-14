@@ -456,8 +456,8 @@ CI_RETIRING_CHECKS = ""
 #
 # WHY THESE TWO AND NOT `filed-here-check`: that gate is already the engine's
 # (CLOUD-1051) and the lap reaches it through `batten check`, so listing it here
-# would run it twice. These two are still bash and still have `land.sh` as their
-# only caller — which is what slice 7's deletion would orphan.
+# would run it twice. These two were still bash and still had `land.sh` as their
+# only caller — which is what slice 7's deletion would have orphaned.
 LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
 LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
 # THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
@@ -1495,12 +1495,12 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 # CLOUD-827's gate, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, DELIBERATELY. `verify` and
-# `mise-tasks/land.sh` both invoke it by name, and `land.sh` is an authored shell
-# rule `shell-retirement` refuses to see edited — so retiring the gate by editing
+# `mise-tasks/land.sh` both invoked it by name, and `land.sh` was an authored shell
+# rule `shell-retirement` refused to see edited — so retiring the gate by editing
 # its callers would have meant retiring the landing loop to move one predicate.
 # `batten check --rule` is the narrowing that makes a migrated row invocable
-# instead, and this row is its first consumer. Both callers stay byte-identical
-# and out of this PR's changed-file set.
+# instead, and this row is its first consumer. Both callers stayed byte-identical
+# and out of that PR's changed-file set.
 #
 # The `[tasks.policy-test]` precedent below is the same shape for the same reason:
 # an inline `cargo run -p batten` body where a shell file used to be.
@@ -1901,10 +1901,10 @@ description = "Gate: every row this branch put on the board was refined at creat
 # CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `prose-only-check`'s reason above:
-# `mise-tasks/land.sh` invokes it by name at the fourth stop, and `land.sh` is an
-# authored shell rule `shell-retirement` refuses to see edited — so retiring the
+# `mise-tasks/land.sh` invoked it by name at the fourth stop, and `land.sh` was an
+# authored shell rule `shell-retirement` refused to see edited — so retiring the
 # gate by editing its caller would have meant retiring the landing loop to move
-# one predicate. That call site stays byte-identical and out of this PR's
+# one predicate. That call site stayed byte-identical and out of that PR's
 # changed-file set.
 #
 # THE HEREDOC ON THAT CALL BECOMES INERT INPUT, and the channel it carried moved
@@ -1958,7 +1958,7 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # whole load-time tier over all of them ran only when a human typed the verb.
 # `privileged-lane` is a live `deny` row over this repository's own privileged CI
 # lanes and its nine `test_` rules were, by the standard `tests/run-shape.bats`
-# states in its own header, comments that happen to parse.
+# stated in its own header, comments that happen to parse.
 #
 # AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and that is forced rather
 # than stylistic: `bash-surface-not-growing` (CLOUD-929) lands in this same PR and
@@ -1969,9 +1969,9 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # command, which is what `rules/toolchain.md` reserves a file task FROM.
 #
 # THIS DELIVERS THE LOAD-TIME TIER ONLY. `tests/<gate>.bats` over the compiled
-# binary is the tier that proves the ENGINE produces the shape a predicate reads,
+# binary was the tier that proved the ENGINE produces the shape a predicate reads,
 # and a `with input as` cannot substitute for it (CLOUD-845). That is why this row
-# also carries `tests/privileged-lane.bats` rather than stopping here.
+# also carried `tests/privileged-lane.bats` rather than stopping here.
 #
 # ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
 # whose exit code a one-command task already is.
@@ -2789,9 +2789,9 @@ description = "Build the release binary the hook registrations execute"
 # NO `depends` ON `target-prune` (CLOUD-2198): the floor model it judged is
 # retired, and the hook collects before this task's own spawn.
 #
-# The one place the hook's binary is produced, so `install:local`,
-# `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
-# of a cargo line that could drift in their flags.
+# The one place the hook's binary is produced, so `install:local` and every
+# other task that `depends` on it name a task rather than copies of a cargo
+# line that could drift in their flags.
 #
 # Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
 # `cargo run` re-walks the build graph per invocation and contends for the
@@ -2862,7 +2862,7 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # `rules/scanning.md` records from CLOUD-843's two disagreeing passes.
 # Describe the row here; do not write its needle.
 #
-# BENCH_METRIC IS THE LOAD-BEARING LINE. `mise-tasks/perf-record.sh` reads it from
+# BENCH_METRIC IS THE LOAD-BEARING LINE. `batten perf record` reads it from
 # the environment and stamps it into every series entry, defaulting to
 # `wall-clock` — the invocation series. Acquisition is a different axis measured
 # over a generated fixture family, so a shared stamp would let a later reader diff
@@ -2994,14 +2994,14 @@ depends = ["build:release"]
 # invoke `batten hook --harness <h>` directly and always did.
 #
 # So the launcher's search is replaced by putting the binary where a search would
-# have ended. The destination is `install.sh:224`'s, character for character, so
+# have ended. The destination is `install.sh`'s, character for character, so
 # a developer clone and a released install resolve the same name from the same
 # place rather than through two different rules.
 #
 # THE NO-BINARY CASE STILL REACHES A HUMAN, and through a louder channel than the
 # one it replaces. The launcher failed open with a stderr line and a
 # once-per-session `$TMPDIR` marker, which is the quietest report this repository
-# produces; this step runs inside `session-start.sh`'s `step`, which emits
+# produces; this step ran inside `session-start.sh`'s `step`, which emitted
 # `::error::`, a log pointer, and a non-zero exit. At hook time, a `batten` that
 # is not there is a command the host cannot run, which every supported host
 # reports through its own channel.
@@ -3272,8 +3272,8 @@ env = { MISE_LOCKFILE = "false", MISE_ENV = "agent" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
-description = "Gate: every tool [tools] declares is actually installed — the question doctor.sh structurally cannot ask"
-# `mise-tasks/doctor.sh` looks for broken bin SYMLINKS under the installs dir,
+description = "Gate: every tool [tools] declares is actually installed — the question the provisioning self-check structurally cannot ask"
+# The provisioning self-check looks for broken bin SYMLINKS under the installs dir,
 # which is a question about RESIDUE. A tool declared and never fetched leaves no
 # symlink at all and passes it — which is exactly the state a failed install
 # leaves, and the state that made CLOUD-1683's false green possible. This asks
@@ -4010,7 +4010,7 @@ run = "batten startup --repair"
 # program, and CI still calls every one of these by name: `ci-tools-check` from
 # six workflows, `rust-paths-check` from `rust.yml`, `report-only-check` from
 # `scorecard.yml` and from `verify` here, `timeout-check` from
-# `timeout-drift.yml`, and `awk-regex-check` from `mise-tasks/nonverdict-assert.sh`.
+# `timeout-drift.yml`; `mise-tasks/nonverdict-assert.sh` called `awk-regex-check`.
 # Without these rows each of those is "no task found" — which is how `hk.pkl`'s
 # `mcp-timeout-budget` step and `test:musl`'s `target-ensure` call broke in this
 # same campaign, and it is the fourth and fifth instance of one defect.
@@ -4282,7 +4282,7 @@ run = "hk check --all"
 # The predecessor spelled an unverified head `1` and an unusable checkout `2` —
 # the table inverted. Callers read the old numbers, so this maps them back, which
 # is the shim shape CLOUD-1170 established and the reason `land.sh` and
-# `tests/tree-clean.bats` need no edit to keep working.
+# `tests/tree-clean.bats` needed no edit to keep working.
 # CLOUD-193's precondition, ported off `mise-tasks/tree-clean.sh` under
 # CLOUD-1753.
 #
@@ -4526,8 +4526,8 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # CLOUD-843 and retired onto the `task` noun.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `claim-check`'s reason: `land.sh`
-# calls `mise run task-registry <verb> ...` and may not be edited, so keeping the
-# name is what makes this retirement reach the program it claims. The other
+# called `mise run task-registry <verb> ...` and could not be edited, so keeping
+# the name is what made this retirement reach the program it claims. The other
 # caller this paragraph once named, `step-receipt`, retired onto `batten step`
 # (CLOUD-843), which announces its phase through the `task` noun in-process
 # rather than through this task.
@@ -4548,9 +4548,9 @@ description = "Refuse to start a task that is already running in this clone, nam
 # onto the `singleton` noun.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, and here that is the whole of the
-# retirement's reach: `land.sh` calls `mise run singleton acquire|release` by
-# NAME, never by path, so keeping the name means `land.sh` and `tests/land.bats`
-# are not touched at all.
+# retirement's reach: `land.sh` called `mise run singleton acquire|release` by
+# NAME, never by path, so keeping the name meant `land.sh` and `tests/land.bats`
+# were not touched at all.
 #
 # THE TRANSLATION RETIRED WITH ITS LAST CALLER (CLOUD-1991): `land.sh` was the
 # only program reading the old `1`/`2`, and `land` is `batten land lap` now. The

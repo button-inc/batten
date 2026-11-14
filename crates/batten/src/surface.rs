@@ -796,7 +796,7 @@ const CONFIG_FROM: FlagDecl = FlagDecl {
 /// The sibling of [`CONFIG_FROM`], and the distinction is the whole reason it
 /// exists: `--config-from` names a git **ref**, resolved inside the repository
 /// the run discovered. A verb run inside a `git init`-ed scratch repository —
-/// which 50 of 144 `tests/*.bats` suites create, to keep receipt writes off the
+/// which 50 of 144 `tests/*.bats` suites created, to keep receipt writes off the
 /// real checkout (CLOUD-512) — has no ref to name and no `batten.toml` to read,
 /// so no spelling of the existing flag reaches that case.
 ///
@@ -1310,8 +1310,8 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
 ///
 /// A gate ported out of `mise-tasks/` into a `[[rule]]` row loses its task name,
 /// and every lifecycle step that invoked it by name breaks. The alternative was
-/// to edit those callers — which for `land.sh` means editing an authored shell
-/// rule `shell-retirement` refuses to see edited, so the migration would have had
+/// to edit those callers — which for `land.sh` meant editing an authored shell
+/// rule `shell-retirement` refused to see edited, so the migration would have had
 /// to retire the landing loop to move one gate. This is the narrowing that makes
 /// a migrated row invocable by name instead, so a caller stays byte-identical
 /// and out of the changed-file set.
@@ -2449,7 +2449,7 @@ const LANDED_BY: FlagDecl = FlagDecl {
 /// The keys a commit reachable from the trunk CLOSES — claiming, never
 /// merely mentioning. This is the first arm of the landedness disjunction, and
 /// the caller supplies it rather than the engine reading it, for the reason
-/// `mise-tasks/landed-check.sh` gives at its own call site: `claimed-keys` is
+/// `mise-tasks/landed-check.sh` gave at its own call site: `claimed-keys` is
 /// this repository's ONE authority on claim-versus-mention, and a second copy
 /// of its `CLAIM_RE` is what CLOUD-378 was filed for.
 ///
@@ -2457,7 +2457,7 @@ const LANDED_BY: FlagDecl = FlagDecl {
 /// declared the field, `landed()` and `asserted_only()` branched on it, and
 /// four unit cases constructed it directly — so the predicate's own tier was
 /// green over an arm the binary could not feed, a two-arm disjunction wearing a
-/// three-arm header. `landed-check.sh` names the direction that costs: a
+/// three-arm header. `landed-check.sh` named the direction that costs: a
 /// claim-only reading trades over-reporting for a SILENT UNDER-REPORT, which is
 /// "strictly worse for a drain", and shipping without the arm is that same
 /// error pointed the other way.
@@ -6086,8 +6086,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // than a pure read — the mediated claim gate needs a claimed branch to be
     // distinguishable from an unclaimed one. A row claiming `read` here would put
     // a writing verb on the derived read-only allowlist.
-    // CLOUD-1711. `mise-tasks/claimed-keys.sh` retires onto this leaf, and
-    // `merged-pr-keys.sh` with it — that program shells into this same answer once
+    // CLOUD-1711. `mise-tasks/claimed-keys.sh` retired onto this leaf, and
+    // `merged-pr-keys.sh` with it — that program shelled into this same answer once
     // per pull request body, so the two are a closed set.
     //
     // A LEAF under `claim` rather than a noun of its own (CLOUD-1546's 42
