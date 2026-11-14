@@ -1446,6 +1446,29 @@ fn is_pin_line(line: &str) -> bool {
         .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
+/// Whether `worktree` differs from the committed `head` config only by a local
+/// build's source pin over a committed release pin.
+///
+/// A local build pins its own digest so whichever `batten` runs follows it; the
+/// pin's job ends once the test that needed the build has answered, because no
+/// unreleased engine can judge a merge to the trunk. Left in the tree, it fails
+/// every lap's receipt, and it was stashed "to restore later" nine times in one
+/// session (#1276) rather than put back. Only this exact shape answers yes:
+/// every other byte must already be the committed one.
+#[must_use]
+pub fn local_source_pin(head: &str, worktree: &str) -> bool {
+    let pin = |text: &str| top_level(text, "engine").and_then(|value| value.try_into::<Pin>().ok());
+    match (pin(worktree), pin(head)) {
+        (Some(local), Some(committed)) => {
+            local.source.is_some()
+                && committed.source.is_none()
+                && committed.release.is_some()
+                && rewrite(worktree, &committed) == head
+        }
+        _ => false,
+    }
+}
+
 /// `text` with its top-level pin set to `pin` (CLOUD-2063).
 ///
 /// The existing line is replaced in place. With none, the pin goes directly
@@ -2463,6 +2486,30 @@ mod tests {
         assert_eq!(extract(&archive, "batten")?, b"\x7fELF engine");
         assert!(extract(&archive, "missing").is_err());
         Ok(())
+    }
+
+    /// Fails by: a local source pin over a committed release not recognised, or
+    /// any other difference — a second edit, a committed source pin, or a
+    /// release moved — read as one, so restoring it would discard real work.
+    #[test]
+    fn only_a_local_source_pin_over_a_committed_release_is_the_builds_own() {
+        let head = "version = 1\nengine = { release = \"v0.0.9\" }\n\n[x]\ny = 1\n";
+        let source = format!("engine = {{ source = \"{}\" }}", "a".repeat(64));
+        let local = head.replace("engine = { release = \"v0.0.9\" }", &source);
+        assert!(local_source_pin(head, &local));
+        assert!(!local_source_pin(head, head), "nothing differs");
+        assert!(
+            !local_source_pin(head, &local.replace("y = 1", "y = 2")),
+            "a second edit is someone's work"
+        );
+        assert!(
+            !local_source_pin(&local, &local),
+            "a committed source pin is the engine gate's"
+        );
+        assert!(
+            !local_source_pin(head, &head.replace("v0.0.9", "v0.0.10")),
+            "a moved release is a change to land"
+        );
     }
 
     #[test]
