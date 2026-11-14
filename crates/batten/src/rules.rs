@@ -21686,7 +21686,7 @@ violation contains {
         let rows = [&judged, &retiring, &elsewhere];
         let moving = moving_rows(&rows, "t.bats", Some(""), ONE_CASE).expect("counts");
         assert_eq!(moving.len(), 1, "only the judged row over *.bats moves");
-        assert!(std::ptr::eq(moving[0].0, &judged));
+        assert!(std::ptr::eq(moving[0].0, std::ptr::from_ref(&judged)));
     }
 
     /// The changed set follows its base ref: moving the base while HEAD stays

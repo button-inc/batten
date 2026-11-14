@@ -4584,6 +4584,7 @@ pub fn will_need(path: &Path) {
 /// is queued in one pass before any object is read. A hint only: a failure is
 /// ignored, and off Linux it is a no-op. Answers how many pack and index files
 /// it hinted, the one thing a hint can be checked by.
+#[must_use]
 pub fn prefetch_packs(dir: &Path) -> usize {
     let Ok(repository) = open(dir) else {
         return 0;
