@@ -402,6 +402,37 @@ pub fn source_named(harness: &str, transcript: Option<&Path>) -> Option<Box<dyn 
     }
 }
 
+/// A harness's name and its source.
+pub type Named = (String, Box<dyn SessionSource>);
+
+/// Every source that lists the sessions kept on this machine, by harness name,
+/// for the daemon of a session of `harness` (CLOUD-2735).
+///
+/// One per harness that has an implementation; a harness with none is left
+/// out. `transcript` is read only by `harness`'s own source, which finds its
+/// place from it.
+///
+/// **The neutral harness gets none.** Its source is one file the caller names:
+/// it has no machine to list, so a daemon run for it imports nothing.
+#[must_use]
+pub fn machine_sources(harness: &str, transcript: Option<&Path>) -> Vec<Named> {
+    let neutral = Harness::ExitCode.as_str();
+    if harness == neutral {
+        return Vec::new();
+    }
+    Harness::ALL
+        .iter()
+        .filter(|each| each.as_str() != neutral)
+        .filter_map(|each| {
+            let named = transcript.filter(|_| each.as_str() == harness);
+            match source_for(*each, named) {
+                Sourced::Surveyed(source) => Some((each.as_str().to_owned(), source)),
+                Sourced::Unsurveyed(_) => None,
+            }
+        })
+        .collect()
+}
+
 /// Claude Code's session source (CLOUD-1011): one append-only JSON-lines file
 /// per session under a projects directory, with subagent transcripts in a
 /// `subagents` directory beside the session they belong to.

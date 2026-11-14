@@ -1038,6 +1038,8 @@ fn segment(sub: &str) -> String {
 
 /// The feeds of one push: the session's own, from its harness's source, then
 /// `extra` in the order given.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT history-fed-before-live-data|s@^    feeds.extend(later);$@    drop(feeds.splice(0..0, later));@|the_feed_list_has_the_live_feeds_before_any_history
 fn feeds_of<'a>(
     session: &Session<'_>,
     source: Option<&'a dyn SessionSource>,
@@ -1059,26 +1061,32 @@ fn feeds_of<'a>(
             if !named && found.id != session.meta.session {
                 continue;
             }
-            let prefix = if found.sub.is_empty() {
-                String::from("transcript/main")
-            } else {
-                format!("transcript/{}", segment(&found.sub))
-            };
             feeds.push(Feed {
-                prefix,
+                prefix: own_prefix(&found.sub),
                 source,
                 session: found,
             });
         }
     }
-    for feed in extra {
-        feeds.push(Feed {
-            prefix: feed.prefix.clone(),
-            source: feed.source,
-            session: feed.session.clone(),
-        });
-    }
+    // LIVE DATA FIRST (CLOUD-2735): the cap is spent in feed order, so what
+    // comes after takes only what the session's own records left.
+    let later = extra.iter().map(|feed| Feed {
+        prefix: feed.prefix.clone(),
+        source: feed.source,
+        session: feed.session.clone(),
+    });
+    feeds.extend(later);
     Ok(feeds)
+}
+
+/// Where one of a session's own files goes in its snapshot: `transcript/main`,
+/// or `transcript/<key>` for a subagent's.
+fn own_prefix(sub: &str) -> String {
+    if sub.is_empty() {
+        String::from("transcript/main")
+    } else {
+        format!("transcript/{}", segment(sub))
+    }
 }
 
 /// Build one snapshot of `session` and make it the value of the session's ref
@@ -1104,8 +1112,13 @@ fn feeds_of<'a>(
 //MUTANT throttled-push-retried-at-once|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                let _ = throttle;@|a_throttled_push_returns_at_once_and_loses_nothing
 //MUTANT unchanged-snapshot-still-sent|s@^        if unchanged {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
 //MUTANT pushed-cursor-recorded-before-the-swap|s@^        let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;$@        record_pushed(\&dir, \&repo, \&commit)?; let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;@|a_throttled_push_returns_at_once_and_loses_nothing
-//MUTANT rejected-swap-retried-without-bound|s@^    for attempt in 1..=ATTEMPTS {$@    for attempt in 1..=ATTEMPTS + 2 {@|three_rejected_swaps_are_contended_after_three_posts
+//MUTANT rejected-swap-retried-without-bound|s@^    for _ in 0..ATTEMPTS {$@    for _ in 0..ATTEMPTS + 2 {@|three_rejected_swaps_are_contended_after_three_posts
 pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
+    push_capped(session, extra, BYTE_CAP)
+}
+
+/// [`push_once`] with the most new record bytes it may add named outright.
+fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Result<Push> {
     match lease::probe(&session.remote, Service::ReceivePack) {
         Ok(200) => {}
         Ok(401 | 403 | 404) => return Ok(Push::only(Pushed::Unattached)),
@@ -1125,14 +1138,14 @@ pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
     let feeds = feeds_of(session, source.as_deref(), extra)?;
 
     let mut ended = Vec::new();
-    for attempt in 1..=ATTEMPTS {
+    for _ in 0..ATTEMPTS {
         let built = snapshot(
             session.project_root,
             session.provisions,
             &session.meta,
             &feeds,
             session.time,
-            BYTE_CAP,
+            byte_cap,
         )?;
         let (commit, tree) = match built {
             Snapshot::Built {
@@ -1186,11 +1199,10 @@ pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
             }
             lease::Outcome::Rejected { .. } => {}
         }
-        if attempt == ATTEMPTS {
-            break;
-        }
         // REJECTED: another writer holds the ref. Take what it wrote, keep all
-        // of it, and build again on top.
+        // of it, and build again on top. After the last attempt too: THE LOOP'S
+        // BOUND IS THE ONLY BOUND, and what the last rival wrote is then here
+        // for the next push to build on.
         let theirs = match lease::advertise(&session.remote, Service::ReceivePack) {
             Ok(advertisement) => advertisement.head_of(&name).to_owned(),
             Err(err) => return throttled(err),
@@ -1481,6 +1493,394 @@ fn foreign(dir: &Path, last: Option<&str>, path: &str) -> bool {
         return aside.join("transcript").exists();
     }
     keyed(path, "history/").is_some_and(|(entry, _)| aside.join("history").join(entry).exists())
+}
+
+// --- the import (CLOUD-2735) ---------------------------------------------------
+
+/// The directory, under the machine's state root, that holds one marker per
+/// session whose records are known to be in the state repository.
+///
+/// Per machine, and not per checkout or per session: an imported session has no
+/// ref of its own, so the marker is what stops another session or another
+/// checkout here from uploading the same history again.
+const IMPORTED: &str = "offbox-imported";
+
+/// The lock one importing daemon per machine holds, beside the markers.
+const IMPORT_LOCK: &str = "offbox-import.lock";
+
+/// The tree root, and the local directory, imported sessions are kept under.
+const HISTORY: &str = "history";
+
+/// An imported session's own description, beside its segment files.
+const HISTORY_META: &str = "meta.json";
+
+/// One session a source lists, other than the live one, with all its files.
+struct Listed<'a> {
+    harness: &'a str,
+    source: &'a dyn SessionSource,
+    id: String,
+    leaf: String,
+    /// The project directory the agent recorded, where it recorded one.
+    project: Option<PathBuf>,
+    files: Vec<SessionRef>,
+}
+
+/// Every session the sources list on this machine, other than the live one —
+/// `live` is its harness and its id. A source that will not list gives none:
+/// what it holds is looked for again before the next push.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT live-session-imported-as-history|s@^            if harness == live.0 \&\& file.id == live.1 {$@            if false {@|the_live_session_is_not_imported_and_the_others_are
+fn listed<'a>(history: &'a [crate::sessions::Named], live: (&str, &str)) -> Vec<Listed<'a>> {
+    let mut found = Vec::new();
+    for (harness, source) in history {
+        let mut sessions: BTreeMap<String, Listed<'a>> = BTreeMap::new();
+        for file in source.list().unwrap_or_default() {
+            if harness == live.0 && file.id == live.1 {
+                continue;
+            }
+            let session = sessions.entry(file.id.clone()).or_insert_with(|| Listed {
+                harness,
+                source: source.as_ref(),
+                id: file.id.clone(),
+                leaf: leaf(harness, &file.id),
+                project: None,
+                files: Vec::new(),
+            });
+            // The main file's directory, where the session has a main file.
+            if file.project.is_some() && (file.sub.is_empty() || session.project.is_none()) {
+                session.project.clone_from(&file.project);
+            }
+            session.files.push(file);
+        }
+        found.extend(sessions.into_values());
+    }
+    found
+}
+
+/// Where a listed session stands, by local files alone: nothing here asks the
+/// remote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    /// Its marker exists.
+    Marked,
+    /// Its own daemon is running and pushing it; looked at again next push.
+    Live,
+    /// Known to be stored without this daemon importing it; to be marked.
+    Stored,
+    /// To be imported.
+    Owed,
+}
+
+/// The main checkout a recorded project directory is in, where it is in one.
+fn checkout_of(project: Option<&Path>) -> Option<PathBuf> {
+    crate::git::repo_root(project?).ok()
+}
+
+/// Whether the push record at `pushed` — the cursors its session's own daemon
+/// last pushed — covers every file the source lists for `session`, each read to
+/// the end of its source.
+///
+/// A listed file with no entry, a source that will not read, and one replaced
+/// under its cursor all answer no. Entries under `history/` are never looked at.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT unlisted-file-counts-as-pushed|s@^            return false; // a file the push never saw$@            return true;@|a_file_the_push_never_saw_is_imported_and_not_marked
+//MUTANT partly-pushed-session-marked-stored|s@^        read.is_ok_and(\x7cbatch\x7c batch.is_ended())$@        read.is_ok()@|a_partly_pushed_session_with_no_daemon_is_imported_whole
+fn pushed_whole(session: &Listed<'_>, pushed: &Path) -> bool {
+    let Ok(body) = std::fs::read(pushed) else {
+        return false;
+    };
+    let Ok(cursors) = serde_json::from_slice::<Cursors>(&body) else {
+        return false;
+    };
+    session.files.iter().all(|file| {
+        let Some(position) = cursors.get(&own_prefix(&file.sub)) else {
+            return false; // a file the push never saw
+        };
+        let from = Cursor(unhex(&position.cursor));
+        let read = session.source.read(file, &from, 1);
+        read.is_ok_and(|batch| batch.is_ended())
+    })
+}
+
+/// Where `session` stands (CLOUD-2735). `checkout` is the checkout its project
+/// directory is in, `dir` this daemon's session directory with `cursors` its
+/// cursor file, and `machine` the machine's state root.
+///
+/// In order: its marker; **then whether its own daemon is alive**, before any
+/// check that could mark it, so a live session is never marked however far its
+/// push record has got; then a local `history/<leaf>/` with no cursor entry
+/// under it, which only another writer's snapshot leaves behind — [`snapshot`]
+/// writes the entry for every feed it is given before that feed's first byte;
+/// then its own daemon's push record.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT live-session-marked-stored|s@^    if live_elsewhere {$@    if false {@|a_session_live_elsewhere_is_neither_imported_nor_marked
+//MUTANT session-live-elsewhere-imported|s@^        return Standing::Live;$@        return Standing::Owed;@|a_session_live_elsewhere_is_neither_imported_nor_marked
+//MUTANT absorbed-history-imported-again|s@^    if absorbed_here {$@    if false {@|history_absorbed_from_another_writer_is_marked_and_not_imported
+//MUTANT fully-pushed-session-imported-again|s@^    if whole {$@    if false {@|a_session_its_own_daemon_pushed_whole_is_marked_and_not_imported
+fn standing_of(
+    session: &Listed<'_>,
+    checkout: Option<&Path>,
+    dir: &Path,
+    cursors: &Cursors,
+    machine: &Path,
+) -> Standing {
+    if machine.join(IMPORTED).join(&session.leaf).exists() {
+        return Standing::Marked;
+    }
+    let theirs = checkout
+        .and_then(|root| crate::state::repo_state_dir(root).ok())
+        .map(|state| state.join(DIR));
+    let live_elsewhere = theirs.as_deref().is_some_and(|theirs| {
+        crate::offbox_watch::probe(theirs, Some(&session.leaf))
+            == crate::offbox_watch::Liveness::Alive
+    });
+    if live_elsewhere {
+        return Standing::Live;
+    }
+    let under = format!("{HISTORY}/{}/", session.leaf);
+    let absorbed_here = dir.join(HISTORY).join(&session.leaf).exists()
+        && !cursors.keys().any(|prefix| prefix.starts_with(&under));
+    if absorbed_here {
+        return Standing::Stored;
+    }
+    let whole = theirs.is_some_and(|theirs| {
+        pushed_whole(
+            session,
+            &theirs.join(SESSIONS).join(&session.leaf).join(PUSHED),
+        )
+    });
+    if whole {
+        return Standing::Stored;
+    }
+    Standing::Owed
+}
+
+/// Write `leaf`'s marker under `machine`.
+fn mark(machine: &Path, leaf: &str) -> Result<()> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: an import marker will not write: {err}");
+    let markers = machine.join(IMPORTED);
+    std::fs::create_dir_all(&markers).map_err(refused)?;
+    crate::durable::replace(markers.join(leaf), "").map_err(refused)
+}
+
+/// Take the machine's import lock, or `None` where another daemon holds it.
+/// Without it, every agent on one machine would upload the same history.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT second-importer-runs|s@^    let importing_elsewhere = fs4::FileExt::try_lock(\&file).is_err();$@    let importing_elsewhere = false;@|a_daemon_without_the_import_lock_imports_nothing_until_it_is_free
+fn take_import_lock(machine: &Path) -> Result<Option<std::fs::File>> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: the import lock will not open: {err}");
+    std::fs::create_dir_all(machine).map_err(refused)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(machine.join(IMPORT_LOCK))
+        .map_err(refused)?;
+    let importing_elsewhere = fs4::FileExt::try_lock(&file).is_err();
+    Ok((!importing_elsewhere).then_some(file))
+}
+
+/// One session a push is given the feeds of.
+struct Fed {
+    leaf: String,
+    /// Its feeds' prefixes: `history/<leaf>/transcript/<key>`.
+    prefixes: Vec<String>,
+    /// Whether its `meta.json` was already written when the push began, so the
+    /// push's snapshot carries it.
+    described: bool,
+    /// What its `meta.json` holds.
+    meta: Vec<u8>,
+}
+
+/// What one push imports, and what the sources listed.
+#[derive(Default)]
+struct Import<'a> {
+    /// One feed per file of each session still to import, in listed order.
+    feeds: Vec<Feed<'a>>,
+    fed: Vec<Fed>,
+    /// How many sessions the sources listed, the live one apart.
+    listed: u64,
+    /// The leaves of the listed sessions that are marked.
+    marked: Vec<String>,
+}
+
+/// Decide what the next push imports (CLOUD-2735): one feed per file of every
+/// listed session that is not marked, not live elsewhere, and not found stored
+/// — and mark the ones found stored.
+///
+/// **A project that does not resolve is still imported.** A recorded directory
+/// that is gone, is no checkout, or has no http(s) origin gives a `meta.json`
+/// whose `origin` is null; nothing is skipped for lack of one.
+///
+/// # Errors
+///
+/// A marker that will not write.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT unresolved-project-skipped|s@^        let checkout = checkout_of(session.project.as_deref());$@        let checkout = checkout_of(session.project.as_deref()); if checkout.is_none() { continue; }@|a_session_whose_project_is_gone_is_imported_with_no_origin
+//MUTANT marker-written-before-the-push|s@^                import.fed.push(fed);$@                mark(machine, \&fed.leaf)?; import.fed.push(fed);@|a_throttled_push_marks_nothing_and_the_next_applied_one_does
+fn plan_import<'a>(
+    history: &'a [crate::sessions::Named],
+    live: (&str, &str),
+    dir: &Path,
+    machine: &Path,
+) -> Result<Import<'a>> {
+    let cursors = load_cursors(dir);
+    let mut import = Import::default();
+    for session in listed(history, live) {
+        import.listed += 1;
+        let checkout = checkout_of(session.project.as_deref());
+        match standing_of(&session, checkout.as_deref(), dir, &cursors, machine) {
+            Standing::Marked => import.marked.push(session.leaf),
+            Standing::Live => {}
+            Standing::Stored => {
+                mark(machine, &session.leaf)?;
+                import.marked.push(session.leaf);
+            }
+            Standing::Owed => {
+                let origin = checkout.as_deref().and_then(|root| {
+                    let remotes = crate::git::remotes(root).ok()?;
+                    let (_, url) = remotes.into_iter().find(|(name, _)| name == "origin")?;
+                    origin_path(&url)
+                });
+                let mut meta = serde_json::to_vec_pretty(&serde_json::json!({
+                    "harness": session.harness,
+                    "session": session.id,
+                    "project": session.project,
+                    "origin": origin,
+                }))
+                .map_err(|err| {
+                    anyhow::anyhow!("offbox: an imported session's meta will not serialise: {err}")
+                })?;
+                meta.push(b'\n');
+                let under = format!("{HISTORY}/{}", session.leaf);
+                let mut prefixes = Vec::new();
+                for file in session.files {
+                    let prefix = format!("{under}/{}", own_prefix(&file.sub));
+                    prefixes.push(prefix.clone());
+                    import.feeds.push(Feed {
+                        prefix,
+                        source: session.source,
+                        session: file,
+                    });
+                }
+                let fed = Fed {
+                    described: dir.join(&under).join(HISTORY_META).exists(),
+                    leaf: session.leaf,
+                    prefixes,
+                    meta,
+                };
+                import.fed.push(fed);
+            }
+        }
+    }
+    Ok(import)
+}
+
+/// After a push that was given `import`'s feeds: write each new session's
+/// `meta.json`, and mark each session the push finished. Returns the leaves it
+/// marked, and whether any imported feed moved.
+///
+/// **A session is finished by a push that found nothing new in it.** The push
+/// was applied, or changed nothing; its snapshot read every feed of the session
+/// to the end of its source; none of those feeds' cursors moved in it — so
+/// every record was already in an earlier snapshot, and this push carried them
+/// all; and its `meta.json` was written before the push began. A session
+/// another agent is still writing never reaches that while it grows.
+///
+/// **`meta.json` is written only once the cursor file names the session's
+/// feeds**, so a `history/<leaf>/` with no cursor entry stays what only another
+/// writer's snapshot leaves.
+///
+/// `before` is the cursor file as the push found it; `ended` the prefixes its
+/// snapshot read to the end, where it was applied or changed nothing.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT unread-session-marked-imported|s@^        let read_out = fed.prefixes.iter().all(\x7cprefix\x7c ended.contains(prefix));$@        let read_out = true;@|history_is_imported_behind_live_data_inside_the_cap
+fn finish_import(
+    import: &Import<'_>,
+    dir: &Path,
+    machine: &Path,
+    before: &Cursors,
+    ended: Option<&[String]>,
+) -> Result<(Vec<String>, bool)> {
+    let refused = |err: std::io::Error| {
+        anyhow::anyhow!("offbox: an imported session's meta will not write: {err}")
+    };
+    let after = load_cursors(dir);
+    let mut marked = Vec::new();
+    let mut moved = false;
+    for fed in &import.fed {
+        let named = fed.prefixes.iter().all(|prefix| after.contains_key(prefix));
+        let quiet = fed
+            .prefixes
+            .iter()
+            .all(|prefix| before.contains_key(prefix) && before.get(prefix) == after.get(prefix));
+        moved |= !quiet;
+        if !fed.described && named {
+            let held = dir.join(HISTORY).join(&fed.leaf);
+            std::fs::create_dir_all(&held).map_err(refused)?;
+            crate::durable::replace(held.join(HISTORY_META), &fed.meta).map_err(refused)?;
+        }
+        let Some(ended) = ended else {
+            continue;
+        };
+        let read_out = fed.prefixes.iter().all(|prefix| ended.contains(prefix));
+        if fed.described && quiet && read_out {
+            mark(machine, &fed.leaf)?;
+            marked.push(fed.leaf.clone());
+        }
+    }
+    Ok((marked, moved))
+}
+
+/// What one push that imported came to.
+struct Imported {
+    /// The push itself.
+    pushed: Result<Push>,
+    /// How many sessions the sources listed, the live one apart.
+    listed: u64,
+    /// The leaves that were marked when the push began.
+    stored: Vec<String>,
+    /// The leaves this push finished and marked.
+    marked: Vec<String>,
+    /// Whether any imported feed moved, so that a later push has to confirm it.
+    moved: bool,
+}
+
+/// One push of `session` with the machine's other sessions riding in it
+/// (CLOUD-2735): [`plan_import`], the push, [`finish_import`]. An import costs
+/// no push of its own and creates no ref.
+///
+/// # Errors
+///
+/// A marker or a `meta.json` that will not write. A failed push is not an
+/// error here: it is `pushed`.
+fn import_push(
+    session: &Session<'_>,
+    history: &[crate::sessions::Named],
+    machine: &Path,
+    byte_cap: u64,
+) -> Result<Imported> {
+    let dir = session_dir(session.project_root, &session.meta)?;
+    let live = (session.meta.harness.as_str(), session.meta.session.as_str());
+    let import = plan_import(history, live, &dir, machine)?;
+    let before = load_cursors(&dir);
+    let pushed = push_capped(session, &import.feeds, byte_cap);
+    let ended = match &pushed {
+        Ok(push) if matches!(push.outcome, Pushed::Applied | Pushed::Unchanged) => {
+            Some(push.ended.as_slice())
+        }
+        _ => None,
+    };
+    let (marked, moved) = finish_import(&import, &dir, machine, &before, ended)?;
+    Ok(Imported {
+        pushed,
+        listed: import.listed,
+        stored: import.marked,
+        marked,
+        moved,
+    })
 }
 
 // --- the restore (CLOUD-2723) --------------------------------------------------
@@ -1837,6 +2237,18 @@ pub struct StatusFile {
     pub restored: String,
     /// `ok`, `not-surveyed` or `unavailable`.
     pub source: String,
+    /// The import of this machine's other sessions (CLOUD-2735): `ok`,
+    /// `lock-held` where another daemon is the machine's importer, or
+    /// `not-surveyed` where this session's harness has no source to list them.
+    pub history: String,
+    /// How many sessions the sources listed, the live one apart.
+    pub history_listed: u64,
+    /// How many of them this daemon marked after importing them.
+    pub history_imported: u64,
+    /// How many are marked because they were found already stored.
+    pub history_stored: u64,
+    /// How many are not yet marked.
+    pub history_remaining: u64,
 }
 
 //MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
@@ -1858,6 +2270,11 @@ impl StatusFile {
         let _ = writeln!(text, "attached {}", self.attached);
         let _ = writeln!(text, "restored {}", self.restored);
         let _ = writeln!(text, "source {}", self.source);
+        let _ = writeln!(text, "history {}", self.history);
+        let _ = writeln!(text, "history_listed {}", self.history_listed);
+        let _ = writeln!(text, "history_imported {}", self.history_imported);
+        let _ = writeln!(text, "history_stored {}", self.history_stored);
+        let _ = writeln!(text, "history_remaining {}", self.history_remaining);
         text
     }
 
@@ -1876,6 +2293,11 @@ impl StatusFile {
             attached: String::from("unknown"),
             restored: String::from("none"),
             source: String::from("ok"),
+            history: String::from("ok"),
+            history_listed: 0,
+            history_imported: 0,
+            history_stored: 0,
+            history_remaining: 0,
         };
         for line in text.lines() {
             let Some((key, value)) = line.split_once(' ') else {
@@ -1892,6 +2314,11 @@ impl StatusFile {
                 "attached" => value.clone_into(&mut read.attached),
                 "restored" => value.clone_into(&mut read.restored),
                 "source" => value.clone_into(&mut read.source),
+                "history" => value.clone_into(&mut read.history),
+                "history_listed" => read.history_listed = value.parse().unwrap_or(0),
+                "history_imported" => read.history_imported = value.parse().unwrap_or(0),
+                "history_stored" => read.history_stored = value.parse().unwrap_or(0),
+                "history_remaining" => read.history_remaining = value.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -1953,6 +2380,11 @@ pub struct Launching<'a> {
     pub predecessor: Option<&'a str>,
     /// How many wakes to run before returning; `None` runs until killed.
     pub wakes: Option<u64>,
+    /// The sources that list this machine's sessions, by harness name: what
+    /// the daemon imports the other sessions from (CLOUD-2735).
+    pub history: &'a [crate::sessions::Named],
+    /// The most new record bytes one push may add: [`BYTE_CAP`].
+    pub byte_cap: u64,
 }
 
 /// The per-checkout directory the daemon's own files live in.
@@ -1992,6 +2424,7 @@ fn take_lock(dir: &Path, world: &mut dyn World) -> Result<Option<std::fs::File>>
 /// The running daemon: what it was launched with, and what it remembers
 /// between wakes. Everything it must not lose is in the status file.
 //MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT marker-kept-per-session|s@^        let machine = crate::state::state_root()?;$@        let machine = session_dir(session.project_root, \&session.meta)?;@|a_session_one_daemon_marked_is_not_imported_by_another_on_the_machine
 //MUTANT applied-push-keeps-the-backoff|s@^                self.status.throttles = 0;$@@|a_throttled_daemon_waits_as_told_and_resets_on_an_applied_push
 struct Daemon<'a> {
     launching: &'a Launching<'a>,
@@ -2008,9 +2441,13 @@ struct Daemon<'a> {
     owed: bool,
     /// The first attempt is not made before this.
     not_before: i64,
+    /// The machine's import lock, once this daemon has it.
+    import_lock: Option<std::fs::File>,
+    /// The leaves of the sessions this daemon marked after importing them.
+    imported: BTreeSet<String>,
 }
 
-impl Daemon<'_> {
+impl<'a> Daemon<'a> {
     fn write_status(&mut self) -> Result<()> {
         let text = self.status.render();
         if text == self.written {
@@ -2115,7 +2552,13 @@ impl Daemon<'_> {
             transcript: self.launching.transcript.map(Path::to_path_buf),
             time: now,
         };
-        let result = match push_once(&session, &[]) {
+        let machine = crate::state::state_root()?;
+        let history = self.importing(&machine)?;
+        let done = import_push(&session, history, &machine, self.launching.byte_cap)?;
+        self.imported.extend(done.marked.iter().cloned());
+        self.count(&done);
+        let moved = done.moved;
+        let result = match done.pushed {
             Ok(push) => match push.outcome {
                 Pushed::Applied | Pushed::Unchanged => {
                     let repo = local_repo(&session_dir(session.project_root, &session.meta)?);
@@ -2140,7 +2583,52 @@ impl Daemon<'_> {
             Err(_) => Attempt::Failed,
         };
         self.settle(result, world);
+        // AN IMPORT THAT MOVED IS NOT FINISHED: the push after it is the one
+        // that can find nothing new and mark, so it is not left to the timer.
+        self.owed |= moved;
         Ok(())
+    }
+
+    /// The sources this push imports from, with the machine's import lock
+    /// taken, or tried again (CLOUD-2735). Without the lock, none: the daemon
+    /// that holds it is the machine's importer.
+    fn importing(&mut self, machine: &Path) -> Result<&'a [crate::sessions::Named]> {
+        let launching = self.launching;
+        if launching.history.is_empty() {
+            "not-surveyed".clone_into(&mut self.status.history);
+            return Ok(&[]);
+        }
+        if self.import_lock.is_none() {
+            self.import_lock = take_import_lock(machine)?;
+        }
+        if self.import_lock.is_none() {
+            "lock-held".clone_into(&mut self.status.history);
+            return Ok(&[]);
+        }
+        // A harness with no source is skipped, and this says so when it is the
+        // session's own: its other sessions are not among the ones listed.
+        let own = launching
+            .history
+            .iter()
+            .any(|(harness, _)| harness == launching.harness);
+        if own { "ok" } else { "not-surveyed" }.clone_into(&mut self.status.history);
+        Ok(launching.history)
+    }
+
+    /// The status file's counts of sessions, after the push `done`.
+    fn count(&mut self, done: &Imported) {
+        let marked = done.stored.len() + done.marked.len();
+        let by_this_daemon = done
+            .stored
+            .iter()
+            .chain(&done.marked)
+            .filter(|leaf| self.imported.contains(*leaf))
+            .count();
+        let as_count = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+        self.status.history_listed = done.listed;
+        self.status.history_imported = as_count(by_this_daemon);
+        self.status.history_stored = as_count(marked - by_this_daemon);
+        self.status.history_remaining = done.listed.saturating_sub(as_count(marked));
     }
 
     /// Restore, once, before the first push (CLOUD-2723).
@@ -2311,6 +2799,8 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
         inbox_at_attempt: 0,
         owed: false,
         not_before: now.saturating_add(i64::try_from(first_delay(world.random())).unwrap_or(0)),
+        import_lock: None,
+        imported: BTreeSet::new(),
     };
     daemon.write_status()?;
     crate::durable::replace(dir.join(INBOX), "")
@@ -2467,6 +2957,9 @@ mod push_tests {
         provisions: Vec<crate::provision::Provision>,
         meta: Meta,
         transcript: PathBuf,
+        /// What its daemon imports from, and the cap its pushes run under.
+        history: Vec<crate::sessions::Named>,
+        byte_cap: u64,
     }
 
     #[derive(serde::Deserialize)]
@@ -2520,6 +3013,8 @@ mod push_tests {
                     origin: String::from("acme/widgets"),
                 },
                 transcript,
+                history: Vec::new(),
+                byte_cap: BYTE_CAP,
             }
         }
 
@@ -3002,6 +3497,10 @@ mod push_tests {
             Some("other 0\n")
         );
         assert!(one.dir().join(ABSORBED).join(&others[1]).is_dir());
+        // The last rival's too, so the push after it is admitted first time.
+        assert!(one.dir().join(ABSORBED).join(&others[2]).is_dir());
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        assert_eq!(receives(&stand), 1 + 3 + 1);
     }
 
     // --- the daemon (CLOUD-2721) ----------------------------------------------
@@ -3051,6 +3550,8 @@ mod push_tests {
                     origin: Some(REMOTE),
                     predecessor: None,
                     wakes: Some(wakes),
+                    history: &self.history,
+                    byte_cap: self.byte_cap,
                 },
                 &mut sim,
             )
@@ -3535,5 +4036,635 @@ mod push_tests {
             .unwrap()
             .join("mutate/schema/journal.jsonl");
         assert_eq!(std::fs::read_to_string(back).unwrap(), "{}\n");
+    }
+
+    // --- the import (CLOUD-2735) ----------------------------------------------
+
+    /// A source over the files a test names.
+    struct Fixture(Vec<SessionRef>);
+
+    impl SessionSource for Fixture {
+        fn list(&self) -> Result<Vec<SessionRef>> {
+            Ok(self.0.clone())
+        }
+
+        fn read(
+            &self,
+            session: &SessionRef,
+            from: &Cursor,
+            max_bytes: u64,
+        ) -> Result<crate::sessions::Batch> {
+            Ok(crate::sessions::read_jsonl(
+                Path::new(&session.locator),
+                from,
+                max_bytes,
+            ))
+        }
+    }
+
+    /// One listed file: its session's id, its sub-key, the project directory
+    /// recorded for it, and where it is.
+    type Listing<'a> = (&'a str, &'a str, Option<&'a Path>, &'a Path);
+
+    /// The sources a daemon is given: one, under the writers' own harness name.
+    fn listing(files: &[Listing<'_>]) -> Vec<crate::sessions::Named> {
+        let sessions = files
+            .iter()
+            .map(|(id, sub, project, path)| SessionRef {
+                id: (*id).to_owned(),
+                project: project.map(Path::to_path_buf),
+                locator: path.to_string_lossy().into_owned(),
+                sub: (*sub).to_owned(),
+            })
+            .collect();
+        vec![(String::from("exit-code"), Box::new(Fixture(sessions)))]
+    }
+
+    /// Records numbered over `range`, each padded by `pad` bytes.
+    fn records(range: std::ops::Range<usize>, pad: usize) -> String {
+        use std::fmt::Write as _;
+        let padding = "x".repeat(pad);
+        range.fold(String::new(), |mut out, n| {
+            let _ = writeln!(out, "{{\"n\":{n},\"pad\":\"{padding}\"}}");
+            out
+        })
+    }
+
+    fn text(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    fn machine() -> PathBuf {
+        crate::state::state_root().unwrap()
+    }
+
+    fn history_leaf(id: &str) -> String {
+        leaf("exit-code", id)
+    }
+
+    fn marked(id: &str) -> bool {
+        machine().join(IMPORTED).join(history_leaf(id)).exists()
+    }
+
+    /// The records a tree holds for one file of an imported session, in order.
+    fn imported(tree: &BTreeMap<String, Vec<u8>>, id: &str, key: &str) -> String {
+        let under = format!("history/{}/transcript/{key}/", history_leaf(id));
+        tree.iter()
+            .filter(|(path, _)| path.starts_with(&under))
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+            .collect()
+    }
+
+    fn history_meta(tree: &BTreeMap<String, Vec<u8>>, id: &str) -> serde_json::Value {
+        let path = format!("history/{}/meta.json", history_leaf(id));
+        serde_json::from_slice(&tree[&path]).unwrap()
+    }
+
+    impl Writer {
+        fn session(&self) -> Session<'_> {
+            Session {
+                project_root: &self.root,
+                provisions: &self.provisions,
+                meta: self.meta.clone(),
+                remote: REMOTE.to_owned(),
+                transcript: Some(self.transcript.clone()),
+                time: TIME,
+            }
+        }
+
+        /// One push with this writer's history riding in it.
+        fn import(&self) -> Imported {
+            import_push(&self.session(), &self.history, &machine(), self.byte_cap)
+                .expect("the import runs")
+        }
+
+        fn plan(&self) -> Import<'_> {
+            plan_import(
+                &self.history,
+                (&self.meta.harness, &self.meta.session),
+                &self.dir(),
+                &machine(),
+            )
+            .expect("the plan is made")
+        }
+
+        /// The remote's snapshot of this writer's session.
+        fn remote(&self, stand: &Shared) -> BTreeMap<String, Vec<u8>> {
+            self.tree(&head(stand, &self.meta))
+        }
+
+        /// Whether this writer's cursor file names any imported feed.
+        fn imports(&self) -> bool {
+            load_cursors(&self.dir())
+                .keys()
+                .any(|prefix| prefix.starts_with("history/"))
+        }
+    }
+
+    fn outcome(done: &Imported) -> &Pushed {
+        &done.pushed.as_ref().expect("the push ran").outcome
+    }
+
+    /// A second writer whose daemon has pushed all of its session `t`.
+    fn pushed_whole_elsewhere(base: &Path) -> Writer {
+        let two = Writer::new(base, "two", "t");
+        put(&two.transcript, &records(0..3, 4));
+        assert_eq!(two.push().outcome, Pushed::Applied);
+        two
+    }
+
+    /// Fails by: the live session imported as history, a listed session left
+    /// out, or a session marked before a push found nothing new in it.
+    #[test]
+    fn the_live_session_is_not_imported_and_the_others_are() {
+        let base = base("offbox-import-all");
+        let stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        put(&one.transcript, &records(0..2, 4));
+        let (a, b, c) = (
+            base.join("a.jsonl"),
+            base.join("b.jsonl"),
+            base.join("c.jsonl"),
+        );
+        let sub = base.join("c-agent.jsonl");
+        put(&a, &records(10..13, 4));
+        put(&b, &records(20..22, 4));
+        put(&c, &records(30..31, 4));
+        put(&sub, &records(40..42, 4));
+        one.history = listing(&[
+            ("s", "", None, &one.transcript),
+            ("a", "", None, &a),
+            ("b", "", None, &b),
+            ("c", "", None, &c),
+            ("c", "agent 1", None, &sub),
+        ]);
+
+        let first = one.import();
+        assert_eq!(outcome(&first), &Pushed::Applied);
+        assert_eq!(first.listed, 3);
+        assert!(first.marked.is_empty() && first.moved);
+        assert!(!marked("a") && !marked("b") && !marked("c"));
+
+        let second = one.import();
+        assert_eq!(outcome(&second), &Pushed::Applied, "it carries the metas");
+        assert_eq!(second.marked.len(), 3);
+        assert!(!second.moved);
+
+        let tree = one.remote(&stand);
+        for (id, file) in [("a", &a), ("b", &b), ("c", &c)] {
+            assert_eq!(imported(&tree, id, "main"), text(file), "{id}");
+            assert_eq!(history_meta(&tree, id)["session"], id);
+            assert!(marked(id), "{id}");
+        }
+        assert_eq!(imported(&tree, "c", "agent_1"), text(&sub));
+        let leaves: BTreeSet<&str> = tree
+            .keys()
+            .filter_map(|path| path.strip_prefix("history/")?.split('/').next())
+            .collect();
+        assert_eq!(leaves.len(), 3, "{leaves:?}");
+        assert!(!leaves.contains(history_leaf("s").as_str()));
+        assert!(!marked("s"));
+
+        // With every session marked the next push has nothing to carry.
+        let third = one.import();
+        assert_eq!(outcome(&third), &Pushed::Unchanged);
+        assert_eq!(third.stored.len(), 3);
+    }
+
+    /// Fails by: history read before the session's own records, so the cap is
+    /// spent on it first.
+    #[test]
+    fn the_feed_list_has_the_live_feeds_before_any_history() {
+        let base = base("offbox-import-order");
+        let mut one = Writer::new(&base, "one", "s");
+        put(&one.transcript, &records(0..1, 4));
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..11, 4));
+        one.history = listing(&[("a", "", None, &a)]);
+
+        let plan = one.plan();
+        let source = crate::sessions::source_named("exit-code", Some(&one.transcript));
+        let feeds = feeds_of(&one.session(), source.as_deref(), &plan.feeds).unwrap();
+
+        let prefixes: Vec<&str> = feeds.iter().map(|feed| feed.prefix.as_str()).collect();
+        let history = format!("history/{}/transcript/main", history_leaf("a"));
+        assert_eq!(prefixes, ["transcript/main", history.as_str()]);
+    }
+
+    /// Fails by: a session skipped because its project is gone, or an origin
+    /// invented for it.
+    #[test]
+    fn a_session_whose_project_is_gone_is_imported_with_no_origin() {
+        let base = base("offbox-import-origin");
+        let stand = standing(&[], Vec::new());
+        let two = Writer::new(&base, "two", "t");
+        add(
+            &two.root.join(".git").join("config"),
+            "[remote \"origin\"]\n\turl = https://forge.invalid/acme/gadgets.git\n",
+        );
+        let mut one = Writer::new(&base, "one", "s");
+        let (a, b) = (base.join("a.jsonl"), base.join("b.jsonl"));
+        put(&a, &records(10..12, 4));
+        put(&b, &records(20..22, 4));
+        let gone = Path::new("/nonexistent/offbox-import/gone");
+        one.history = listing(&[("a", "", Some(gone), &a), ("b", "", Some(&two.root), &b)]);
+
+        one.import();
+        one.import();
+
+        let tree = one.remote(&stand);
+        assert_eq!(imported(&tree, "a", "main"), text(&a));
+        let meta = history_meta(&tree, "a");
+        assert_eq!(meta["project"], gone.to_string_lossy().as_ref());
+        assert!(meta["origin"].is_null(), "{meta}");
+        assert_eq!(history_meta(&tree, "b")["origin"], "acme/gadgets");
+        assert!(marked("a") && marked("b"));
+    }
+
+    /// Fails by: a session its own daemon pushed whole uploaded again, or the
+    /// checks that decide it asking the remote anything.
+    #[test]
+    fn a_session_its_own_daemon_pushed_whole_is_marked_and_not_imported() {
+        let base = base("offbox-import-pushed");
+        let stand = standing(&[], Vec::new());
+        let two = pushed_whole_elsewhere(&base);
+        let mut one = Writer::new(&base, "one", "s");
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..12, 4));
+        one.history = listing(&[
+            ("t", "", Some(&two.root), &two.transcript),
+            ("a", "", None, &a),
+        ]);
+        let asked = stand.borrow().asked.len();
+
+        let plan = one.plan();
+
+        assert_eq!(stand.borrow().asked.len(), asked, "no request was made");
+        assert_eq!(plan.marked, [history_leaf("t")]);
+        assert_eq!(plan.feeds.len(), 1, "only the session nobody pushed");
+        assert!(marked("t"));
+        drop(plan);
+        one.import();
+        let held = one.local("history");
+        assert!(!held.keys().any(|path| path.starts_with(&history_leaf("t"))));
+    }
+
+    /// Fails by: a session whose daemon died before its last push read as
+    /// stored, losing the records its own ref never received.
+    #[test]
+    fn a_partly_pushed_session_with_no_daemon_is_imported_whole() {
+        let base = base("offbox-import-partly");
+        let stand = standing(&[], Vec::new());
+        let two = pushed_whole_elsewhere(&base);
+        add(&two.transcript, &records(3..4, 4));
+        let mut one = Writer::new(&base, "one", "s");
+        one.history = listing(&[("t", "", Some(&two.root), &two.transcript)]);
+
+        let first = one.import();
+        assert!(first.stored.is_empty() && !marked("t"));
+        one.import();
+
+        assert_eq!(
+            imported(&one.remote(&stand), "t", "main"),
+            text(&two.transcript),
+            "from its first record"
+        );
+        assert!(marked("t"));
+    }
+
+    /// Fails by: a session its own daemon is still pushing imported, or marked
+    /// because its push record happens to be at the end.
+    #[test]
+    fn a_session_live_elsewhere_is_neither_imported_nor_marked() {
+        let base = base("offbox-import-live");
+        let _stand = standing(&[], Vec::new());
+        let two = pushed_whole_elsewhere(&base);
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(daemon_dir(&two.root).unwrap().join(LOCK))
+            .unwrap();
+        fs4::FileExt::try_lock(&lock).unwrap();
+        let mut serving = StatusFile::parse("");
+        serving.session = history_leaf("t");
+        put(&two.status_path(), &serving.render());
+        let mut one = Writer::new(&base, "one", "s");
+        one.history = listing(&[("t", "", Some(&two.root), &two.transcript)]);
+
+        let live = one.import();
+
+        assert_eq!(live.listed, 1);
+        assert!(live.stored.is_empty() && live.marked.is_empty());
+        assert!(!marked("t") && !one.imports());
+        assert!(one.local("history").is_empty());
+
+        // Its daemon gone and its push record at the end: stored, not imported.
+        drop(lock);
+        let after = one.import();
+        assert_eq!(after.stored, [history_leaf("t")]);
+        assert!(marked("t") && !one.imports());
+    }
+
+    /// Fails by: a subagent file its session's daemon never pushed counted as
+    /// pushed because the main file was.
+    #[test]
+    fn a_file_the_push_never_saw_is_imported_and_not_marked() {
+        let base = base("offbox-import-unseen");
+        let stand = standing(&[], Vec::new());
+        let two = pushed_whole_elsewhere(&base);
+        let sub = base.join("t-agent.jsonl");
+        put(&sub, &records(50..52, 4));
+        let mut one = Writer::new(&base, "one", "s");
+        one.history = listing(&[
+            ("t", "", Some(&two.root), &two.transcript),
+            ("t", "agent-1", Some(&two.root), &sub),
+        ]);
+
+        let first = one.import();
+
+        assert!(first.stored.is_empty() && !marked("t"));
+        let tree = one.remote(&stand);
+        assert_eq!(imported(&tree, "t", "agent-1"), text(&sub));
+        assert_eq!(imported(&tree, "t", "main"), text(&two.transcript));
+    }
+
+    /// Fails by: a source that will not read taken as one read to its end.
+    #[test]
+    fn a_push_record_the_source_cannot_be_read_against_marks_nothing() {
+        let base = base("offbox-import-unreadable");
+        let _stand = standing(&[], Vec::new());
+        let two = pushed_whole_elsewhere(&base);
+        let mut one = Writer::new(&base, "one", "s");
+        // A directory opens and will not read: the source answers unavailable.
+        one.history = listing(&[("t", "", Some(&two.root), &base)]);
+
+        let first = one.import();
+        let second = one.import();
+
+        assert!(first.stored.is_empty() && second.stored.is_empty());
+        assert!(second.marked.is_empty() && !second.moved);
+        assert!(!marked("t"));
+    }
+
+    /// Fails by: a marker written for a push the forge did not take, or none
+    /// written once it does.
+    #[test]
+    fn a_throttled_push_marks_nothing_and_the_next_applied_one_does() {
+        let base = base("offbox-import-throttled");
+        let stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..13, 4));
+        one.history = listing(&[("a", "", None, &a)]);
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Receive,
+            left: 1,
+            status: 429,
+            headers: vec![(String::from("retry-after"), String::from("120"))],
+        });
+
+        let throttled = one.import();
+
+        assert!(matches!(outcome(&throttled), Pushed::Throttled(_)));
+        assert!(throttled.marked.is_empty() && !marked("a"));
+
+        let applied = one.import();
+        assert_eq!(outcome(&applied), &Pushed::Applied);
+        assert_eq!(applied.marked, [history_leaf("a")]);
+        assert_eq!(imported(&one.remote(&stand), "a", "main"), text(&a));
+    }
+
+    /// Fails by: history another writer's snapshot left here uploaded again.
+    #[test]
+    fn history_absorbed_from_another_writer_is_marked_and_not_imported() {
+        let base = base("offbox-import-absorbed");
+        let _stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..13, 4));
+        one.history = listing(&[("a", "", None, &a)]);
+        let theirs = one
+            .dir()
+            .join("history")
+            .join(history_leaf("a"))
+            .join("transcript/main/0/000000.jsonl");
+        put(&theirs, "{\"theirs\":1}\n");
+
+        let done = one.import();
+
+        assert_eq!(done.stored, [history_leaf("a")]);
+        assert!(marked("a") && !one.imports());
+        assert_eq!(text(&theirs), "{\"theirs\":1}\n");
+    }
+
+    /// Fails by: history read ahead of live data or past the cap, a session
+    /// the cap never reached marked, or a session whose `meta.json` exists but
+    /// whose import is unfinished taken for another writer's.
+    ///
+    /// The row's 250 MiB under a 100 MiB cap, at one part in 1024.
+    #[test]
+    fn history_is_imported_behind_live_data_inside_the_cap() {
+        const KIB: usize = 1024;
+        let base = base("offbox-import-cap");
+        let stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        one.byte_cap = 100 * 1024;
+        put(&one.transcript, &records(0..30, 1000));
+        let (a, b, c) = (
+            base.join("a.jsonl"),
+            base.join("b.jsonl"),
+            base.join("c.jsonl"),
+        );
+        put(&a, &records(1000..1118, 1000));
+        put(&b, &records(2000..2118, 1000));
+        put(&c, &records(3000..3010, 1000));
+        let history = text(&a).len() + text(&b).len() + text(&c).len();
+        assert!((245 * KIB..=250 * KIB).contains(&history), "{history}");
+        one.history = listing(&[
+            ("a", "", None, &a),
+            ("b", "", None, &b),
+            ("c", "", None, &c),
+        ]);
+        let live = text(&one.transcript);
+
+        // The first push: all the live data, and history in what is left.
+        assert_eq!(outcome(&one.import()), &Pushed::Applied);
+        let tree = one.remote(&stand);
+        assert_eq!(tree["transcript/main/0/000000.jsonl"], live.as_bytes());
+        let got = imported(&tree, "a", "main");
+        assert!(!got.is_empty() && text(&a).starts_with(&got));
+        assert!(
+            got.len() <= 100 * KIB - live.len() + 2 * KIB,
+            "{}",
+            got.len()
+        );
+        assert!(imported(&tree, "b", "main").is_empty());
+        // A session the cap never reached has its entry and its meta already.
+        let unreached = one.dir().join("history").join(history_leaf("c"));
+        assert!(unreached.join("meta.json").is_file());
+
+        assert_eq!(outcome(&one.import()), &Pushed::Applied);
+        let tree = one.remote(&stand);
+        assert_eq!(imported(&tree, "a", "main"), text(&a));
+        assert!(imported(&tree, "c", "main").is_empty());
+        assert!(!marked("a") && !marked("b") && !marked("c"));
+
+        // The third push carries the last of it.
+        assert_eq!(outcome(&one.import()), &Pushed::Applied);
+        let tree = one.remote(&stand);
+        for (id, file) in [("a", &a), ("b", &b), ("c", &c)] {
+            assert_eq!(imported(&tree, id, "main"), text(file), "{id}");
+        }
+        assert!(marked("a"), "nothing new was found in it");
+        assert!(!marked("b") && !marked("c"), "read to the end only now");
+
+        // And the push after it finds nothing new anywhere, and sends nothing.
+        assert_eq!(outcome(&one.import()), &Pushed::Unchanged);
+        assert_eq!(receives(&stand), 3);
+        assert!(marked("b") && marked("c"));
+    }
+
+    /// Fails by: a session another agent is still writing marked as finished,
+    /// or one of its records stored twice.
+    #[test]
+    fn a_session_that_keeps_growing_is_never_marked() {
+        let base = base("offbox-import-growing");
+        let stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..12, 4));
+        one.history = listing(&[("a", "", None, &a)]);
+
+        for round in 0..4 {
+            let done = one.import();
+            assert!(done.marked.is_empty(), "round {round}");
+            assert_eq!(imported(&one.remote(&stand), "a", "main"), text(&a));
+            add(&a, &records(100 + round..101 + round, 4));
+        }
+        assert!(!marked("a"));
+    }
+
+    /// Fails by: a push rejected part-way through an import storing a record
+    /// twice when it is tried again.
+    #[test]
+    fn a_push_rejected_mid_import_stores_no_record_twice() {
+        let base = base("offbox-import-rejected");
+        let stand = standing(&[], Vec::new());
+        let first = Writer::new(&base, "first", "s");
+        put(&first.transcript, &records(0..2, 4));
+        assert_eq!(first.push().outcome, Pushed::Applied);
+        let mut two = Writer::new(&base, "two", "s");
+        put(&two.transcript, &records(5..6, 4));
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..14, 4));
+        two.history = listing(&[("a", "", None, &a)]);
+
+        let done = two.import();
+
+        assert_eq!(outcome(&done), &Pushed::Applied);
+        assert_eq!(stand.borrow().uploads, 1, "the first try was rejected");
+        assert_eq!(imported(&two.remote(&stand), "a", "main"), text(&a));
+        two.import();
+        assert_eq!(imported(&two.remote(&stand), "a", "main"), text(&a));
+        assert!(marked("a"));
+    }
+
+    /// Fails by: two daemons on one machine both importing, or the one without
+    /// the lock never importing once it is free.
+    #[test]
+    fn a_daemon_without_the_import_lock_imports_nothing_until_it_is_free() {
+        let base = base("offbox-import-lock");
+        let _stand = standing(&[], Vec::new());
+        let mut one = Writer::new(&base, "one", "s");
+        put(&one.transcript, &records(0..1, 4));
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..12, 4));
+        one.history = listing(&[("a", "", None, &a)]);
+        std::fs::create_dir_all(machine()).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(machine().join(IMPORT_LOCK))
+            .unwrap();
+        fs4::FileExt::try_lock(&held).unwrap();
+
+        let stopped = one.daemon(1000, 40, |_| {});
+
+        let status = one.status();
+        assert_eq!(status.history, "lock-held");
+        assert_eq!(status.history_listed, 0);
+        assert!(status.pushed != "-", "its own session is still pushed");
+        assert!(!one.imports() && !marked("a"));
+
+        drop(held);
+        one.daemon(stopped, 40, |_| {});
+        let status = one.status();
+        assert_eq!(status.history, "ok");
+        assert_eq!(
+            (
+                status.history_listed,
+                status.history_imported,
+                status.history_stored,
+                status.history_remaining
+            ),
+            (1, 1, 0, 0)
+        );
+        assert!(marked("a"));
+    }
+
+    /// Fails by: a marker kept per session or per checkout, so every daemon on
+    /// the machine uploads the same history.
+    #[test]
+    fn a_session_one_daemon_marked_is_not_imported_by_another_on_the_machine() {
+        let base = base("offbox-import-once");
+        let _stand = standing(&[], Vec::new());
+        let a = base.join("a.jsonl");
+        put(&a, &records(10..12, 4));
+        let mut one = Writer::new(&base, "one", "s");
+        one.history = listing(&[("a", "", None, &a)]);
+        one.daemon(1000, 40, |_| {});
+        assert!(marked("a"));
+        assert!(one.imports());
+
+        // Another session, in another checkout, on the same machine.
+        let mut two = Writer::new(&base, "two", "t");
+        two.history = listing(&[("a", "", None, &a)]);
+        two.daemon(1000, 40, |_| {});
+
+        let status = two.status();
+        assert_eq!(
+            (
+                status.history_listed,
+                status.history_imported,
+                status.history_stored,
+                status.history_remaining
+            ),
+            (1, 0, 1, 0)
+        );
+        assert!(!two.imports());
+        assert!(two.local("history").is_empty());
+    }
+
+    /// Fails by: a daemon with no source to list sessions from saying its
+    /// import is fine.
+    #[test]
+    fn a_harness_with_no_source_reads_not_surveyed() {
+        let base = base("offbox-import-unsurveyed");
+        let _stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+
+        one.daemon(1000, 8, |_| {});
+
+        let status = one.status();
+        assert!(status.pushed != "-");
+        assert_eq!(status.history, "not-surveyed");
+        assert_eq!(crate::sessions::machine_sources("exit-code", None).len(), 0);
+        let names: Vec<String> = crate::sessions::machine_sources("claude-code", None)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, ["claude-code"]);
     }
 }
