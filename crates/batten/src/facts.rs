@@ -2180,6 +2180,20 @@ impl Fact {
                         "additionalProperties": false,
                     },
                 },
+                // CLOUD-2770: engine source spawning a shell. Absent when the
+                // fact did not read the whole tree.
+                "spawn": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "function": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
             },
             "additionalProperties": false,
         })

@@ -6177,6 +6177,17 @@ unit = "[tasks."
 path = "hk.pkl"
 carrier = "hk-step"
 
+# CLOUD-2770. THE ONE SHELL THE ENGINE SPAWNS. An MCP wiring file's credential
+# helper is a shell command line by the harness's own definition, so `mcp.rs`'s
+# `shell` hands it to `sh -c` (`cmd /C` on Windows); splitting it into an argv
+# would run a different command than the one the file's author wrote. Any other
+# non-test spawn of a shell in `crates/**/src` is `shell spawn refused`, and this
+# row naming a function that spawns none is `shell spawn missing`.
+[[census.shell.spawn]]
+path = "crates/batten/src/mcp.rs"
+function = "shell"
+contract = "an MCP server's `headersHelper` is a shell command whose stdout is JSON headers: https://code.claude.com/docs/en/mcp"
+
 # CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
 # globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
 # above. `.github/workflows/**` was left, and it is bigger than either: 28 files
