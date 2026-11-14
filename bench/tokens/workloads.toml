@@ -17,8 +17,12 @@
 # how a non-deterministic tool acquires a number it cannot support, and
 # byte-stability is precisely the property the cache claim rests on.
 #
-# `$BATTEN` is substituted with the binary under test, so the harness always
-# judges the working tree's engine rather than whatever is on PATH.
+# EVERY STEP IS AN ARGV, and no shell splits it (CLOUD-2635). An element exactly
+# `BATTEN` is replaced with the binary under test, so the harness always judges
+# the working tree's engine rather than whatever is on PATH. An element
+# `{{handle:<stream>}}` is replaced with the handle an earlier step's `exec:`
+# report printed for that stream; using one before any step printed it is
+# refused. A string step is a parse error.
 
 version = 1
 
@@ -31,14 +35,14 @@ fixture = "scan-pointer"
 question = "Which files and lines carry the banned pattern?"
 runs = 3
 
-baseline = ["grep -rnF '.unwrap()' src"]
+baseline = [["grep", "-rnF", ".unwrap()", "src"]]
 baseline_model = """
 The full matched output: one whole source line per hit, every hit. This is what a \
 tree scan puts into an agent's context today, and it carries the matched bytes \
 themselves — the payload rather than a pointer to it, which is what makes the \
 same shape unusable over content nobody wants echoed."""
 
-batten = ["$BATTEN check"]
+batten = [["BATTEN", "check"]]
 batten_model = """
 `path:line rule-id` per finding and nothing else (non-negotiable rule 4). Same \
 question, same file set, same number of findings — only the answer's shape \
@@ -53,7 +57,7 @@ fixture = "build-warning"
 question = "Does this build's own output say it is not actually done, and where?"
 runs = 3
 
-baseline = ["tail -n 200 build.log", "cat build.log"]
+baseline = [["tail", "-n", "200", "build.log"], ["cat", "build.log"]]
 baseline_model = """
 The named pain, modelled as the two commands it actually costs: the agent pipes \
 to `tail`, the warning is above the window, so it re-runs and takes the whole \
@@ -61,7 +65,7 @@ dump. Two steps, both billed. The fixture places the warning outside a 200-line 
 tail on purpose — that is the case worth measuring, and a fixture that put it \
 inside would be measuring the lucky guess."""
 
-batten = ["$BATTEN exec -- cat build.log"]
+batten = [["BATTEN", "exec", "--", "cat", "build.log"]]
 batten_model = """
 One step, and the reduction is exactly the discarded `tail` window — nothing \
 more. `exec` TEES (CLOUD-162): the child's bytes reach the caller unchanged by \
@@ -83,7 +87,7 @@ runs = 3
 # shipped it. The harness measured rather than asserted, and this is the diff
 # where that pays: the number below was produced by the same command a reader can
 # run, not written by whoever wanted it to be good.
-baseline = ["tail -n 200 build.log", "cat build.log"]
+baseline = [["tail", "-n", "200", "build.log"], ["cat", "build.log"]]
 baseline_model = """
 The same two commands `build-warning`'s baseline costs, because it is the same \
 pain: guess a window, miss the line, re-run to widen. Repeated deliberately \
@@ -91,15 +95,15 @@ rather than cross-referenced — a workload whose baseline lives in another row 
 a figure a reader has to assemble."""
 
 batten = [
-  "$BATTEN exec --capture-only -- cat build.log",
-  "$BATTEN capture show \"$($BATTEN capture list --stream stdout | cut -d' ' -f1)\" --grep 'warning[duplicate]'",
-  "$BATTEN capture show \"$($BATTEN capture list --stream stdout | cut -d' ' -f1)\" --lines 125:130",
+  ["BATTEN", "exec", "--capture-only", "--", "cat", "build.log"],
+  ["BATTEN", "capture", "show", "{{handle:stdout}}", "--grep", "warning[duplicate]"],
+  ["BATTEN", "capture", "show", "{{handle:stdout}}", "--lines", "125:130"],
 ]
 batten_model = """
 Three steps and no second run of the command. `--capture-only` returns handles \
 instead of the log, then the agent greps the frozen capture and widens around the \
-line the grep named. The command substitution is the agent reading a handle out \
-of step one's own pointer output — it costs nothing here because it costs nothing \
+line the grep named. `{{handle:stdout}}` is the agent reading the handle out of \
+step one's own pointer output — it costs nothing here because it costs nothing \
 there either, the handle having already been printed. What this measures against \
 the baseline is precisely the re-run the acceptance criterion says handles \
 delete, plus the dump the agent never has to hold."""
@@ -113,7 +117,7 @@ fixture = "board-gate-payload"
 question = "How old was this clone's read of the issue it is about to update?"
 runs = 3
 
-baseline = ["cat issue.json"]
+baseline = [["cat", "issue.json"]]
 baseline_model = """
 The whole `get_issue` payload, which is what `issue-read-check` demanded before \
 CLOUD-526 — it hashed `.description` and read nothing else from it. THE BYTES ARE \
@@ -127,7 +131,7 @@ would be claiming something it did not measure. The fixture body sits at the sma
 end of real ones (this repository's own issues run two to three times longer), so \
 the ratio is a floor."""
 
-batten = ["jq -c '{id, updatedAt}' issue.json"]
+batten = [["jq", "-c", "{id, updatedAt}", "issue.json"]]
 batten_model = """
 The declared field set, and nothing else: which row was read, and at which \
 revision. `description` is not in it, because after CLOUD-526 the baseline is an \
