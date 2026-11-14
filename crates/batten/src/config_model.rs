@@ -2233,7 +2233,8 @@ pub struct ResultRow {
     pub reduce: Reduce,
     /// The fields kept, in the order they are written.
     ///
-    /// Top-level keys of the payload the row's `node` reaches. A declared field
+    /// Paths into the payload the row's `node` reaches, in [`Node::at`]'s
+    /// dotted spelling, so `outer.inner` names a nested key. A declared field
     /// the payload does not carry is ABSENT from the reduction rather than
     /// present and null: "the row does not have this" and "the reduction dropped
     /// it" are different answers.
@@ -2253,6 +2254,15 @@ pub struct ResultRow {
     /// wrongly gets could-not-look rather than a reduction over the wrong tree.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub embedded: bool,
+    /// Whether the answer's single text block carries its document INSIDE an
+    /// envelope of prose, rather than being the document (CLOUD-2759).
+    ///
+    /// A new key and not a new meaning for `embedded`, which re-parses a node's
+    /// whole text and has rows written against it. Set, the payload is the first
+    /// complete JSON object inside the text block; `mcp::payload_for` reads it, so
+    /// `mcp call` and `mcp wait` reduce such an answer alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enveloped: bool,
 }
 
 /// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
