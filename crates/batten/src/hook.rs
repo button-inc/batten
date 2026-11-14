@@ -5948,6 +5948,114 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     landed_from(&current, &envelope.input)
 }
 
+/// Whether a write authors shell into the repository, and by which arm
+/// (CLOUD-2335): `shell-path` or `shebang`, the reason the policy input carries.
+///
+/// A REASON TOKEN, NEVER THE CONTENT. Rule 4 keeps the bytes a write would land
+/// out of the policy input (see [`ProspectiveFacts`]), and a custom Rego builtin
+/// is refused by the bytecode compiler, so the decision is made here, in Rust,
+/// with the one detector [`crate::shell_detect`] owns, and the module reads its
+/// answer.
+pub type ShellIntroducedFacts = crate::facts::Look<&'static str>;
+
+/// The `shell-introduced` reason for a write that creates a shell-named file.
+pub const SHELL_PATH: &str = "shell-path";
+
+/// The `shell-introduced` reason for a write that puts a shell shebang on line 1.
+pub const SHEBANG: &str = "shebang";
+
+/// Decide whether `envelope`'s write introduces shell (CLOUD-2335).
+///
+/// Two arms, both decided by [`crate::shell_detect`] and neither restated here:
+///
+/// * **`shell-path`** — the write CREATES a file absent on disk at a path
+///   [`crate::shell_detect::shell_path`] accepts. An existing shell file is the
+///   tree arms' to judge, never a write's.
+/// * **`shebang`** — [`crate::shell_detect::shebang`] names a shell for the first line
+///   the write would land and names none for the first line on disk. So an
+///   overwrite keeping an existing shebang introduces nothing.
+///
+/// Write shapes are [`prospective_facts`]'s, keyed by [`Operation`] and never by
+/// tool name: whole-file `/content`, one `/old_string`/`/new_string` span, or an
+/// `/edits` batch. It reads the target itself under the same 1 MiB bound, since
+/// the whole-file arm of [`prospective_facts`] never reads the file — the read
+/// that makes the fact `read`.
+///
+/// **Could-not-look** for a notebook write (a cell starting `#!` is not a file's
+/// first line), a file over the bound or unreadable, an edit whose spans or
+/// target cannot be read, and a host whose write keys left `writes` null. The
+/// module abstains on it.
+///
+/// **A target outside the repository is `is-not`.** The ban covers what the
+/// repository commits, never the agent's own scratch files (the operator's
+/// ruling the row records), and a path still rooted after
+/// [`Envelope::relativise_writes`] is not in the tree.
+#[must_use]
+pub fn shell_introduced(root: &std::path::Path, envelope: &Envelope) -> ShellIntroducedFacts {
+    use crate::facts::Look;
+
+    if envelope.operation != Operation::Write {
+        return Look::CouldNotLook;
+    }
+    if envelope.input.pointer("/new_source").is_some()
+        || envelope.input.pointer("/notebook_path").is_some()
+    {
+        return Look::CouldNotLook;
+    }
+    let Some(target) = envelope.writes.as_deref() else {
+        return Look::CouldNotLook;
+    };
+    if std::path::Path::new(target).has_root() {
+        return Look::IsNot;
+    }
+    let on_disk = root.join(target);
+    let current = match std::fs::metadata(&on_disk) {
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_PROSPECTIVE_BYTES => {
+            let Ok(bytes) = std::fs::read(&on_disk) else {
+                return Look::CouldNotLook;
+            };
+            Some(bytes)
+        }
+        Ok(_) | Err(_) => return Look::CouldNotLook,
+    };
+    let absent = current.is_none();
+    if absent && crate::shell_detect::shell_path(target) {
+        return Look::Is(SHELL_PATH);
+    }
+    let landed = if let Some(content) = envelope.input.pointer("/content").and_then(Value::as_str) {
+        content.to_owned()
+    } else {
+        let Some(text) = current
+            .as_deref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        else {
+            return Look::CouldNotLook;
+        };
+        let Look::Is(landed) = landed_from(text, &envelope.input) else {
+            return Look::CouldNotLook;
+        };
+        landed
+    };
+    let before = current.as_deref().unwrap_or_default();
+    let introduces = crate::shell_detect::shebang(&first_line(landed.as_bytes())).is_some();
+    if introduces && crate::shell_detect::shebang(&first_line(before)).is_none() {
+        Look::Is(SHEBANG)
+    } else {
+        Look::IsNot
+    }
+}
+
+/// The first line of `bytes`, read lossily: a shebang is ASCII, so bytes that
+/// are not UTF-8 later in the file must not hide one.
+fn first_line(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
 /// The largest file the prospective read will pull into memory.
 ///
 /// Not a policy number: the bound the `read` classification claims, made true by
@@ -6139,6 +6247,9 @@ pub struct Facts<'a> {
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
     /// Each pathspec a checkout or restore names, with its status (CLOUD-2684).
     pub pathspec_status: &'a crate::facts::Look<serde_json::Value>,
+    /// Whether this call's write authors shell, and by which arm (CLOUD-2335):
+    /// [`shell_introduced`]'s answer, a reason token and never the content.
+    pub shell_introduced: &'a ShellIntroducedFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -6198,6 +6309,8 @@ impl<'a> Facts<'a> {
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
             pathspec_status: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "introduces nothing": nothing read the write.
+            shell_introduced: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -9200,6 +9313,19 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Null
                 }
             }),
+            // THE LOOK AND A REASON TOKEN, NEVER THE BYTES (CLOUD-2335). All
+            // three answers are spelled, because "could not look" and "looked,
+            // introduces nothing" are different for a module that abstains on
+            // the one and is silent on the other. `reason` is `null` unless `is`.
+            crate::facts::Fact::ShellIntroduced => Some(serde_json::json!({
+                "look": facts.shell_introduced.as_str(),
+                "reason": match facts.shell_introduced {
+                    crate::facts::Look::Is(reason) => serde_json::Value::from(*reason),
+                    crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                        serde_json::Value::Null
+                    }
+                },
+            })),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
                 |records| {
@@ -14035,6 +14161,7 @@ mod tests {
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
                 pathspec_status: &crate::facts::Look::CouldNotLook,
+                shell_introduced: &crate::facts::Look::CouldNotLook,
             },
         )
     }

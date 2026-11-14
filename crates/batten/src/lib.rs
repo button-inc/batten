@@ -19639,6 +19639,7 @@ struct CallFacts {
     red_head: facts::Look<serde_json::Value>,
     commit_subject: facts::Look<String>,
     pathspec_status: facts::Look<serde_json::Value>,
+    shell_introduced: hook::ShellIntroducedFacts,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -19653,6 +19654,23 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         red_head: red_head_for(policy, envelope),
         commit_subject: commit_subject_for(policy, envelope),
         pathspec_status: pathspec_status_for(policy, envelope),
+        shell_introduced: shell_introduced_for(policy, envelope),
+    }
+}
+
+/// Whether this call's write authors shell (CLOUD-2335), resolved only for a
+/// pre-tool write some policy row selects, so every other call reads nothing.
+fn shell_introduced_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> hook::ShellIntroducedFacts {
+    if envelope.event == hook::Event::PreTool
+        && envelope.operation == hook::Operation::Write
+        && policy.reads_pinned(envelope)
+    {
+        hook::shell_introduced(hook_authority_root(), envelope)
+    } else {
+        facts::Look::CouldNotLook
     }
 }
 
@@ -20225,6 +20243,7 @@ fn dispatch_envelope(
         dispatch: &call.dispatch,
         red_head: &call.red_head,
         pathspec_status: &call.pathspec_status,
+        shell_introduced: &call.shell_introduced,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,

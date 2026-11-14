@@ -153,28 +153,32 @@ fn scratch(name: &str) -> PathBuf {
 /// lives in whichever consumer enables the bundle — and a preset absent from this
 /// table is one nobody stated a surface for, which is precisely the state that
 /// lets a wrong-surface key hide.
-const PRESET_SCOPES: &[(&str, bool)] = &[
-    ("commit-hygiene", false),
-    ("trunk-based", false),
-    ("linear-history", false),
-    ("red-head", false),
-    ("git", false),
-    ("shell-hygiene", true),
-    ("pinned-toolchain", false),
-    ("mise", false),
-    ("ci-hygiene", true),
-    ("landing-loop", true),
-    ("claude-code-cloud", false),
-    ("claude-code-plan", false),
-    ("ci-signal", true),
-    ("supply-chain", true),
-    ("tracker-hygiene", true),
-    ("release-hygiene", true),
-    ("engine-hygiene", true),
-    ("check-verdict", true),
+///
+/// Each entry lists every surface the preset is enabled at, `true` for the tree:
+/// `shell-hygiene` decides over both (CLOUD-2335), its tree arms at `verify` and
+/// its write arm on the mediated call, and each row compiles only its own.
+const PRESET_SCOPES: &[(&str, &[bool])] = &[
+    ("commit-hygiene", &[false]),
+    ("trunk-based", &[false]),
+    ("linear-history", &[false]),
+    ("red-head", &[false]),
+    ("git", &[false]),
+    ("shell-hygiene", &[true, false]),
+    ("pinned-toolchain", &[false]),
+    ("mise", &[false]),
+    ("ci-hygiene", &[true]),
+    ("landing-loop", &[true]),
+    ("claude-code-cloud", &[false]),
+    ("claude-code-plan", &[false]),
+    ("ci-signal", &[true]),
+    ("supply-chain", &[true]),
+    ("tracker-hygiene", &[true]),
+    ("release-hygiene", &[true]),
+    ("engine-hygiene", &[true]),
+    ("check-verdict", &[true]),
 ];
 
-/// A row enabling `name` at the scope it is really enabled with.
+/// A row enabling `name` at each scope it is really enabled with.
 ///
 /// Every table-wide loop below goes through this rather than through
 /// [`preset_row`], and that is the whole of CLOUD-1279's test half. Fabricating
@@ -183,18 +187,23 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
 /// `check_tree_paths_are_emittable`, so a tree module reading a key the engine
 /// never emits passed every tier it had. The loops still cover the table; they
 /// just stop inventing the surface while doing it.
-fn row_at_real_scope(id: &str, name: &str) -> Rule {
-    let (_, is_tree) = PRESET_SCOPES
+fn rows_at_real_scopes(id: &str, name: &str) -> Vec<Rule> {
+    let (_, surfaces) = PRESET_SCOPES
         .iter()
         .find(|(preset, _)| *preset == name)
         .unwrap_or_else(|| {
             panic!("the preset `{name}` ships and PRESET_SCOPES does not say which surface it decides over")
         });
-    if *is_tree {
-        tree_preset_row(id, name)
-    } else {
-        preset_row(id, name)
-    }
+    surfaces
+        .iter()
+        .map(|is_tree| {
+            if *is_tree {
+                tree_preset_row(id, name)
+            } else {
+                preset_row(id, name)
+            }
+        })
+        .collect()
 }
 
 /// (a) A preset predicate denies on a violating call and is green on a clean
@@ -453,14 +462,16 @@ fn every_advertised_preset_name_actually_loads() {
     let names = batten::config_model::preset_names();
     assert!(!names.is_empty(), "the binary ships at least one preset");
     for name in names {
-        policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
+        for row in rows_at_real_scopes("row", name) {
+            policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
+        }
     }
 }
 
@@ -544,19 +555,21 @@ fn presets_are_inside_the_rule_one_glob() {
 fn every_shipped_preset_publishes_its_ids() {
     let root = scratch("published");
     for name in batten::config_model::preset_names() {
-        let bundles = policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .expect("loads");
-        assert!(
-            !bundles[0].declared().is_empty(),
-            "the preset `{name}` publishes no rule id, so nothing it denies could \
-             be waived or attributed"
-        );
+        for row in rows_at_real_scopes("row", name) {
+            let bundles = policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .expect("loads");
+            assert!(
+                !bundles[0].declared().is_empty(),
+                "the preset `{name}` publishes no rule id, so nothing it denies could \
+                 be waived or attributed"
+            );
+        }
     }
 }
 
@@ -576,10 +589,14 @@ fn every_shipped_preset_publishes_its_ids() {
 #[test]
 fn every_shipped_preset_passes_its_own_suite() {
     let root = scratch("suites");
-    for name in batten::config_model::preset_names() {
+    for (name, row) in batten::config_model::preset_names().iter().flat_map(|name| {
+        rows_at_real_scopes("row", name)
+            .into_iter()
+            .map(move |row| (name, row))
+    }) {
         let bundles = policy::load(
             &root,
-            &[row_at_real_scope("row", name)],
+            &[row],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
@@ -918,7 +935,7 @@ fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
 /// (CLOUD-1269, CLOUD-1279) Every preset loads at the scope it is enabled with,
 /// and the tree-scoped ones therefore reach the guard at all.
 ///
-/// The loops above now go through [`row_at_real_scope`] too, so this is the arm
+/// The loops above now go through [`rows_at_real_scopes`] too, so this is the arm
 /// that states the property directly rather than relying on them: a preset whose
 /// modules read a key its own surface does not emit fails to load, on either
 /// surface. Before CLOUD-1279 the mediated arm did not exist and every loop
@@ -927,14 +944,18 @@ fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
 fn every_preset_loads_at_the_scope_it_is_enabled_with() {
     for name in batten::config_model::preset_names() {
         let root = scratch(&format!("real-scope-{name}"));
-        policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .unwrap_or_else(|err| panic!("the preset `{name}` does not load at its own scope: {err}"));
+        for row in rows_at_real_scopes("row", name) {
+            policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .unwrap_or_else(|err| {
+                panic!("the preset `{name}` does not load at its own scope: {err}")
+            });
+        }
     }
 }
 

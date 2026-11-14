@@ -5309,7 +5309,9 @@ pub(crate) fn tree_document(
             | crate::facts::Fact::RedHead
             | crate::facts::Fact::LandLive
             | crate::facts::Fact::PathspecStatus
-            | crate::facts::Fact::Budgeted => continue,
+            | crate::facts::Fact::Budgeted
+            // CLOUD-2335: hook-surface; its question is about a write.
+            | crate::facts::Fact::ShellIntroduced => continue,
         };
         tree.insert(key.to_owned(), value);
     }

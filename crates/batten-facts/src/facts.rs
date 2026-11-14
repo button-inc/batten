@@ -827,6 +827,13 @@ pub enum Fact {
     /// Each `[budget.*]` set a write would change, measured before and after
     /// the call (CLOUD-2661).
     Budgeted,
+    /// Whether this call's write authors shell into the repository, and by
+    /// which arm: `shell-path` or `shebang` (CLOUD-2335).
+    ///
+    /// Decided in Rust by the engine's shell detector over the bytes the write
+    /// would land and the bytes on disk, so the policy input carries a reason
+    /// token and never the content (non-negotiable rule 4).
+    ShellIntroduced,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1591,6 +1598,9 @@ pub const PATHSPEC_STATUS: Class = Class::new(Cost::Read, Surface::Hook);
 /// [`Fact::Budgeted`]: the target and a fixed count of literal members, each
 /// capped, only on a write a `[budget.*]` set selects (CLOUD-2661).
 pub const BUDGETED: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::ShellIntroduced`] — one bounded read (1 MiB) of the file the call
+/// already names (CLOUD-2335). A read, asked only of a write.
+pub const SHELL_INTRODUCED: Class = Class::new(Cost::Read, Surface::Hook);
 
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
@@ -1643,6 +1653,7 @@ impl Fact {
         Fact::RedHead,
         Fact::PathspecStatus,
         Fact::Budgeted,
+        Fact::ShellIntroduced,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1697,6 +1708,7 @@ impl Fact {
             Fact::RedHead => "red-head",
             Fact::PathspecStatus => "pathspec-status",
             Fact::Budgeted => "budgeted",
+            Fact::ShellIntroduced => "shell-introduced",
         }
     }
 
@@ -1759,6 +1771,7 @@ impl Fact {
             Fact::RedHead => RED_HEAD,
             Fact::PathspecStatus => PATHSPEC_STATUS,
             Fact::Budgeted => BUDGETED,
+            Fact::ShellIntroduced => SHELL_INTRODUCED,
         }
     }
 
@@ -1851,6 +1864,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Instant => false,
         }
     }
@@ -2029,7 +2043,11 @@ impl Fact {
             // question about the call, and a tree walk has none.
             | Fact::RedHead
             | Fact::PathspecStatus
-            | Fact::Budgeted => None,
+            | Fact::Budgeted
+            // CLOUD-2335. Hook-only for `Prospective`'s reason: what a write
+            // would introduce does not exist on the tree, whose own arms judge
+            // the shell already there.
+            | Fact::ShellIntroduced => None,
         }
     }
 
@@ -2225,6 +2243,7 @@ impl Fact {
                 "description": "Fact::Budgeted (CLOUD-2661) -- each `[budget.*]` set this write would change, by name, with whether the call breaches a ceiling it grows past; null when no set selects the call. Counts only, never content.",
                 "items": {"type": "object", "properties": {"name": {"type": "string"}, "breach": {"type": "boolean"}}, "required": ["name", "breach"], "additionalProperties": false},
             }),
+            Fact::ShellIntroduced => Self::shell_introduced_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
@@ -2560,6 +2579,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
             }),
@@ -2655,6 +2675,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2731,6 +2752,22 @@ impl Fact {
                 "running": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["head", "failed", "running"],
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for [`Fact::ShellIntroduced`] (CLOUD-2335): the look
+    /// and a reason token, stated so `opa check -s` refuses a module reading a
+    /// key the fact does not carry.
+    fn shell_introduced_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::ShellIntroduced (CLOUD-2335) -- whether this call's write authors shell into the repository. `look` is is, is-not or could-not-look; `reason` is shell-path (the write creates an absent file at a shell path) or shebang (line 1 would name a shell and does not on disk) when `look` is is, else null. A token, never the content; the path is `call.writes`.",
+            "properties": {
+                "look": {"type": "string", "enum": ["is", "is-not", "could-not-look"]},
+                "reason": {"type": ["string", "null"], "enum": ["shell-path", "shebang", null]},
+            },
+            "required": ["look", "reason"],
             "additionalProperties": false,
         })
     }
@@ -2872,6 +2909,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -3100,6 +3138,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -3168,6 +3207,7 @@ impl Fact {
             | Fact::LandLive
             | Fact::PathspecStatus
             | Fact::Budgeted
+            | Fact::ShellIntroduced
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),
