@@ -34,8 +34,8 @@ use common::{run_with_stdin, scratch};
 /// A fixture repository on a known branch, with both lease programs stubbed.
 fn repo(name: &str, status_exit: i32, peek_stdout: &str) -> PathBuf {
     let dir = scratch(name);
-    write_program(&dir, "status.sh", status_exit, "");
-    write_program(&dir, "peek.sh", 0, peek_stdout);
+    write_program(&dir, "status", status_exit, "");
+    write_program(&dir, "peek", 0, peek_stdout);
     fs::write(dir.join("batten.toml"), CONFIG).expect("write config");
     commit_on_work(&dir);
     dir
@@ -54,21 +54,18 @@ fn commit_on_work(dir: &Path) {
     git(dir, &["commit", "--quiet", "-m", "seed"]);
 }
 
-/// `printf '%s'` with NO trailing newline, so an empty stdout is genuinely empty.
+/// The stand-in (`examples/stub.rs`, CLOUD-2336) at `dir/name`: it swallows its
+/// stdin, prints `stdout` with NO trailing newline, so an empty stdout is
+/// genuinely empty, and exits `exit`.
 ///
 /// `board_record.rs`'s stub writer appends one; here it would make the "no
 /// reservation" case indistinguishable from a one-character answer, and that case
 /// is exactly what the successor column's could-not-look reading turns on.
 fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let path = dir.join(name);
-    fs::write(
-        &path,
-        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' {stdout:?}\nexit {exit}\n"),
-    )
-    .expect("write stub");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+    common::stub_at(
+        &dir.join(name),
+        &serde_json::json!([{"steps": [{"stdout": stdout}, {"exit": exit}]}]),
+    );
 }
 
 /// Through [`common::git_in`], as `board_record.rs` builds its fixture: a
@@ -109,10 +106,10 @@ const CONFIG: &str = r#"
 version = 1
 
 [program.land-lock-status]
-path = "status.sh"
+path = "status"
 
 [program.land-lock-peek]
-path = "peek.sh"
+path = "peek"
 
 [[pattern]]
 id = "landing-lifecycle-call"

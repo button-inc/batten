@@ -196,6 +196,10 @@ fn linked_fixture(name: &str, dest: &str, body: &[u8]) -> (PathBuf, PathBuf) {
     (dir, artifact)
 }
 
+/// The provisioned artifact's bytes. These cases assert where the binary lands
+/// and its mode, never run it, so no shebang and no shell (CLOUD-2336).
+const NEVER_RUN: &[u8] = b"an artifact these cases never run\n";
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -223,7 +227,7 @@ fn applying_a_linked_entry_puts_the_binary_where_a_bare_name_resolves() {
     let (dir, _artifact) = linked_fixture(
         "provision-link",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     let out = batten()
         .current_dir(&dir)
@@ -261,7 +265,7 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     let (dir, _artifact) = linked_fixture(
         "provision-relink",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     let landed = dest.join("probe");
 
