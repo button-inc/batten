@@ -203,7 +203,9 @@ pub(crate) fn agreeing_readme() -> String {
      | `passthrough` | a call no rule selects | — | — | ≤ 10 ms | ≤ 100 ms |\n\
      | `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |\n\
      | `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |\n\
-     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n"
+     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n\
+     | `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |\n"
         .to_owned()
 }
 
@@ -211,7 +213,8 @@ pub(crate) fn agreeing_readme() -> String {
 /// takes them: `<name> <token>` per line.
 pub(crate) fn clean_record() -> String {
     "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n\
-     hook/p50 2.8\npassthrough/p50 2.0\nposttool/p50 2.1\nstop/p50 2.4\nwired/p50 8.0\n"
+     hook/p50 2.8\npassthrough/p50 2.0\nposttool/p50 2.1\nstop/p50 2.4\nwired/p50 8.0\n\
+     hook-offbox 3.2\nhook-offbox/p50 3.0\nposttool-offbox 2.6\nposttool-offbox/p50 2.4\n"
         .to_owned()
 }
 
@@ -503,6 +506,8 @@ fn measured() -> String {
         ("posttool", "2.3"),
         ("stop", "2.6"),
         ("wired", "8.4"),
+        ("hook-offbox", "3.2"),
+        ("posttool-offbox", "2.6"),
     ]
     .iter()
     .fold(String::new(), |mut lines, (path, p95)| {

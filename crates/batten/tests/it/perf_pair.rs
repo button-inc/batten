@@ -681,6 +681,8 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "posttool",
         "stop",
         "wired",
+        "hook-offbox",
+        "posttool-offbox",
     ] {
         assert!(records.contains(id), "the {id} path is recorded: {records}");
     }
@@ -690,7 +692,7 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 7, "{argv}");
+    assert_eq!(timed.len(), 9, "{argv}");
     for line in timed {
         assert_eq!(
             line.contains("--prepare"),

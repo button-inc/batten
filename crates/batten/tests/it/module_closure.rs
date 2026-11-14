@@ -192,7 +192,13 @@ const PLUMBING: &[&str] = &[
 /// rule engine. One genuinely new module, not an edge between old ones —
 /// `register` itself is plumbing, and `traversal` was kept plumbing by
 /// injecting its reads rather than letting it reach the fact model.
-const DEEPEST_CLOSURE: usize = 29;
+///
+/// Thirty since CLOUD-2736: `offbox`, already the deepest at 29 — it pushes, so
+/// it reaches the transport, the scanner and the session sources — reads its
+/// file names and the session leaf from `offbox_watch`, the leaf the hook path
+/// calls. One genuinely new module again, and plumbing: it reaches `durable`
+/// alone. The edge runs that way so the hook never has to reach `offbox`.
+const DEEPEST_CLOSURE: usize = 30;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
