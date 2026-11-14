@@ -48,6 +48,11 @@ fn mutant(
 /// A committed fixture crate whose library is [`LIB`], with a nextest profile
 /// that ends a hang in seconds.
 fn seeded(name: &str) -> std::path::PathBuf {
+    seeded_with(name, LIB)
+}
+
+/// [`seeded`] over the library `lib`.
+fn seeded_with(name: &str, lib: &str) -> std::path::PathBuf {
     let repo = common::scratch_repo(name);
     common::write(
         &repo,
@@ -61,7 +66,7 @@ fn seeded(name: &str) -> std::path::PathBuf {
         "[profile.mutants]\nfail-fast = true\n\
          slow-timeout = { period = \"2s\", terminate-after = 2 }\n",
     );
-    common::write(&repo, "src/lib.rs", LIB);
+    common::write(&repo, "src/lib.rs", lib);
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
     repo
@@ -159,9 +164,13 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     }
     let (code, again, err) = sweep();
     assert_eq!(code, Some(2), "{again}\n{err}");
+    // NO BUILD ROUND REDISCOVERS WHAT THE FIRST SWEEP FOUND: the unviable
+    // mutant and the const-caller hand-back are both journaled, so the second
+    // sweep's first build is clean — once, the hand-back cost a refused build
+    // on every sweep.
     for line in [
-        "1 unviable known from earlier runs",
-        "build 2 clean, 1 unviable",
+        "1 unviable, 1 handed back and 0 unprobed file(s) known from earlier runs",
+        "build 1 clean, 1 unviable",
         "reused 5 of 5 verdict(s)",
         COUNTS,
     ] {
@@ -228,4 +237,91 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         "reach carried 0 case(s)"
     };
     assert!(sixth.contains(carried), "{carried:?} in {sixth}");
+}
+
+/// A fixture case that, when `BATTEN_FIXTURE_STOP` is set, SIGKILLs the sweep
+/// above it — and every process between — before it reaches its end-of-run
+/// seal: a kill partway through reach, at a point name order makes exact.
+/// It runs `five` first, so the edit that moves `adds` moves it too and it is
+/// recorded again rather than carried; `five` holds no mutant, so no verdict
+/// changes. Unset, it passes having done only that.
+const STOPPER: &str = "    #[test]\n    fn zz_stop() {\n\
+        assert_eq!(super::five(), 5);\n\
+        if std::env::var_os(\"BATTEN_FIXTURE_STOP\").is_none() {\n            return;\n        }\n\
+        let (mut pid, mut chain) = (std::process::id(), Vec::new());\n\
+        loop {\n\
+            let status = std::fs::read_to_string(format!(\"/proc/{pid}/status\")).unwrap();\n\
+            let parent: u32 = status.lines().find_map(|l| l.strip_prefix(\"PPid:\")).unwrap().trim().parse().unwrap();\n\
+            assert!(parent > 1, \"no sweep above this case\");\n\
+            chain.push(parent);\n\
+            let cmdline = std::fs::read(format!(\"/proc/{parent}/cmdline\")).unwrap();\n\
+            if String::from_utf8_lossy(&cmdline).contains(\"__mutate-schema\") {\n                break;\n            }\n\
+            pid = parent;\n\
+        }\n\
+        for pid in chain.iter().rev() {\n\
+            let _ = std::process::Command::new(\"kill\").args([\"-9\", &pid.to_string()]).status();\n\
+        }\n    }\n";
+
+/// A sweep killed partway through reach keeps every case it finished: the next
+/// sweep seals what the stopped one left, against the snapshot it ran over, and
+/// carries it across a head that moved meanwhile.
+///
+/// Fails by: a finished case's record lost to the kill (it records again, so
+/// fewer are carried), a leftover sealed over the wrong snapshot (its digest
+/// moves, so it is not carried), or verdicts that differ from an unkilled run.
+#[test]
+fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let lib = {
+        let end = LIB
+            .rfind("\n}\n")
+            .expect("the tests module closes the library");
+        format!("{}\n{STOPPER}}}\n", &LIB[..end])
+    };
+    let repo = seeded_with("mutate-schema-killed", &lib);
+    let file = listing("mutate-schema-killed-listing");
+    // ONE CASE AT A TIME, IN NAME ORDER: `adds`, `compares`, `triples`, then
+    // the stopper — so the kill lands at the same case on every run.
+    let sweep = |stop: bool| {
+        let mut command = common::batten();
+        command
+            .args(["__mutate-schema", &file, "2"])
+            .current_dir(&repo)
+            .env("NEXTEST_TEST_THREADS", "1");
+        if stop {
+            command.env("BATTEN_FIXTURE_STOP", "1");
+        }
+        let output = command.output().expect("run batten");
+        let said = common::stdout(&output);
+        (output.status.code(), said, common::stderr(&output))
+    };
+    let (code, first, err) = sweep(false);
+    assert_eq!(code, Some(2), "{first}\n{err}");
+    assert!(first.contains(COUNTS), "{first}\n{err}");
+    // The head moves under `adds` (it runs `five`), and the stopper fires once
+    // `adds` has re-recorded and the two carried cases have been skipped.
+    let edited = lib.replace("    5\n}", "    4 + 1\n}");
+    common::write(&repo, "src/lib.rs", &edited);
+    let (code, killed, err) = sweep(true);
+    assert_ne!(code, Some(0), "{killed}\n{err}");
+    assert_ne!(code, Some(2), "the sweep never reported: {killed}\n{err}");
+    assert!(
+        !killed.contains(COUNTS),
+        "killed before any verdict: {killed}"
+    );
+    // And moves again, by nothing any case runs.
+    let grown = format!("{edited}pub fn helper(x: u8) -> u8 {{\n    x\n}}\n");
+    common::write(&repo, "src/lib.rs", &grown);
+    let (code, third, err) = sweep(false);
+    assert_eq!(code, Some(2), "{third}\n{err}");
+    for line in [
+        "sealed 1 case(s) a stopped run finished",
+        "reach carried 3 case(s)",
+        COUNTS,
+    ] {
+        assert!(third.contains(line), "{line:?} in {third}\n{err}");
+    }
 }
