@@ -32158,10 +32158,10 @@ mod tests {
             "under the cap, no line end is needed"
         );
         let mut early = b"s\n".to_vec();
-        early.extend([b'a'; 70_000]);
+        early.extend(vec![b'a'; 70_000]);
         assert_eq!(first_line(&write("early", &early)), is("s"));
         assert_eq!(
-            first_line(&write("long", &[b'a'; 70_000])),
+            first_line(&write("long", &vec![b'a'; 70_000])),
             facts::Look::CouldNotLook,
             "no line end within the cap"
         );
