@@ -119,6 +119,7 @@ pub fn write_objects(dir: &Path, objects: &[Object]) -> Result<usize> {
 /// A repository that will not open, an id that will not parse, or a ref the
 /// backend refuses to move.
 pub fn set_ref(dir: &Path, reference: &str, id: &str) -> Result<()> {
+    crate::testing::step()?;
     let repo = crate::git::open_for_write(dir)?;
     let target = gix::ObjectId::from_hex(id.as_bytes())
         .map_err(|err| anyhow::anyhow!("gitwrite: {id} is not an object id: {err}"))?;
