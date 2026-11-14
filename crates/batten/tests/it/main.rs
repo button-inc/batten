@@ -465,6 +465,7 @@ mod sleep_ban;
 mod snapshots;
 #[cfg(unix)]
 mod sonar_gate;
+mod source_claude_code;
 mod source_facts;
 mod source_scope;
 mod spawn_ceilings;
