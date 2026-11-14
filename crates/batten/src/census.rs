@@ -77,6 +77,34 @@ fn holds_test(text: &str, name: &str) -> bool {
     text.lines().any(|line| line.contains(name))
 }
 
+/// Refuse a `[[census.shell.spawn]]` row that names no file or function, or
+/// whose `contract` carries no citation URL.
+fn validate_spawns(census: &ShellCensus) -> Result<()> {
+    for spawn in &census.spawns {
+        let bare = |field: Option<&str>| field.is_none_or(|text| text.trim().is_empty());
+        if spawn.path.trim().is_empty() || bare(spawn.function.as_deref()) {
+            return Err(UsageError::raise(format!(
+                "census.shell.spawn {}: a row names the file and the function that spawns",
+                spawn.path
+            )));
+        }
+        if bare(spawn.contract.as_deref())
+            || !spawn
+                .contract
+                .as_deref()
+                .unwrap_or_default()
+                .contains("://")
+        {
+            return Err(UsageError::raise(format!(
+                "census.shell.spawn {}: `contract` must name the external format that forces \
+                 a shell, with a citation URL",
+                spawn.path
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The carriers a manifest row may name: the ones this module has a manifest
 /// reader for. Every other `crate::shell_detect::CARRIERS` row is cited data only.
 const MANIFEST_CARRIERS: [&crate::shell_detect::Carrier; 2] =
@@ -218,6 +246,7 @@ impl ShellCensusExt for ShellCensus {
                 )));
             }
         }
+        validate_spawns(self)?;
         let generated = self.generated.iter().map(|entry| &entry.path);
         for glob in self.workflows.iter().chain(&self.exempt).chain(generated) {
             Selector::new(glob)?;
@@ -587,6 +616,9 @@ pub struct Report {
     /// Each `[[census.shell.generated]]` entry, held to what is behind it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub generated: Vec<GeneratedEntry>,
+    /// Engine source spawning a shell (CLOUD-2770), declared or not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spawns: Vec<SpawnEntry>,
     /// The sums.
     pub totals: Totals,
 }
@@ -649,6 +681,308 @@ fn generated_entries<'g>(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Engine source that spawns a shell (CLOUD-2770). Whether an argv runs one is
+// `crate::shell::spawns_shell`'s; this walk only finds the argv.
+// ---------------------------------------------------------------------------
+
+/// One engine spawn site: a string-literal argv, outside test code, whose
+/// program [`crate::shell::spawns_shell`] reads as running a shell.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct SpawnEntry {
+    /// The source file.
+    pub path: String,
+    /// The 1-based line of the argv's program.
+    pub line: usize,
+    /// The function (or `const`/`static`) holding it. Absent for a file the
+    /// parser refused, which is one site no row can declare: could-not-look is
+    /// never clean.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+}
+
+/// How a site of a file the parser refused renders.
+const UNPARSED: &str = "<unparsed>";
+
+/// Whether a tracked path is engine source: a `.rs` file under a `src`
+/// directory. A crate's tests, benches and build script are not; a test module
+/// inside `src` is skipped by the walk.
+fn engine_source(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "rs")
+        && (path.starts_with("src/") || path.contains("/src/"))
+}
+
+/// Every engine spawn site in the tracked tree at `root`.
+fn spawns_on_disk(root: &Path, tracked: &BTreeSet<String>) -> Vec<SpawnEntry> {
+    tracked
+        .iter()
+        .filter(|path| engine_source(path))
+        .filter_map(|path| {
+            let bytes = std::fs::read(root.join(path)).ok()?;
+            Some(spawn_sites(path, &String::from_utf8_lossy(&bytes)))
+        })
+        .flatten()
+        .collect()
+}
+
+/// Every shell spawn site in one engine source file, in source order.
+fn spawn_sites(path: &str, text: &str) -> Vec<SpawnEntry> {
+    let Ok(file) = crate::source::rust(text) else {
+        return vec![SpawnEntry {
+            path: path.to_owned(),
+            line: 1,
+            function: None,
+        }];
+    };
+    if test_only(&file.attrs) {
+        return Vec::new();
+    }
+    let mut walk = SpawnWalk {
+        owner: None,
+        found: BTreeMap::new(),
+    };
+    syn::visit::Visit::visit_file(&mut walk, &file);
+    walk.found
+        .into_iter()
+        .map(|((line, _), function)| SpawnEntry {
+            path: path.to_owned(),
+            line,
+            function,
+        })
+        .collect()
+}
+
+/// Whether `attrs` mark an item as test code: `#[test]` or exactly
+/// `#[cfg(test)]`. Test code is CLOUD-2336's, not this arm's.
+fn test_only(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Ident>()
+                    .is_ok_and(|ident| ident == "test"))
+    })
+}
+
+/// An item's attributes, for the kinds that can hold code.
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+/// A string literal, through `&` and parentheses.
+fn literal(expr: &syn::Expr) -> Option<String> {
+    literal_token(expr).map(syn::LitStr::value)
+}
+
+/// [`literal`]'s token, for its position.
+fn literal_token(expr: &syn::Expr) -> Option<&syn::LitStr> {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(text),
+            ..
+        }) => Some(text),
+        syn::Expr::Reference(inner) => literal_token(&inner.expr),
+        syn::Expr::Paren(inner) => literal_token(&inner.expr),
+        _ => None,
+    }
+}
+
+/// The word standing for an argument the source computes: an inline flag whose
+/// script is computed still carries one.
+const COMPUTED: &str = "<computed>";
+
+/// A sequence's leading string literals, then [`COMPUTED`] once for whatever
+/// follows them.
+fn literal_argv<'e>(items: impl IntoIterator<Item = &'e syn::Expr>) -> Vec<String> {
+    let mut argv = Vec::new();
+    for item in items {
+        if let Some(word) = literal(item) {
+            argv.push(word);
+        } else {
+            argv.push(COMPUTED.to_owned());
+            break;
+        }
+    }
+    argv
+}
+
+/// `Command::new("<literal>")` by any path ending in it: the call's span and
+/// the program.
+fn command_new(call: &syn::ExprCall) -> Option<(proc_macro2::Span, String)> {
+    let syn::Expr::Path(path) = &*call.func else {
+        return None;
+    };
+    let [.., ty, new] = path.path.segments.iter().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    if ty.ident != "Command" || new.ident != "new" {
+        return None;
+    }
+    let program = literal_token(call.args.first()?)?;
+    Some((program.span(), program.value()))
+}
+
+/// The walk: the item owning the code under it, and each site found, keyed by
+/// its program's position so a method chain and the call it starts from are
+/// one site.
+struct SpawnWalk {
+    owner: Option<String>,
+    found: BTreeMap<(usize, usize), Option<String>>,
+}
+
+impl SpawnWalk {
+    /// Record `argv`, whose program sits at `at`, when it runs a shell. The
+    /// first record at a position wins: an outer method chain is visited before
+    /// the call it starts from, and carries more of the argv.
+    fn record(&mut self, at: proc_macro2::Span, argv: &[String]) {
+        let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+        if crate::shell::spawns_shell(&words) {
+            let start = at.start();
+            let owner = self.owner.clone();
+            self.found
+                .entry((start.line, start.column))
+                .or_insert(owner);
+        }
+    }
+
+    /// A sequence spelled as an argv: its first two elements are string
+    /// literals. One literal beside a value is a table row, not an argv.
+    fn sequence(&mut self, items: &[&syn::Expr]) {
+        if let [first, second, ..] = items
+            && let Some(program) = literal_token(first)
+            && literal(second).is_some()
+        {
+            let argv = literal_argv(items.iter().copied());
+            self.record(program.span(), &argv);
+        }
+    }
+
+    /// Walk `visit` with `name` as the owner.
+    fn owned(&mut self, name: String, visit: impl FnOnce(&mut Self)) {
+        let outer = self.owner.replace(name);
+        visit(self);
+        self.owner = outer;
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for SpawnWalk {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if test_only(item_attrs(item)) {
+            return;
+        }
+        match item {
+            syn::Item::Fn(function) => self.owned(function.sig.ident.to_string(), |walk| {
+                syn::visit::visit_item(walk, item);
+            }),
+            syn::Item::Const(constant) => self.owned(constant.ident.to_string(), |walk| {
+                syn::visit::visit_item(walk, item);
+            }),
+            syn::Item::Static(value) => self.owned(value.ident.to_string(), |walk| {
+                syn::visit::visit_item(walk, item);
+            }),
+            _ => syn::visit::visit_item(self, item),
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        match item {
+            syn::ImplItem::Fn(function) if test_only(&function.attrs) => {}
+            syn::ImplItem::Fn(function) => self.owned(function.sig.ident.to_string(), |walk| {
+                syn::visit::visit_impl_item(walk, item);
+            }),
+            syn::ImplItem::Const(constant) => self.owned(constant.ident.to_string(), |walk| {
+                syn::visit::visit_impl_item(walk, item);
+            }),
+            _ => syn::visit::visit_impl_item(self, item),
+        }
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.owned(item.sig.ident.to_string(), |walk| {
+            syn::visit::visit_trait_item_fn(walk, item);
+        });
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let Some((at, program)) = command_new(call) {
+            self.record(at, &[program]);
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        // The chain from this call down to its root, outermost first.
+        let mut chain = vec![call];
+        let mut root = &*call.receiver;
+        while let syn::Expr::MethodCall(inner) = root {
+            chain.push(inner);
+            root = &inner.receiver;
+        }
+        if let syn::Expr::Call(root) = root
+            && let Some((at, program)) = command_new(root)
+        {
+            let mut argv = vec![program];
+            for link in chain.iter().rev() {
+                if argv.last().is_some_and(|word| word == COMPUTED) {
+                    break;
+                }
+                if link.method == "arg" {
+                    argv.extend(literal_argv(link.args.first()));
+                } else if link.method == "args" {
+                    let array = link.args.first().map(|arg| match arg {
+                        syn::Expr::Reference(inner) => &*inner.expr,
+                        other => other,
+                    });
+                    match array {
+                        Some(syn::Expr::Array(array)) => argv.extend(literal_argv(&array.elems)),
+                        _ => argv.push(COMPUTED.to_owned()),
+                    }
+                }
+            }
+            self.record(at, &argv);
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_tuple(&mut self, tuple: &'ast syn::ExprTuple) {
+        self.sequence(&tuple.elems.iter().collect::<Vec<_>>());
+        syn::visit::visit_expr_tuple(self, tuple);
+    }
+
+    fn visit_expr_array(&mut self, array: &'ast syn::ExprArray) {
+        self.sequence(&array.elems.iter().collect::<Vec<_>>());
+        syn::visit::visit_expr_array(self, array);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        // A macro body is tokens to `syn`; one whose body is comma-separated
+        // expressions (`vec!`, `format!`, `assert!`) is walked as them, and
+        // `vec!`'s is an argv as an array literal's is.
+        let Ok(args) = mac.parse_body_with(
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+        ) else {
+            return;
+        };
+        if mac.path.is_ident("vec") {
+            self.sequence(&args.iter().collect::<Vec<_>>());
+        }
+        for arg in &args {
+            syn::visit::Visit::visit_expr(self, arg);
+        }
+    }
+}
+
 impl Report {
     /// The pointer lines, one per entry, then the totals.
     #[must_use]
@@ -677,6 +1011,14 @@ impl Report {
         }
         for entry in &self.exempt {
             rendered.push(format!("{} exempt {}", entry.path, entry.lines));
+        }
+        for entry in &self.spawns {
+            rendered.push(format!(
+                "{}:{} spawn {}",
+                entry.path,
+                entry.line,
+                entry.function.as_deref().unwrap_or(UNPARSED)
+            ));
         }
         let totals = self.totals;
         rendered.push(format!(
@@ -848,6 +1190,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
     }
 
     report.generated = generated_on_disk(root, declared, tracked);
+    report.spawns = spawns_on_disk(root, tracked);
     report.manifests.sort();
     report.steps.sort();
     report.files.sort();
@@ -1096,6 +1439,11 @@ pub struct Reach<'r, 'a> {
 /// `tracked` its glob matches, and whether a line of its check file holds the
 /// test name. A check file that cannot be read is `check_found: false`.
 ///
+/// `spawn` is one `{path, line, function}` per engine spawn site (CLOUD-2770):
+/// a string-literal argv outside test code in a tracked `src/**.rs` file whose
+/// program runs a shell. Present only with a [`Reach`] that applies, since
+/// both directions of the `[[census.shell.spawn]]` table need the whole tree.
+///
 /// Pointer-only (non-negotiable rule 4): a kind, a 1-based line, the detector's
 /// reason, a count and a boolean. Never a byte of the body.
 #[must_use]
@@ -1169,7 +1517,29 @@ pub fn tree_fact(
             base_side.insert(path.clone(), entry);
         }
     }
-    serde_json::json!({"head": head_side, "base": base_side, "generated": generated})
+    let mut fact =
+        serde_json::json!({"head": head_side, "base": base_side, "generated": generated});
+    // Engine spawn sites (CLOUD-2770), only where the whole tree was read: a
+    // fact that read a row's line sources alone would hand the ban an absent
+    // site as no site, and every declared row would read as naming nothing.
+    if let Some(reader) = reader {
+        let sources: BTreeSet<&str> = reader
+            .tracked
+            .iter()
+            .map(String::as_str)
+            .chain(head.keys().map(String::as_str))
+            .filter(|path| engine_source(path))
+            .collect();
+        let spawn: Vec<SpawnEntry> = sources
+            .into_iter()
+            .filter_map(|path| Some(spawn_sites(path, &read(path)?.join("\n"))))
+            .flatten()
+            .collect();
+        if let Some(object) = fact.as_object_mut() {
+            object.insert("spawn".to_owned(), serde_json::json!(spawn));
+        }
+    }
+    fact
 }
 
 /// `batten census shell`: render the census of this repository.

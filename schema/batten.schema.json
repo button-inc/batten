@@ -6019,6 +6019,13 @@
             }
           ]
         },
+        "spawn": {
+          "description": "The only shell engine source may spawn (CLOUD-2770): one row per\nfunction whose string-literal argv runs a shell because an external\nformat forces it. Held in both directions, whatever `mode` says.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Spawn"
+          }
+        },
         "workflows": {
           "description": "Workflow files whose `run:` steps are counted, as globs over tracked paths.",
           "type": "array",
@@ -6335,6 +6342,37 @@
           "type": "string",
           "const": "days"
         }
+      ]
+    },
+    "Spawn": {
+      "description": "One `[[census.shell.spawn]]` row: an engine function that spawns a shell,\nand the external contract that forces it to.",
+      "type": "object",
+      "properties": {
+        "contract": {
+          "description": "The external format that makes the argv a shell command line, with a\ncitation (a URL). Optional to the parser so that\n[`ShellCensus::validate`] is what refuses its absence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "function": {
+          "description": "The function holding the spawn, by its name. Optional to the parser so\nthat [`ShellCensus::validate`] is what refuses its absence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "path": {
+          "description": "The source file, repo-relative.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
       ]
     },
     "Startup": {

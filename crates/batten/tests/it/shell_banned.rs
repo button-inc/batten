@@ -726,6 +726,74 @@ fn a_generated_file_is_admitted() {
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
 }
 
+// ENGINE SOURCE THAT SPAWNS A SHELL (CLOUD-2770). A string-literal argv in
+// non-test `src/**.rs` whose program runs a shell is a site, and a site stands
+// only on a `[[census.shell.spawn]]` row. The table is held in both directions,
+// so a row naming no site is refused too.
+
+/// A crate source whose non-test `run` spawns `sh -c`, at line 4.
+const SPAWNING: &str = "use std::process::Command;\n\npub fn run() {\n    \
+                        let _ = Command::new(\"sh\").args([\"-c\", \"x\"]).status();\n}\n";
+
+/// One `[[census.shell.spawn]]` row for `src/lib.rs`'s `run`.
+const SPAWN_ROW: &str = "\n[[census.shell.spawn]]\npath = \"src/lib.rs\"\nfunction = \"run\"\n\
+                         contract = \"the format's helper is a shell line: https://example.invalid/format\"\n";
+
+#[test]
+fn an_undeclared_engine_shell_spawn_is_refused() {
+    let dir = repo_under(
+        "shell-ban-spawn-undeclared",
+        &presence_config(""),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    // `shell spawn refused` points at the site: the file and the program's line.
+    assert_eq!(found, [("src/lib.rs".to_owned(), Some(4))], "{found:?}");
+}
+
+#[test]
+fn a_declared_engine_shell_spawn_is_admitted() {
+    let dir = repo_under(
+        "shell-ban-spawn-declared",
+        &presence_config(SPAWN_ROW),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
+fn a_spawn_row_naming_no_site_is_refused() {
+    let dir = repo_under(
+        "shell-ban-spawn-row-unmatched",
+        &presence_config(SPAWN_ROW),
+        &[("src/lib.rs", "pub fn run() {}\n")],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    // `shell spawn missing` points at the row's file, no line.
+    assert_eq!(found, [("src/lib.rs".to_owned(), None)], "{found:?}");
+}
+
+/// Test code is CLOUD-2336's: the same spawn inside `#[cfg(test)] mod tests`
+/// is no site, so no row is needed for it.
+#[test]
+fn a_shell_spawn_inside_cfg_test_is_not_judged_here() {
+    let dir = repo_under(
+        "shell-ban-spawn-cfg-test",
+        &presence_config(""),
+        &[(
+            "src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    use std::process::Command;\n\n    \
+             #[test]\n    fn run() {\n        \
+             let _ = Command::new(\"sh\").args([\"-c\", \"x\"]).status();\n    }\n}\n",
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
 /// LEGACY `exempt` IS MIGRATE. The stranger's config carries `exempt` and no
 /// `mode`, so a shell file standing at the base that the list does not name
 /// passes — presence is not judged — and growing it is refused.
