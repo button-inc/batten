@@ -666,6 +666,11 @@ impl HarnessExt for Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // THE PUBLISHED PROMPT-CACHE FIGURES (CLOUD-2763), read
+                // 2026-11-14; `prompt_cache::CLAUDE_CODE` carries the sources.
+                //MUTANT-SUITE crates/batten/src/hook.rs
+                //MUTANT eviction-limit-invented|s@^                cache_eviction: None,$@                cache_eviction: Some(\&crate::prompt_cache::CLAUDE_CODE),@|only_claude_code_declares_an_eviction_limit
+                cache_eviction: Some(&crate::prompt_cache::CLAUDE_CODE),
             },
             Harness::Cursor => Capabilities {
                 // Searched 2026-09-01 and NOT fetched: the host has a Todos
@@ -707,6 +712,9 @@ impl HarnessExt for Harness {
                 // deny explained there would explain itself to nobody.
                 reason_travels_in_band: true,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CopilotCli => Capabilities {
@@ -741,6 +749,9 @@ impl HarnessExt for Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::GeminiCli => Capabilities {
@@ -807,6 +818,9 @@ impl HarnessExt for Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::CodexCli => Capabilities {
@@ -832,6 +846,9 @@ impl HarnessExt for Harness {
                 // stderr carries the reason.
                 reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                // Not published for this host's CLI (read 2026-11-14): no
+                // limit, so no wake.
+                cache_eviction: None,
                 capture: UNSURVEYED_CAPTURE,
             },
             Harness::ExitCode => Capabilities {
@@ -889,6 +906,8 @@ impl HarnessExt for Harness {
                     spill_path: crate::capture::Fidelity::Unavailable,
                     transcript: crate::capture::Fidelity::Unavailable,
                 },
+                // No host behind the normalized envelope publishes a cache.
+                cache_eviction: None,
             },
         }
     }
@@ -1182,6 +1201,14 @@ pub struct Capabilities {
     /// [`Capabilities::events`] is, and [`Capabilities::fidelity`] is its
     /// projection. See [`Capability`]'s own doc: the scalar columns only.
     pub capture: CaptureCapabilities,
+    /// When this host evicts a session's cached context, and what a write and a
+    /// read cost (CLOUD-2763).
+    ///
+    /// A field of its own for [`Capabilities::capture`]'s reason: a
+    /// [`Declaration`] cannot carry numbers. `None` where the host's CLI
+    /// publishes no limit, even where its provider's API publishes one: no
+    /// figure is invented, and with none there is no wake.
+    pub cache_eviction: Option<&'static crate::prompt_cache::Eviction>,
 }
 
 /// How faithfully one host's responses can be captured, per response shape
@@ -13679,6 +13706,35 @@ mod tests {
         }
     }
     use super::*;
+
+    /// CLOUD-2763: every host but Claude Code declares no eviction limit, and
+    /// Claude Code's column holds exactly the published figures.
+    #[test]
+    fn only_claude_code_declares_an_eviction_limit() {
+        for harness in Harness::ALL {
+            if *harness != Harness::ClaudeCode {
+                assert!(
+                    harness.capabilities().cache_eviction.is_none(),
+                    "{harness:?} publishes no limit"
+                );
+            }
+        }
+        let eviction = Harness::ClaudeCode
+            .capabilities()
+            .cache_eviction
+            .expect("Claude Code publishes its buckets");
+        let buckets: Vec<(u64, u64)> = eviction
+            .buckets
+            .iter()
+            .map(|bucket| (bucket.lifetime_secs, bucket.write_milli))
+            .collect();
+        assert_eq!(buckets, vec![(300, 1250), (3600, 2000)]);
+        assert_eq!(eviction.read_milli("claude-fable-5-2"), Some(25));
+        assert_eq!(eviction.read_milli("claude-opus-5-5"), Some(50));
+        assert_eq!(eviction.read_milli("claude-sonnet-5-5"), Some(50));
+        assert_eq!(eviction.read_milli("claude-haiku-5-5"), Some(100));
+        assert_eq!(eviction.read_milli("gpt-5"), None, "not a Claude model");
+    }
 
     /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
     /// alone never makes a relative word absolute. Fails by: either operator
