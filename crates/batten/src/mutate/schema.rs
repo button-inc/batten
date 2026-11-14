@@ -1967,8 +1967,9 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
     let jobs = args.get(2).and_then(|j| j.parse().ok()).unwrap_or(3);
     let mut out = std::io::stdout();
     let swept = crate::git::repo_root(std::path::Path::new(".")).and_then(|root| {
+        let listed_over = super::cover::source_digest(&root)?;
         let mutants = listing(&crate::fsio::read_to_string(path)?)?;
-        sweep(&root, &mutants, jobs, &mut out)
+        sweep(&root, &mutants, &listed_over, jobs, &mut out)
     });
     let code = match swept {
         Ok(swept) => swept.code,
@@ -2267,6 +2268,7 @@ pub struct Swept {
 pub fn sweep(
     root: &std::path::Path,
     mutants: &[Listed],
+    listed_over: &str,
     jobs: usize,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
@@ -2284,8 +2286,19 @@ pub fn sweep(
     // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
     // is read from this snapshot, never the live checkout, which an edit during
     // an hour-long sweep would move under the listing's spans.
+    //
+    // AND THE SNAPSHOT IS OF THE TREE THE LISTING READ: `listed_over` is the
+    // checkout's source digest taken before the change was written, and the
+    // copy is compared by the bytes it copied. On #1276 a `cargo fmt` landed
+    // between the listing and this copy, every span after it pointed into the
+    // wrong text, and five builds refused delimiters no mutant owned.
     let snapshot = state.join("pristine");
-    super::cover::pristine(root, &snapshot)?;
+    let copied = super::cover::pristine(root, &snapshot)?;
+    anyhow::ensure!(
+        copied == listed_over,
+        "the checkout's Rust sources changed while the mutants were listed, so no span would \
+         point where it was listed; run the sweep again once the tree is still"
+    );
     let resources = resource_digest(root)?;
     let root = snapshot;
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
