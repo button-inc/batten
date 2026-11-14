@@ -132,7 +132,8 @@ fn pattern_rows() -> String {
 /// both-directions check failed the config LOAD. The fixture cannot grow a class
 /// its module does not raise, so the list is the four ids and the coupling to
 /// somebody else's naming is gone.
-const RAISED: [&str; 4] = [
+const RAISED: [&str; 5] = [
+    "hook measure late",
     "path measure late",
     "path measure partial",
     "prose state wrong",
@@ -194,22 +195,24 @@ input = "subject.bin"
 
 /// A README table publishing `budget` for every path the module gates.
 pub(crate) fn agreeing_readme() -> String {
-    "| path | what it does | p50 | p95 | budget |\n\
-     | ---- | ------------ | --- | --- | ------ |\n\
-     | `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |\n\
-     | `check` | one-rule tree | 2.3 ms | 2.7 ms | ≤ 100 ms |\n\
-     | `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |\n\
-     | `passthrough` | a call no rule selects | — | — | ≤ 100 ms |\n\
-     | `posttool` | a PostToolUse call | — | — | ≤ 100 ms |\n\
-     | `stop` | an end of turn | — | — | ≤ 100 ms |\n\
-     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n"
+    "| path | what it does | p50 | p95 | target | budget |\n\
+     | ---- | ------------ | --- | --- | ------ | ------ |\n\
+     | `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |\n\
+     | `check` | one-rule tree | 2.3 ms | 2.7 ms | — | ≤ 100 ms |\n\
+     | `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |\n\
+     | `passthrough` | a call no rule selects | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n"
         .to_owned()
 }
 
 /// Every budgeted path measured comfortably inside its ceiling, as the producer
 /// takes them: `<name> <token>` per line.
 pub(crate) fn clean_record() -> String {
-    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
+    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n\
+     hook/p50 2.8\npassthrough/p50 2.0\nposttool/p50 2.1\nstop/p50 2.4\nwired/p50 8.0\n"
+        .to_owned()
 }
 
 /// A scratch repository carrying the fixture config, the COMMITTED module, and
@@ -307,6 +310,81 @@ fn a_budgeted_path_absent_from_a_present_record_is_refused() {
     );
 }
 
+// --- the p50 target (CLOUD-2730) ---------------------------------------------
+//
+// The target is what a hook call normally costs and the budget is what it must
+// never exceed, so the two findings are told apart by token: each case below
+// trips exactly one of them.
+
+#[test]
+fn a_p50_over_its_target_is_the_target_finding_alone() {
+    let dir = repo("target-over", Some(&agreeing_readme()));
+    record(
+        &dir,
+        &clean_record()
+            .replace("posttool 2.3", "posttool 50")
+            .replace("posttool/p50 2.1", "posttool/p50 11"),
+    );
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("hook measure late"),
+        "a p50 over its target is a finding:\n{answer}"
+    );
+    assert!(
+        !answer.contains("path measure late"),
+        "a p95 of 50 is inside the 100 ms budget:\n{answer}"
+    );
+}
+
+#[test]
+fn a_p95_over_its_budget_is_the_budget_finding_alone() {
+    let dir = repo("target-under", Some(&agreeing_readme()));
+    record(
+        &dir,
+        &clean_record()
+            .replace("posttool 2.3", "posttool 101")
+            .replace("posttool/p50 2.1", "posttool/p50 9"),
+    );
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("path measure late"),
+        "a p95 over its ceiling is a finding:\n{answer}"
+    );
+    assert!(
+        !answer.contains("hook measure late"),
+        "a p50 of 9 is inside the 10 ms target, whatever the p95 reads:\n{answer}"
+    );
+}
+
+#[test]
+fn a_targeted_path_with_no_p50_is_refused() {
+    let dir = repo("target-partial", Some(&agreeing_readme()));
+    record(&dir, &clean_record().replace("posttool/p50 2.1\n", ""));
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("path measure partial"),
+        "a targeted arm with no p50 in a present record is a finding:\n{answer}"
+    );
+    assert!(!answer.contains("hook measure late"), "{answer}");
+}
+
+#[test]
+fn a_readme_publishing_a_different_target_is_refused() {
+    let dir = repo(
+        "readme-target-disagrees",
+        Some(&agreeing_readme().replace(
+            "| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |",
+            "| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 20 ms | ≤ 100 ms |",
+        )),
+    );
+    record(&dir, &clean_record());
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("prose state wrong"),
+        "the published target and the enforced one must agree:\n{answer}"
+    );
+}
+
 #[test]
 fn no_record_at_all_is_silent() {
     // ABSENT IS NOT INCOMPLETE, and this is the case that keeps every checkout
@@ -343,8 +421,8 @@ fn a_readme_publishing_a_different_budget_is_refused() {
     let dir = repo(
         "readme-disagrees",
         Some(&agreeing_readme().replace(
-            "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |",
-            "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |",
+            "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |",
+            "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |",
         )),
     );
     record(&dir, &clean_record());
@@ -360,7 +438,7 @@ fn a_readme_with_no_row_for_a_budgeted_path_is_refused() {
     let dir = repo(
         "readme-short",
         Some(&agreeing_readme().replace(
-            "| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n",
+            "| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n",
             "",
         )),
     );
@@ -437,7 +515,7 @@ fn measured() -> String {
 fn record_picked(dir: &Path, lines: &str) -> std::process::Output {
     run_with_stdin(
         dir,
-        &["record", "tool", "perf-p95", "--pick", "path=p95"],
+        &["record", "tool", "perf-p95", "--pick", "path=p95,p50"],
         lines,
     )
 }
