@@ -67,6 +67,37 @@ mkdir -p "$STUB_TARGET/$t/dist"
 printf 'not really a binary\n' >"$STUB_TARGET/$t/dist/$b"
 "#;
 
+/// THE TEST STAND-IN IS NEVER SHIPPED (CLOUD-2336). `examples/stub.rs` is an
+/// `[[example]]` precisely so that this repository's own `cargo metadata`, fed
+/// to the reader `dist` names its archive from, still declares exactly one
+/// binary. The day the helper became a `[[bin]]`, the reader would refuse with
+/// "2 binary targets", and so would this case.
+#[test]
+fn the_package_ships_exactly_one_binary() {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the subject is this repository's real `cargo metadata`, which only cargo answers (CLOUD-2336)"
+    )]
+    let output = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(at_root("."))
+        .output()
+        .expect("cargo metadata runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON");
+    let package = batten::dist::package(&metadata).expect("exactly one releasable binary");
+    assert_eq!(package.bin, "batten");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\"batten-stub\""),
+        "the stand-in is still a target of the package, as an example"
+    );
+}
+
 /// One scratch workspace: its root, its stub directory and the stub's log.
 struct Bench {
     root: PathBuf,
