@@ -30048,10 +30048,16 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             )?;
         }
     }
+    // LAST, and only with the state repository variable set (CLOUD-2722):
+    // whether this checkout's state is leaving the machine. It changes no exit.
+    if let Some(offbox) = &report.offbox {
+        writeln!(out, "{}", offbox.line())?;
+    }
     Ok(session_code(&report))
 }
 
 //MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
+//MUTANT session-code-reads-the-offbox-field|s@^    match report.open {$@    if report.offbox.is_some() { return ExitCode::Usage; } match report.open {@|the_offbox_report_changes_no_exit_code
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
     // than unfinished work (CLOUD-1760). The two arms answer different questions —
