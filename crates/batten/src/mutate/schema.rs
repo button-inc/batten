@@ -219,8 +219,14 @@ fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<Strin
 
 /// The pid a trace line is from and the event it reports, when the line is an
 /// exit or signal report (`+++ ... +++`, `--- ... ---`) rather than a syscall.
+///
+/// THE PID COLUMN IS PADDED: strace prints a short pid left-aligned in a
+/// five-wide field (`8638  execve`), so the event starts after however many
+/// spaces follow it. Read as one space, no pid under five digits ever matched
+/// its exit, every trace read as unfinished, and every case keyed on every file.
 fn trace_event(line: &str) -> Option<(&str, &str)> {
     let (pid, rest) = line.split_once(' ')?;
+    let rest = rest.trim_start();
     (rest.starts_with("+++ ") || rest.starts_with("--- ")).then_some((pid, rest))
 }
 
@@ -1494,7 +1500,8 @@ pub fn build(
     work: &std::path::Path,
     target: &std::path::Path,
     mutants: &[Listed],
-    known_unviable: BTreeSet<u32>,
+    known: Known,
+    on_round: &mut dyn FnMut(&Refused) -> anyhow::Result<()>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Built> {
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
@@ -1515,9 +1522,12 @@ pub fn build(
         String::from("CARGO_TARGET_DIR"),
         target.to_string_lossy().into_owned(),
     )];
-    let mut skip = known_unviable;
-    let mut handed = BTreeSet::new();
-    let mut unprobed = BTreeSet::new();
+    let Known {
+        unviable: mut skip,
+        mut handed,
+        mut unprobed,
+    } = known;
+    skip.extend(handed.iter().copied());
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip, &unprobed)?;
         let ran = super::spawn(
@@ -1559,6 +1569,10 @@ pub fn build(
             "the schema build failed on error(s) no mutant owns: {}",
             refused.stray.join("; ")
         );
+        // KEPT THE MOMENT THE BUILD REFUSED: a round is a full schema build,
+        // and a sweep killed in the next one, or the next sweep, would pay it
+        // again to rediscover what this one already found.
+        on_round(&refused)?;
         unprobed.extend(refused.unprobe);
         skip.extend(refused.owned);
         // HANDED BACK, NOT UNVIABLE: the mutants compile, only not switched,
@@ -1567,6 +1581,19 @@ pub fn build(
         handed.extend(refused.reconst);
     }
     anyhow::bail!("the schema build was not clean within 12 rounds")
+}
+
+/// What earlier runs already found a build refuses: the mutants that do not
+/// compile, those handed back for a const caller, and the files built without
+/// probes. Each skips the build round that would only rediscover it.
+#[derive(Debug, Default)]
+pub struct Known {
+    /// Mutants an earlier build found do not compile.
+    pub unviable: BTreeSet<u32>,
+    /// Mutants an earlier build handed back for a const caller.
+    pub handed: BTreeSet<u32>,
+    /// Files an earlier build had to build without probes.
+    pub unprobed: BTreeSet<String>,
 }
 
 /// A schema that built: the mutants that do not compile, those handed back
@@ -2314,6 +2341,19 @@ pub struct Reach {
 ///
 /// The reach directory cannot be read.
 pub fn collect_reach(base: &std::path::Path, identity: &Identity<'_>) -> anyhow::Result<Reach> {
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(base)? {
+        dirs.push(entry?.path());
+    }
+    collect_dirs(dirs, identity)
+}
+
+/// [`collect_reach`] over the case directories `dirs` alone, so a sweep can
+/// read back only the records a stopped run left ([`seal_leftovers`]).
+fn collect_dirs(
+    dirs: impl IntoIterator<Item = std::path::PathBuf>,
+    identity: &Identity<'_>,
+) -> anyhow::Result<Reach> {
     let functions = ids_by_value(identity.probes.iter().enumerate());
     let sites = ids_by_value(
         identity
@@ -2323,8 +2363,7 @@ pub fn collect_reach(base: &std::path::Path, identity: &Identity<'_>) -> anyhow:
             .filter_map(|(id, key)| key.as_deref().map(|key| (id, key))),
     );
     let mut reach = Reach::default();
-    for entry in std::fs::read_dir(base)? {
-        let dir = entry?.path();
+    for dir in dirs {
         let Some(case) = kept_case(&dir) else {
             continue;
         };
@@ -2396,6 +2435,7 @@ pub fn seal_reach(
     digests: &std::collections::BTreeMap<Case, String>,
     identity: &Identity<'_>,
     seconds: &std::collections::BTreeMap<Case, f64>,
+    whole: bool,
 ) -> anyhow::Result<()> {
     let mut reached: std::collections::BTreeMap<&Case, BTreeSet<u32>> =
         std::collections::BTreeMap::new();
@@ -2412,43 +2452,36 @@ pub fn seal_reach(
         let Some(digest) = digests.get(&case) else {
             continue;
         };
-        let mut record = format!("D{digest}\n");
-        for probe in reach.executed.get(&case).into_iter().flatten() {
-            let Some(function) = identity.probes.get(*probe) else {
-                continue;
-            };
-            let _ = writeln!(record, "F{function}");
-        }
-        let mut keyless = false;
-        for site in reached.get(&case).into_iter().flatten() {
-            match identity
-                .sites
-                .get(usize::try_from(*site)?)
-                .and_then(Option::as_ref)
-            {
-                Some(key) => {
-                    let _ = writeln!(record, "S{key}");
-                }
-                None => keyless = true,
-            }
-        }
-        if keyless {
-            continue;
-        }
-        if let Some(took) = seconds.get(&case) {
-            let _ = writeln!(record, "T{took}");
-        }
-        crate::durable::replace(dir.join(DEPENDS), record)?;
-        for file in std::fs::read_dir(&dir)? {
-            let path = file?.path();
-            let own = path
-                .file_name()
-                .is_some_and(|f| f == "case" || f == DONE || f == READ || f == DEPENDS);
-            if !own {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
+        seal_dir(
+            &dir,
+            digest,
+            reach.executed.get(&case),
+            reached.get(&case),
+            seconds.get(&case).copied(),
+            identity,
+        )?;
     }
+    write_listed(base, identity)?;
+    // THE TREE IS SEALED ONLY BY A WHOLE PASS: a seal over the same tree skips
+    // the suite, which after a failed baseline would skip the refusal too. Each
+    // passing case's `depends` is written either way, which is what carries.
+    if whole {
+        crate::durable::replace(base.join(SEALED), &reach.tree)?;
+    }
+    Ok(())
+}
+/// Write the listing's site keys under `base` ([`LISTED`]): what the records
+/// there were made against, so the next run knows which mutants are new.
+///
+/// WRITTEN WHEN REACH STARTS, NOT WHEN IT ENDS: a record a recorder sealed is
+/// carried only against the listing it was made under, and one written only at
+/// the end was absent after a kill, so every mutant read as new and every
+/// recorder-sealed record was dropped — the crash it exists for.
+///
+/// # Errors
+///
+/// The file cannot be written.
+fn write_listed(base: &std::path::Path, identity: &Identity<'_>) -> anyhow::Result<()> {
     let listing = identity
         .sites
         .iter()
@@ -2459,9 +2492,192 @@ pub fn seal_reach(
             listing
         });
     crate::durable::replace(base.join(LISTED), listing)?;
-    crate::durable::replace(base.join(SEALED), &reach.tree)?;
     Ok(())
 }
+
+/// Seal one case's record at `dir` in identities ([`DEPENDS`]) and drop its
+/// per-process files; a case reaching a keyless site is left unsealed.
+///
+/// # Errors
+///
+/// The record cannot be written or the directory read.
+fn seal_dir(
+    dir: &std::path::Path,
+    digest: &str,
+    executed: Option<&BTreeSet<usize>>,
+    reached: Option<&BTreeSet<u32>>,
+    seconds: Option<f64>,
+    identity: &Identity<'_>,
+) -> anyhow::Result<()> {
+    let mut record = format!("D{digest}\n");
+    for probe in executed.into_iter().flatten() {
+        let Some(function) = identity.probes.get(*probe) else {
+            continue;
+        };
+        let _ = writeln!(record, "F{function}");
+    }
+    for site in reached.into_iter().flatten() {
+        match identity
+            .sites
+            .get(usize::try_from(*site)?)
+            .and_then(Option::as_ref)
+        {
+            Some(key) => {
+                let _ = writeln!(record, "S{key}");
+            }
+            None => return Ok(()),
+        }
+    }
+    if let Some(took) = seconds {
+        let _ = writeln!(record, "T{took}");
+    }
+    crate::durable::replace(dir.join(DEPENDS), record)?;
+    for file in std::fs::read_dir(dir)? {
+        let path = file?.path();
+        let own = path
+            .file_name()
+            .is_some_and(|f| f == "case" || f == DONE || f == READ || f == DEPENDS);
+        if !own {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    Ok(())
+}
+
+/// The file under the reach directory holding what a stopped run's records
+/// are sealed with ([`SealContext`], [`seal_leftovers`]).
+const CONTEXT: &str = "context.json";
+
+/// What a run's records are sealed with: the sweep's identities and every input
+/// [`case_digests`] reads, written when reach starts, so a run that never
+/// reached its own end-of-run seal can still be sealed by the next one.
+///
+/// CRASH-ONLY WITHOUT A PER-CASE TAX: sealed only after the whole suite exited,
+/// a sweep killed at case 9,000 left 9,000 records that carried nowhere once the
+/// head moved, and the next run recorded them all again. Sealing in each
+/// recorder would parse this context ~9,960 times a run to cover the one case
+/// of a kill; the context and the `pristine/` snapshot its `root` names both
+/// outlive the stopped run, so the next sweep seals what it left, once.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SealContext {
+    root: std::path::PathBuf,
+    dirs: std::collections::BTreeMap<String, String>,
+    probes: Vec<String>,
+    names: Vec<BTreeSet<String>>,
+    items: std::collections::BTreeMap<String, BTreeSet<String>>,
+    mentions: std::collections::BTreeMap<String, BTreeSet<String>>,
+    resources: std::collections::BTreeMap<String, String>,
+    untraced: String,
+    sites: Vec<Option<String>>,
+    mutant_fns: std::collections::BTreeMap<u32, String>,
+    classic: BTreeSet<u32>,
+}
+
+impl SealContext {
+    fn identity(&self) -> Identity<'_> {
+        Identity {
+            probes: &self.probes,
+            sites: &self.sites,
+            mutant_fns: &self.mutant_fns,
+            classic: &self.classic,
+        }
+    }
+}
+
+/// [`seal_leftovers`] over the sweep's reach directory under `state`, saying
+/// how many a stopped run left.
+///
+/// # Errors
+///
+/// As [`seal_leftovers`], or the line cannot be written.
+fn keep_leftovers(state: &std::path::Path, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
+    let leftovers = seal_leftovers(&state.join("reach"))?;
+    if leftovers > 0 {
+        writeln!(
+            out,
+            "mutate schema: sealed {leftovers} case(s) a stopped run finished"
+        )?;
+    }
+    Ok(())
+}
+
+/// Seal every finished, passing record under `base` that a stopped run left
+/// unsealed, with the context that run wrote; the count sealed. No context, no
+/// leftovers. Run before the sweep re-copies `pristine/`, the snapshot the
+/// context's `root` names, so each digest is the one the stopped run's own
+/// end-of-run seal would have written. Idempotent: a crash in here reruns it.
+///
+/// # Errors
+///
+/// The context does not parse, or a record cannot be read or written.
+fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
+    let Ok(text) = crate::fsio::read_to_string(base.join(CONTEXT)) else {
+        return Ok(0);
+    };
+    let context: SealContext = serde_json::from_str(&text)?;
+    let identity = context.identity();
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(base)? {
+        let dir = entry?.path();
+        if dir.is_dir() && finished_passing(&dir) && !dir.join(DEPENDS).exists() {
+            dirs.push(dir);
+        }
+    }
+    if dirs.is_empty() {
+        return Ok(0);
+    }
+    let reach = collect_dirs(dirs.clone(), &identity)?;
+    let mut executed = reach.executed.clone();
+    for dir in &dirs {
+        if let Some(case) = kept_case(dir) {
+            executed.entry(case).or_default();
+        }
+    }
+    let digests = case_digests(
+        &context.root,
+        executed.keys(),
+        &context.dirs,
+        &executed,
+        &Depends {
+            probes: &context.probes,
+            names: &context.names,
+            items: &context.items,
+            mentions: &context.mentions,
+            read: &reach.read,
+            resources: &context.resources,
+            untraced: &context.untraced,
+        },
+    );
+    let mut reached: std::collections::BTreeMap<&Case, BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
+    for (site, cases) in &reach.sites {
+        for case in cases {
+            reached.entry(case).or_default().insert(*site);
+        }
+    }
+    let mut sealed = 0;
+    for dir in &dirs {
+        let Some(case) = kept_case(dir) else {
+            continue;
+        };
+        let Some(digest) = digests.get(&case) else {
+            continue;
+        };
+        seal_dir(
+            dir,
+            digest,
+            reach.executed.get(&case),
+            reached.get(&case),
+            None,
+            &identity,
+        )?;
+        if dir.join(DEPENDS).exists() {
+            sealed += 1;
+        }
+    }
+    Ok(sealed)
+}
+
 /// Run the suite once on the schema build with no mutant active, recording
 /// which sites each case reaches; a case whose record [`carry_forward`] kept
 /// is skipped by the recorder, so a lap re-runs only what its change touched.
@@ -2478,7 +2694,7 @@ pub fn record_reach(
     packages: &BTreeSet<&str>,
     (identity, recompute): (&Identity<'_>, &Recompute<'_>),
     out: &mut dyn std::io::Write,
-) -> anyhow::Result<Reach> {
+) -> anyhow::Result<(Reach, bool)> {
     let base = state.join("reach");
     // A RESTART OVER THE SAME TREE resumes from the record a finished run
     // sealed instead of re-running the suite (640 s on #1276).
@@ -2486,9 +2702,10 @@ pub fn record_reach(
     if sealed_over(&base, &inputs) {
         let mut reach = collect_reach(&base, identity)?;
         reach.tree = inputs;
-        return Ok(reach);
+        return Ok((reach, true));
     }
     let (carried, resumed) = carry_forward(&base, &inputs, identity, recompute)?;
+    write_listed(&base, identity)?;
     writeln!(
         out,
         "mutate schema: reach carried {carried} case(s) across the change, resumed {resumed}"
@@ -2538,16 +2755,17 @@ pub fn record_reach(
         super::runner_bound(),
         super::Said::Streamed,
     )?;
-    anyhow::ensure!(
-        ran.passed(),
-        "the unmutated suite failed on the schema build, so no verdict would mean anything"
-    );
+    // A FAILED BASELINE STILL KEEPS WHAT PASSED: the caller seals every case
+    // that finished passing before it refuses, so the next run carries them
+    // across the fix instead of re-running the whole suite (9,952 of 9,959
+    // cases thrown away on #1276 when seven failed and the tree then moved).
+    let passed = ran.passed();
     // THE FINISHED SUITE'S FIXTURES GO: nothing reads them once it has exited,
     // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
     let _ = std::fs::remove_dir_all(target.join("tmp"));
     let mut reach = collect_reach(&base, identity)?;
     reach.tree = inputs;
-    Ok(reach)
+    Ok((reach, passed))
 }
 
 /// The file `record_reach` writes once a record is whole, holding the digest
@@ -3005,7 +3223,11 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
             let mut fields = line.split('\t');
             Some((fields.next()?, fields.next()?))
         })
-        .filter(|(key, verdict)| *key != "-" && (reusable(verdict) || *verdict == PASSED))
+        // A BUILD'S FINDINGS LOAD TOO: a hand-back and an unprobed file stand
+        // in for no run, but each spares the build round that rediscovers it.
+        .filter(|(key, verdict)| {
+            *key != "-" && (reusable(verdict) || [PASSED, HANDED, UNPROBED].contains(verdict))
+        })
         .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
         .collect()
 }
@@ -3143,8 +3365,9 @@ fn judge_all(
                     };
                     // EVERY VERDICT, SURVIVORS TOO, the moment it is decided:
                     // one write per line, so a crash tears at most the last.
-                    // Only a kill is reused (`reusable`); a survivor's line is
-                    // the record a stopped sweep keeps.
+                    // Every decided verdict is reused under an unchanged key
+                    // (`reusable`); a run that erred decided nothing and runs
+                    // again.
                     if reused.is_none() {
                         append(
                             journal,
@@ -3220,19 +3443,45 @@ fn newly_unviable(
 }
 
 /// The mutants a stored verdict already found do not compile, by site key.
+#[cfg(test)]
 fn cached_unviable(
     site_keys: &[Option<String>],
     cache: &std::collections::BTreeMap<String, String>,
+) -> BTreeSet<u32> {
+    cached_as(site_keys, cache, "unviable")
+}
+
+/// The mutants whose site key the journal holds as `verdict`.
+fn cached_as(
+    site_keys: &[Option<String>],
+    cache: &std::collections::BTreeMap<String, String>,
+    verdict: &str,
 ) -> BTreeSet<u32> {
     site_keys
         .iter()
         .enumerate()
         .filter(|(_, key)| {
             key.as_ref()
-                .is_some_and(|key| cache.get(key).is_some_and(|v| v == "unviable"))
+                .is_some_and(|key| cache.get(key).is_some_and(|v| v == verdict))
         })
         .filter_map(|(id, _)| u32::try_from(id).ok())
         .collect()
+}
+
+/// The journal's word for a mutant handed back for a const caller.
+const HANDED: &str = "handed";
+
+/// The journal's word for a file a build had to build without probes.
+const UNPROBED: &str = "unprobed";
+
+/// A file's journal key for being built without probes: its path and bytes,
+/// so an edit to the file asks the build again.
+fn unprobe_key(root: &std::path::Path, file: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(file.as_bytes());
+    hasher.update(b"\x1f");
+    hasher.update(&crate::fsio::read(root.join(file)).unwrap_or_default());
+    format!("unprobe-{}", hasher.finalize().to_hex())
 }
 
 /// Print every verdict that is not a kill, and the counts, and answer the
@@ -3566,6 +3815,10 @@ pub fn sweep(
     // failed the unmutated baseline.
     let target = work.join("target");
     let started = std::time::Instant::now();
+    // WHAT A STOPPED RUN FINISHED IS KEPT, BEFORE ANYTHING MOVES IT: its
+    // records are sealed against the snapshot it ran over, which the copy
+    // below replaces.
+    keep_leftovers(&state, out)?;
     sync(root, &work, &package_sources(root, mutants))?;
     // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
     // is read from this snapshot, never the live checkout, which an edit during
@@ -3593,21 +3846,15 @@ pub fn sweep(
     let cache_path = state.join("verdicts");
     let mut cache = load_verdicts(&crate::fsio::read_to_string(&cache_path).unwrap_or_default());
     let site_keys: Vec<Option<String>> = mutants.iter().map(|m| site_key(&root, m)).collect();
-    let known_unviable = cached_unviable(&site_keys, &cache);
-    writeln!(
-        out,
-        "mutate schema: {} unviable known from earlier runs",
-        known_unviable.len()
-    )?;
     let Built {
         unviable,
         handed,
         schema,
-    } = build(&root, &work, &target, mutants, known_unviable, out)?;
-    // KEPT BEFORE ANY TEST RUNS: a restart skips the unviable loop's builds.
-    journal(
-        &cache_path,
-        &newly_unviable(&unviable, &site_keys, mutants, &mut cache),
+    } = build_journaled(
+        (&root, &work, &target),
+        mutants,
+        (&site_keys, &mut cache, &cache_path),
+        out,
     )?;
     let classic = schema.classic(handed);
     writeln!(
@@ -3674,6 +3921,60 @@ pub fn sweep(
     })
 }
 
+/// [`build`] seeded with what the journal already knows a build refuses, and
+/// journaling each round's discoveries the moment its build refuses them, so
+/// no later round or sweep rebuilds to rediscover one.
+///
+/// # Errors
+///
+/// The build fails as [`build`] does, or the journal cannot be written.
+fn build_journaled(
+    (root, work, target): (&std::path::Path, &std::path::Path, &std::path::Path),
+    mutants: &[Listed],
+    (site_keys, cache, cache_path): (
+        &[Option<String>],
+        &mut std::collections::BTreeMap<String, String>,
+        &std::path::Path,
+    ),
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<Built> {
+    let known = Known {
+        unviable: cached_as(site_keys, cache, "unviable"),
+        handed: cached_as(site_keys, cache, HANDED),
+        unprobed: mutants
+            .iter()
+            .map(|m| m.file.clone())
+            .filter(|file| cache.contains_key(&unprobe_key(root, file)))
+            .collect(),
+    };
+    writeln!(
+        out,
+        "mutate schema: {} unviable, {} handed back and {} unprobed file(s) known from earlier runs",
+        known.unviable.len(),
+        known.handed.len(),
+        known.unprobed.len()
+    )?;
+    let mut keep = |refused: &Refused| {
+        let mut lines = newly_unviable(&refused.owned, site_keys, mutants, cache);
+        for id in &refused.reconst {
+            if let (Some(Some(key)), Some(mutant)) =
+                (site_keys.get(*id as usize), mutants.get(*id as usize))
+                && cache.insert(key.clone(), String::from(HANDED)).is_none()
+            {
+                lines.push_str(&journal_line(Some(key), HANDED, &mutant.name));
+            }
+        }
+        for file in &refused.unprobe {
+            let key = unprobe_key(root, file);
+            if cache.insert(key.clone(), String::from(UNPROBED)).is_none() {
+                lines.push_str(&journal_line(Some(&key), UNPROBED, file));
+            }
+        }
+        journal(cache_path, &lines)
+    };
+    build(root, work, target, mutants, known, &mut keep, out)
+}
+
 /// Each of `executed`'s cases keyed on what it depends on ([`case_digests`]):
 /// the schema's probes, names and items, `read`, and the checkout's content
 /// ids with the untraced fallback.
@@ -3734,7 +4035,26 @@ fn reached(
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
             digests_with(root, &dirs, schema, ids, executed, read)
         };
-    let reach = record_reach(work, target, state, &packages, (identity, &recompute), out)?;
+    let base = state.join("reach");
+    std::fs::create_dir_all(&base)?;
+    crate::durable::replace(
+        base.join(CONTEXT),
+        serde_json::to_string(&SealContext {
+            root: root.to_path_buf(),
+            dirs: dirs.clone(),
+            probes: schema.probes.clone(),
+            names: schema.names.clone(),
+            items: schema.items.clone(),
+            mentions: schema.mentions.clone(),
+            resources: ids.0.clone(),
+            untraced: ids.1.to_owned(),
+            sites: site_keys.to_vec(),
+            mutant_fns: schema.mutant_fns.clone(),
+            classic: classic.clone(),
+        })?,
+    )?;
+    let (reach, passed) =
+        record_reach(work, target, state, &packages, (identity, &recompute), out)?;
     let mut recorded = reach.executed.clone();
     for case in reach.sites.values().flatten() {
         recorded.entry(case.clone()).or_default();
@@ -3745,7 +4065,19 @@ fn reached(
         let held = seconds.entry(case.clone()).or_insert(0.0);
         *held = held.max(*took);
     }
-    seal_reach(&state.join("reach"), &reach, &digests, identity, &seconds)?;
+    seal_reach(
+        &state.join("reach"),
+        &reach,
+        &digests,
+        identity,
+        &seconds,
+        passed,
+    )?;
+    anyhow::ensure!(
+        passed,
+        "the unmutated suite failed on the schema build, so no verdict would mean anything; \
+         every case that passed is sealed and carries to the next run"
+    );
     writeln!(
         out,
         "mutate schema: reach recorded for {} site(s), {} function(s) probed, in {}s",
@@ -3788,6 +4120,16 @@ mod tests {
             "a run that erred decided nothing"
         );
         assert_eq!(loaded.get("s").map(String::as_str), Some("missed"));
+        let found = load_verdicts("h\thanded\tm7\nu\tunprobed\tsrc/a.rs\n");
+        assert_eq!(
+            (found.get("h"), found.get("u")),
+            (Some(&String::from(HANDED)), Some(&String::from(UNPROBED))),
+            "a build's findings load, or every sweep rebuilds to find them"
+        );
+        assert!(
+            !reusable(HANDED) && !reusable(UNPROBED),
+            "neither stands in for a run"
+        );
         assert_eq!(loaded.get("u").map(String::as_str), Some("uncovered"));
         assert_eq!(loaded.len(), 4);
         assert_eq!(journal_line(None, "missed", "m"), "-\tmissed\tm\n");
@@ -3946,8 +4288,9 @@ mod tests {
     /// records the listing; a case reaching a keyless site stays unsealed.
     ///
     /// Fails by: a record sealed in positional ids (carried to the wrong
-    /// function next lap), process files left to be read twice, or a keyless
-    /// site sealed (it could never be carried back).
+    /// function next lap), process files left to be read twice, a keyless
+    /// site sealed (it could never be carried back), or a failed baseline's
+    /// pass sealing the tree (a restart would skip the refusal) or no case.
     #[test]
     fn a_sealed_record_names_functions_and_sites_by_identity() {
         let base = crate::scratch::scratch("schema-reach-seal");
@@ -3975,7 +4318,13 @@ mod tests {
         ]
         .into();
         let seconds = [(one, 1.5)].into();
-        seal_reach(&base, &reach, &digests, &identity, &seconds).unwrap();
+        // A FAILED BASELINE SEALS EACH CASE AND NOT THE TREE: the passing
+        // case's `depends` carries to the next run, and no seal over this tree
+        // lets a restart skip the suite and so the refusal.
+        seal_reach(&base, &reach, &digests, &identity, &seconds, false).unwrap();
+        assert!(base.join("one").join(DEPENDS).is_file(), "the case carries");
+        assert!(!base.join(SEALED).exists(), "the tree is not sealed");
+        seal_reach(&base, &reach, &digests, &identity, &seconds, true).unwrap();
         assert_eq!(
             std::fs::read_to_string(base.join("one").join(DEPENDS)).unwrap(),
             "Dd1\nFfb\nSkey-0\nT1.5\n"
@@ -3995,6 +4344,136 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(base.join(SEALED)).unwrap(),
             "tree-1"
+        );
+    }
+
+    /// A two-probe, one-site context over an empty root, as a sweep writes it.
+    fn seal_context() -> SealContext {
+        SealContext {
+            root: crate::scratch::scratch("schema-seal-case-root"),
+            dirs: std::collections::BTreeMap::new(),
+            probes: vec![String::from("fa"), String::from("fb")],
+            names: vec![BTreeSet::new(), BTreeSet::new()],
+            items: std::collections::BTreeMap::new(),
+            mentions: std::collections::BTreeMap::new(),
+            resources: std::collections::BTreeMap::new(),
+            untraced: String::from("u"),
+            sites: vec![Some(String::from("key-0"))],
+            mutant_fns: std::collections::BTreeMap::new(),
+            classic: BTreeSet::new(),
+        }
+    }
+
+    /// A stopped run's finished records are sealed by the next sweep exactly
+    /// as the stopped run's own end-of-run seal would have, so a sweep killed
+    /// partway leaves every finished case carryable across a moving head.
+    ///
+    /// Fails by: a leftover seal disagreeing with the end-of-run seal (a carry
+    /// over the wrong dependencies), process files kept, a leftover not carried
+    /// to a new tree, a failed case sealed, a sealed record rewritten, or a
+    /// seal written with no context.
+    #[test]
+    fn a_stopped_runs_records_are_sealed_as_its_own_seal_would_and_carry() {
+        let context = seal_context();
+        let by_recorder = crate::scratch::scratch("schema-seal-case-recorder");
+        let by_sweep = crate::scratch::scratch("schema-seal-case-sweep");
+        for base in [&by_recorder, &by_sweep] {
+            record(base, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
+        }
+        let bare = crate::scratch::scratch("schema-seal-case-bare");
+        record(&bare, "one", "one", Some("0"), &[("100", "0\nf1\n")]);
+        assert_eq!(seal_leftovers(&bare).unwrap(), 0);
+        assert!(
+            !bare.join("one").join(DEPENDS).exists(),
+            "no context, no seal"
+        );
+        record(
+            &by_recorder,
+            "bad",
+            "bad",
+            Some("101"),
+            &[("300", "0\nf0\n")],
+        );
+        record(
+            &by_recorder,
+            "kept",
+            "kept",
+            Some("0"),
+            &[(DEPENDS, "Dheld\n")],
+        );
+        std::fs::write(
+            by_recorder.join(CONTEXT),
+            serde_json::to_string(&context).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            seal_leftovers(&by_recorder).unwrap(),
+            1,
+            "only the leftover"
+        );
+        assert!(
+            !by_recorder.join("bad").join(DEPENDS).exists(),
+            "a failed case is not sealed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(by_recorder.join("kept").join(DEPENDS)).unwrap(),
+            "Dheld\n",
+            "a sealed record is not rewritten"
+        );
+        assert!(
+            !by_recorder.join("one/100").exists(),
+            "process files go once sealed"
+        );
+        let identity = context.identity();
+        let mut reach = collect_reach(&by_sweep, &identity).unwrap();
+        reach.tree = String::from("tree-1");
+        let digests = case_digests(
+            &context.root,
+            reach.executed.keys(),
+            &context.dirs,
+            &reach.executed,
+            &Depends {
+                probes: &context.probes,
+                names: &context.names,
+                items: &context.items,
+                mentions: &context.mentions,
+                read: &reach.read,
+                resources: &context.resources,
+                untraced: &context.untraced,
+            },
+        );
+        seal_reach(
+            &by_sweep,
+            &reach,
+            &digests,
+            &identity,
+            &std::collections::BTreeMap::new(),
+            true,
+        )
+        .unwrap();
+        let untimed = |base: &std::path::Path| {
+            std::fs::read_to_string(base.join("one").join(DEPENDS))
+                .unwrap()
+                .lines()
+                .filter(|line| !line.starts_with('T'))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(untimed(&by_recorder), untimed(&by_sweep));
+        assert!(untimed(&by_recorder).contains("Ffb\nSkey-0"));
+        // THE LISTING AS A KILLED RUN LEFT IT: written when reach started, and
+        // no end-of-run seal followed.
+        write_listed(&by_recorder, &identity).unwrap();
+        assert!(!by_recorder.join(SEALED).exists());
+        let recompute =
+            |_: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+             _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+                digests.clone()
+            };
+        assert_eq!(
+            carry_forward(&by_recorder, "tree-2", &identity, &recompute).unwrap(),
+            (1, 0),
+            "the recorder's seal carries to a new tree"
         );
     }
 
@@ -5262,6 +5741,16 @@ mod tests {
             "only a child's exit is no whole trace"
         );
         assert_eq!(read_trace("", &tree), None, "an empty trace says nothing");
+        // strace pads a short pid to five columns.
+        let padded = whole(lines)
+            .lines()
+            .map(|line| line.replacen(' ', "   ", 1) + "\n")
+            .collect::<String>();
+        assert_eq!(
+            read_trace(&padded, &tree),
+            read_trace(&whole(lines), &tree),
+            "a padded pid column reads as the plain one"
+        );
         let killed =
             whole(lines).replace("100 +++ exited with 0 +++", "100 +++ killed by SIGKILL +++");
         assert!(
