@@ -67,8 +67,9 @@ fn seeded(name: &str) -> std::path::PathBuf {
     repo
 }
 
-/// The listing every verdict comes from, written where the sweep reads it.
-fn listing() -> String {
+/// The listing every verdict comes from, written under the case's own scratch
+/// `name` where the sweep reads it.
+fn listing(name: &str) -> String {
     let add = ("add", "-> u8", [1, 1, 3, 2]);
     let untested = ("untested", "-> bool", [7, 1, 9, 2]);
     let listing = serde_json::json!([
@@ -99,14 +100,21 @@ fn listing() -> String {
         ),
         mutant("field", "StructField", "", [8, 5, 8, 9], untested),
     ]);
-    let file = common::scratch("mutate-schema-listing").join("listing.json");
+    let file = common::scratch(name).join("listing.json");
     std::fs::write(&file, listing.to_string()).unwrap();
     file.to_string_lossy().into_owned()
 }
 
-/// Whether reach runs cases under a tracer on this host, as the schema asks.
+/// Whether reach runs cases under a tracer on this host, as the schema asks:
+/// never from a process already traced, as this case is inside a sweep's reach.
 fn traced() -> bool {
     cfg!(target_os = "linux")
+        && !std::fs::read_to_string("/proc/self/status").is_ok_and(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("TracerPid:"))
+                .is_some_and(|pid| pid.trim() != "0")
+        })
         && std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
             .any(|dir| dir.join("strace").is_file())
 }
@@ -130,7 +138,7 @@ const COUNTS: &str =
 fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let _ = common::require_bin("nextest", "cargo-nextest");
     let repo = seeded("mutate-schema-sweep");
-    let file = listing();
+    let file = listing("mutate-schema-listing");
     let sweep = || {
         let output = common::run(&repo, &["__mutate-schema", &file, "2"]);
         let said = common::stdout(&output);

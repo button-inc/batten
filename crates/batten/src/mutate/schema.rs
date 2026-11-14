@@ -107,7 +107,7 @@ const TRACE: &str = "trace";
 /// has one: `strace` on Linux. Elsewhere no case is traced, and each keys on
 /// every non-Rust file, which is the sound answer, not a cheaper one.
 fn tracer() -> Option<String> {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(target_os = "linux") || traced_already() {
         return None;
     }
     std::env::var_os("PATH").and_then(|path| {
@@ -118,14 +118,35 @@ fn tracer() -> Option<String> {
     })
 }
 
+/// Whether this process is itself under a tracer, which refuses a second one:
+/// a sweep run inside another sweep's reach (the schema's own suite does this)
+/// records untraced rather than spawning a tracer that cannot attach.
+fn traced_already() -> bool {
+    crate::fsio::read_to_string("/proc/self/status").is_ok_and(|status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("TracerPid:"))
+            .is_some_and(|pid| pid.trim() != "0")
+    })
+}
+
 /// The tracer's argv around one case: every syscall that names a path, in the
 /// case and every process it spawns, with each descriptor printed as the path
 /// it resolves to. `--seccomp-bpf` stops the case only at those syscalls.
+///
+/// `-DD` RUNS THE TRACER DETACHED, in its own process group: the case keeps the
+/// pid the recorder spawned it with and leads its own group, as it does
+/// untraced. Attached, strace led the group and the case was its child, so a
+/// case signalling its own group signalled the tracer, and one asserting it
+/// leads its group failed (seven baseline failures, #1276). `-q` rather than
+/// `-qq` keeps the case's own exit line, which is how the reader knows the
+/// detached tracer finished writing ([`trace_whole`]).
 fn trace_args(trace: &std::path::Path, program: &str, rest: &[String]) -> Vec<String> {
     let mut args: Vec<String> = [
+        "-DD",
         "--seccomp-bpf",
         "-f",
-        "-qq",
+        "-q",
         "-y",
         "-e",
         "trace=%file,openat2",
@@ -146,8 +167,14 @@ fn trace_args(trace: &std::path::Path, program: &str, rest: &[String]) -> Vec<St
 /// tree's `.git`, which depends on every tracked file. Paths outside the tree
 /// and under its `target/` are a run's own, not its inputs.
 fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<String>> {
+    if !trace_whole(trace) {
+        return None;
+    }
     let mut read = BTreeSet::new();
     for line in trace.lines() {
+        if trace_event(line).is_some() {
+            continue;
+        }
         let mut touched: Vec<std::path::PathBuf> = Vec::new();
         if let Some(resolved) = line
             .rsplit_once(") = ")
@@ -188,6 +215,52 @@ fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<Strin
         }
     }
     Some(read)
+}
+
+/// The pid a trace line is from and the event it reports, when the line is an
+/// exit or signal report (`+++ ... +++`, `--- ... ---`) rather than a syscall.
+fn trace_event(line: &str) -> Option<(&str, &str)> {
+    let (pid, rest) = line.split_once(' ')?;
+    (rest.starts_with("+++ ") || rest.starts_with("--- ")).then_some((pid, rest))
+}
+
+/// Whether a trace is whole: its first line is the case's own `execve`, and
+/// the same pid's exit is reported. The tracer runs detached ([`trace_args`]),
+/// so the case can exit before the tracer has written its last line; and a
+/// tracer that could not attach — under another trace, where ptrace is refused
+/// — writes no such line while the case runs untraced. Either way the reader
+/// has no whole picture, and the case keys on every file.
+fn trace_whole(trace: &str) -> bool {
+    let Some((root, _)) = trace.lines().next().and_then(|line| line.split_once(' ')) else {
+        return false;
+    };
+    trace.lines().filter_map(trace_event).any(|(pid, event)| {
+        pid == root
+            && (event.starts_with("+++ exited with ") || event.starts_with("+++ killed by "))
+    })
+}
+
+/// How long a recorder waits for the detached tracer to finish a case's trace
+/// once the case exited. A trace still unfinished at this bound is read as no
+/// trace, which keys the case on every file: slower, never unsound.
+const TRACE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The trace at `path` once whole, or whatever it holds at [`TRACE_GRACE`].
+fn await_trace(path: &std::path::Path) -> Option<String> {
+    let deadline = std::time::Instant::now() + TRACE_GRACE;
+    loop {
+        let text = crate::fsio::read_to_string(path).ok();
+        if text.as_deref().is_some_and(trace_whole) || std::time::Instant::now() >= deadline {
+            return text;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of the poll this loop is: it exits the moment the detached \
+                      tracer writes the case's exit, and its outer bound is `TRACE_GRACE`, past \
+                      which the case keys on every file rather than waits longer"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 /// A strace string argument up to its closing quote, or `None` for an escape
@@ -1058,6 +1131,16 @@ pub fn sync(
     work: &std::path::Path,
     rendered: &BTreeSet<String>,
 ) -> anyhow::Result<()> {
+    // THE CASES' FIXTURE SCRATCH IS A RUN'S OWN, NEVER KEPT. Each case writes
+    // its fixtures under the target's `tmp/`, and the build output beside it is
+    // kept so the next sweep compiles only what moved; the scratch was kept with
+    // it and grew to 6.5 GB on #1276, which put the disk under the pruner's
+    // floor and made every build start cold. Cleared at the start, so a run
+    // killed mid-sweep leaves nothing the next one carries.
+    match std::fs::remove_dir_all(work.join("target").join("tmp")) {
+        Err(gone) if gone.kind() != std::io::ErrorKind::NotFound => return Err(gone.into()),
+        _ => {}
+    }
     sync_dir(root, work, std::path::Path::new(""), rendered)
 }
 
@@ -1980,9 +2063,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
             .into_iter()
             .chain(std::iter::once(tree))
             .collect();
-        let read = crate::fsio::read_to_string(&trace)
-            .ok()
-            .and_then(|text| read_trace(&text, &roots));
+        let read = await_trace(&trace).and_then(|text| read_trace(&text, &roots));
         if let Some(read) = read {
             let listing = read.iter().fold(String::new(), |mut listing, path| {
                 listing.push_str(path);
@@ -3913,7 +3994,10 @@ mod tests {
         std::fs::write(base.join(&key).join(DONE), "0").unwrap();
         assert_eq!(record_into(&base, &test).unwrap(), 0, "skipped");
         std::fs::write(base.join(&key).join(DONE), "101").unwrap();
-        assert!(record_into(&base, &test).is_err(), "run again");
+        // Run again either way the host runs it: untraced, the missing
+        // program is a spawn error; under a tracer, the tracer's own failing
+        // exit. Only the skip answers a clean 0.
+        assert!(!matches!(record_into(&base, &test), Ok(0)), "run again");
     }
 
     /// The exit-code file is the record's own, never a site: `0` would read as
@@ -4418,6 +4502,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(base.join("j")).unwrap(), "x\ny\n");
         std::fs::create_dir_all(work.join("target")).unwrap();
         std::fs::write(work.join("target/z"), "built").unwrap();
+        std::fs::create_dir_all(work.join("target/tmp/case")).unwrap();
+        std::fs::write(work.join("target/tmp/case/f"), "fixture").unwrap();
         std::fs::remove_file(root.join("sub/b.txt")).unwrap();
         std::fs::write(work.join("a.txt"), "rendered").unwrap();
         sync(&root, &work, &[String::from("a.txt")].into()).unwrap();
@@ -4428,6 +4514,10 @@ mod tests {
         assert!(
             work.join("target/z").is_file(),
             "the work tree's own target stays"
+        );
+        assert!(
+            !work.join("target/tmp").exists(),
+            "a run's fixture scratch does not"
         );
         assert_eq!(
             std::fs::read_to_string(work.join("a.txt")).unwrap(),
@@ -5094,13 +5184,20 @@ mod tests {
     #[test]
     fn a_trace_names_the_tree_paths_a_case_touched_or_nothing() {
         let tree = [std::path::PathBuf::from("/w")];
+        let whole = |body: &str| {
+            format!(
+                "100 execve(\"/usr/bin/t\", [\"t\"], 0x7ff /* 1 vars */) = 0\n{body}\
+                 101 +++ exited with 0 +++\n100 --- SIGCHLD {{si_signo=SIGCHLD}} ---\n\
+                 100 +++ exited with 0 +++\n"
+            )
+        };
         let lines = "100 openat(AT_FDCWD</w/crates/batten>, \"tests/x.toml\", O_RDONLY) = 3</w/crates/batten/tests/x.toml>\n\
                      100 newfstatat(AT_FDCWD</w>, \"absent.toml\", 0x7ff, 0) = -1 ENOENT (No such file or directory)\n\
                      101 openat(AT_FDCWD</tmp>, \"/etc/ld.so.cache\", O_RDONLY) = 3</etc/ld.so.cache>\n\
                      101 openat(AT_FDCWD</w>, \"target/debug/x\", O_RDONLY) = 4</w/target/debug/x>\n\
                      102 <... openat resumed>) = 5</w/a/../b.txt>\n";
         assert_eq!(
-            read_trace(lines, &tree),
+            read_trace(&whole(lines), &tree),
             Some(
                 ["crates/batten/tests/x.toml", "absent.toml", "b.txt"]
                     .map(String::from)
@@ -5109,21 +5206,44 @@ mod tests {
         );
         let git = "100 openat(AT_FDCWD</w>, \".git/index\", O_RDONLY) = 3</w/.git/index>\n";
         assert_eq!(
-            read_trace(git, &tree),
+            read_trace(&whole(git), &tree),
             None,
             "a .git read depends on every file"
         );
         let bare = "100 stat(\"relative\", 0x7ff) = 0\n";
         assert_eq!(
-            read_trace(bare, &tree),
+            read_trace(&whole(bare), &tree),
             None,
             "no directory to resolve against"
         );
         let escaped = "100 openat(AT_FDCWD</w>, \"a\\x01\", O_RDONLY) = 3</w/a>\n";
         assert_eq!(
-            read_trace(escaped, &tree),
+            read_trace(&whole(escaped), &tree),
             None,
             "an escape this reader does not decode"
+        );
+        // A DETACHED TRACER'S PARTIAL TRACE IS NO TRACE: without the case's own
+        // exit the tracer may still be writing, or never attached at all.
+        let unfinished = whole(lines).replace("100 +++ exited with 0 +++\n", "");
+        assert_eq!(
+            read_trace(&unfinished, &tree),
+            None,
+            "the case's exit is missing"
+        );
+        let child_only = format!(
+            "100 execve(\"/usr/bin/t\", [], 0x7ff) = 0\n{lines}101 +++ exited with 0 +++\n"
+        );
+        assert_eq!(
+            read_trace(&child_only, &tree),
+            None,
+            "only a child's exit is no whole trace"
+        );
+        assert_eq!(read_trace("", &tree), None, "an empty trace says nothing");
+        let killed =
+            whole(lines).replace("100 +++ exited with 0 +++", "100 +++ killed by SIGKILL +++");
+        assert!(
+            read_trace(&killed, &tree).is_some(),
+            "a case killed by a signal finished"
         );
     }
 
