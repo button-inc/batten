@@ -3823,6 +3823,7 @@ pub const SURFACE: &[CommandDecl] = &[
     //
     // `Unclassified` and no data channel, on `mcp call`'s reasoning: its reads are
     // a server's answers, and it may take a singleton lock in the clone.
+    // unreached: "mcp wait" CLOUD-2759 an agent's own blocking read between turns, invoked by the session and not by a task, workflow or hook
     CommandDecl {
         path: "mcp wait",
         id: "mcp.wait",
