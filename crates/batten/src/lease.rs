@@ -223,6 +223,38 @@ fn base64_of(raw: &str) -> String {
 /// transport failure — all could-not-look (exit `3`), never a verdict about the
 /// lease. A lease gate that could not read the lease has not judged it.
 pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
+    let response = discover(remote, service)?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: ref discovery answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_advertisement(&response.body, service)
+}
+
+/// The discovery STATUS alone, for a caller whose question is whether the remote
+/// answers at all (CLOUD-2718).
+///
+/// [`advertise`] folds every non-200 into one error, which is right for a lease
+/// reader — it has no verdict to give over a remote it could not read — and wrong
+/// for a caller asking whether a repository is reachable with this credential:
+/// `401`, `403` and `404` are that question's ANSWER, not a failure to ask it.
+/// Measured through an agent proxy on 2026-11-14: `200` once the repository was
+/// attached to the session, `403` before, and `403` for a name that does not
+/// exist, so a refusal here cannot tell unattached from misspelled.
+///
+/// # Errors
+///
+/// A transport failure only — could-not-look (exit `3`). Every status the
+/// server sent is returned, never judged.
+pub fn probe(remote: &str, service: Service) -> Result<u16> {
+    Ok(discover(remote, service)?.status)
+}
+
+/// One discovery exchange, unjudged: the request [`advertise`] and [`probe`]
+/// share, so the two cannot come to spell the endpoint differently.
+fn discover(remote: &str, service: Service) -> Result<fetch::Response> {
     let url = format!(
         "{}/info/refs?service={}",
         remote.trim_end_matches('/'),
@@ -237,16 +269,10 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
         delete: false,
         credentials: &[],
     }])?;
-    let response = responses
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
-    if response.status != 200 {
-        return Err(anyhow::anyhow!(
-            "lease: ref discovery answered {} rather than 200",
-            response.status
-        ));
-    }
-    parse_advertisement(&response.body, service)
+    responses
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))
 }
 
 /// Parse a smart-HTTP advertisement body.

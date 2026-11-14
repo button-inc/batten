@@ -1657,6 +1657,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // One token out of four (CLOUD-2718). The corpus spawns it with the state
+    // repository variable removed, so it answers `off` and reads nothing.
+    Verb {
+        path: "offbox status",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-843, retiring `gh-preflight`. The corpus declares no
     // `[[forge.probe]]` row, so this exercises the refusal that names the
     // missing table — a usage answer, never a probe, and the forge fixture the

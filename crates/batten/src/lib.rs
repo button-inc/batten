@@ -119,6 +119,7 @@ pub mod mint;
 pub mod minted;
 pub mod mutate;
 pub mod o200k;
+pub mod offbox;
 pub mod outcome;
 pub mod output;
 pub mod outputs;
@@ -669,7 +670,29 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 replay::run(&root, &base, json, out)
             }
         },
+        // No config chain: the switch is the environment's alone (CLOUD-2717
+        // ruling 2), so no key could layer over it.
+        Some(Command::Offbox { command }) => match command {
+            cli::OffboxCommand::Status => run_offbox_status(out),
+        },
     }
+}
+
+/// `batten offbox status` (CLOUD-2718): one token, and the exit that goes with it.
+///
+/// The origin is read from the clone and the repository from the environment, so
+/// this is the one place the two meet. A clone whose remotes cannot be read is
+/// the same answer as one with no origin: there is no host to derive a remote
+/// from, and the token says so.
+fn run_offbox_status(out: &mut dyn Write) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).ok();
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let status = offbox::status(value.as_deref(), origin.as_deref())?;
+    writeln!(out, "{}", status.token())?;
+    Ok(status.code())
 }
 
 /// Set on the re-exec after a self-update, so the updated engine never updates

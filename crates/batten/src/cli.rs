@@ -496,6 +496,21 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// Off-box session state (CLOUD-2717).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Offbox {
+        /// The sub-verb selected.
+        command: OffboxCommand,
+    },
+}
+
+/// Subcommands of `offbox` (CLOUD-2717).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OffboxCommand {
+    /// Whether the state repository can be written from here (CLOUD-2718).
+    Status,
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -4015,6 +4030,14 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
+        "offbox" => offbox_of(matches).map(|command| Command::Offbox { command }),
+        _ => None,
+    }
+}
+
+fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
+    match matches.subcommand()? {
+        ("status", _) => Some(OffboxCommand::Status),
         _ => None,
     }
 }

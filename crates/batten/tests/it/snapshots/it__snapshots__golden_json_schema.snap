@@ -2611,6 +2611,25 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "offbox",
+      "id": "offbox",
+      "about": "Keep this session's state in a repository off this machine",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "offbox status",
+          "id": "offbox.status",
+          "about": "Whether the state repository the environment names can be written from here",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "override",
       "id": "override",
       "about": "Issued admissions: an override is a record, never a variable somebody knows",
@@ -5556,6 +5575,10 @@ expression: stdout_of(&output)
     {
       "id": "mutate.census",
       "path": "mutate census"
+    },
+    {
+      "id": "offbox.status",
+      "path": "offbox status"
     },
     {
       "id": "payload",

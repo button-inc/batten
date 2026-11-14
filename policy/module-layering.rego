@@ -397,6 +397,16 @@ declared_modules := {
 	# is not one (CLOUD-1260), which is why the edge is listed rather than left
 	# to follow.
 	"land",
+	# `offbox` arrived with CLOUD-2718 as `lease`'s second CONSUMER, beside
+	# `land`: it asks `lease` whether the state repository answers, and the rows
+	# after it push a session's snapshot there. It reaches `lease`, `state`,
+	# `git`, `session`, `exit` and `error`.
+	#
+	# Its `hook`, `repair` and `check` edges are forbidden below for `land`'s
+	# reason, and this row owns that edge for the whole off-box chain: every
+	# module the chain adds is reached through this one, and a mediated call
+	# that could reach it would wait on a remote inside CLOUD-689's ceiling.
+	"offbox",
 	# `pipeline` arrived with CLOUD-1338's declared composition, and this rule
 	# named it before a human did. It sits ABOVE `land` and reaches it alone: the
 	# composition is a list of that module's `Step`s with a compensation per row,
@@ -983,7 +993,7 @@ forbidden[from] contains to if {
 		# network through `fetch`, the second runs a caller's program.
 		# `ci_step` joins for `probe`'s reason: it runs a caller's program.
 		"hook": {
-			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
 			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
@@ -1009,7 +1019,7 @@ forbidden[from] contains to if {
 		# one hop is not one, which is why the effect bounds in
 		# `crate::repair`'s header carry the other half.
 		"repair": {
-			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
+			"fetch", "rest", "mcp", "lease", "gitwrite", "land", "offbox",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
 			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
@@ -1028,7 +1038,7 @@ forbidden[from] contains to if {
 		# adding the three adapter targets below — the case written for it could
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
-			"lease", "gitwrite", "land",
+			"lease", "gitwrite", "land", "offbox",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"preflight", "release", "attestation",
 			"unsubscribe", "probe",
@@ -1454,6 +1464,26 @@ test_the_mediated_path_must_not_reach_the_forge_query_producer if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/forge_query.rs",
 		[internal("rules", 12)],
+	)
+}
+
+# CLOUD-2718's off-box root. The mediated path must not reach it — it is `lease`
+# one hop further out — and it reaches what it composes, so a table that banned
+# the module outright would not satisfy this case.
+test_the_mediated_path_must_not_reach_offbox if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("offbox", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("offbox", 31)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/offbox.rs",
+		[internal("lease", 10), internal("state", 11), internal("git", 12), internal("session", 13)],
 	)
 }
 
