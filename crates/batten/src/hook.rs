@@ -20744,6 +20744,11 @@ deny contains "refused by themodule" if {
             segment_commit_message(&parsed("git commit -mfix")[0], None),
             Some(CommitMessage::Text(String::from("fix")))
         );
+        // Fails by: a glued `-F` path refused unless empty.
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -Fmsg.txt")[0], Some(Path::new("/w"))),
+            Some(CommitMessage::File(PathBuf::from("/w/msg.txt")))
+        );
         assert!(!waited_on(&parsed("wait &"), 0, 1));
     }
 
@@ -20849,6 +20854,9 @@ deny contains "refused by themodule" if {
             "git commit -m x$(cat <<'EOF'\nglued\nEOF\n)y",
             "git commit -m \"$(tac <<'EOF'\nother\nEOF\n)\"",
             "git commit -m \"$(X=1 cat <<'EOF'\nassigned\nEOF\n)\"",
+            // Fails by: a word quoted on one side only read as the quoted form.
+            "git commit -m \"$(cat <<'EOF'\nhalf\nEOF\n)\"y",
+            "git commit -m y\"$(cat <<'EOF'\nhalf\nEOF\n)\"",
         ] {
             assert!(bodies(refused).is_empty(), "{refused}");
         }

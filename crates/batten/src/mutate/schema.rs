@@ -1158,6 +1158,35 @@ const FIRST_PHASE_SECONDS: f64 = 4.0;
 /// What a case the reach run did not time is taken to cost.
 const UNMEASURED_SECONDS: f64 = 1.0;
 
+/// How many times its cases' measured time one mutant's run may take, and the
+/// least it is ever given: cargo-mutants' own rule (mutants.rs, "Timeouts":
+/// 5x the baseline, never under 20 s), applied to the cases this run selects.
+const TIMEOUT_MULTIPLIER: f64 = 5.0;
+const MINIMUM_TIMEOUT_SECONDS: f64 = 20.0;
+
+/// What one run spends before any case starts: cargo's freshness check and
+/// nextest listing each selected binary, which no case's time includes.
+const STARTUP_SECONDS: f64 = 30.0;
+
+/// How long one mutant's run over `cases` may take before it is a timeout.
+///
+/// MEASURED ON #1276: the bound was the classic runner's six hours, sized for a
+/// build per mutant, and one mutant hung its run before a case started — the
+/// test binary blocked listing itself — so the sweep sat 70 minutes on its
+/// last run with every other verdict in.
+fn case_bound(
+    cases: &BTreeSet<Case>,
+    seconds: &std::collections::BTreeMap<Case, f64>,
+) -> std::time::Duration {
+    let measured: f64 = cases
+        .iter()
+        .map(|case| seconds.get(case).copied().unwrap_or(UNMEASURED_SECONDS))
+        .sum();
+    std::time::Duration::from_secs_f64(
+        STARTUP_SECONDS + (TIMEOUT_MULTIPLIER * measured).max(MINIMUM_TIMEOUT_SECONDS),
+    )
+}
+
 /// Each case's measured seconds, from a nextest `JUnit` report: the `name`,
 /// `classname` (the binary) and `time` of every `<testcase>`.
 fn durations(junit: &str) -> std::collections::BTreeMap<Case, f64> {
@@ -1244,18 +1273,9 @@ fn named(line: &str, status: &str) -> Option<Case> {
     Some((name.trim().to_owned(), binary.to_owned()))
 }
 
-/// Run `cases` once with mutant `id` switched on, and answer its verdict, the
-/// case that killed it, and every case that passed. `cases` must not be empty.
-///
-/// # Errors
-///
-/// The run could not be started.
-fn run_cases(
-    judging: &Judging<'_>,
-    id: u32,
-    mutant: &Listed,
-    cases: &BTreeSet<Case>,
-) -> anyhow::Result<(Verdict, Option<Case>, Vec<Case>)> {
+/// The nextest argv that runs exactly `cases` against `mutant`: the cases'
+/// own packages and targets, and a filter naming each case.
+fn nextest_args(mutant: &Listed, cases: &BTreeSet<Case>) -> Vec<String> {
     let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
     let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
     let mut args: Vec<String> = [
@@ -1292,6 +1312,22 @@ fn run_cases(
         super::cover::filterset(&tests),
         String::from("--no-tests=pass"),
     ]);
+    args
+}
+
+/// Run `cases` once with mutant `id` switched on, and answer its verdict, the
+/// case that killed it, and every case that passed. `cases` must not be empty.
+///
+/// # Errors
+///
+/// The run could not be started.
+fn run_cases(
+    judging: &Judging<'_>,
+    id: u32,
+    mutant: &Listed,
+    cases: &BTreeSet<Case>,
+) -> anyhow::Result<(Verdict, Option<Case>, Vec<Case>)> {
+    let args = nextest_args(mutant, cases);
     let own = judging.scratch.join(id.to_string());
     let _ = std::fs::create_dir_all(own.join("tmp"));
     let _ = std::fs::create_dir_all(own.join("fixtures"));
@@ -1319,7 +1355,7 @@ fn run_cases(
         super::Program::Cargo,
         &args,
         &env,
-        super::runner_bound(),
+        case_bound(cases, judging.seconds).min(super::runner_bound()),
     );
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
@@ -1426,9 +1462,7 @@ fn judge(
                 if verdict == Verdict::Missed {
                     continue;
                 }
-                if let Some(case) = &killed_by
-                    && verdict == Verdict::Caught
-                {
+                if let Some(case) = journaled_kill(verdict, killed_by.as_ref()) {
                     record(case, "caught");
                 }
                 if let (Some(key), Some(case)) = (sibling, killed_by)
@@ -1447,6 +1481,25 @@ fn judge(
         }
     }
     (Verdict::Missed, skipped)
+}
+
+/// The case a run's verdict journals as a kill: its killer, and only when
+/// the run caught the mutant (a timeout names no killer it could reuse).
+fn journaled_kill(verdict: Verdict, killed_by: Option<&Case>) -> Option<&Case> {
+    killed_by.filter(|_| verdict == Verdict::Caught)
+}
+
+/// Whether the reach record under `base` was sealed by a finished run over
+/// the tree `inputs` digests.
+fn sealed_over(base: &std::path::Path, inputs: &str) -> bool {
+    crate::fsio::read_to_string(base.join(SEALED)).is_ok_and(|held| held == inputs)
+}
+
+/// The line a resumed reach run says, naming the cases it kept: none when it
+/// kept none.
+fn resume_note(resumed: usize) -> Option<String> {
+    (resumed > 0)
+        .then(|| format!("mutate schema: reach resumed with {resumed} case(s) already recorded"))
 }
 
 /// The longest filterset one run is handed, in bytes. The kernel caps ONE
@@ -1648,16 +1701,11 @@ pub fn record_reach(
     // resumes from the record a finished run sealed instead of re-running the
     // suite (640 s on #1276).
     let inputs = tree_digest(work);
-    let seal = base.join(SEALED);
-    if crate::fsio::read_to_string(&seal).is_ok_and(|held| held == inputs) {
+    if sealed_over(&base, &inputs) {
         return collect_reach(&base);
     }
-    let resumed = resume_reach(&base, &inputs)?;
-    if resumed > 0 {
-        writeln!(
-            out,
-            "mutate schema: reach resumed with {resumed} case(s) already recorded"
-        )?;
+    if let Some(note) = resume_note(resume_reach(&base, &inputs)?) {
+        writeln!(out, "{note}")?;
     }
     let config = state.join("nextest.toml");
     // A PRIVATE COPY of this binary is the recorder: the suite runs for minutes,
@@ -1711,7 +1759,7 @@ pub fn record_reach(
     // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
     let _ = std::fs::remove_dir_all(target.join("tmp"));
     let reach = collect_reach(&base)?;
-    std::fs::write(&seal, inputs)?;
+    std::fs::write(base.join(SEALED), inputs)?;
     Ok(reach)
 }
 
@@ -2156,7 +2204,9 @@ fn judge_all(
                         Some("caught") => Verdict::Caught,
                         Some("timeout") => Verdict::Timeout,
                         Some("missed") => Verdict::Missed,
-                        Some("uncovered") => Verdict::Uncovered,
+                        // A stored `uncovered` needs no arm: its key was taken
+                        // over no reaching case, so the same key reaches none
+                        // now, and `judge` answers it without a run.
                         _ => {
                             let (verdict, skipped) =
                                 judge(judging, id, mutant, cases, hints, journal);
@@ -3103,14 +3153,25 @@ mod tests {
                 .map(String::from)
                 .into()
         );
-        let schema =
-            write_schema(&root, &work, &[inner], &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        let schema = write_schema(
+            &root,
+            &work,
+            std::slice::from_ref(&inner),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
         assert!(schema.files.contains_key("crates/x/src/m.rs"));
         let m = std::fs::read_to_string(work.join("crates/x/src/m.rs")).unwrap();
         assert!(m.contains("crate::__batten_mutant(0) { a != b }"), "{m}");
         let lib = std::fs::read_to_string(work.join("crates/x/src/lib.rs")).unwrap();
         assert_eq!(lib, format!("pub mod m;\n{}", prelude(schema.probes.len())));
         assert_eq!(schema.probes.len(), 1, "m.rs's one function");
+        // Fails by: a file the build refused probed again because no build
+        // script includes it.
+        let unprobed = [String::from("crates/x/src/m.rs")].into();
+        let again = write_schema(&root, &work, &[inner], &BTreeSet::new(), &unprobed).unwrap();
+        assert!(again.probes.is_empty(), "an unprobed file carries no probe");
     }
 
     /// An error is owned by the mutant whose region holds its primary span;
@@ -3524,6 +3585,140 @@ mod tests {
         assert!(cases.iter().all(|case| global[case] != held[case]));
     }
 
+    /// A run selects its cases' own packages; a case whose binary went
+    /// unrecorded, or none recorded at all, falls back to the mutant's package.
+    ///
+    /// Fails by: an unrecorded binary's empty package kept as `-p ""`, or the
+    /// fallback taken only when every binary went unrecorded.
+    #[test]
+    fn a_run_selects_its_cases_packages_or_the_mutants_when_one_is_unrecorded() {
+        let mut mutant = listed("BinaryOperator", "!=", (2, 7), (2, 9));
+        mutant.package = String::from("other");
+        let packages = |cases: &[(&str, &str)]| {
+            let cases: BTreeSet<Case> = cases
+                .iter()
+                .map(|(name, binary)| ((*name).to_owned(), (*binary).to_owned()))
+                .collect();
+            let args = nextest_args(&mutant, &cases);
+            args.windows(2)
+                .filter(|pair| pair[0] == "-p")
+                .map(|pair| pair[1].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(packages(&[("t", "batten")]), ["batten"]);
+        assert_eq!(packages(&[("t", "batten"), ("u", "")]), ["other"]);
+        assert_eq!(packages(&[("u", "")]), ["other"]);
+    }
+
+    /// An error ending exactly where a probe region ends is outside it.
+    ///
+    /// Fails by: a region read as closed at its end, which unprobes a file
+    /// for an error that is not the probe's.
+    #[test]
+    fn an_error_at_a_probe_regions_end_does_not_unprobe_its_file() {
+        let source = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        let rendered = render(
+            source,
+            &[(0, &listed("BinaryOperator", "!=", (2, 7), (2, 9)))],
+            &BTreeSet::new(),
+            Some(0),
+        );
+        let at = rendered.probe_regions[0].end;
+        let schema = Schema {
+            files: [(String::from("src/m.rs"), rendered)].into(),
+            ..Schema::default()
+        };
+        let message = format!(
+            "{{\"reason\":\"compiler-message\",\"message\":{{\"level\":\"error\",\"message\":\"e\",\
+             \"spans\":[{{\"is_primary\":true,\"file_name\":\"src/m.rs\",\"byte_start\":{at}}}]}}}}"
+        );
+        assert!(unviable(&schema, &message).unprobe.is_empty());
+    }
+
+    /// A `const fn` inside a `const fn` drops its own `const`, not its
+    /// container's.
+    ///
+    /// Fails by: an enclosing function's `const` taken for the innermost one.
+    #[test]
+    fn a_nested_const_fn_drops_its_own_const() {
+        let source = "const fn g() -> u8 {\n    const fn f(a: u8) -> bool {\n        a == 1\n    }\n    1\n}\n";
+        let rendered = render_all(source, &[listed("BinaryOperator", "!=", (3, 11), (3, 13))]);
+        assert!(
+            rendered.text.starts_with("const fn g()"),
+            "{}",
+            rendered.text
+        );
+        assert!(
+            rendered.text.contains("\n    fn f(a: u8)"),
+            "{}",
+            rendered.text
+        );
+    }
+
+    /// Only a seal over this very tree skips the reach run, and a resumed
+    /// run says how many cases it kept, saying nothing when it kept none.
+    ///
+    /// Fails by: a seal over another tree honoured, or the note said for a
+    /// fresh run or withheld from a resumed one.
+    #[test]
+    fn only_a_seal_over_this_tree_skips_reach_and_a_resume_is_counted() {
+        let base = crate::scratch::scratch("schema-reach-sealed");
+        assert!(!sealed_over(&base, "t1"), "no seal yet");
+        std::fs::write(base.join(SEALED), "t1").unwrap();
+        assert!(sealed_over(&base, "t1"));
+        assert!(!sealed_over(&base, "t2"), "a seal over another tree");
+        assert_eq!(resume_note(0), None);
+        assert_eq!(
+            resume_note(1).as_deref(),
+            Some("mutate schema: reach resumed with 1 case(s) already recorded")
+        );
+    }
+
+    /// The resource digest moves with a non-Rust file a run may read, and not
+    /// with a Rust source, which the probes already key.
+    ///
+    /// Fails by: a constant digest, which reuses a verdict over a changed
+    /// fixture.
+    #[test]
+    fn the_resource_digest_moves_with_a_fixture_and_not_a_source() {
+        let base = crate::scratch::scratch("schema-resource-digest");
+        crate::gitwrite::init_on_main(&base).unwrap();
+        std::fs::write(base.join("notes.md"), "one\n").unwrap();
+        std::fs::write(base.join("lib.rs"), "fn f() {}\n").unwrap();
+        let paths = [String::from("notes.md"), String::from("lib.rs")];
+        crate::gitwrite::commit_paths(&base, &paths, "base").unwrap();
+        let held = resource_digest(&base).unwrap();
+        std::fs::write(base.join("notes.md"), "two\n").unwrap();
+        let moved = resource_digest(&base).unwrap();
+        assert_ne!(moved, held, "a fixture changed");
+        std::fs::write(base.join("lib.rs"), "fn g() {}\n").unwrap();
+        assert_eq!(
+            resource_digest(&base).unwrap(),
+            moved,
+            "a source is the probes'"
+        );
+    }
+
+    /// A run is bounded by five times its cases' measured time, never under
+    /// the floor, plus its startup; an unmeasured case counts its default.
+    ///
+    /// Fails by: the multiplier, the floor or the startup dropped, or an
+    /// unmeasured case counted as free.
+    #[test]
+    fn a_run_is_bounded_by_its_own_cases_time() {
+        let (quick, slow) = (case("quick"), case("slow"));
+        let seconds = [(quick.clone(), 0.5), (slow.clone(), 10.0)].into();
+        let bound = |cases: &[&Case]| {
+            case_bound(&cases.iter().map(|c| (*c).clone()).collect(), &seconds).as_secs_f64()
+        };
+        assert!((bound(&[&quick]) - 50.0).abs() < 1e-9, "the floor");
+        assert!((bound(&[&quick, &slow]) - 82.5).abs() < 1e-9, "5x 10.5 s");
+        let unmeasured = case("unmeasured");
+        let many: Vec<Case> = (0..5).map(|n| case(&format!("u{n}"))).collect();
+        let refs: Vec<&Case> = many.iter().chain([&unmeasured]).collect();
+        assert!((bound(&refs) - 60.0).abs() < 1e-9, "six at 1 s each");
+    }
+
     /// An error on a probe unprobes its file, even inside a mutant's branch.
     #[test]
     fn an_error_on_a_probe_unprobes_its_file() {
@@ -3605,6 +3800,8 @@ mod tests {
     /// run again, or a recorded pass not narrowing the run.
     #[test]
     fn a_recorded_outcome_per_case_decides_or_narrows_a_mutant() {
+        /// An id no other case's run uses, so its kept log is this case's.
+        const ERRING: u32 = 90_017;
         let base = crate::scratch::scratch("schema-judge-pairs");
         std::fs::create_dir_all(base.join("src")).unwrap();
         std::fs::write(
@@ -3640,7 +3837,7 @@ mod tests {
             };
             let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
             let journal = std::sync::Mutex::new(None);
-            judge(&judging, 0, &mutant, &cases, &hints, &journal)
+            judge(&judging, ERRING, &mutant, &cases, &hints, &journal)
         };
         let caught = String::from("caught");
         let passed = String::from(PASSED);
@@ -3660,6 +3857,15 @@ mod tests {
             !matches!(verdict, Verdict::Caught | Verdict::Missed),
             "the open case was run, and here no run can start: {verdict:?}"
         );
+        // Fails by: an erring run's words dropped rather than kept.
+        let kept = base
+            .parent()
+            .unwrap()
+            .join("errors")
+            .join(format!("{ERRING}.log"));
+        assert!(kept.is_file(), "{} is kept", kept.display());
+        assert_eq!(journaled_kill(Verdict::Caught, Some(&a)), Some(&a));
+        assert_eq!(journaled_kill(Verdict::Timeout, Some(&a)), None);
         assert_ne!(pair(&a), pair(&b), "each case is its own pair");
     }
 

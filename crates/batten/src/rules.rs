@@ -21647,6 +21647,87 @@ violation contains {
         dir
     }
 
+    /// Two rows count the same only when their counters match: pattern,
+    /// regex and what is counted all key the persisted tables.
+    ///
+    /// Fails by: a constant key, which shares one row's counts with another's.
+    #[test]
+    fn rows_share_counts_only_when_their_counters_match() {
+        let row = |pattern: Option<&str>, regex: Option<&str>| Rule {
+            pattern: pattern.map(String::from),
+            regex: regex.map(String::from),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let base = counter_key(&row(Some("x"), None));
+        assert_eq!(base, counter_key(&row(Some("x"), None)));
+        assert_ne!(base, counter_key(&row(Some("y"), None)));
+        assert_ne!(base, counter_key(&row(None, Some("x"))));
+    }
+
+    /// A write moves only the rows judged at the call whose glob holds the
+    /// target: a row `check` alone judges, or one over other paths, is not
+    /// read.
+    ///
+    /// Fails by: a row admitted when either condition holds rather than both.
+    #[test]
+    fn only_a_call_judged_row_over_the_target_moves() {
+        let judged = Rule {
+            base: Some(String::from("origin/main")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let retiring = Rule {
+            retires_with: Some(String::from("# subject:")),
+            ..judged.clone()
+        };
+        let elsewhere = Rule {
+            glob: Some(String::from("*.md")),
+            ..judged.clone()
+        };
+        let rows = [&judged, &retiring, &elsewhere];
+        let moving = moving_rows(&rows, "t.bats", Some(""), ONE_CASE).expect("counts");
+        assert_eq!(moving.len(), 1, "only the judged row over *.bats moves");
+        assert!(std::ptr::eq(moving[0].0, &judged));
+    }
+
+    /// The changed set follows its base ref: moving the base while HEAD stays
+    /// put is a different set, not the cached one.
+    ///
+    /// Fails by: the set's cache keyed on another row's ref (HEAD's id), which
+    /// answers the old set after the base moved.
+    #[test]
+    fn a_moved_base_is_a_new_changed_set_with_head_unmoved() {
+        let dir = ratchet_repo("rules-changed-base-moved", &[("a.bats", ONE_CASE)], &[]);
+        let head = || {
+            crate::git::rev_ids(&dir, &["HEAD"]).expect("ids")[0]
+                .clone()
+                .expect("HEAD resolves")
+        };
+        let point_base = |id: String| {
+            fs::write(dir.join(".git/refs/heads/base"), format!("{id}\n")).expect("ref");
+        };
+        point_base(head());
+        write(&dir, "b.bats", ONE_CASE);
+        // A commit's tree is the paths it is handed, so `a.bats` is carried.
+        let both = [String::from("a.bats"), String::from("b.bats")];
+        crate::gitwrite::commit_paths(&dir, &both, "second").expect("commit");
+        let cache = temp_dir("rules-changed-base-moved-cache");
+        let row = Rule {
+            base: Some(String::from("base")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let moving = [(&row, Direction::NonIncreasing, "base", "*.bats", 0, 1)];
+        let paths = |sets: BTreeMap<(&str, &str), Changed>| {
+            sets.into_values()
+                .flat_map(|set| set.paths.into_iter().map(|(path, _)| path))
+                .collect::<Vec<_>>()
+        };
+        let before = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(before), ["b.bats", "t.bats"]);
+        point_base(head());
+        let after = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(after), ["t.bats"], "the base now carries b.bats");
+    }
+
     fn ratchet_row(direction: Direction) -> Rule {
         Rule {
             glob: Some(String::from("*.bats")),
