@@ -695,6 +695,8 @@ pub fn snapshot(
 
 /// [`snapshot`]'s body, apart from it so the staging directory is removed on
 /// every path out — a refusal and an error as much as a build.
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT appended-file-named-by-the-last-tree|s@^            let id = gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)?;$@            let id = match last.get(\&format!("{root}/{relative}")) { Some(id) => id.clone(), None => gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)? };@|every_snapshot_holds_the_source_whole_whatever_closed_in_between
 #[allow(clippy::too_many_lines)]
 fn build(
     project_root: &Path,
@@ -830,26 +832,23 @@ fn build(
         Content::Blob(gitwrite::write_blob(repo, &cursors_bytes(&cursors)?)?),
     );
 
-    // THE APPENDED ROOTS, one file at a time. A file the last snapshot already
-    // holds, and that no feed is still appending to, is named by the id it had:
-    // it is never rewritten, so it is never read again.
-    let open: BTreeSet<String> = cursors
-        .iter()
-        .filter_map(|(prefix, position)| {
-            let file = position.file.as_ref()?;
-            Some(format!("{prefix}/{}/{file}", position.generation))
-        })
-        .collect();
+    // THE APPENDED ROOTS: EVERY FILE ON DISK, NAMED BY ITS OWN BYTES, EVERY
+    // TIME. Nothing is remembered about a file from the snapshot before, so
+    // there is nothing to fall out of step with it: the tree is a function of
+    // the directory, and a snapshot built after a kill, a restore or a rejected
+    // push is the one built after none of them.
+    //
+    // It was once otherwise — a file the last tree held, and no feed was still
+    // appending to, kept the id it had. A file open at one snapshot that had
+    // filled and closed by the next was neither open nor new, and every record
+    // appended to it in between was left out of every later snapshot.
+    //
+    // Naming a file costs a read and a hash and no write: the odb is asked for
+    // the id first, and a blob it holds is not stored again.
     for root in APPENDED {
         for (relative, path) in files_under(&dir.join(root)) {
-            let tree_path = format!("{root}/{relative}");
-            let fresh = open.contains(&tree_path) || !last.contains_key(&tree_path);
-            let id = if fresh {
-                gitwrite::write_blob(repo, &std::fs::read(&path).map_err(unread)?)?
-            } else {
-                last.get(&tree_path).cloned().unwrap_or_default()
-            };
-            entries.insert(tree_path, Content::Blob(id));
+            let id = gitwrite::write_blob(repo, &std::fs::read(&path).map_err(unread)?)?;
+            entries.insert(format!("{root}/{relative}"), Content::Blob(id));
         }
     }
 

@@ -384,6 +384,62 @@ fn a_second_snapshot_holds_everything_the_first_did() {
     );
 }
 
+/// Fails by: any snapshot whose tree is not the source, byte for byte — a
+/// segment that was open at one snapshot and had filled and closed by the next
+/// kept at the length the earlier one saw, above all.
+///
+/// The steps cross every boundary there is between two snapshots: nothing
+/// appended, the open segment still open, the open segment closed and the next
+/// opened, several segments closed at once, and each of those after a snapshot
+/// that was pushed and after one that was not.
+#[test]
+fn every_snapshot_holds_the_source_whole_whatever_closed_in_between() {
+    let rig = Rig::new("offbox-snapshot-whole");
+    let meta = Rig::meta("whole");
+    let path = rig.source("main");
+    write(&path, "");
+    let source = JsonlFile::at(&path);
+    // (records appended before the snapshot, whether that snapshot is pushed)
+    let steps = [
+        (1500, true),
+        (1200, true),
+        (20, true),
+        (0, true),
+        (700, false),
+        (900, true),
+        (2600, false),
+        (1, false),
+        (1100, true),
+        (3, true),
+        (3300, true),
+    ];
+    let mut written = 0;
+    let mut segments = 0;
+    for (step, (count, pushed)) in steps.into_iter().enumerate() {
+        append(&path, &records(written, count, 1000));
+        written += count;
+        let time = TIME + 60 * i64::try_from(step).unwrap();
+        let (commit, ..) = built(rig.snap(&meta, &[feed(MAIN, &source)], time, NO_CAP));
+        let tree = rig.tree(&meta, &commit);
+        assert_eq!(
+            rig.joined(&meta, &tree, "transcript/main/0"),
+            fs::read(&path).unwrap(),
+            "step {step}: the tree is the source"
+        );
+        segments = tree
+            .keys()
+            .filter(|path| path.starts_with("transcript/main/0/"))
+            .count();
+        if pushed {
+            rig.pushed(&meta, &commit);
+        }
+    }
+    assert!(
+        segments > 10,
+        "the premise: many segments closed: {segments}"
+    );
+}
+
 /// Fails by: the tree depending on the commit time, or on being built twice.
 #[test]
 fn an_unchanged_session_gives_the_same_tree() {
