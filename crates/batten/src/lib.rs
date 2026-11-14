@@ -198,6 +198,7 @@ pub mod semver;
 pub mod session;
 pub use batten_core::severity;
 pub use batten_core::shell;
+pub mod shell_detect;
 pub use batten_core::signer_posture;
 pub use batten_core::sink;
 pub use batten_facts::source;

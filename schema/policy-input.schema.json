@@ -699,6 +699,77 @@
             "null"
           ]
         },
+        "shell": {
+          "additionalProperties": false,
+          "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`crate::shell::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading.",
+          "properties": {
+            "base": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "manifest",
+                      "workflow",
+                      "file"
+                    ],
+                    "type": "string"
+                  },
+                  "lines": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "line": {
+                          "type": "integer"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "head": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "manifest",
+                      "workflow",
+                      "file"
+                    ],
+                    "type": "string"
+                  },
+                  "lines": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "line": {
+                          "type": "integer"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "staged": {
           "additionalProperties": true,
           "description": "Fact::Staged (CLOUD-1203). Declared path -> its STAGED content, parsed by the path's format -- `git show :<path>`, which `tracked` explicitly is NOT: that fact walks the WORKING TREE. A path with no staged entry, one whose bytes are not UTF-8, and one whose format this build cannot parse are each ABSENT from this map rather than present with an empty node, and `missing` names the path with the cause. NULL when no row declared a staged read, so a module can tell `nobody asked` from `nothing is staged`.",

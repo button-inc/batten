@@ -9122,6 +9122,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Derived from `Lines` and `Document` by parsing every declared
+            // body (CLOUD-2625), so unbounded in the input for both their
+            // reasons at once.
+            crate::facts::Fact::Shell => None,
             // Not resolvable on the mediated call, for `Document`'s reason plus
             // one this family adds (CLOUD-1167): it opens and parses a file of
             // unbounded size, AND the file lives outside the repository, so the
