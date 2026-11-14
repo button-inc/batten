@@ -197,6 +197,7 @@ pub mod selfwrite;
 /// longer resolve one.
 pub mod semver;
 pub mod session;
+pub mod sessions;
 pub use batten_core::severity;
 pub use batten_core::shell;
 pub use batten_core::signer_posture;
