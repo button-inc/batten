@@ -4,7 +4,7 @@
 #   CLOUD-1200 owes: a tree-scoped module deciding over a set no declaration can
 #   enumerate.
 #
-#   `released.sh` walked `git tag` to decide what had shipped, and
+#   `released.sh` walks `git tag` to decide what has shipped, and
 #   `release-due`, `release-backfill`, `release-tracking-check` and
 #   `landed-check` read the same shape. None of them could migrate, because
 #   `input.tree["git-refs"]` resolves what a rule NAMES and which tags exist is

@@ -10,7 +10,7 @@
 #
 # THIS MODULE ONLY REFUSES WEAKENING IT. The split matters. A gate that
 # re-derived per-case durations would be the instrument this repository has
-# already refused twice — `mise-tasks/suite-bench-check.sh` recorded that a
+# already refused twice — `mise-tasks/suite-bench-check.sh` records that a
 # duration gate "would be red on every second run and would be bypassed within a
 # day", and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the same
 # branch because its first firing was on the change that improved the thing it

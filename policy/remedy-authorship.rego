@@ -62,8 +62,8 @@
 #
 # The rows above declare what each predicate must not survive; what CANNOT run
 # them is the mutation runner, for a reason that is a named gap rather than a
-# choice. `mutant` resolved a gate's suite as `tests/$gate.bats`, and a policy
-# module had none — the second tier here is `crates/batten/tests/remedy_
+# choice. `mutant` resolves a gate's suite as `tests/$gate.bats`, and a policy
+# module has none — the second tier here is `crates/batten/tests/remedy_
 # authorship.rs`, which drives the compiled binary and is the stronger evidence,
 # but it is not what `mutant` drives. `batten policy test` IS wired as of
 # CLOUD-931 and runs the load-time tier below; that tier is `with input as`
