@@ -208,7 +208,7 @@ A helper rather than a token in the URL: the URL form puts the credential in
 
 **What it cost, so the next reader does not re-derive it.** `land-lock`'s CAS is
 a `git push` to a ref another VM minted. The injected token is not scoped for it,
-so the push 403s; `swap` discards stderr (`land-lock.sh:442`), so `acquire`
+so the push 403s; `swap` discards stderr (script line 442), so `acquire`
 renders the refusal as `still held by <the last holder>` and names a session that
 released hours earlier. Measured: 34 identical refusals, 120s apart, zero
 successes, against a lease `status` reads as `released`. No session can take over

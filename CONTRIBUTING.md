@@ -22,11 +22,11 @@ The toolchain is pinned with [`mise`](https://mise.jdx.dev) (see `mise.toml`),
 and git hooks run through [`hk`](https://hk.jdx.dev) (see `hk.pkl`). Once:
 
 ```bash
-mise install     # provision the pinned Rust toolchain and hk
-.claude/hooks/session-start.sh  # all of the above, plus the git hooks
+mise install             # provision the pinned Rust toolchain and hk
+batten startup --repair  # all of the above, plus the git hooks
 ```
 
-Prefer the last line: it performs every per-clone step, and `mise run doctor`
+Prefer the last line: it runs every declared per-clone step, and `batten doctor`
 fails afterwards if one did not take. Install the hooks that way rather than
 with `hk install` — hk's generated hook calls `hk` bare, which resolves only
 where mise's shims are on PATH, and `.claude/hooks/git-hook.sh` resolves it through

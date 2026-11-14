@@ -11821,8 +11821,6 @@ stream = "both"
 reason = "the prune floor's basis is stale, not the disk. Nothing is wrong with this branch: the declared stem count has drifted past its tolerance, which is what a campaign adding test files does. Re-measure `[prune.warm]` by the stem model the block documents, and move `mb`, `worst_mb`, `measured` and BOTH `basis.count` values together."
 [lease]
 landing_paths = [
-  "mise-tasks/land.sh",
-  "mise-tasks/land-lock.sh",
   "crates/batten/src/land.rs",
   "crates/batten/src/lease.rs",
   # `fast_forward.rs` carries the half of the landing protocol that ASKS for the
@@ -13336,7 +13334,7 @@ leave-alone. An existing occurrence is grandfathered; a new one is refused.
 [[verdict.route]]
 id = "gate fix now"
 kind = "document"
-target = "mise-tasks/landed-check.sh"
+target = "crates/batten/src/landed.rs"
 [[verdict]]
 id = "prose declare missing"
 gloss = "a rule stub carries no `paths:` trigger, so the one mechanism it exists for does not fire"
