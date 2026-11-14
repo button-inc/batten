@@ -3941,6 +3941,16 @@ pub enum Extraction {
     /// (CLOUD-2383). A count over `Event::ToolCall` names, which the transcript
     /// already types; no argument is read.
     PlanExits,
+    /// The context the session's last message was sent with: its input plus
+    /// cache read plus cache write (CLOUD-415). Exact, from the host's own
+    /// usage record, never an estimate over bytes.
+    ContextTokens,
+    /// Cumulative cache-read tokens, each message counted once (CLOUD-415).
+    CacheReadTokens,
+    /// Cumulative cache-write tokens, each message counted once (CLOUD-415).
+    CacheWriteTokens,
+    /// Cumulative output tokens, each message counted once (CLOUD-415).
+    OutputTokens,
 }
 
 impl Extraction {
@@ -3966,6 +3976,8 @@ impl Extraction {
     ///
     /// Generic over [`crate::transcript::Summary`] so the hook's incremental
     /// [`crate::transcript::Tally`] is read by this same decision (CLOUD-2315).
+    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+    //MUTANT usage-facts-unreachable|s@^            Extraction::ContextTokens => recorded(Kind::Usage).then(\x7c\x7c stream.usage().context),$@            Extraction::ContextTokens => None,@|a_policy_row_reads_the_four_facts
     #[must_use]
     pub fn of(self, stream: &impl crate::transcript::Summary) -> Option<usize> {
         use crate::transcript::Kind;
@@ -3992,6 +4004,14 @@ impl Extraction {
             // Gated on the kind it counts, as `ToolCalls` is: a host recording no
             // tool calls cannot say a plan was never presented.
             Extraction::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
+            // Gated on the usage kind: a host whose records carry no usage has
+            // not reported a zero-token session (CLOUD-415).
+            Extraction::ContextTokens => recorded(Kind::Usage).then(|| stream.usage().context),
+            Extraction::CacheReadTokens => recorded(Kind::Usage).then(|| stream.usage().cache_read),
+            Extraction::CacheWriteTokens => {
+                recorded(Kind::Usage).then(|| stream.usage().cache_write)
+            }
+            Extraction::OutputTokens => recorded(Kind::Usage).then(|| stream.usage().output),
         }
     }
 }

@@ -29635,6 +29635,19 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             gap.rule, gap.fact
         )?;
     }
+    // THE SESSION'S OWN USAGE, ON EVERY PATH (CLOUD-415): integers only (rule
+    // 4), and `-` for a reading that could not be taken, never `0`.
+    let reading = |value: Option<usize>| value.map_or_else(|| "-".to_owned(), |n| n.to_string());
+    writeln!(
+        out,
+        "doctor session: turns={} context={} cache_read={} cache_write={} input={} output={}",
+        reading(report.turns),
+        reading(report.context),
+        reading(report.cache_read),
+        reading(report.cache_write),
+        reading(report.input),
+        reading(report.output),
+    )?;
     match (report.open, report.total) {
         (Some(open), Some(total)) if open > 0 => {
             writeln!(
