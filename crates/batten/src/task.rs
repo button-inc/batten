@@ -1217,11 +1217,15 @@ mod tests {
             return;
         }
         let pid = std::process::id().to_string();
-        let raw = std::fs::read("/proc/self/cmdline").unwrap();
-        let want: String = sha2::Sha256::digest(&raw)
+        let raw = crate::fsio::read("/proc/self/cmdline");
+        assert!(raw.is_ok(), "a Linux process reads its own command line");
+        let raw = raw.unwrap_or_default();
+        let want = sha2::Sha256::digest(&raw)
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+            .fold(String::new(), |mut hex, byte| {
+                let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+                hex
+            });
         assert_eq!(cmdline_digest(&pid), Some(want));
         assert_eq!(cmdline_digest("0"), None);
     }

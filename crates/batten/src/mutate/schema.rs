@@ -92,6 +92,137 @@ pub const REACH: &str = "BATTEN_SCHEMA_REACH";
 /// The first argument that makes this binary nextest's recording wrapper.
 pub const RECORD_ARG: &str = "__schema-record";
 
+/// The schema tree a recording case runs in, which its touched paths are
+/// taken relative to.
+pub const TREE_ENV: &str = "BATTEN_SCHEMA_TREE";
+
+/// The file in a case's record listing the tree paths it touched; absent when
+/// the case was not traced.
+const READ: &str = "read";
+
+/// The tracer's raw output in a case's record, removed once read.
+const TRACE: &str = "trace";
+
+/// The syscall tracer a case's file reads are recorded with, where the host
+/// has one: `strace` on Linux. Elsewhere no case is traced, and each keys on
+/// every non-Rust file, which is the sound answer, not a cheaper one.
+fn tracer() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("strace"))
+            .find(|candidate| candidate.is_file())
+            .map(|found| found.to_string_lossy().into_owned())
+    })
+}
+
+/// The tracer's argv around one case: every syscall that names a path, in the
+/// case and every process it spawns, with each descriptor printed as the path
+/// it resolves to. `--seccomp-bpf` stops the case only at those syscalls.
+fn trace_args(trace: &std::path::Path, program: &str, rest: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--seccomp-bpf",
+        "-f",
+        "-qq",
+        "-y",
+        "-e",
+        "trace=%file,openat2",
+        "-o",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(trace.to_string_lossy().into_owned());
+    args.push(String::from("--"));
+    args.push(program.to_owned());
+    args.extend(rest.iter().cloned());
+    args
+}
+
+/// The tree paths a trace shows touched, relative to `tree`, or `None` when
+/// the trace cannot be read whole: a relative path with no directory to
+/// resolve it against, an escape this reader does not decode, or a read of the
+/// tree's `.git`, which depends on every tracked file. Paths outside the tree
+/// and under its `target/` are a run's own, not its inputs.
+fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<String>> {
+    let mut read = BTreeSet::new();
+    for line in trace.lines() {
+        let mut touched: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(resolved) = line
+            .rsplit_once(") = ")
+            .and_then(|(_, result)| result.split_once('<'))
+            .and_then(|(_, rest)| rest.strip_suffix('>'))
+        {
+            touched.push(std::path::PathBuf::from(resolved));
+        }
+        if let Some(open) = line.find('(')
+            && !line[..open].contains("<...")
+            && let Some(quote) = line[open..].find('"')
+        {
+            let argument = unquote(&line[open + quote + 1..])?;
+            let path = std::path::Path::new(&argument);
+            if path.is_absolute() {
+                touched.push(path.to_path_buf());
+            } else {
+                let base = line[open + 1..open + quote]
+                    .split_once('<')
+                    .and_then(|(_, rest)| rest.split_once('>'))
+                    .map(|(dir, _)| std::path::PathBuf::from(dir))?;
+                touched.push(base.join(path));
+            }
+        }
+        for path in touched {
+            let path = lexical(&path);
+            let Some(relative) = tree.iter().find_map(|root| path.strip_prefix(root).ok()) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().into_owned();
+            if relative == ".git" || relative.starts_with(".git/") {
+                return None;
+            }
+            if relative == "target" || relative.starts_with("target/") {
+                continue;
+            }
+            read.insert(relative);
+        }
+    }
+    Some(read)
+}
+
+/// A strace string argument up to its closing quote, or `None` for an escape
+/// other than `\"` and `\\`, or a string strace cut short.
+fn unquote(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return (!chars.as_str().starts_with("...")).then_some(out),
+            '\\' => match chars.next()? {
+                escaped @ ('"' | '\\') => out.push(escaped),
+                _ => return None,
+            },
+            other => out.push(other),
+        }
+    }
+    None
+}
+
+/// `path` with `.` and `..` folded away, without touching the filesystem.
+fn lexical(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// One mutant as `cargo mutants --list --json` names it.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Listed {
@@ -215,6 +346,10 @@ pub struct Rendered {
     /// consts, `const fn`s, macros and signatures, which no probe records
     /// but every run depends on. The whole source where nothing is probed.
     pub skeleton: String,
+    /// Each probed function's names, in probe-id order ([`names_in`]).
+    pub names: Vec<BTreeSet<String>>,
+    /// Each skeleton item's digest under every name it answers to.
+    pub items: Vec<(String, String)>,
 }
 
 impl Rendered {
@@ -622,7 +757,7 @@ pub fn render(
             }),
         }
     }
-    let (probes, skeleton) = probe_sites(&root, probe_from, &mut sites);
+    let probed = probe_sites(&root, probe_from, &mut sites);
     for &(start, end) in erased.keys() {
         sites.push(Site {
             range: start..end,
@@ -643,17 +778,33 @@ pub fn render(
         regions: writer.regions,
         classic,
         deconst: erased.into_values().collect(),
-        probes,
+        probes: probed.probes,
+        names: probed.names,
+        items: probed.items,
         probe_regions: writer.probe_regions,
-        skeleton,
+        skeleton: probed.skeleton,
     }
+}
+
+/// What [`probe_sites`] reads off one file besides the sites it places.
+#[derive(Debug, Default)]
+struct Probed {
+    /// Each probed function's source digest, in probe-id order.
+    probes: Vec<String>,
+    /// Each probed function's names, in probe-id order ([`names_in`]).
+    names: Vec<BTreeSet<String>>,
+    /// Each skeleton item's digest under every name it answers to
+    /// ([`item_names`]); `""` for tokens outside any item.
+    items: Vec<(String, String)>,
+    /// The digest of the whole skeleton.
+    skeleton: String,
 }
 
 /// A probe site in every function body that runs at run time, ids counted
 /// from `probe_from` (none when it is `None`), each with its function's
 /// source digest; and the skeleton digest (see [`Rendered::skeleton`]).
 ///
-/// THE FUNCTION IS THE UNIT (RTS++, Fu et al. 2019; RustyRTS, Hundsdorfer et
+/// THE FUNCTION IS THE UNIT (RTS++, Fu et al. 2019; `RustyRTS`, Hundsdorfer et
 /// al., ICST 2025): a test's verdict depends on the functions it executes, so
 /// those are recorded per case, while what is decided at compile time (const
 /// items and `const fn`s, types, macros, impl headers, imports) is in the
@@ -669,12 +820,17 @@ pub fn render(
 /// TOKENS, NOT TEXT (Ekstazi's smart checksum, Gligoric et al. ISSTA 2015):
 /// whitespace and comments, doc comments included, change no compiled
 /// behaviour, so the skeleton hashes the non-trivia tokens alone.
-fn probe_sites(
-    root: &SyntaxNode,
-    probe_from: Option<usize>,
-    sites: &mut Vec<Site>,
-) -> (Vec<String>, String) {
-    let mut probes = Vec::new();
+///
+/// EACH SKELETON ITEM ITS OWN DIGEST, under every name it answers to, and each
+/// probed function the names it mentions. `RustyRTS` (ICST 2025) sees a `const`
+/// through the MIR of every function that inlines it; source has no such edge,
+/// so the edge is the name: a case depends on the items its executed functions
+/// name. An edited const, type or impl header moves exactly the cases whose
+/// functions name it, and an item ADDED moves none, which is the commit a
+/// mutant-fixing lap makes. A tree-wide skeleton in every key re-judged all
+/// 2386 viable mutants on #1276 after one commit of new tests.
+fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Site>) -> Probed {
+    let mut probed = Probed::default();
     let mut cuts: Vec<Range<usize>> = Vec::new();
     if let Some(mut next) = probe_from {
         for function in root.descendants().filter_map(ast::Fn::cast) {
@@ -695,11 +851,12 @@ fn probe_sites(
                 wraps: vec![Wrap::Probe(format!("crate::__batten_fn({next});"))],
                 children: Vec::new(),
             });
-            probes.push(
+            probed.probes.push(
                 blake3::hash(function.syntax().to_string().as_bytes())
                     .to_hex()
                     .to_string(),
             );
+            probed.names.push(names_in(function.syntax()));
             let item = function.syntax().text_range();
             cuts.push(usize::from(item.start())..usize::from(item.end()));
             next += 1;
@@ -707,10 +864,14 @@ fn probe_sites(
     }
     cuts.sort_by_key(|cut| cut.start);
     let mut skeleton = blake3::Hasher::new();
+    // EACH ITEM ITS OWN DIGEST, keyed by where it starts so its tokens gather
+    // in one hasher wherever the walk meets them.
+    let mut items: std::collections::BTreeMap<usize, (Vec<String>, blake3::Hasher)> =
+        std::collections::BTreeMap::new();
     let mut cut = cuts.iter().peekable();
     for token in root
         .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
     {
         if matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT) {
             continue;
@@ -726,8 +887,88 @@ fn probe_sites(
         }
         skeleton.update(token.text().as_bytes());
         skeleton.update(b"\x1f");
+        let owner = token.parent_ancestors().find_map(ast::Item::cast);
+        let at = owner.as_ref().map_or(usize::MAX, |item| {
+            usize::from(item.syntax().text_range().start())
+        });
+        let (_, hasher) = items.entry(at).or_insert_with(|| {
+            (
+                owner
+                    .as_ref()
+                    .map_or_else(|| vec![String::new()], item_names),
+                blake3::Hasher::new(),
+            )
+        });
+        hasher.update(token.text().as_bytes());
+        hasher.update(b"\x1f");
     }
-    (probes, skeleton.finalize().to_hex().to_string())
+    for (names, hasher) in items.into_values() {
+        let digest = hasher.finalize().to_hex().to_string();
+        probed
+            .items
+            .extend(names.into_iter().map(|name| (name, digest.clone())));
+    }
+    probed.skeleton = skeleton.finalize().to_hex().to_string();
+    probed
+}
+
+/// The names a skeleton item answers to: its own where it has one, and for an
+/// impl, an import or an item-position macro every identifier in it (the
+/// type and trait an impl is for; what a `use` or a `thread_local!` binds).
+/// Over-inclusion is the safe direction: a name too many only re-runs a case.
+fn item_names(item: &ast::Item) -> Vec<String> {
+    use ast::HasName as _;
+    let named = match item {
+        ast::Item::Const(it) => it.name(),
+        ast::Item::Static(it) => it.name(),
+        ast::Item::Struct(it) => it.name(),
+        ast::Item::Enum(it) => it.name(),
+        ast::Item::Union(it) => it.name(),
+        ast::Item::Trait(it) => it.name(),
+        ast::Item::TypeAlias(it) => it.name(),
+        ast::Item::MacroRules(it) => it.name(),
+        ast::Item::MacroDef(it) => it.name(),
+        ast::Item::Module(it) => it.name(),
+        ast::Item::Fn(it) => it.name(),
+        _ => None,
+    };
+    named.map_or_else(
+        || names_in(item.syntax()).into_iter().collect(),
+        |name| vec![name.text().to_string()],
+    )
+}
+
+/// Every identifier `node` names: its `IDENT` tokens, and each name a string
+/// literal captures in a format argument (`"{LIMIT}"`), which no token carries.
+fn names_in(node: &SyntaxNode) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for token in node
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+    {
+        match token.kind() {
+            SyntaxKind::IDENT => {
+                names.insert(token.text().to_owned());
+            }
+            SyntaxKind::STRING => {
+                for captured in token.text().split('{').skip(1) {
+                    let name: String = captured
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphabetic() || c == '_')
+                    {
+                        names.insert(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +1071,11 @@ pub struct Schema {
     pub probes: Vec<String>,
     /// The digest of every rendered file's skeleton ([`Rendered::skeleton`]).
     pub skeleton: String,
+    /// Every probed function's names, by probe id.
+    pub names: Vec<BTreeSet<String>>,
+    /// Every skeleton item's digests, by each name it answers to, across
+    /// every rendered file: a name shared by two items keys on both.
+    pub items: std::collections::BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Every Rust source under the `src/` of each package `mutants` live in: the
@@ -907,6 +1153,14 @@ pub fn write_schema(
             (!unprobed.contains(&file) && !included.contains(&file)).then_some(schema.probes.len());
         let rendered = render(&source, listed, skip, probe_from);
         schema.probes.extend(rendered.probes.iter().cloned());
+        schema.names.extend(rendered.names.iter().cloned());
+        for (name, digest) in &rendered.items {
+            schema
+                .items
+                .entry(name.clone())
+                .or_default()
+                .insert(digest.clone());
+        }
         skeleton.update(format!("\x1d{file}\x1f{}", rendered.skeleton).as_bytes());
         schema.files.insert(file, rendered);
     }
@@ -1584,19 +1838,56 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     std::fs::create_dir_all(&dir)?;
     crate::durable::replace(dir.join("case"), format!("{name}\t{binary}"))?;
     let cwd = std::env::current_dir()?;
-    let ran = super::spawn_as(
-        &cwd,
-        super::Program::Test(program),
-        rest,
-        &[(String::from(RECORD), dir.to_string_lossy().into_owned())],
-        super::runner_bound(),
-        super::Said::Streamed,
-    )?;
+    let env = [(String::from(RECORD), dir.to_string_lossy().into_owned())];
+    // TRACED WHERE THE HOST CAN, so the case's key reads only the files it
+    // touched (Ekstazi's dynamic file dependencies); untraced, it keys on every
+    // non-Rust file. The tree the paths are taken against comes from the
+    // recorder, which knows it; a case run outside one is not traced.
+    let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
+    let traced = tracer().filter(|_| tree.is_some());
+    let trace = dir.join(TRACE);
+    let ran = match traced.as_deref() {
+        Some(strace) => super::spawn_as(
+            &cwd,
+            super::Program::Tracer(strace),
+            &trace_args(&trace, program, rest),
+            &env,
+            super::runner_bound(),
+            super::Said::Streamed,
+        )?,
+        None => super::spawn_as(
+            &cwd,
+            super::Program::Test(program),
+            rest,
+            &env,
+            super::runner_bound(),
+            super::Said::Streamed,
+        )?,
+    };
     let code = match ran.outcome {
         super::Outcome::Passed => 0,
         super::Outcome::Failed(Some(code)) => u8::try_from(code).unwrap_or(101),
         super::Outcome::Failed(None) | super::Outcome::TimedOut => 101,
     };
+    if let (Some(_), Some(tree)) = (traced, tree) {
+        let roots: Vec<std::path::PathBuf> = std::fs::canonicalize(&tree)
+            .ok()
+            .into_iter()
+            .chain(std::iter::once(tree))
+            .collect();
+        let read = crate::fsio::read_to_string(&trace)
+            .ok()
+            .and_then(|text| read_trace(&text, &roots));
+        if let Some(read) = read {
+            let listing = read.iter().fold(String::new(), |mut listing, path| {
+                listing.push_str(path);
+                listing.push('\n');
+                listing
+            });
+            crate::durable::replace(dir.join(READ), listing)?;
+        }
+        let _ = std::fs::remove_file(&trace);
+    }
     crate::durable::replace(dir.join(DONE), code.to_string())?;
     Ok(code)
 }
@@ -1640,6 +1931,9 @@ pub struct Reach {
     pub sites: std::collections::BTreeMap<u32, BTreeSet<Case>>,
     /// Each case's executed functions, by probe id.
     pub executed: std::collections::BTreeMap<Case, BTreeSet<usize>>,
+    /// Each traced case's touched tree paths ([`READ`]); an untraced case is
+    /// absent, never empty.
+    pub read: std::collections::BTreeMap<Case, BTreeSet<String>>,
 }
 
 /// Every mutant site each case reached and every function it executed, from
@@ -1659,7 +1953,17 @@ pub fn collect_reach(base: &std::path::Path) -> anyhow::Result<Reach> {
         let case: Case = (name.to_owned(), binary.to_owned());
         for file in std::fs::read_dir(&dir)? {
             let path = file?.path();
-            if path.file_name().is_some_and(|f| f == "case" || f == DONE) {
+            if path.file_name().is_some_and(|f| f == READ) {
+                let listing = crate::fsio::read_to_string(&path).unwrap_or_default();
+                reach
+                    .read
+                    .insert(case.clone(), listing.lines().map(str::to_owned).collect());
+                continue;
+            }
+            if path
+                .file_name()
+                .is_some_and(|f| f == "case" || f == DONE || f == TRACE)
+            {
                 continue;
             }
             let text = crate::fsio::read_to_string(&path).unwrap_or_default();
@@ -1741,6 +2045,7 @@ pub fn record_reach(
             target.to_string_lossy().into_owned(),
         ),
         (String::from(REACH), base.to_string_lossy().into_owned()),
+        (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
     ];
     let ran = super::spawn_as(
         work,
@@ -1777,13 +2082,79 @@ pub fn resource_digest(live: &std::path::Path) -> anyhow::Result<String> {
     let mut paths = crate::git::tracked_paths(live)?;
     paths.extend(crate::git::changed_paths(live)?);
     let mut hasher = blake3::Hasher::new();
-    for path in paths.iter().filter(|path| !path.ends_with(".rs")) {
+    for path in paths.iter().filter(|path| {
+        !std::path::Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+    }) {
         hasher.update(path.as_bytes());
         hasher.update(&[0]);
         hasher.update(&crate::fsio::read(live.join(path)).unwrap_or_default());
         hasher.update(&[0]);
     }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Each path of the checkout at `live` by its content id: git's own blob id
+/// from the index, which costs no hashing, and a fresh one for each path the
+/// working tree changed or git does not track. A deleted path is left out, so
+/// it reads as absent.
+///
+/// # Errors
+///
+/// The checkout's index or working tree cannot be read.
+pub fn resource_ids(
+    live: &std::path::Path,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let mut ids = std::collections::BTreeMap::new();
+    for fact in crate::git::index_facts(live, &[String::from(".")])?.into_values() {
+        for entry in fact.entries.into_iter().filter(|entry| entry.stage == 0) {
+            ids.insert(entry.path, entry.oid);
+        }
+        for path in fact.diverged.into_iter().chain(fact.untracked) {
+            match crate::fsio::read(live.join(&path)) {
+                Ok(bytes) => {
+                    let id = std::str::from_utf8(&bytes)
+                        .ok()
+                        .and_then(crate::git::blob_id)
+                        .unwrap_or_else(|| format!("b3:{}", blake3::hash(&bytes).to_hex()));
+                    ids.insert(path, id);
+                }
+                Err(_) => {
+                    ids.remove(&path);
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// The content id a case keys a path it touched on: the file's, a directory's
+/// listing of the names directly in it, or `-` for a path that is absent, so
+/// a file appearing where a case probed for none moves its key.
+fn resource_id(resources: &std::collections::BTreeMap<String, String>, path: &str) -> String {
+    if let Some(id) = resources.get(path) {
+        return id.clone();
+    }
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{path}/")
+    };
+    let listing: BTreeSet<&str> = resources
+        .range(prefix.clone()..)
+        .take_while(|(held, _)| held.starts_with(&prefix))
+        .filter_map(|(held, _)| held[prefix.len()..].split('/').next())
+        .collect();
+    if listing.is_empty() {
+        return String::from("-");
+    }
+    let mut hasher = blake3::Hasher::new();
+    for name in listing {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\x1f");
+    }
+    format!("dir:{}", hasher.finalize().to_hex())
 }
 
 /// A digest of every source and manifest in the schema tree: what the test
@@ -1929,6 +2300,26 @@ fn append(journal: &std::sync::Mutex<Option<std::path::PathBuf>>, line: &str) {
     }
 }
 
+/// What a case's key reads besides its own text: per case, its executed
+/// functions and the files it read; across the sweep, what each names.
+#[derive(Debug, Clone, Copy)]
+pub struct Depends<'a> {
+    /// Each probed function's source digest, by probe id.
+    pub probes: &'a [String],
+    /// Each probed function's names, by probe id ([`names_in`]).
+    pub names: &'a [BTreeSet<String>],
+    /// Every skeleton item's digests, by name ([`Schema::items`]).
+    pub items: &'a std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// The checkout paths each traced case touched ([`Reach::read`]); a case
+    /// absent here was not traced.
+    pub read: &'a std::collections::BTreeMap<Case, BTreeSet<String>>,
+    /// Each checkout path's content id ([`resource_ids`]).
+    pub resources: &'a std::collections::BTreeMap<String, String>,
+    /// What an untraced case keys on in place of its reads: every non-Rust
+    /// file's content ([`resource_digest`]).
+    pub untraced: &'a str,
+}
+
 /// Each case's own text, digested once per sweep (read once per file): in
 /// each of its own module files, the test function it names and the helper
 /// functions beside it; the whole file where no such test is found; and the
@@ -1936,18 +2327,21 @@ fn append(journal: &std::sync::Mutex<Option<std::path::PathBuf>>, line: &str) {
 /// on #1276 a file-wide key moved every mutant a `lib.rs` case reaches on any
 /// edit to `lib.rs`, so a lap re-judged nearly all of them.
 ///
-/// THE FUNCTIONS IT EXECUTED, BY THEIR SOURCE (Ekstazi, Gligoric et al., ISSTA
-/// 2015; RTS++): each probed function the reach run saw the case run, by its
-/// digest, so an edit anywhere on its path moves its key; and `global`, the
-/// skeleton and every resource it may read, which no probe sees.
+/// AND WHAT IT DEPENDS ON, NEVER THE TREE (Ekstazi, Gligoric et al., ISSTA
+/// 2015; RTS++; RustyRTS): each probed function the reach run saw the case
+/// run, by its digest; every skeleton item those functions name; and each file
+/// it touched with that file's content id, absent included. A case the reach
+/// run could not trace keys on every non-Rust file instead, which is what
+/// every case keyed on before and is never less sound. On #1276 a tree-wide
+/// digest in every key moved every pair on a commit that added tests and two
+/// `exclude_re` lines, and the next sweep re-judged all 2386 viable mutants.
 #[must_use]
 pub fn case_digests<'c>(
     root: &std::path::Path,
     cases: impl IntoIterator<Item = &'c Case>,
     package_dirs: &std::collections::BTreeMap<String, String>,
     executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
-    probes: &[String],
-    global: &str,
+    depends: &Depends<'_>,
 ) -> std::collections::BTreeMap<Case, String> {
     type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
@@ -1956,10 +2350,38 @@ pub fn case_digests<'c>(
         let (name, binary) = case;
         let test = name.rsplit("::").next().unwrap_or(name);
         let mut hasher = blake3::Hasher::new();
-        hasher.update(global.as_bytes());
-        for probe in executed.get(case).into_iter().flatten() {
+        let ran = executed.get(case);
+        for probe in ran.into_iter().flatten() {
             hasher.update(b"\x1c");
-            hasher.update(probes.get(*probe).map_or("", String::as_str).as_bytes());
+            hasher.update(
+                depends
+                    .probes
+                    .get(*probe)
+                    .map_or("", String::as_str)
+                    .as_bytes(),
+            );
+        }
+        let named: BTreeSet<&String> = std::iter::once(&String::new())
+            .chain(
+                ran.into_iter()
+                    .flatten()
+                    .filter_map(|probe| depends.names.get(*probe))
+                    .flatten(),
+            )
+            .flat_map(|name| depends.items.get(name).into_iter().flatten())
+            .collect();
+        for item in named {
+            hasher.update(b"\x1b");
+            hasher.update(item.as_bytes());
+        }
+        if let Some(paths) = depends.read.get(case) {
+            for path in paths {
+                hasher.update(format!("\x1a{path}\x1f").as_bytes());
+                hasher.update(resource_id(depends.resources, path).as_bytes());
+            }
+        } else {
+            hasher.update(b"\x19");
+            hasher.update(depends.untraced.as_bytes());
         }
         for file in case_sources(package_dirs, name, binary) {
             let held = parsed.entry(file.clone()).or_insert_with(|| {
@@ -1972,8 +2394,8 @@ pub fn case_digests<'c>(
                 continue;
             };
             match tests.get(test).filter(|_| !file.ends_with("common/mod.rs")) {
-                Some(texts) => {
-                    for text in texts {
+                Some(bodies) => {
+                    for text in bodies {
                         hasher.update(text.as_bytes());
                         hasher.update(b"\x1e");
                     }
@@ -2322,8 +2744,7 @@ fn report(
     }
     writeln!(
         out,
-        "mutate schema: {counts:?}, {} unviable, {} classic, in {}s",
-        unviable, classic, seconds
+        "mutate schema: {counts:?}, {unviable} unviable, {classic} classic, in {seconds}s"
     )?;
     // A RUN THAT ERRED DECIDED NOTHING: could-not-look (3), above any verdict,
     // so a sweep whose runs failed never reads as a set of survivors.
@@ -2445,6 +2866,7 @@ pub fn sweep(
          point where it was listed; run the sweep again once the tree is still"
     );
     let resources = resource_digest(root)?;
+    let resource_ids = resource_ids(root)?;
     let root = snapshot;
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
     // would read as a run of this one erring.
@@ -2485,17 +2907,7 @@ pub fn sweep(
     )?;
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let reach = record_reach(&work, &target, &state, &packages, out)?;
-    let global = blake3::hash(format!("{}\x1f{resources}", schema.skeleton).as_bytes())
-        .to_hex()
-        .to_string();
-    let digests = case_digests(
-        &root,
-        reach.sites.values().flatten(),
-        &dirs,
-        &reach.executed,
-        &schema.probes,
-        &global,
-    );
+    let digests = reach_digests(&root, &dirs, &schema, &reach, (&resource_ids, &resources));
     writeln!(
         out,
         "mutate schema: reach recorded for {} site(s), {} function(s) probed, in {}s",
@@ -2503,15 +2915,7 @@ pub fn sweep(
         schema.probes.len(),
         started.elapsed().as_secs()
     )?;
-    let seconds = durations(
-        &crate::fsio::read_to_string(
-            state
-                .join("nextest")
-                .join("batten-cover")
-                .join(super::cover::JUNIT),
-        )
-        .unwrap_or_default(),
-    );
+    let seconds = case_seconds(&state);
     let scratch = state.join("scratch");
     std::fs::create_dir_all(&scratch)?;
     let todo: Vec<u32> = (0..u32::try_from(mutants.len())?)
@@ -2547,6 +2951,47 @@ pub fn sweep(
         code,
         classic: names,
     })
+}
+
+/// Each reaching case's digest over what it depends on ([`case_digests`]):
+/// the schema's probes, names and items, the reach run's executions and
+/// reads, and the checkout's content ids with the untraced fallback.
+fn reach_digests(
+    root: &std::path::Path,
+    dirs: &std::collections::BTreeMap<String, String>,
+    schema: &Schema,
+    reach: &Reach,
+    (resources, untraced): (&std::collections::BTreeMap<String, String>, &str),
+) -> std::collections::BTreeMap<Case, String> {
+    let depends = Depends {
+        probes: &schema.probes,
+        names: &schema.names,
+        items: &schema.items,
+        read: &reach.read,
+        resources,
+        untraced,
+    };
+    case_digests(
+        root,
+        reach.sites.values().flatten(),
+        dirs,
+        &reach.executed,
+        &depends,
+    )
+}
+
+/// Each case's measured seconds from the reach run's junit report, or none
+/// when it left no report.
+fn case_seconds(state: &std::path::Path) -> std::collections::BTreeMap<Case, f64> {
+    durations(
+        &crate::fsio::read_to_string(
+            state
+                .join("nextest")
+                .join("batten-cover")
+                .join(super::cover::JUNIT),
+        )
+        .unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]
@@ -3398,7 +3843,7 @@ mod tests {
         let dirs = [(String::from("p"), String::new())].into();
         let cases = [(String::from("x"), String::from("p"))].into();
         let none = std::collections::BTreeMap::new();
-        let digests = case_digests(&root, &cases, &dirs, &none, &[], "");
+        let digests = case_digests(&root, &cases, &dirs, &none, &depends(&[]));
         let verdict = verdict_key(&root, &ne, &cases, &digests).unwrap();
         assert_eq!(verdict.len(), 64);
         assert_ne!(verdict, key);
@@ -3409,7 +3854,7 @@ mod tests {
             (4, 2),
         );
         assert_eq!(site_key(&root, &moved), Some(key));
-        let digests = case_digests(&root, &cases, &dirs, &none, &[], "");
+        let digests = case_digests(&root, &cases, &dirs, &none, &depends(&[]));
         assert_ne!(verdict_key(&root, &moved, &cases, &digests), Some(verdict));
     }
 
@@ -3446,8 +3891,7 @@ mod tests {
                 &cases,
                 &dirs,
                 &std::collections::BTreeMap::new(),
-                &[],
-                "",
+                &depends(&[]),
             )[&(name.to_owned(), String::from("p"))]
                 .clone()
         };
@@ -3553,7 +3997,7 @@ mod tests {
     }
 
     /// A case's digest moves with a function it executed and with nothing it
-    /// did not, and every case's moves with the global digest.
+    /// did not, and every untraced case's moves with every non-Rust file.
     ///
     /// Fails by: the executed functions left out (a callee's edit reuses a
     /// stale kill), or another case's functions read into this one.
@@ -3564,8 +4008,17 @@ mod tests {
         let (one, two) = (case("one"), case("two"));
         let cases: BTreeSet<Case> = [one.clone(), two.clone()].into();
         let executed = [(one.clone(), [0].into()), (two.clone(), [1].into())].into();
-        let digests = |probes: &[String], global: &str| {
-            case_digests(&root, &cases, &dirs, &executed, probes, global)
+        let digests = |probes: &[String], untraced: &str| {
+            case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &executed,
+                &Depends {
+                    untraced,
+                    ..depends(probes)
+                },
+            )
         };
         let held = digests(&[String::from("a"), String::from("b")], "g");
         let moved = digests(&[String::from("a2"), String::from("b")], "g");
@@ -3573,6 +4026,206 @@ mod tests {
         assert_eq!(moved[&two], held[&two], "not a function it ran");
         let global = digests(&[String::from("a"), String::from("b")], "h");
         assert!(cases.iter().all(|case| global[case] != held[case]));
+    }
+
+    /// No dependencies beyond a case's own text and `probes`: no names, no
+    /// items, no case traced, no resources.
+    fn depends(probes: &[String]) -> Depends<'_> {
+        static ITEMS: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        static READ: std::collections::BTreeMap<Case, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        static IDS: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        Depends {
+            probes,
+            names: &[],
+            items: &ITEMS,
+            read: &READ,
+            resources: &IDS,
+            untraced: "",
+        }
+    }
+
+    /// An item added moves no case, and an item edited moves exactly the cases
+    /// whose executed functions name it, a name a format string captures
+    /// included.
+    ///
+    /// Fails by: a tree-wide skeleton in every key (the added item moves all
+    /// three), a const read by no name (its edit moves nothing), or a captured
+    /// `"{OTHER}"` missed.
+    #[test]
+    fn an_added_item_moves_no_case_and_an_edited_one_moves_the_cases_naming_it() {
+        let root = crate::scratch::scratch("schema-item-digests");
+        let dirs = std::collections::BTreeMap::new();
+        let (a, b, c) = (case("a"), case("b"), case("c"));
+        let cases: BTreeSet<Case> = [a.clone(), b.clone(), c.clone()].into();
+        let executed = [
+            (a.clone(), [0].into()),
+            (b.clone(), [1].into()),
+            (c.clone(), [2].into()),
+        ]
+        .into();
+        let base = "const LIMIT: u8 = 1;\nconst OTHER: u8 = 2;\n\
+                    pub fn uses_limit() -> u8 { LIMIT }\n\
+                    pub fn uses_format() -> String { format!(\"{OTHER}\") }\n\
+                    pub fn plain() -> u8 { 3 }\n";
+        let digests = |source: &str| {
+            let rendered = render(source, &[], &BTreeSet::new(), Some(0));
+            let mut items: std::collections::BTreeMap<String, BTreeSet<String>> =
+                std::collections::BTreeMap::new();
+            for (name, digest) in &rendered.items {
+                items
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(digest.clone());
+            }
+            let depends = Depends {
+                names: &rendered.names,
+                items: &items,
+                ..depends(&rendered.probes)
+            };
+            case_digests(&root, &cases, &dirs, &executed, &depends)
+        };
+        let held = digests(base);
+        let added = digests(&format!(
+            "{base}pub fn added() -> u8 {{ 4 }}\nconst NEW: u8 = 5;\n"
+        ));
+        assert_eq!(added, held, "an added function and const move no case");
+        let limit = digests(&base.replace("LIMIT: u8 = 1", "LIMIT: u8 = 9"));
+        assert_ne!(limit[&a], held[&a], "a names LIMIT");
+        assert_eq!(
+            (limit[&b].clone(), limit[&c].clone()),
+            (held[&b].clone(), held[&c].clone())
+        );
+        let other = digests(&base.replace("OTHER: u8 = 2", "OTHER: u8 = 9"));
+        assert_ne!(other[&b], held[&b], "b captures OTHER in a format string");
+        assert_eq!(
+            (other[&a].clone(), other[&c].clone()),
+            (held[&a].clone(), held[&c].clone())
+        );
+    }
+
+    /// A traced case keys on the files it touched, an absent one and a
+    /// directory's listing included, and on nothing else; an untraced case
+    /// keys on every non-Rust file.
+    ///
+    /// Fails by: a traced case keyed on the untraced digest (an unread config
+    /// edit moves it), a read path dropped (its edit reuses a stale verdict), an
+    /// absent path keyed on nothing (a file appearing moves nothing), or a
+    /// directory keyed on its own entry only (an added sibling moves nothing).
+    #[test]
+    fn a_traced_case_keys_on_what_it_touched_and_an_untraced_one_on_every_file() {
+        let root = crate::scratch::scratch("schema-read-digests");
+        let dirs = std::collections::BTreeMap::new();
+        let none = std::collections::BTreeMap::new();
+        let (traced, untraced) = (case("traced"), case("untraced"));
+        let cases: BTreeSet<Case> = [traced.clone(), untraced.clone()].into();
+        let read = [(
+            traced.clone(),
+            [
+                String::from("fixture.txt"),
+                String::from("missing.toml"),
+                String::from("dir"),
+            ]
+            .into(),
+        )]
+        .into();
+        let digests = |resources: &[(&str, &str)], all: &str| {
+            let resources = resources
+                .iter()
+                .map(|(path, id)| ((*path).to_owned(), (*id).to_owned()))
+                .collect();
+            let depends = Depends {
+                read: &read,
+                resources: &resources,
+                untraced: all,
+                ..depends(&[])
+            };
+            case_digests(&root, &cases, &dirs, &none, &depends)
+        };
+        let base = [("fixture.txt", "1"), ("mutants.toml", "1"), ("dir/a", "1")];
+        let held = digests(&base, "all-1");
+        let config = digests(
+            &[("fixture.txt", "1"), ("mutants.toml", "2"), ("dir/a", "1")],
+            "all-2",
+        );
+        assert_eq!(
+            config[&traced], held[&traced],
+            "it never touched mutants.toml"
+        );
+        assert_ne!(
+            config[&untraced], held[&untraced],
+            "untraced keys on every file"
+        );
+        let fixture = digests(
+            &[("fixture.txt", "2"), ("mutants.toml", "1"), ("dir/a", "1")],
+            "all-1",
+        );
+        assert_ne!(fixture[&traced], held[&traced], "a file it read changed");
+        let appeared = digests(
+            &[("missing.toml", "1"), ("fixture.txt", "1"), ("dir/a", "1")],
+            "all-1",
+        );
+        assert_ne!(
+            appeared[&traced], held[&traced],
+            "a path it probed for now exists"
+        );
+        let sibling = digests(
+            &[("fixture.txt", "1"), ("dir/a", "1"), ("dir/b", "1")],
+            "all-1",
+        );
+        assert_ne!(
+            sibling[&traced], held[&traced],
+            "a directory it read gained an entry"
+        );
+        let edited = digests(&[("fixture.txt", "1"), ("dir/a", "2")], "all-1");
+        assert_eq!(
+            edited[&traced], held[&traced],
+            "a listing is names, not contents"
+        );
+    }
+
+    /// The trace reader resolves each touched path against the descriptor
+    /// strace printed, keeps the tree's own paths relative, and refuses a
+    /// trace it cannot read whole.
+    ///
+    /// Fails by: a relative path kept unresolved, `target/` or a system path
+    /// read as an input, a resumed line's result dropped, or a `.git` read, an
+    /// unresolvable path or an undecoded escape answered as a partial set.
+    #[test]
+    fn a_trace_names_the_tree_paths_a_case_touched_or_nothing() {
+        let tree = [std::path::PathBuf::from("/w")];
+        let lines = "100 openat(AT_FDCWD</w/crates/batten>, \"tests/x.toml\", O_RDONLY) = 3</w/crates/batten/tests/x.toml>\n\
+                     100 newfstatat(AT_FDCWD</w>, \"absent.toml\", 0x7ff, 0) = -1 ENOENT (No such file or directory)\n\
+                     101 openat(AT_FDCWD</tmp>, \"/etc/ld.so.cache\", O_RDONLY) = 3</etc/ld.so.cache>\n\
+                     101 openat(AT_FDCWD</w>, \"target/debug/x\", O_RDONLY) = 4</w/target/debug/x>\n\
+                     102 <... openat resumed>) = 5</w/a/../b.txt>\n";
+        assert_eq!(
+            read_trace(lines, &tree),
+            Some(
+                ["crates/batten/tests/x.toml", "absent.toml", "b.txt"]
+                    .map(String::from)
+                    .into()
+            )
+        );
+        let git = "100 openat(AT_FDCWD</w>, \".git/index\", O_RDONLY) = 3</w/.git/index>\n";
+        assert_eq!(
+            read_trace(git, &tree),
+            None,
+            "a .git read depends on every file"
+        );
+        let bare = "100 stat(\"relative\", 0x7ff) = 0\n";
+        assert_eq!(
+            read_trace(bare, &tree),
+            None,
+            "no directory to resolve against"
+        );
+        let escaped = "100 openat(AT_FDCWD</w>, \"a\\x01\", O_RDONLY) = 3</w/a>\n";
+        assert_eq!(
+            read_trace(escaped, &tree),
+            None,
+            "an escape this reader does not decode"
+        );
     }
 
     /// A run selects its cases' own packages; a case whose binary went
