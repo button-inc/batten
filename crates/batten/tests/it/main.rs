@@ -465,6 +465,7 @@ mod step_cover;
 mod step_graph;
 mod step_journal;
 mod step_receipt;
+mod stop_hold;
 mod stop_posture;
 mod stop_watchdog;
 mod store_lifecycle;

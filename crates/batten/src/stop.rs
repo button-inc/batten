@@ -196,6 +196,53 @@ pub fn facts(
     Ok(StopFacts { at_risk, pending })
 }
 
+/// The `[stop]` table (CLOUD-2761): what must be true at the end of a turn.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct StopTable {
+    /// `[[stop.hold]]` rows, each refusing a Stop while its receipt exists and
+    /// its singleton lock has no live holder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold: Vec<Hold>,
+}
+
+/// One `[[stop.hold]]` row (CLOUD-2761): while a receipt of `while_receipt`
+/// exists, the clone's singleton lock `unless_singleton` must have a live holder
+/// at the end of a turn, and `start` is the command that takes it.
+///
+/// No name of a session, a waiter or a vendor: the row's three names are the
+/// consumer's.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Hold {
+    /// The row's id, named in the refusal and keying its counters.
+    pub id: String,
+    /// A `[[mint]]` row's `name`: the hold applies while any
+    /// `batten-receipts/<name>.*` file exists.
+    pub while_receipt: String,
+    /// The singleton lock that must have a live holder.
+    pub unless_singleton: String,
+    /// The argv that takes the lock, printed as the remedy and matched against a
+    /// backgrounded call to excuse the one Stop before it locks.
+    pub start: Vec<String>,
+}
+
+impl Hold {
+    /// The row as one comparable key, so changing any of what it guards reads as
+    /// the old row removed.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!(
+            "{} while {} unless {}",
+            self.id, self.while_receipt, self.unless_singleton
+        )
+    }
+}
+
 /// What the Stop watchdog decided about one crashed task (CLOUD-2370).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
