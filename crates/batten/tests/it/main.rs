@@ -321,6 +321,7 @@ mod offbox_hook;
 mod offbox_push;
 #[cfg(unix)]
 mod offbox_restore;
+mod offbox_rotate;
 #[cfg(unix)]
 mod offbox_snapshot;
 mod offbox_status;
