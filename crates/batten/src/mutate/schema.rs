@@ -243,6 +243,7 @@ fn trace_whole(trace: &str) -> bool {
 /// How long a recorder waits for the detached tracer to finish a case's trace
 /// once the case exited. A trace still unfinished at this bound is read as no
 /// trace, which keys the case on every file: slower, never unsound.
+#[cfg(target_os = "linux")]
 const TRACE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The trace at `path` once whole, or whatever it holds at [`TRACE_GRACE`].
