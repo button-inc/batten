@@ -12335,6 +12335,12 @@ on = "pre-tool"
 # writes the timing line to stderr, which the door reads as a refusal's reason.
 run = ["env", "MISE_TASK_TIMINGS=0", "mise", "run", "-q", "filed-here:guard"]
 matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+# A WRITE OUTSIDE THE REPOSITORY IS NOT AN EDIT OF THE TREE (CLOUD-2756): a
+# scratch file under the temp directory or the harness's own settings is no
+# remedy this row guards, so it is skipped. The engine shipped the key in 0.0.217.
+#MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+#MUTANT filed-row-guard-leaves-the-tree|s@^tree_only = true$@tree_only = false@|the_committed_filed_row_handler_is_tree_only
+tree_only = true
 timeout_ms = 10000
 owner = "CLOUD-514"
 expires = "2027-02-28"
