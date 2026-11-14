@@ -153,26 +153,22 @@ fn the_skip_says_why_rather_than_only_that() {
 /// argv and refuses, so this case builds nothing either way.
 ///
 /// COMPILED ON EVERY TARGET, and the off-unix contract is stated here rather than
-/// gated away (`policy/cfg-gated-test.rego`). A `#!/bin/sh` stub cannot stand in
-/// for `cargo.exe`, so off unix the real cargo runs — and with the manifest pinned
+/// gated away (`policy/cfg-gated-test.rego`). The stand-in installed as a bare
+/// `cargo` is not what a lookup for `cargo.exe` finds, so off unix the real cargo runs — and with the manifest pinned
 /// it refuses the fixture's absent `Cargo.toml` at once, which is still the verb
 /// failing without building anything.
 #[test]
 fn a_measurement_builds_the_repository_it_was_asked_about() {
     let repo = repo("perf-measure-confined");
     let bin = repo.join("stub-bin");
-    std::fs::create_dir_all(&bin).unwrap();
     let recorded = repo.join("cargo-argv");
-    let stub = bin.join("cargo");
-    std::fs::write(
-        &stub,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 1\n",
-            recorded.display()
-        ),
-    )
-    .unwrap();
-    make_executable(&stub);
+    common::stub_at(
+        &bin.join("cargo"),
+        &serde_json::json!([{"steps": [
+            {"append": [recorded.display().to_string(), "{argv}\n"]},
+            {"exit": 1},
+        ]}]),
+    );
     let path = std::env::join_paths(
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
@@ -193,7 +189,7 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
     }
 
     let argv = std::fs::read_to_string(&recorded).expect("perf measure ran cargo");
-    let argv: Vec<&str> = argv.lines().collect();
+    let argv: Vec<&str> = argv.split_whitespace().collect();
     let manifest = repo
         .canonicalize()
         .unwrap()
@@ -207,15 +203,6 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
          walks up and builds whatever workspace encloses it: {argv:?}"
     );
 }
-
-#[cfg(unix)]
-fn make_executable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod the stub");
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &std::path::Path) {}
 
 #[test]
 fn the_verb_is_reachable_and_declares_its_flag() {
@@ -510,65 +497,45 @@ fn the_default_sample_is_at_least_what_the_null_was_remeasured_at() {
 // The measurement end to end, over stubbed instruments (CLOUD-2509).
 // ---------------------------------------------------------------------------
 
-/// A `cargo` that builds by writing a `batten` that is the real one under
-/// another name, stamped with the manifest it was asked to build so two arms
-/// are never the same bytes; and a `hyperfine` that writes one result per
-/// command it was handed. Both append their argv to `instruments.log`.
+/// A `cargo` that builds by copying the real `batten` to where the build would
+/// put it, stamped with the manifest it was asked to build so two arms are never
+/// the same bytes; and a `hyperfine` that writes two results, one per arm a pair
+/// hands it (a measurement reads only the first). Both append their argv to
+/// `instruments.log`.
 ///
-/// Off unix a `#!/bin/sh` stub cannot stand in for a program, so the cases
+/// Off unix the stand-in is not found as a bare `cargo` on `PATH`, so the cases
 /// built on this say so and assert nothing further there.
 fn instruments(repo: &std::path::Path) -> std::ffi::OsString {
     let bin = repo.join("stub-bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let log = repo.join("instruments.log");
-    let cargo = format!(
-        r#"#!/bin/sh
-printf 'cargo %s\n' "$*" >> '{log}'
-[ "$1" = clean ] && exit 0
-profile=; manifest=; prev=
-for word in "$@"; do
-  case "$prev" in --profile) profile=$word ;; --manifest-path) manifest=$word ;; esac
-  prev=$word
-done
-target=${{CARGO_TARGET_DIR:-$(dirname "$manifest")/target}}
-mkdir -p "$target/$profile"
-printf '#!/bin/sh\n# built from %s\nexec '"'"'%s'"'"' "$@"\n' "$manifest" '{batten}' > "$target/$profile/batten"
-chmod +x "$target/$profile/batten"
-"#,
-        log = log.display(),
-        batten = env!("CARGO_BIN_EXE_batten"),
+    let log = repo.join("instruments.log").display().to_string();
+    // The build runs in the measured tree, so a relative `target` is the
+    // manifest's own when no `CARGO_TARGET_DIR` names a shared one.
+    let built = |target: &str| {
+        let dir = format!("{target}/{{argv-after:--profile}}");
+        let binary = format!("{dir}/batten");
+        serde_json::json!([
+            {"append": [log, "cargo {argv}\n"]},
+            {"mkdir": dir},
+            {"run": ["cp", env!("CARGO_BIN_EXE_batten"), binary]},
+            {"append": [binary, "\nbuilt from {argv-after:--manifest-path}\n"]},
+        ])
+    };
+    common::stub_at(
+        &bin.join("cargo"),
+        &serde_json::json!([
+            {"argv_prefix": ["clean"], "steps": [{"append": [log, "cargo {argv}\n"]}]},
+            {"env": "CARGO_TARGET_DIR", "steps": built("{env:CARGO_TARGET_DIR}")},
+            {"steps": built("target")},
+        ]),
     );
-    let hyperfine = format!(
-        r#"#!/bin/sh
-printf 'hyperfine %s\n' "$*" >> '{log}'
-json=; take=; commands=0
-for word in "$@"; do
-  if [ -n "$take" ]; then [ "$take" = json ] && json=$word; take=; continue; fi
-  case "$word" in
-    --export-json) take=json ;;
-    --warmup|--runs|--style|--input|--prepare) take=value ;;
-    --*) ;;
-    *) commands=$((commands + 1)) ;;
-  esac
-done
-{{
-  printf '{{"results":['
-  index=0
-  while [ "$index" -lt "$commands" ]; do
-    [ "$index" -gt 0 ] && printf ','
-    printf '{{"mean":0.01,"times":[0.01,0.02,0.03]}}'
-    index=$((index + 1))
-  done
-  printf ']}}'
-}} > "$json"
-"#,
-        log = log.display(),
+    let result = r#"{"mean":0.01,"times":[0.01,0.02,0.03]}"#;
+    common::stub_at(
+        &bin.join("hyperfine"),
+        &serde_json::json!([{"steps": [
+            {"append": [log, "hyperfine {argv}\n"]},
+            {"write": ["{argv-after:--export-json}", format!(r#"{{"results":[{result},{result}]}}"#)]},
+        ]}]),
     );
-    for (name, body) in [("cargo", cargo), ("hyperfine", hyperfine)] {
-        let stub = bin.join(name);
-        std::fs::write(&stub, body).unwrap();
-        make_executable(&stub);
-    }
     std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())))
         .unwrap()
 }
