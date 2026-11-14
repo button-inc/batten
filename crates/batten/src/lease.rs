@@ -3496,6 +3496,87 @@ pub fn push(
     Ok(Outcome::Rejected { reason })
 }
 
+/// The capability that makes a command list all-or-nothing.
+const ATOMIC: &str = "atomic";
+
+/// What the first command of a list asks for, after its NUL: a report, and
+/// that the list apply whole or not at all.
+const FIRST_ASKS: &str = "\0report-status atomic";
+
+/// Send several ref updates as ONE command list that applies whole or not at
+/// all (CLOUD-2724).
+///
+/// Each update is conditioned on its own `old`, so the list applies only while
+/// every named ref still reads what the caller saw. `atomic` is asked for on
+/// the first command, and **a remote that does not offer it is refused before
+/// anything is sent**: without it a server may apply some commands and not
+/// others, and a caller that removes one ref because another now reaches its
+/// commit would have removed it for nothing.
+///
+/// **The pack holds only what the remote lacks.** For each update that sets a
+/// commit, [`crate::git::commit_ids_to_send`] takes that commit and its tree's
+/// closure and subtracts the tree of every commit the remote advertises that is
+/// present in `repo`. No parent is walked, so a parent the remote holds and
+/// `repo` does not is never asked for and never sent.
+///
+/// # Errors
+///
+/// A transport failure, an unreadable report, a remote that does not offer
+/// `atomic`, or an update whose new commit `repo` does not hold. A list the
+/// server refused is [`Outcome::Rejected`], and a throttle is
+/// [`Outcome::Throttled`].
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT atomic-not-asked-for|s@^const FIRST_ASKS: \&str = "\\0report-status atomic";$@const FIRST_ASKS: \&str = "\\0report-status";@|a_session_that_pushes_during_the_pass_refuses_the_whole_push
+//MUTANT non-atomic-remote-is-sent-to|s@^    if !offered {$@    if false {@|a_remote_without_atomic_is_refused_and_nothing_is_sent
+//MUTANT advertised-commits-are-resent|s@^    let have: Vec<String> = advertisement.refs.values().cloned().collect();$@    let have: Vec<String> = Vec::new();@|a_quiet_session_is_archived_and_its_ref_removed
+pub fn swap_many(remote: &str, repo: &std::path::Path, updates: &[Update]) -> Result<Outcome> {
+    let advertisement = match advertise(remote, Service::ReceivePack) {
+        Ok(advertisement) => advertisement,
+        Err(err) => return throttled_outcome(err),
+    };
+    let offered = advertisement.capabilities.iter().any(|each| each == ATOMIC);
+    if !offered {
+        return Err(anyhow::anyhow!(
+            "lease: the remote does not offer `{ATOMIC}`, so a command list is not sent"
+        ));
+    }
+    let have: Vec<String> = advertisement.refs.values().cloned().collect();
+    let mut ids: Vec<String> = Vec::new();
+    for update in updates.iter().filter(|update| update.new != ZERO) {
+        for id in crate::git::commit_ids_to_send(repo, &update.new, &have)? {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("lease: the push request will not write: {err}");
+    let request = Scratch::under(repo)?;
+    let reader = crate::git::ObjectReader::open(repo)?;
+    let file = std::fs::File::create(&request.0)
+        .map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))?;
+    let mut out = std::io::BufWriter::new(file);
+    for (index, update) in updates.iter().enumerate() {
+        let capabilities = if index == 0 { FIRST_ASKS } else { "" };
+        let command = format!(
+            "{} {} {}{capabilities}\n",
+            update.old, update.new, update.name
+        );
+        std::io::Write::write_all(&mut out, &pktline(&command)?).map_err(refused)?;
+    }
+    std::io::Write::write_all(&mut out, FLUSH).map_err(refused)?;
+    let bodies = ids.iter().map(|id| {
+        reader.read(id).map(|raw| Object {
+            id: raw.id,
+            kind: raw.kind,
+            body: raw.body,
+        })
+    });
+    pack_to(out, ids.len(), bodies)?;
+    outcome_of(&send_request(remote, &request.0)?)
+}
+
 /// A file this module writes and removes: the push request being sent.
 struct Scratch(std::path::PathBuf);
 
@@ -4658,6 +4739,8 @@ pub(crate) mod testing {
         /// Apply the next swap and then fail its reply.
         pub(crate) lose_next_reply: bool,
         pub(crate) moved: Option<Moved>,
+        /// Advertise no `atomic` capability.
+        pub(crate) no_atomic: bool,
     }
 
     pub(crate) type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
@@ -4721,6 +4804,23 @@ pub(crate) mod testing {
             out
         }
 
+        /// The ref advertisement for `service`: every ref, with the
+        /// capabilities on the first.
+        fn advertisement(&self, service: &str) -> Vec<u8> {
+            let offered = if self.no_atomic { "" } else { " atomic" };
+            let mut lines = vec![format!("# service={service}\n"), String::new()];
+            for (index, (name, id)) in self.refs.iter().enumerate() {
+                let capabilities = if index == 0 {
+                    format!("\0report-status{offered}")
+                } else {
+                    String::new()
+                };
+                lines.push(format!("{id} {name}{capabilities}\n"));
+            }
+            lines.push(String::new());
+            framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+        }
+
         /// Apply one receive-pack request and say what happened to it.
         fn receive(&mut self, body: &[u8]) -> crate::Result<Vec<u8>> {
             let (commands, pack) = pkt_split(body)?;
@@ -4736,18 +4836,39 @@ pub(crate) mod testing {
                 self.keep(objects_in(pack)?);
             }
             let mut report = vec![String::from("unpack ok\n")];
-            for command in &commands {
-                let command = command.split('\0').next().unwrap_or_default().trim();
-                let mut words = command.split(' ');
-                let (Some(old), Some(new), Some(name)) = (words.next(), words.next(), words.next())
-                else {
-                    continue;
-                };
-                if self.head_of(name) == old {
-                    self.set(name, new);
-                    report.push(format!("ok {name}\n"));
-                } else {
-                    report.push(format!("ng {name} the ref moved\n"));
+            // `atomic`, asked for on the first command: the list applies whole
+            // or not at all, as receive-pack does it.
+            let atomic = commands.first().is_some_and(|first| {
+                first.split_once('\0').is_some_and(|(_, asked)| {
+                    asked.split_whitespace().any(|each| each == super::ATOMIC)
+                })
+            });
+            let parsed: Vec<(&str, &str, &str)> = commands
+                .iter()
+                .filter_map(|command| {
+                    let command = command.split('\0').next().unwrap_or_default().trim();
+                    let mut words = command.split(' ');
+                    Some((words.next()?, words.next()?, words.next()?))
+                })
+                .collect();
+            let moved = |stand: &Stand, old: &str, name: &str| stand.head_of(name) != old;
+            if atomic && parsed.iter().any(|(old, _, name)| moved(self, old, name)) {
+                for (old, _, name) in &parsed {
+                    let why = if moved(self, old, name) {
+                        "the ref moved"
+                    } else {
+                        "atomic push failed"
+                    };
+                    report.push(format!("ng {name} {why}\n"));
+                }
+            } else {
+                for (old, new, name) in parsed {
+                    if self.head_of(name) == old {
+                        self.set(name, new);
+                        report.push(format!("ok {name}\n"));
+                    } else {
+                        report.push(format!("ng {name} the ref moved\n"));
+                    }
                 }
             }
             report.push(String::new());
@@ -4771,6 +4892,19 @@ pub(crate) mod testing {
         out
     }
 
+    /// The ids of the objects the pack of a receive-pack request carries.
+    pub(crate) fn pack_ids(request: &[u8]) -> Vec<String> {
+        let Ok((_, pack)) = pkt_split(request) else {
+            return Vec::new();
+        };
+        if pack.len() < 12 {
+            return Vec::new();
+        }
+        objects_in(pack)
+            .map(|objects| objects.into_iter().map(|object| object.id).collect())
+            .unwrap_or_default()
+    }
+
     /// A remote answering `200` over `refs`, serving `objects`.
     pub(crate) fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
         let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
@@ -4788,6 +4922,7 @@ pub(crate) mod testing {
             canned: Vec::new(),
             lose_next_reply: false,
             moved: None,
+            no_atomic: false,
         }));
         let answering = std::rc::Rc::clone(&stand);
         let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
@@ -4826,13 +4961,7 @@ pub(crate) mod testing {
                 let body = match kind {
                     Kind::Discovery => {
                         let service = call.url.split_once("service=").map_or("", |(_, s)| s);
-                        let mut lines = vec![format!("# service={service}\n"), String::new()];
-                        for (index, (name, id)) in stand.refs.iter().enumerate() {
-                            let capabilities = if index == 0 { "\0report-status" } else { "" };
-                            lines.push(format!("{id} {name}{capabilities}\n"));
-                        }
-                        lines.push(String::new());
-                        framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+                        stand.advertisement(service)
                     }
                     Kind::Upload => {
                         let (lines, _) = pkt_split(&sent)?;

@@ -1680,6 +1680,22 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The workflow file the verb prints (CLOUD-2724): Batten's own text, with
+    // the caller's install URL and this build's version in it. A pass itself
+    // answers one token and is exercised beside the code, over the stand-in.
+    Verb {
+        path: "offbox rotate",
+        args: &[
+            "--print-workflow",
+            "--install-url",
+            "https://example.test/install.sh",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "prints the workflow file that runs a rotation pass on a schedule",
+            Echoed::Surface,
+        ),
+    },
     // `off`, and it returns: with the variable removed the daemon never starts
     // (CLOUD-2721).
     Verb {

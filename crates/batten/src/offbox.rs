@@ -1929,6 +1929,9 @@ pub const ARCHIVE: &str = "refs/heads/archive";
 
 /// The key of a session ref in the archive: the first sixteen hex digits of
 /// the BLAKE3 of its full name. Of the whole name, so it includes the project.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT key-ignores-the-project|s@^    blake3::hash(reference.as_bytes()).to_hex()\[..16\].to_owned()$@    blake3::hash(reference.rsplit('/').next().unwrap_or_default().as_bytes()).to_hex()[..16].to_owned()@|two_projects_with_one_session_name_have_two_keys
+//MUTANT index-path-uses-one-level|s@^    format!("{root}/{}/{}/{key}", \&key\[..2\], \&key\[2..4\])$@    format!("{root}/{}/{key}", \&key[..2])@|the_index_path_is_two_levels_and_its_first_line_is_the_ref
 #[must_use]
 pub fn archive_key(reference: &str) -> String {
     blake3::hash(reference.as_bytes()).to_hex()[..16].to_owned()
@@ -2145,6 +2148,265 @@ fn restore(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored>
 
 /// The lock one daemon per checkout holds for its life, under [`DIR`].
 pub const LOCK: &str = crate::offbox_watch::LOCK;
+
+// --- the rotation (CLOUD-2724) -------------------------------------------------
+
+/// How many consecutive passes a session ref must go unchanged before a pass
+/// rotates it, where `--quiet-runs` does not say.
+pub const QUIET_RUNS: u64 = 6;
+
+/// The prefix every session ref has. A ref of any shape under it is a session.
+const SESSION_REFS: &str = "refs/heads/session/";
+
+/// The archive tree's root of one file per rotated session: the ref's name,
+/// then one snapshot commit id a line, oldest first.
+const INDEX: &str = "index";
+
+/// The archive tree's root of one file per live session ref: the tip last
+/// seen, then how many consecutive passes it has not changed.
+const OBSERVED: &str = "observed";
+
+/// What one rotation pass came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rotated {
+    /// The pass was applied; how many sessions it rotated, which may be none.
+    Done(usize),
+    /// The forge said to slow down; nothing was changed.
+    Throttled,
+    /// The atomic push was refused because a ref moved; nothing was changed.
+    Contended,
+}
+
+impl Rotated {
+    /// The one stdout token.
+    #[must_use]
+    pub fn token(self) -> String {
+        match self {
+            Rotated::Done(count) => format!("rotated {count}"),
+            Rotated::Throttled => String::from("throttled"),
+            Rotated::Contended => String::from("contended"),
+        }
+    }
+
+    /// The exit that goes with it. **A throttled pass is a success**: the next
+    /// scheduled pass simply tries again, and the wait between passes is far
+    /// longer than any backoff the forge asks for.
+    #[must_use]
+    pub const fn code(self) -> ExitCode {
+        match self {
+            Rotated::Done(_) | Rotated::Throttled => ExitCode::Success,
+            Rotated::Contended => ExitCode::Violation,
+        }
+    }
+}
+
+/// How many consecutive passes `tip` has now gone unchanged, given the
+/// `observed` file the last pass left for its ref: the tip it saw, then its
+/// count. A changed tip starts again at 0.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT changed-ref-keeps-its-quiet-count|s@^    if seen != tip {$@    if false {@|a_ref_whose_tip_changed_starts_its_count_again
+fn quiet_passes(observed: &str, tip: &str) -> u64 {
+    let mut lines = observed.lines();
+    let seen = lines.next().unwrap_or_default().trim();
+    if seen != tip {
+        return 0;
+    }
+    let count: u64 = lines
+        .next()
+        .and_then(|line| line.trim().parse().ok())
+        .unwrap_or(0);
+    count.saturating_add(1)
+}
+
+/// One rotation pass over the state repository at `remote` (CLOUD-2724):
+/// finished sessions go into the archive and their branches are removed,
+/// discarding nothing.
+///
+/// 1. **Read** the ref advertisement, and the archive's tip at depth 1 into the
+///    bare repository at `scratch`. With no archive ref the previous tree is
+///    empty.
+/// 2. **Observe.** Every session ref's `observed` entry is brought up to date:
+///    an unchanged tip adds one to its count, a changed tip sets it to 0, a new
+///    ref starts at 0. No clock decides anything: "finished" is a count of
+///    passes.
+/// 3. **Select** each session ref whose count has reached `quiet_runs`.
+/// 4. **Archive.** One new commit: its parents are the previous archive tip,
+///    then the tip of every selected session — which is what keeps a rotated
+///    snapshot reachable — and its tree is the previous tree by blob id, except
+///    that each selected session's index file gains one line and its `observed`
+///    entry is left out. No session commit is fetched and no session blob is
+///    read.
+/// 5. **One atomic push:** the archive ref from its old tip to the new commit,
+///    and the removal of each selected ref, each conditioned on the exact tip
+///    that was archived. If any condition fails nothing is applied, so a
+///    session that pushed while the pass ran is never lost.
+///
+/// `time` is the commit time; this function reads no clock.
+///
+/// # Errors
+///
+/// A transport failure, a remote that does not offer an atomic push, or a
+/// local file that will not read or write. A throttle met anywhere is
+/// [`Rotated::Throttled`], and a refused push [`Rotated::Contended`].
+pub fn rotate_once(remote: &str, scratch: &Path, quiet_runs: u64, time: i64) -> Result<Rotated> {
+    match rotate(remote, scratch, quiet_runs, time) {
+        Err(err) if err.downcast_ref::<lease::Throttled>().is_some() => Ok(Rotated::Throttled),
+        other => other,
+    }
+}
+
+/// [`rotate_once`]'s body; a throttle met on a read is an error here and an
+/// outcome there.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT oddly-named-ref-skipped|s@^        .filter(\x7c(name, _)\x7c name.starts_with(SESSION_REFS))$@        .filter(\x7c(name, _)\x7c name.starts_with(SESSION_REFS) \&\& name.contains('-'))@|a_ref_of_any_shape_under_the_session_prefix_is_rotated
+//MUTANT second-rotation-overwrites-the-index-line|s@^            let mut lines = held.unwrap_or_else(\x7c\x7c format!("{name}\\n"));$@            let mut lines = held.map_or_else(\x7c\x7c format!("{name}\\n"), \x7c_\x7c format!("{name}\\n"));@|a_session_rotated_twice_has_two_index_lines_oldest_first
+//MUTANT previous-archive-tip-not-a-parent|s@^    let mut parents: Vec<String> = previous_tip.into_iter().collect();$@    let mut parents: Vec<String> = Vec::new();@|a_quiet_session_is_archived_and_its_ref_removed
+//MUTANT ref-removed-without-archiving|s@^    parents.extend(selected.iter().map(\x7c(_, tip)\x7c tip.clone()));$@@|a_quiet_session_is_archived_and_its_ref_removed
+//MUTANT removal-not-conditioned-on-the-tip|s@^            old: tip.clone(),$@            old: lease::ZERO.to_owned(),@|a_quiet_session_is_archived_and_its_ref_removed
+//MUTANT throttled-pass-removes-a-ref|s@^        lease::Outcome::Throttled { .. } => Ok(Rotated::Throttled),$@        lease::Outcome::Throttled { .. } => { lease::swap_many(remote, scratch, \&updates)?; Ok(Rotated::Throttled) }@|a_throttled_pass_changes_nothing_and_exits_clean
+fn rotate(remote: &str, scratch: &Path, quiet_runs: u64, time: i64) -> Result<Rotated> {
+    let refs = lease::advertise(remote, Service::ReceivePack)?;
+    let archive = refs.head_of(ARCHIVE);
+    let sessions: Vec<(&String, &String)> = refs
+        .refs
+        .iter()
+        .filter(|(name, _)| name.starts_with(SESSION_REFS))
+        .collect();
+    if sessions.is_empty() {
+        return Ok(Rotated::Done(0));
+    }
+    gitwrite::init_bare(scratch)?;
+    let previous_tip = (archive != lease::ZERO).then(|| archive.to_owned());
+    let previous: BTreeMap<String, String> = match &previous_tip {
+        Some(tip) => {
+            lease::fetch_shallow(remote, scratch, tip)?;
+            gitwrite::tree_index(scratch, tip)?.into_iter().collect()
+        }
+        None => BTreeMap::new(),
+    };
+    let held = |path: &str| -> Result<Option<String>> {
+        let Some(blob) = previous.get(path) else {
+            return Ok(None);
+        };
+        let bytes = gitwrite::read_blob(scratch, blob)?;
+        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+
+    // EVERY ENTRY OF THE PREVIOUS TREE, BY BLOB ID: nothing the archive holds
+    // is read again or rewritten, apart from the files this pass changes.
+    let mut entries: BTreeMap<String, Content> = previous
+        .iter()
+        .map(|(path, blob)| (path.clone(), Content::Blob(blob.clone())))
+        .collect();
+    let mut selected: Vec<(String, String)> = Vec::new();
+    for (name, tip) in sessions {
+        let observed = archive_path(OBSERVED, name);
+        let quiet = match held(&observed)? {
+            Some(seen) => quiet_passes(&seen, tip),
+            None => 0,
+        };
+        if quiet < quiet_runs {
+            let body = format!("{tip}\n{quiet}\n").into_bytes();
+            entries.insert(observed, Content::Bytes(body));
+        } else {
+            entries.remove(&observed);
+            let index = archive_path(INDEX, name);
+            let held = held(&index)?;
+            let mut lines = held.unwrap_or_else(|| format!("{name}\n"));
+            lines.push_str(tip);
+            lines.push('\n');
+            entries.insert(index, Content::Bytes(lines.into_bytes()));
+            selected.push((name.clone(), tip.clone()));
+        }
+    }
+
+    // THE PARENTS ARE WHAT KEEP A ROTATED SNAPSHOT: a ref is removed only in
+    // the push that makes its commit one of these.
+    let mut parents: Vec<String> = previous_tip.into_iter().collect();
+    parents.extend(selected.iter().map(|(_, tip)| tip.clone()));
+    // Two refs may name one commit; a commit names each parent once.
+    let mut named = BTreeSet::new();
+    parents.retain(|parent| named.insert(parent.clone()));
+    let listed: Vec<(String, Content)> = entries.into_iter().collect();
+    let (commit, _) = gitwrite::commit_tree(scratch, &listed, &parents, time, "rotate")?;
+
+    let mut updates = vec![lease::Update {
+        old: archive.to_owned(),
+        new: commit.clone(),
+        name: ARCHIVE.to_owned(),
+    }];
+    for (name, tip) in &selected {
+        updates.push(lease::Update {
+            old: tip.clone(),
+            new: lease::ZERO.to_owned(),
+            name: name.clone(),
+        });
+    }
+    match lease::swap_many(remote, scratch, &updates)? {
+        lease::Outcome::Applied => {
+            // The scratch repository is a cache of the archive's tip alone.
+            gitwrite::prune_unreachable(scratch, std::slice::from_ref(&commit))?;
+            Ok(Rotated::Done(selected.len()))
+        }
+        lease::Outcome::Rejected { .. } => Ok(Rotated::Contended),
+        lease::Outcome::Throttled { .. } => Ok(Rotated::Throttled),
+    }
+}
+
+/// The workflow `--print-workflow` prints, with its three values still named.
+const ROTATE_WORKFLOW: &str = r#"# Printed by `batten offbox rotate --print-workflow`. Install it on the default
+# branch of the state repository: a scheduled workflow runs from there alone.
+name: offbox-rotate
+on:
+  schedule:
+    - cron: "17 * * * *"
+permissions:
+  contents: write
+concurrency:
+  group: offbox-rotate
+  cancel-in-progress: false
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install batten __VERSION__
+        env:
+          BATTEN_VERSION: v__VERSION__
+          INSTALL_URL: "__INSTALL_URL__"
+        run: curl -sSfL --retry 3 "$INSTALL_URL" | sh
+      - name: Rotate finished sessions into the archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: batten offbox rotate --remote "${{ github.server_url }}/${{ github.repository }}" --quiet-runs __QUIET_RUNS__
+"#;
+
+/// The workflow file that runs [`rotate_once`] on a schedule in the state
+/// repository (CLOUD-2724). It is printed, never kept in this crate: the
+/// repository it is installed in is the one it rotates.
+///
+/// * **Its only trigger is `schedule`.** On push it would start once for every
+///   session push.
+/// * **It grants `contents: write` and nothing else**, and hands the run's own
+///   token to `batten` as the credential every forge call here reads.
+/// * **It installs the version that printed it**, by the install script at
+///   `install_url`. The URL is an argument because no repository address is
+///   written in this crate.
+/// * **`rotate` carries the file forward**: a pass keeps every entry of the
+///   archive's tree by blob id, so a workflow installed on the archive branch
+///   stays there.
+//MUTANT-SUITE crates/batten/tests/it/offbox_rotate.rs
+//MUTANT workflow-triggers-on-push|s@^  schedule:$@  push:@|the_printed_workflow_runs_on_a_schedule_alone_and_pins_this_version
+//MUTANT workflow-installs-an-unpinned-batten|s@^          BATTEN_VERSION: v__VERSION__$@          BATTEN_UNPINNED: v__VERSION__@|the_printed_workflow_runs_on_a_schedule_alone_and_pins_this_version
+#[must_use]
+pub fn rotate_workflow(install_url: &str, version: &str) -> String {
+    ROTATE_WORKFLOW
+        .replace("__VERSION__", version)
+        .replace("__INSTALL_URL__", install_url)
+        .replace("__QUIET_RUNS__", &QUIET_RUNS.to_string())
+}
+
+// --- the daemon's files (CLOUD-2721), continued --------------------------------
 
 /// The daemon's status file, under [`DIR`]: one `key value` per line.
 pub const STATUS: &str = crate::offbox_watch::STATUS;
@@ -4874,5 +5136,368 @@ mod push_tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(names, ["claude-code"]);
+    }
+
+    // --- the rotation (CLOUD-2724) --------------------------------------------
+
+    /// The rotation's scratch repository under `base`.
+    fn rotating(base: &Path) -> PathBuf {
+        base.join("rotate.git")
+    }
+
+    fn pass(base: &Path, quiet_runs: u64) -> Rotated {
+        rotate_once(REMOTE, &rotating(base), quiet_runs, TIME).expect("the pass runs")
+    }
+
+    fn archive_tip(stand: &Shared) -> String {
+        stand.borrow().head_of(ARCHIVE)
+    }
+
+    /// The archive's tree after an applied pass, path to text.
+    fn archive_tree(stand: &Shared, base: &Path) -> BTreeMap<String, String> {
+        let (repo, tip) = (rotating(base), archive_tip(stand));
+        gitwrite::tree_index(&repo, &tip)
+            .unwrap()
+            .into_iter()
+            .map(|(path, id)| {
+                let bytes = gitwrite::read_blob(&repo, &id).unwrap();
+                (path, String::from_utf8(bytes).unwrap())
+            })
+            .collect()
+    }
+
+    /// The parents of a commit the stand-in holds.
+    fn parents_of(stand: &Shared, commit: &str) -> Vec<String> {
+        let stand = stand.borrow();
+        let held = stand.objects.iter().find(|held| held.id == commit).unwrap();
+        String::from_utf8_lossy(&held.body)
+            .lines()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// A writer that has pushed one record of session `session`.
+    fn session_pushed(base: &Path, name: &str, session: &str) -> Writer {
+        let writer = Writer::new(base, name, session);
+        put(&writer.transcript, &records(0..1, 4));
+        assert_eq!(writer.push().outcome, Pushed::Applied);
+        writer
+    }
+
+    /// Push one more record, so the session's ref moves.
+    fn push_again(writer: &Writer, n: usize) {
+        add(&writer.transcript, &records(n..n + 1, 4));
+        assert_eq!(writer.push().outcome, Pushed::Applied);
+    }
+
+    fn observed(tree: &BTreeMap<String, String>, writer: &Writer) -> Option<String> {
+        tree.get(&archive_path(OBSERVED, &reference(&writer.meta)))
+            .cloned()
+    }
+
+    /// Fails by: a first pass that needs an archive to exist, that counts a ref
+    /// it has only just seen as quiet, or that removes anything.
+    #[test]
+    fn a_first_pass_observes_every_ref_and_removes_none() {
+        let base = base("offbox-rotate-first");
+        let stand = standing(&[], Vec::new());
+        let writers = [
+            session_pushed(&base, "a", "a"),
+            session_pushed(&base, "b", "b"),
+            session_pushed(&base, "c", "c"),
+        ];
+
+        let rotated = pass(&base, 6);
+
+        assert_eq!(rotated, Rotated::Done(0));
+        assert_eq!(rotated.token(), "rotated 0");
+        assert_eq!(rotated.code(), ExitCode::Success);
+        assert!(parents_of(&stand, &archive_tip(&stand)).is_empty());
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(tree.len(), 3, "{tree:?}");
+        for writer in &writers {
+            let tip = head(&stand, &writer.meta);
+            assert_eq!(observed(&tree, writer), Some(format!("{tip}\n0\n")));
+        }
+        assert_eq!(
+            stand.borrow().refs.len(),
+            4,
+            "three sessions and the archive"
+        );
+
+        // With no session ref there is nothing to observe and nothing is sent.
+        let empty = standing(&[], Vec::new());
+        assert_eq!(pass(&base.join("empty"), 6), Rotated::Done(0));
+        assert_eq!(receives(&empty), 0);
+    }
+
+    /// Fails by: a ref removed whose commit the archive does not reach, a
+    /// removal not tied to the tip that was archived, the previous archive left
+    /// behind, a busy session rotated, or a pack that sends again what the
+    /// remote already holds.
+    #[test]
+    fn a_quiet_session_is_archived_and_its_ref_removed() {
+        let base = base("offbox-rotate-quiet");
+        let stand = standing(&[], Vec::new());
+        let quiet = session_pushed(&base, "a", "a");
+        let busy = [
+            session_pushed(&base, "b", "b"),
+            session_pushed(&base, "c", "c"),
+        ];
+        let tip = head(&stand, &quiet.meta);
+        let name = reference(&quiet.meta);
+        for round in 1..=2 {
+            assert_eq!(pass(&base, 2), Rotated::Done(0), "round {round}");
+            for writer in &busy {
+                push_again(writer, round);
+            }
+        }
+        let before = archive_tip(&stand);
+
+        let rotated = pass(&base, 2);
+
+        assert_eq!(rotated, Rotated::Done(1));
+        assert_eq!(rotated.token(), "rotated 1");
+        let archive = archive_tip(&stand);
+        assert_eq!(parents_of(&stand, &archive), [before, tip.clone()]);
+        assert_eq!(head(&stand, &quiet.meta), lease::ZERO, "its ref is gone");
+        let tree = archive_tree(&stand, &base);
+        let index = archive_path(INDEX, &name);
+        assert_eq!(tree[&index], format!("{name}\n{tip}\n"));
+        assert_eq!(observed(&tree, &quiet), None);
+        for writer in &busy {
+            let theirs = head(&stand, &writer.meta);
+            assert_ne!(theirs, lease::ZERO);
+            assert_eq!(observed(&tree, writer), Some(format!("{theirs}\n0\n")));
+        }
+        // Every blob of the rotated snapshot is still held, under a commit the
+        // archive names as a parent; and none of them was sent again.
+        let sent = lease::testing::pack_ids(stand.borrow().sent.last().unwrap());
+        let snapshot = gitwrite::tree_index(&quiet.repo(), &tip).unwrap();
+        assert!(!snapshot.is_empty());
+        for (path, blob) in &snapshot {
+            let held = stand.borrow().objects.iter().any(|held| &held.id == blob);
+            assert!(held, "{path}");
+            assert!(!sent.contains(blob), "{path} was sent again");
+        }
+        assert!(!sent.contains(&tip));
+
+        // The next pass carries the index file by id, and does not send it.
+        let carried = gitwrite::tree_index(&rotating(&base), &archive)
+            .unwrap()
+            .into_iter()
+            .find(|(path, _)| path == &index)
+            .unwrap()
+            .1;
+        push_again(&busy[0], 9);
+        assert_eq!(pass(&base, 2), Rotated::Done(0));
+        let sent = lease::testing::pack_ids(stand.borrow().sent.last().unwrap());
+        assert!(!sent.is_empty() && !sent.contains(&carried));
+        assert_eq!(
+            archive_tree(&stand, &base)[&index],
+            format!("{name}\n{tip}\n")
+        );
+    }
+
+    /// Fails by: a path a reader cannot compute from the ref's name.
+    #[test]
+    fn the_index_path_is_two_levels_and_its_first_line_is_the_ref() {
+        // A ref whose key starts `0a1b`, found by trying names.
+        let name = (0..10_000_000_u32)
+            .map(|n| format!("refs/heads/session/acme/widgets/exit-code-{n:016x}"))
+            .find(|name| archive_key(name).starts_with("0a1b"))
+            .unwrap();
+        let key = archive_key(&name);
+
+        assert_eq!(key.len(), 16);
+        assert_eq!(archive_path(INDEX, &name), format!("index/0a/1b/{key}"));
+        assert_eq!(
+            archive_path(OBSERVED, &name),
+            format!("observed/0a/1b/{key}")
+        );
+    }
+
+    /// Fails by: two projects' sessions sharing one index file.
+    #[test]
+    fn two_projects_with_one_session_name_have_two_keys() {
+        let one = "refs/heads/session/acme/widgets/exit-code-0123456789abcdef";
+        let other = "refs/heads/session/acme/gadgets/exit-code-0123456789abcdef";
+        assert_ne!(archive_key(one), archive_key(other));
+        assert_ne!(archive_path(INDEX, one), archive_path(INDEX, other));
+    }
+
+    /// Fails by: a ref skipped because its last segment is not a session leaf.
+    #[test]
+    fn a_ref_of_any_shape_under_the_session_prefix_is_rotated() {
+        const PROBE: &str = "refs/heads/session/x/y/probe";
+        let base = base("offbox-rotate-probe");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        let tip = head(&stand, &writer.meta);
+        stand
+            .borrow_mut()
+            .refs
+            .push((PROBE.to_owned(), tip.clone()));
+
+        assert_eq!(pass(&base, 1), Rotated::Done(0));
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(tree[&archive_path(OBSERVED, PROBE)], format!("{tip}\n0\n"));
+        assert_eq!(pass(&base, 1), Rotated::Done(2));
+
+        assert_eq!(stand.borrow().head_of(PROBE), lease::ZERO);
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(
+            tree[&archive_path(INDEX, PROBE)],
+            format!("{PROBE}\n{tip}\n")
+        );
+    }
+
+    /// Fails by: a session that pushed while the pass ran losing its branch, or
+    /// the archive moving without the removal it was built for.
+    #[test]
+    fn a_session_that_pushes_during_the_pass_refuses_the_whole_push() {
+        let base = base("offbox-rotate-moved");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        let name = reference(&writer.meta);
+        assert_eq!(pass(&base, 1), Rotated::Done(0));
+        let before = archive_tip(&stand);
+        // The session's next push lands between the pass's read and its push.
+        let pushed_meanwhile = before.clone();
+        stand.borrow_mut().moved = Some(Moved {
+            left: 1,
+            name: name.clone(),
+            id: pushed_meanwhile.clone(),
+            then: Vec::new(),
+        });
+
+        let rotated = pass(&base, 1);
+
+        assert_eq!(rotated, Rotated::Contended);
+        assert_eq!(rotated.token(), "contended");
+        assert_eq!(rotated.code(), ExitCode::Violation);
+        assert_eq!(archive_tip(&stand), before, "the archive did not move");
+        assert_eq!(stand.borrow().head_of(&name), pushed_meanwhile);
+    }
+
+    /// Fails by: a second rotation of one session losing the first snapshot's
+    /// line, or its commit.
+    #[test]
+    fn a_session_rotated_twice_has_two_index_lines_oldest_first() {
+        let base = base("offbox-rotate-twice");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        let name = reference(&writer.meta);
+        let first = head(&stand, &writer.meta);
+        assert_eq!(pass(&base, 1), Rotated::Done(0));
+        assert_eq!(pass(&base, 1), Rotated::Done(1));
+
+        // It was only idle: its daemon finds the ref absent and creates it.
+        push_again(&writer, 1);
+        let second = head(&stand, &writer.meta);
+        assert_ne!(second, first);
+        assert_eq!(pass(&base, 1), Rotated::Done(0));
+        assert_eq!(pass(&base, 1), Rotated::Done(1));
+
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(
+            tree[&archive_path(INDEX, &name)],
+            format!("{name}\n{first}\n{second}\n")
+        );
+        // Both snapshots are parents somewhere in the archive's history.
+        let mut reached = BTreeSet::new();
+        let mut pending = vec![archive_tip(&stand)];
+        while let Some(commit) = pending.pop() {
+            if commit != first && commit != second && reached.insert(commit.clone()) {
+                pending.extend(parents_of(&stand, &commit));
+            } else {
+                reached.insert(commit);
+            }
+        }
+        assert!(reached.contains(&first) && reached.contains(&second));
+    }
+
+    /// Fails by: a session that pushed keeping the quiet passes it had counted.
+    #[test]
+    fn a_ref_whose_tip_changed_starts_its_count_again() {
+        assert_eq!(quiet_passes("abc\n2\n", "abc"), 3);
+        assert_eq!(quiet_passes("abc\n2\n", "def"), 0);
+        assert_eq!(quiet_passes("abc\n", "abc"), 1);
+
+        let base = base("offbox-rotate-reset");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        for _ in 0..3 {
+            assert_eq!(pass(&base, 5), Rotated::Done(0));
+        }
+        let tip = head(&stand, &writer.meta);
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(observed(&tree, &writer), Some(format!("{tip}\n2\n")));
+
+        push_again(&writer, 1);
+        assert_eq!(pass(&base, 5), Rotated::Done(0));
+
+        let tip = head(&stand, &writer.meta);
+        let tree = archive_tree(&stand, &base);
+        assert_eq!(observed(&tree, &writer), Some(format!("{tip}\n0\n")));
+    }
+
+    /// Fails by: a throttled pass removing a ref, moving the archive, or
+    /// failing the job that runs it.
+    #[test]
+    fn a_throttled_pass_changes_nothing_and_exits_clean() {
+        let base = base("offbox-rotate-throttled");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        let tip = head(&stand, &writer.meta);
+        assert_eq!(pass(&base, 1), Rotated::Done(0));
+        let before = archive_tip(&stand);
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Receive,
+            left: 1,
+            status: 429,
+            headers: vec![(String::from("retry-after"), String::from("60"))],
+        });
+
+        let rotated = pass(&base, 1);
+
+        assert_eq!(rotated, Rotated::Throttled);
+        assert_eq!(rotated.token(), "throttled");
+        assert_eq!(rotated.code(), ExitCode::Success);
+        assert_eq!(archive_tip(&stand), before);
+        assert_eq!(head(&stand, &writer.meta), tip, "no ref was removed");
+
+        // A throttle at discovery is the same answer, and sends nothing.
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Discovery,
+            left: 1,
+            status: 429,
+            headers: Vec::new(),
+        });
+        let posts = receives(&stand);
+        assert_eq!(pass(&base, 1), Rotated::Throttled);
+        assert_eq!(receives(&stand), posts);
+
+        // And the next pass does what the throttled one could not.
+        assert_eq!(pass(&base, 1), Rotated::Done(1));
+        assert_eq!(head(&stand, &writer.meta), lease::ZERO);
+    }
+
+    /// Fails by: a command list sent to a remote that may apply part of it.
+    #[test]
+    fn a_remote_without_atomic_is_refused_and_nothing_is_sent() {
+        let base = base("offbox-rotate-no-atomic");
+        let stand = standing(&[], Vec::new());
+        let writer = session_pushed(&base, "a", "a");
+        stand.borrow_mut().no_atomic = true;
+        let posts = receives(&stand);
+
+        let refused = rotate_once(REMOTE, &rotating(&base), 1, TIME);
+
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(receives(&stand), posts);
+        assert_eq!(archive_tip(&stand), lease::ZERO);
+        assert_ne!(head(&stand, &writer.meta), lease::ZERO);
     }
 }

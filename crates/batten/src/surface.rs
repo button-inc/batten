@@ -3055,6 +3055,71 @@ const OFFBOX_FROM: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--remote <url>` on `offbox rotate`: the state repository the pass rotates.
+///
+/// An argument, never read from the environment's switch: the job runs inside
+/// the state repository and names it by its own address.
+const OFFBOX_REMOTE: FlagDecl = FlagDecl {
+    id: "remote",
+    long: Some("remote"),
+    short: None,
+    help: "The state repository's URL, whose finished sessions are rotated into its archive",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--quiet-runs <n>` on `offbox rotate`: how many passes a ref goes unchanged
+/// before it is rotated.
+const OFFBOX_QUIET_RUNS: FlagDecl = FlagDecl {
+    id: "quiet_runs",
+    long: Some("quiet-runs"),
+    short: None,
+    help: "How many consecutive passes a session's branch must go unchanged before it is rotated (default 6)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--print-workflow` on `offbox rotate`: print the scheduled workflow and stop.
+const OFFBOX_PRINT_WORKFLOW: FlagDecl = FlagDecl {
+    id: "print_workflow",
+    long: Some("print-workflow"),
+    short: None,
+    help: "Print the workflow file that runs a pass on a schedule, and do nothing else",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--install-url <url>` on `offbox rotate --print-workflow`: where the
+/// workflow downloads the install script from.
+const OFFBOX_INSTALL_URL: FlagDecl = FlagDecl {
+    id: "install_url",
+    long: Some("install-url"),
+    short: None,
+    help: "The install script's URL, which the printed workflow downloads and runs for this version",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -8258,6 +8323,26 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_FROM],
+    },
+    // `write`: one pass replaces the state repository's archive ref and removes
+    // the branches it archived, in one atomic push. Stdout carries one token,
+    // as its sibling verbs' does, or the workflow file under `--print-workflow`;
+    // neither is a JSON document, so this is no data-channel verb.
+    // unreached: "offbox rotate" CLOUD-2724 it runs from the workflow the verb
+    // itself prints, installed in the state repository and not in this one.
+    CommandDecl {
+        path: "offbox rotate",
+        id: "offbox.rotate",
+        about: "Rotate the state repository's finished sessions into its archive and remove their branches, discarding nothing",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            OFFBOX_REMOTE,
+            OFFBOX_QUIET_RUNS,
+            OFFBOX_PRINT_WORKFLOW,
+            OFFBOX_INSTALL_URL,
+        ],
     },
     CommandDecl {
         path: "offbox run",

@@ -691,6 +691,18 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 harness,
                 from,
             } => run_offbox_restore(out, &session, &harness, from.as_deref()),
+            cli::OffboxCommand::Rotate {
+                remote,
+                quiet_runs,
+                print_workflow,
+                install_url,
+            } => run_offbox_rotate(
+                out,
+                remote.as_deref(),
+                quiet_runs.as_deref(),
+                print_workflow,
+                install_url.as_deref(),
+            ),
         },
     }
 }
@@ -766,6 +778,62 @@ fn run_offbox_daemon(
     )?;
     writeln!(out, "{}", launch.token())?;
     Ok(ExitCode::Success)
+}
+
+/// `batten offbox rotate` (CLOUD-2724): one rotation pass and its token, or —
+/// under `--print-workflow` — the workflow file that runs one on a schedule,
+/// which installs `batten` from `install_url`.
+///
+/// The clock is read here, at the verb's boundary, for the archive commit's time;
+/// it decides nothing, since "finished" is a count of passes.
+fn run_offbox_rotate(
+    out: &mut dyn Write,
+    remote: Option<&str>,
+    quiet_runs: Option<&str>,
+    print_workflow: bool,
+    install_url: Option<&str>,
+) -> Result<ExitCode> {
+    if print_workflow {
+        let Some(install_url) = install_url.filter(|url| !url.trim().is_empty()) else {
+            return Err(UsageError::raise(
+                "offbox rotate: --print-workflow needs --install-url, the install script the workflow downloads",
+            ));
+        };
+        write!(
+            out,
+            "{}",
+            offbox::rotate_workflow(install_url.trim(), env!("CARGO_PKG_VERSION"))
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let Some(remote) = remote.map(str::trim).filter(|url| !url.is_empty()) else {
+        return Err(UsageError::raise(
+            "offbox rotate: --remote is needed, the state repository's URL",
+        ));
+    };
+    let quiet_runs = match quiet_runs {
+        None => offbox::QUIET_RUNS,
+        Some(typed) => typed.trim().parse::<u64>().map_err(|_| {
+            UsageError::raise(format!(
+                "offbox rotate: --quiet-runs takes a whole number of passes, and `{typed}` is not one"
+            ))
+        })?,
+    };
+    // One scratch repository per remote, under the machine's state root: a
+    // cache of the archive's tip, pruned to it after every applied pass.
+    let key = blake3::hash(remote.as_bytes()).to_hex();
+    let scratch = state::state_root()?
+        .join("offbox-rotate")
+        .join(format!("{}.git", &key[..16]));
+    std::fs::create_dir_all(&scratch)?;
+    let rotated = offbox::rotate_once(
+        remote,
+        &scratch,
+        quiet_runs,
+        i64::try_from(now_unix()).unwrap_or(i64::MAX),
+    )?;
+    writeln!(out, "{}", rotated.token())?;
+    Ok(rotated.code())
 }
 
 /// `batten offbox restore` (CLOUD-2723): one restore, one token.

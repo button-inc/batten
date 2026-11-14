@@ -2687,6 +2687,48 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "offbox rotate",
+          "id": "offbox.rotate",
+          "about": "Rotate the state repository's finished sessions into its archive and remove their branches, discarding nothing",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "install_url",
+              "short": null,
+              "long": "install-url",
+              "takes_value": true,
+              "positional": false,
+              "help": "The install script's URL, which the printed workflow downloads and runs for this version"
+            },
+            {
+              "name": "print_workflow",
+              "short": null,
+              "long": "print-workflow",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the workflow file that runs a pass on a schedule, and do nothing else"
+            },
+            {
+              "name": "quiet_runs",
+              "short": null,
+              "long": "quiet-runs",
+              "takes_value": true,
+              "positional": false,
+              "help": "How many consecutive passes a session's branch must go unchanged before it is rotated (default 6)"
+            },
+            {
+              "name": "remote",
+              "short": null,
+              "long": "remote",
+              "takes_value": true,
+              "positional": false,
+              "help": "The state repository's URL, whose finished sessions are rotated into its archive"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "offbox run",
           "id": "offbox.run",
           "about": "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",

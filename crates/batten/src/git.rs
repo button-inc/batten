@@ -2462,6 +2462,42 @@ pub fn object_ids_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<
     Ok(ids)
 }
 
+/// The ids a push of the one commit `head` adds when the remote already holds
+/// the commits `have` (CLOUD-2724): `head` itself, then every tree and blob its
+/// tree reaches, minus what the tree of each `have` commit that is present here
+/// reaches.
+///
+/// **No parent is walked.** `head` may name parents this repository does not
+/// hold — a rotation makes each archived session's tip a parent without
+/// fetching it — and the caller's claim is that the remote holds every one of
+/// them. A `have` id that is not here subtracts nothing, which errs toward
+/// sending.
+///
+/// # Errors
+///
+/// A usage error where `head` is not a commit this repository holds.
+pub fn commit_ids_to_send(dir: &Path, head: &str, have: &[String]) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let commit = repo.find_commit(head_id).map_err(|_| refused())?;
+    let mut carried = std::collections::BTreeSet::new();
+    for held in have {
+        if let Ok(id) = gix::ObjectId::from_hex(held.as_bytes())
+            && let Ok(held) = repo.find_commit(id)
+            && let Ok(tree) = held.tree_id()
+        {
+            collect_tree(&repo, tree.detach(), &mut carried, None);
+        }
+    }
+    let mut reached = std::collections::BTreeSet::new();
+    let tree = commit.tree_id().map_err(|_| refused())?.detach();
+    collect_tree(&repo, tree, &mut reached, None);
+    let mut ids = vec![head_id.to_string()];
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
 /// One open repository to read objects out of by id, one at a time
 /// (CLOUD-2729).
 ///

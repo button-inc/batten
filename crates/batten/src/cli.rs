@@ -530,6 +530,18 @@ pub enum OffboxCommand {
         /// The session this one continues, where it is named.
         from: Option<String>,
     },
+    /// One rotation pass over the state repository, or the workflow that runs
+    /// one on a schedule (CLOUD-2724).
+    Rotate {
+        /// The state repository's URL.
+        remote: Option<String>,
+        /// How many unchanged passes finish a session, as typed.
+        quiet_runs: Option<String>,
+        /// Print the workflow file and do nothing else.
+        print_workflow: bool,
+        /// Where the printed workflow downloads the install script from.
+        install_url: Option<String>,
+    },
     /// Run the session's off-box daemon until it is killed (CLOUD-2721).
     Run {
         /// The harness's own identifier for the session.
@@ -4075,6 +4087,12 @@ fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
             session: matches.get_one::<String>("session").cloned()?,
             harness: matches.get_one::<String>("harness").cloned()?,
             from: matches.get_one::<String>("from").cloned(),
+        }),
+        ("rotate", matches) => Some(OffboxCommand::Rotate {
+            remote: matches.get_one::<String>("remote").cloned(),
+            quiet_runs: matches.get_one::<String>("quiet_runs").cloned(),
+            print_workflow: flag(matches, "print_workflow"),
+            install_url: matches.get_one::<String>("install_url").cloned(),
         }),
         ("run", matches) => Some(OffboxCommand::Run {
             session: matches.get_one::<String>("session").cloned()?,
