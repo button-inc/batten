@@ -61,7 +61,9 @@ pub fn target_args(binaries: &BTreeSet<&str>, mutated_file: &str) -> Vec<String>
 }
 
 /// The checkout's Rust sources as they stand, copied under `dest`: what each
-/// cargo-mutants copy is compared against to find its mutated line.
+/// cargo-mutants copy is compared against to find its mutated line. Returns
+/// the [`source_digest`] of the bytes it copied, so a caller compares the
+/// snapshot itself, never a second read of the checkout.
 ///
 /// NOT THE LIVE CHECKOUT, which a sweep running for hours does not freeze:
 /// measured on #1276, one edit to `lib.rs` mid-sweep made its line the "first
@@ -71,28 +73,56 @@ pub fn target_args(binaries: &BTreeSet<&str>, mutated_file: &str) -> Vec<String>
 /// # Errors
 ///
 /// The checkout cannot be listed, or a source cannot be copied.
-pub fn pristine(root: &Path, dest: &Path) -> Result<()> {
+pub fn pristine(root: &Path, dest: &Path) -> Result<String> {
     let _ = std::fs::remove_dir_all(dest);
-    let mut paths = crate::git::tracked_paths(root)?;
-    paths.extend(crate::git::changed_paths(root)?);
-    for path in &paths {
-        if Path::new(path)
-            .extension()
-            .is_none_or(|ext| !ext.eq_ignore_ascii_case("rs"))
-        {
-            continue;
-        }
-        let from = root.join(path);
-        if !from.is_file() {
-            continue;
-        }
-        let to = dest.join(path);
+    let mut digest = blake3::Hasher::new();
+    for path in rust_sources(root)? {
+        let bytes = std::fs::read(root.join(&path)).with_context(|| format!("read {path}"))?;
+        let to = dest.join(&path);
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(&from, &to).with_context(|| format!("copy {path}"))?;
+        std::fs::write(&to, &bytes).with_context(|| format!("copy {path}"))?;
+        digest_one(&mut digest, &path, &bytes);
     }
-    Ok(())
+    Ok(digest.finalize().to_hex().to_string())
+}
+
+/// The digest of the checkout's Rust sources, path and bytes, in the order
+/// and over the set [`pristine`] copies.
+///
+/// # Errors
+///
+/// The checkout cannot be listed, or a source cannot be read.
+pub fn source_digest(root: &Path) -> Result<String> {
+    let mut digest = blake3::Hasher::new();
+    for path in rust_sources(root)? {
+        let bytes = std::fs::read(root.join(&path)).with_context(|| format!("read {path}"))?;
+        digest_one(&mut digest, &path, &bytes);
+    }
+    Ok(digest.finalize().to_hex().to_string())
+}
+
+fn digest_one(digest: &mut blake3::Hasher, path: &str, bytes: &[u8]) {
+    digest.update(path.as_bytes());
+    digest.update(&[0]);
+    digest.update(bytes);
+    digest.update(&[0]);
+}
+
+/// Every Rust file the checkout tracks or has changed that exists, sorted.
+fn rust_sources(root: &Path) -> Result<Vec<String>> {
+    let mut paths: BTreeSet<String> = crate::git::tracked_paths(root)?.into_iter().collect();
+    paths.extend(crate::git::changed_paths(root)?);
+    Ok(paths
+        .into_iter()
+        .filter(|path| {
+            Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+                && root.join(path).is_file()
+        })
+        .collect())
 }
 
 /// The nextest binary id of the case a wrapper runs, from the test program's
@@ -263,8 +293,9 @@ mod tests {
     /// other file; a later edit to the checkout leaves it alone, so the
     /// mutated line is found against what the sweep started from.
     ///
-    /// Fails by: an untracked source left out, a non-source copied, or the
-    /// comparison reading the live checkout.
+    /// Fails by: an untracked source left out, a non-source copied, the
+    /// comparison reading the live checkout, or a source edit since the
+    /// listing leaving the digest the sweep checks unmoved.
     #[test]
     fn a_snapshot_is_the_sources_as_the_sweep_found_them() {
         let dir = crate::scratch::scratch("cover-pristine");
@@ -280,7 +311,12 @@ mod tests {
         .unwrap();
         std::fs::write(repo.join("src/new.rs"), "fn n() {}\n").unwrap();
         let dest = dir.join("pristine");
-        pristine(&repo, &dest).unwrap();
+        let listed_over = source_digest(&repo).unwrap();
+        assert_eq!(
+            pristine(&repo, &dest).unwrap(),
+            listed_over,
+            "the snapshot's digest is the checkout's when nothing moved"
+        );
         assert_eq!(
             std::fs::read_to_string(dest.join("src/a.rs")).unwrap(),
             "fn a() {}\n"
@@ -292,6 +328,18 @@ mod tests {
             std::fs::read_to_string(dest.join("src/a.rs")).unwrap(),
             "fn a() {}\n",
             "the snapshot does not follow the checkout"
+        );
+        assert_ne!(
+            source_digest(&repo).unwrap(),
+            listed_over,
+            "an edit since the listing moves the digest the sweep checks"
+        );
+        std::fs::write(repo.join("notes.txt"), "moved\n").unwrap();
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        assert_eq!(
+            source_digest(&repo).unwrap(),
+            listed_over,
+            "a non-source edit does not"
         );
     }
 

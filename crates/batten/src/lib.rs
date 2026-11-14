@@ -17961,6 +17961,9 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let diff = state::repo_state_dir(root)?
         .join("mutate")
         .join("change.diff");
+    // THE TREE THE LISTING READS, fixed before the change is written: the
+    // schema's snapshot and the classic stage are each held to it.
+    let listed_over = mutate::cover::source_digest(root)?;
     let Some(sources) = mutate::write_change(root, &registry, &base, &diff)? else {
         writeln!(
             out,
@@ -17988,7 +17991,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
         mine.len()
     )?;
-    let swept = mutate::schema::sweep(root, &mine, workers, out)?;
+    let swept = mutate::schema::sweep(root, &mine, &listed_over, workers, out)?;
     let schema = mutate::schema::exit_of(swept.code);
     if swept.classic.is_empty() {
         return Ok(schema);
@@ -17998,6 +18001,15 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         "mutate cargo: {} handed-back mutant(s) judged by cargo-mutants",
         swept.classic.len()
     )?;
+    // CARGO-MUTANTS COPIES THE LIVE CHECKOUT, an hour after the listing: an
+    // edit since would judge these names against other text, so it refuses
+    // rather than report verdicts about code the listing never saw.
+    anyhow::ensure!(
+        mutate::cover::source_digest(root)? == listed_over,
+        "the checkout's Rust sources changed during the sweep, so cargo-mutants would judge \
+         the handed-back mutants against text they were not listed from; the schema's verdicts \
+         are journaled, so run the sweep again once the tree is still"
+    );
     let classic = mutate::cargo_exit(mutate::cargo_mutants(
         root,
         &runner,
