@@ -62,6 +62,15 @@
 //! keys are held. Key loss is the other branch and never a degraded rotation: its
 //! predicate is [`orphaned_key_ids`], ledger against file, because "the key file is
 //! missing" is indistinguishable from a repository that never scanned.
+//!
+//! # A keyless entry that removes spans (CLOUD-2726)
+//!
+//! [`redact`] replaces each matched span with a marker in a staged copy, for a
+//! caller that must not commit one. It does not weaken containment: the span
+//! still has no route back to a `&str` — the one method it gained consumes the
+//! span and returns a boolean — and the entry reads no key, mints no identity
+//! and writes no ledger, so it adds a way to remove a matched byte and none to
+//! carry one.
 
 use std::fs;
 use std::io::Write;
@@ -1038,7 +1047,7 @@ pub fn scan(
 
     let mut parsed: Vec<Match> = Vec::new();
     for batch in crate::rules::batches(matched) {
-        parsed.extend(run_once(rule, &binary, root, &batch)?);
+        parsed.extend(run_once(&rule.id, &binary, root, &batch)?);
     }
 
     for hit in parsed {
@@ -1154,7 +1163,11 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
 }
 
 /// One scanner invocation over one batch of paths.
-fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
+///
+/// `root` is used as the child's working directory and nothing else, which is
+/// what lets [`redact`] run the same spawn over a staging directory. `label`
+/// names the caller in an error: a rule's id, or the redactor's own word.
+fn run_once(label: &str, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
     // Both streams are captured and NEITHER is forwarded. stdout carries the
     // matched bytes and is parsed here; stderr can carry a path the tool
     // failed to read, and echoing a child's stream would put output Batten
@@ -1203,8 +1216,7 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .output(),
     };
 
-    let output =
-        result.with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;
+    let output = result.with_context(|| format!("rule {label}: run the pinned secret scanner"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut parsed = Vec::new();
@@ -1217,17 +1229,16 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         // error names WHICH line by ordinal and never what it said.
         let hit = parse_line(line, batch).ok_or_else(|| {
             anyhow::anyhow!(
-                "rule {}: the secret scanner emitted a line this build cannot parse \
+                "rule {label}: the secret scanner emitted a line this build cannot parse \
                  (output line {}); refusing to report a clean tree from a stream that \
                  failed to parse",
-                rule.id,
                 ordinal + 1
             )
         })?;
         parsed.push(hit);
     }
 
-    cross_check(rule, output.status.code(), parsed.len())?;
+    cross_check(label, output.status.code(), parsed.len())?;
     Ok(parsed)
 }
 
@@ -1239,30 +1250,130 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
 /// secrets the tool says it did not find; a found exit with nothing parsed would
 /// report a clean tree the tool says is not clean — and that second one is the
 /// silent false green this whole clause exists to prevent.
-fn cross_check(rule: &Rule, code: Option<i32>, parsed: usize) -> Result<()> {
+fn cross_check(label: &str, code: Option<i32>, parsed: usize) -> Result<()> {
     match code {
         Some(EXIT_CLEAN) if parsed == 0 => Ok(()),
         Some(EXIT_FOUND) if parsed > 0 => Ok(()),
         Some(EXIT_CLEAN) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner exited clean while emitting {parsed} match(es); \
-             the exit status and the output disagree, so neither is a verdict",
-            rule.id
+            "rule {label}: the secret scanner exited clean while emitting {parsed} match(es); \
+             the exit status and the output disagree, so neither is a verdict"
         )),
         Some(EXIT_FOUND) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner reported findings and emitted none this build \
-             could parse; clean is never inferred from a stream that failed to parse",
-            rule.id
+            "rule {label}: the secret scanner reported findings and emitted none this build \
+             could parse; clean is never inferred from a stream that failed to parse"
         )),
         Some(other) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner exited {other}, which is neither its clean nor \
-             its found status",
-            rule.id
+            "rule {label}: the secret scanner exited {other}, which is neither its clean nor \
+             its found status"
         )),
         None => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner was killed by a signal, so it reached no verdict",
-            rule.id
+            "rule {label}: the secret scanner was killed by a signal, so it reached no verdict"
         )),
     }
+}
+
+/// What a redacted span is replaced by.
+pub const REDACTED: &str = "[REDACTED]";
+
+/// The word [`redact`]'s errors carry where a scan's carry a rule id.
+const REDACT_LABEL: &str = "offbox";
+
+/// Replace every span the pinned scanner matches in `paths` under `staging`
+/// with [`REDACTED`], and return how many spans were replaced (CLOUD-2726).
+///
+/// **Keyless.** It reads no key, mints no identity and writes no ledger: a
+/// redactor needs the bytes gone, not named, so the custody half of this module
+/// is not reached at all.
+///
+/// The scanner is resolved from `project_root`, because the provision cache is
+/// keyed by the project, and RUN in `staging`, because that is where the files
+/// are. `paths` are relative to `staging`.
+///
+/// **Line counts never change.** A span is replaced within its line, so a store
+/// whose index counts its lines stays consistent with them.
+///
+/// **Nothing is left half-redacted.** Every match is applied in memory first,
+/// and a file is written only once all of them have been.
+///
+/// # Errors
+///
+/// - **exit 1** ([`UsageError`]) where `staging` is relative, the manifest
+///   declares no scanner, or the provision cache holds no binary — [`scan`]'s
+///   own refusals.
+/// - **exit 3** for every fail-closed case: output this build cannot parse, an
+///   exit status that disagrees with the parse, a staged file that will not
+///   read as text, and a span that is not on the line the scanner named. The
+///   last means the scanner and the file disagree, and a file is never reported
+///   redacted while a span the scanner saw is still in it.
+//MUTANT-SUITE crates/batten/tests/it/secrets_kind.rs
+//MUTANT matched-span-left-in-place|s@^            let found = hit.span.replace_in(line, REDACTED);$@            let found = hit.span.replace_in(\&mut line.clone(), REDACTED);@|redact_replaces_the_matched_span_and_only_it
+//MUTANT redaction-drops-the-line|s@^            replaced += 1;$@            replaced += 1; line.clear();@|redact_replaces_the_matched_span_and_only_it
+//MUTANT redact-mints-an-identity|s@^    let binary = resolve_scanner(provisions, project_root)?;$@    let binary = resolve_scanner(provisions, project_root)?; custody_at(\&key_path(\&project_root.canonicalize()?)?, crate::waiver::today()?)?;@|redact_mints_no_identity_and_writes_no_ledger
+//MUTANT redact-scans-the-project-root|s@^        for hit in run_once(REDACT_LABEL, &binary, staging, &batch)? {$@        for hit in run_once(REDACT_LABEL, \&binary, project_root, \&batch)? {@|redact_runs_the_scanner_in_the_staging_directory
+//MUTANT span-not-found-reads-clean|s@^            if !found {$@            if false {@|a_span_the_file_does_not_hold_is_an_error_and_writes_nothing
+pub fn redact(
+    provisions: &[Provision],
+    project_root: &Path,
+    staging: &Path,
+    paths: &[String],
+) -> Result<usize> {
+    if !staging.is_absolute() {
+        return Err(UsageError::raise(format!(
+            "rule {REDACT_LABEL}: the staging directory {} is relative, so the scanner's working \
+             directory would depend on the caller's",
+            staging.display()
+        )));
+    }
+    let binary = resolve_scanner(provisions, project_root)?;
+    let named: Vec<&String> = paths.iter().collect();
+    let mut hits: std::collections::BTreeMap<String, Vec<Match>> =
+        std::collections::BTreeMap::new();
+    for batch in crate::rules::batches(&named) {
+        for hit in run_once(REDACT_LABEL, &binary, staging, &batch)? {
+            hits.entry(hit.path.clone()).or_default().push(hit);
+        }
+    }
+
+    let mut replaced = 0;
+    let mut rewritten: Vec<(PathBuf, String)> = Vec::new();
+    for (path, matched) in hits {
+        let full = staging.join(&path);
+        // Pointer-only: the error names the staged path and never a byte of it.
+        let text = fs::read_to_string(&full).with_context(|| {
+            format!("rule {REDACT_LABEL}: read the staged file {path} to redact it")
+        })?;
+        // `split_inclusive` keeps each terminator on its line, so joining the
+        // lines back gives the file byte for byte apart from the spans.
+        let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
+        for hit in matched {
+            let Some(line) = lines.get_mut(hit.line - 1) else {
+                return Err(anyhow::anyhow!(
+                    "rule {REDACT_LABEL}: the secret scanner named line {} of {path}, which the \
+                     staged file does not have",
+                    hit.line
+                ));
+            };
+            let found = hit.span.replace_in(line, REDACTED);
+            if !found {
+                return Err(anyhow::anyhow!(
+                    "rule {REDACT_LABEL}: the secret scanner matched a span on line {} of {path} \
+                     that the staged file does not hold there; nothing was redacted",
+                    hit.line
+                ));
+            }
+            replaced += 1;
+        }
+        rewritten.push((full, lines.concat()));
+    }
+    for (full, text) in rewritten {
+        crate::durable::replace(&full, text).map_err(|err| {
+            anyhow::anyhow!(
+                "rule {REDACT_LABEL}: the redacted {} will not write: {err}",
+                full.display()
+            )
+        })?;
+    }
+    Ok(replaced)
 }
 
 /// Parse one `<path>:<line>:<span>` output line, given the paths this batch
@@ -1599,15 +1710,15 @@ severity = "deny"
 
     #[test]
     fn the_two_agreeing_cases_are_the_only_ones_that_pass() {
-        assert!(cross_check(&rule(), Some(EXIT_CLEAN), 0).is_ok());
-        assert!(cross_check(&rule(), Some(EXIT_FOUND), 3).is_ok());
+        assert!(cross_check(&rule().id, Some(EXIT_CLEAN), 0).is_ok());
+        assert!(cross_check(&rule().id, Some(EXIT_FOUND), 3).is_ok());
     }
 
     #[test]
     fn a_clean_exit_with_matches_is_refused() {
         // The tool says nothing was found and the stream says otherwise. Neither
         // is a verdict, so this is exit 3 rather than a report.
-        let err = cross_check(&rule(), Some(EXIT_CLEAN), 2).unwrap_err();
+        let err = cross_check(&rule().id, Some(EXIT_CLEAN), 2).unwrap_err();
         assert!(
             err.downcast_ref::<UsageError>().is_none(),
             "internal, not usage"
@@ -1620,17 +1731,17 @@ severity = "deny"
         // The silent false green this clause exists to prevent: the tool found
         // secrets, the parser produced none, and reporting clean would be a
         // clean tree inferred from a stream that failed to parse.
-        let err = cross_check(&rule(), Some(EXIT_FOUND), 0).unwrap_err();
+        let err = cross_check(&rule().id, Some(EXIT_FOUND), 0).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_none());
         assert!(err.to_string().contains("never inferred"), "{err}");
     }
 
     #[test]
     fn a_tool_error_or_a_signal_is_neither_verdict() {
-        let err = cross_check(&rule(), Some(2), 0).unwrap_err();
+        let err = cross_check(&rule().id, Some(2), 0).unwrap_err();
         assert!(err.to_string().contains("neither its clean nor"), "{err}");
 
-        let err = cross_check(&rule(), None, 0).unwrap_err();
+        let err = cross_check(&rule().id, None, 0).unwrap_err();
         assert!(err.to_string().contains("signal"), "{err}");
     }
 
@@ -1642,14 +1753,14 @@ severity = "deny"
         const SECRET: &str = "tok-would-be-leaked";
         let batch = ["src/a.rs"];
         let rendered: Vec<String> = vec![
-            cross_check(&rule(), Some(EXIT_CLEAN), 2)
+            cross_check(&rule().id, Some(EXIT_CLEAN), 2)
                 .unwrap_err()
                 .to_string(),
-            cross_check(&rule(), Some(EXIT_FOUND), 0)
+            cross_check(&rule().id, Some(EXIT_FOUND), 0)
                 .unwrap_err()
                 .to_string(),
-            cross_check(&rule(), Some(2), 0).unwrap_err().to_string(),
-            cross_check(&rule(), None, 0).unwrap_err().to_string(),
+            cross_check(&rule().id, Some(2), 0).unwrap_err().to_string(),
+            cross_check(&rule().id, None, 0).unwrap_err().to_string(),
             resolve_scanner(&[], Path::new("/nowhere"))
                 .unwrap_err()
                 .to_string(),
