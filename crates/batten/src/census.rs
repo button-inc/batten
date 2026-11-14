@@ -147,7 +147,7 @@ fn ban_unread(glob: &str) -> Option<char> {
 
 // ---------------------------------------------------------------------------
 // Where the shell is: which lines of a home carry it. Whether a text IS shell
-// is `crate::shell`'s, and nothing here re-decides it.
+// is `crate::shell_detect`'s, and nothing here re-decides it.
 // ---------------------------------------------------------------------------
 
 /// The two quotes that open a multi-line string body.
