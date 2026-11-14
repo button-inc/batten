@@ -4893,6 +4893,10 @@ pub(crate) mod testing {
     }
 
     /// The ids of the objects the pack of a receive-pack request carries.
+    ///
+    /// Unix only, as the one module that asks is: the off-box cases install an
+    /// executable scanner stand-in, which needs a mode bit.
+    #[cfg(unix)]
     pub(crate) fn pack_ids(request: &[u8]) -> Vec<String> {
         let Ok((_, pack)) = pkt_split(request) else {
             return Vec::new();
