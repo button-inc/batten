@@ -22315,6 +22315,17 @@ fn point_at_spills(
 /// read. At or under the default, nothing spilled can be within it.
 fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
     let configured = capture::result_max_tokens(capture_budget().as_ref());
+    spills_admitted(result, spilled, configured)
+}
+
+/// [`spills_within_bound`] under an explicit `configured` bound: only a bound
+/// raised past the default can hold a spilled result, and then only when the
+/// result fits it.
+fn spills_admitted(
+    result: &serde_json::Value,
+    spilled: &[stream_input::Spilled],
+    configured: u64,
+) -> bool {
     configured > capture::DEFAULT_RESULT_MAX_TOKENS && spills_within(result, spilled, configured)
 }
 
@@ -32304,6 +32315,42 @@ mod tests {
         assert!(
             !spills_within(&inline, &huge, total),
             "over by its bytes alone"
+        );
+    }
+
+    /// A spilled result is kept whole only under a bound raised past the
+    /// default, and then only when it fits: the default itself admits nothing,
+    /// even a result within it. #1276's sweep found the guard unpinned.
+    ///
+    /// Fails by: `>` read as `>=`, or `&&` read as `||` (every spill kept whole
+    /// under any raised bound).
+    #[test]
+    fn only_a_raised_bound_keeps_a_spill_and_only_when_it_fits() {
+        let dir = crate::scratch::scratch("spills-admitted");
+        let path = dir.join("leaf");
+        std::fs::write(&path, "word").unwrap();
+        let spilled = [stream_input::Spilled {
+            pointer: String::from("/a"),
+            path,
+            bytes: 4,
+        }];
+        let inline = serde_json::json!({});
+        let default = capture::DEFAULT_RESULT_MAX_TOKENS;
+        assert!(
+            spills_admitted(&inline, &spilled, default + 1),
+            "raised and fits"
+        );
+        assert!(
+            !spills_admitted(&inline, &spilled, default),
+            "the default admits nothing, however small"
+        );
+        let over = [stream_input::Spilled {
+            bytes: 128 * (default + 2),
+            ..spilled[0].clone()
+        }];
+        assert!(
+            !spills_admitted(&inline, &over, default + 1),
+            "raised, but the result does not fit"
         );
     }
 }
