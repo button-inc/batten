@@ -7363,19 +7363,30 @@ impl Grammar {
     }
 }
 
+/// The fields every family leaves empty unless it says otherwise: no option of
+/// any kind, and options that bundle. Each arm of [`grammar`] names only what it
+/// adds.
+const PLAIN: Grammar = Grammar {
+    inline: "",
+    inline_long: &[],
+    valued: "",
+    valued_long: &[],
+    bundles: true,
+    module: "",
+    program_file: "",
+    program_file_long: &[],
+};
+
 /// The grammar `program` is read through: its family's, or a conservative one
 /// for an interpreter a consumer declared that no family describes.
 fn grammar(program: &str) -> Grammar {
     match family(program) {
         "python" => Grammar {
             inline: "cm",
-            inline_long: &[],
             valued: "WX",
             valued_long: &["--check-hash-based-pycs"],
-            bundles: true,
             module: "m",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
         "node" | "nodejs" => Grammar {
             inline: "ep",
@@ -7388,30 +7399,18 @@ fn grammar(program: &str) -> Grammar {
                 "--conditions",
                 "--input-type",
             ],
-            bundles: true,
-            module: "",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
         "perl" => Grammar {
             inline: "eE",
-            inline_long: &[],
             valued: "IMm",
-            valued_long: &[],
-            bundles: true,
-            module: "",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
         "ruby" => Grammar {
             inline: "e",
-            inline_long: &[],
             valued: "rIEC",
             valued_long: &["--encoding"],
-            bundles: true,
-            module: "",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
         // THE SHELLS (step 14): the POSIX shell family and the shells
         // `crate::shell_detect::ShellKind` names (CLOUD-2626). `-c` makes the
@@ -7424,13 +7423,9 @@ fn grammar(program: &str) -> Grammar {
         "sh" | "dash" | "ksh" | "mksh" | "ash" | "yash" | "bash" | "zsh" | "csh" | "tcsh" => {
             Grammar {
                 inline: "c",
-                inline_long: &[],
                 valued: "oO",
                 valued_long: &["--rcfile", "--init-file"],
-                bundles: true,
-                module: "",
-                program_file: "",
-                program_file_long: &[],
+                ..PLAIN
             }
         }
         // fish: `-c`/`--command` and `-C`/`--init-command` both carry commands.
@@ -7439,22 +7434,14 @@ fn grammar(program: &str) -> Grammar {
             inline_long: &["--command", "--init-command"],
             valued: "dfo",
             valued_long: &["--debug", "--features", "--debug-output"],
-            bundles: true,
-            module: "",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
         // POSIX awk and mawk: no inline option; the program is the first
         // operand unless `-f progfile` names it.
         "awk" | "mawk" => Grammar {
-            inline: "",
-            inline_long: &[],
             valued: "FvW",
-            valued_long: &[],
-            bundles: true,
-            module: "",
             program_file: "f",
-            program_file_long: &[],
+            ..PLAIN
         },
         // gawk adds `-e`/`--source` text and `-E`/`--exec` as a program file.
         "gawk" => Grammar {
@@ -7462,10 +7449,9 @@ fn grammar(program: &str) -> Grammar {
             inline_long: &["--source"],
             valued: "FvilW",
             valued_long: &["--assign", "--field-separator", "--include", "--load"],
-            bundles: true,
-            module: "",
             program_file: "fE",
             program_file_long: &["--file", "--exec"],
+            ..PLAIN
         },
         // sed: `-e script`; `-f file`; otherwise the first operand.
         "sed" => Grammar {
@@ -7473,22 +7459,17 @@ fn grammar(program: &str) -> Grammar {
             inline_long: &["--expression"],
             valued: "l",
             valued_long: &["--line-length"],
-            bundles: true,
-            module: "",
             program_file: "f",
             program_file_long: &["--file"],
+            ..PLAIN
         },
         // The fallback keeps CLOUD-2231's original reading: exact `-c`, `-e`,
         // `-E`, `--command`, `--eval`, never a bundle.
         _ => Grammar {
             inline: "ceE",
             inline_long: &["--command", "--eval"],
-            valued: "",
-            valued_long: &[],
             bundles: false,
-            module: "",
-            program_file: "",
-            program_file_long: &[],
+            ..PLAIN
         },
     }
 }
