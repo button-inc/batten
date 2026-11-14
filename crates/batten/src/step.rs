@@ -556,8 +556,16 @@ mod tests {
             inputs: vec![String::from("input")],
             tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
         };
-        // The platform's own shell spells each tool: one that answers, one
-        // that exits zero saying nothing, and one that answers and fails.
+        // Each tool: one that answers, one that exits zero saying nothing, and
+        // one that answers and fails — the stand-in, off windows.
+        let failing = crate::scratch::scratch("step-material-tool").join("fails");
+        if !cfg!(windows) {
+            crate::scratch::stub_at(
+                &failing,
+                &serde_json::json!([{ "steps": [{ "stdout": "v1\n" }, { "exit": 1 }] }]),
+            );
+        }
+        let failing = failing.display().to_string();
         let (answers, silent, fails): (&[&str], &[&str], &[&str]) = if cfg!(windows) {
             (
                 &["cmd", "/C", "echo v1"],
@@ -565,7 +573,7 @@ mod tests {
                 &["cmd", "/C", "echo v1& exit 1"],
             )
         } else {
-            (&["echo", "v1"], &["true"], &["sh", "-c", "echo v1; exit 1"])
+            (&["echo", "v1"], &["true"], &[failing.as_str()])
         };
         assert!(
             material(&root, &row(answers), &[], None).is_some(),

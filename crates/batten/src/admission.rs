@@ -441,7 +441,7 @@ fn string(text: &str) -> String {
 /// in front of every reviewer and review bot per-commit. A pull request body is
 /// worse on all three of the counts that matter here: it is mutable after the
 /// fact, it is one blob for N commits so the per-write binding is lost, and
-/// writing it is `land.sh`'s job — authored shell frozen by `shell edit refused`.
+/// writing it was `land.sh`'s job — authored shell frozen by `shell edit refused`.
 ///
 /// # The block, and why it is verifiable with the store deleted
 ///

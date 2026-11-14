@@ -15,14 +15,9 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-// THE ATTRIBUTE IS REQUIRED HERE RATHER THAN CHOSEN, which is the one bar
-// `rules/rust.md` holds this route to. Every case stands a `#!/bin/sh` build
-// where a source pin points and marks it executable through
-// `std::os::unix::fs::PermissionsExt` — a symbol the Windows target does not
-// have, so the `cfg!` arm that rule prefers would not type-check. The subject
-// is the same: a program with no extension, which Windows can neither execute
-// nor make executable. `engine_install.rs`'s `repair` module is gated for this
-// reason and these cases are its siblings.
+// Every case stands a stand-in build where a source pin points: a program with
+// no extension, which Windows cannot execute. `engine_install.rs`'s `repair`
+// module is gated for this reason and these cases are its siblings.
 #![cfg(unix)]
 
 use crate::common;
@@ -75,15 +70,6 @@ fn private_build(at: &Path) -> PathBuf {
     at.to_path_buf()
 }
 
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("stat the stub")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("chmod the stub");
-}
-
 fn pin_source(dir: &Path, digest: &str) {
     common::write(
         dir,
@@ -131,30 +117,35 @@ fn crashing_build(dir: &Path, stamp: &str) {
     stub_build(
         &conventional_release(dir),
         stamp,
-        &format!(
-            // DRAINS STDIN, because a real engine does. The hand-off inherits
-            // this process's stdin and that is where the envelope arrives, so a
-            // stub that never reads leaves the payload sitting there for the
-            // parent's fall-through to find — which is not the state a crashed
-            // engine leaves behind. Reading it first is what makes these cases
-            // exercise the fall-through the issue actually ships.
-            "#!/bin/sh\ncat >/dev/null 2>&1\necho ran >> \"{}\"\necho \"{MARKER}\"\nexit 101\n",
-            dir.join("runs").display()
-        ),
+        // DRAINS STDIN, because a real engine does — the stand-in reads all of
+        // it before anything else. The hand-off inherits this process's stdin
+        // and that is where the envelope arrives, so a stub that never reads
+        // leaves the payload sitting there for the parent's fall-through to
+        // find — which is not the state a crashed engine leaves behind. Reading
+        // it first is what makes these cases exercise the fall-through the
+        // issue actually ships.
+        &serde_json::json!([{ "steps": [
+            { "append": [dir.join("runs").display().to_string(), "ran\n"] },
+            { "stdout": format!("{MARKER}\n") },
+            { "exit": 101 },
+        ] }]),
     );
 }
 
 /// A checkout build that ANSWERS, used where the case is about the path to it
 /// rather than about its exit.
 fn speaking_build(at: &Path, stamp: &str) {
-    stub_build(at, stamp, "#!/bin/sh\necho \"checkout build ran $*\"\n");
+    stub_build(
+        at,
+        stamp,
+        &serde_json::json!([{ "steps": [{ "stdout": "checkout build ran {argv}\n" }] }]),
+    );
 }
 
-/// A stamped, executable stand-in for the checkout's release build.
-fn stub_build(at: &Path, digest: &str, script: &str) {
+/// A stamped stand-in for the checkout's release build, running `steps`.
+fn stub_build(at: &Path, digest: &str, plan: &serde_json::Value) {
     let build = at.join("batten");
-    common::write(at, "batten", script);
-    make_executable(&build);
+    common::stub_at(&build, plan);
     stamp(&build, digest);
 }
 
@@ -421,10 +412,16 @@ fn the_floor_still_decides_over_rules_that_will_not_load() {
 /// command.
 #[test]
 fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
-    let (dir, _installed, binary) = case_tree("exec-passthrough");
+    let (dir, installed, binary) = case_tree("exec-passthrough");
     pin_source(&dir, &pinned());
     let build = private_build(&conventional_release(&dir).join("batten"));
     stamp(&build, &built());
+    // The wrapped command: says `x`, then exits 101.
+    let wrapped = installed.join("wrapped");
+    common::stub_at(
+        &wrapped,
+        &serde_json::json!([{ "steps": [{ "stdout": "x\n" }, { "exit": 101 }] }]),
+    );
 
     // `--tee` because capturing is `exec`'s default since CLOUD-429; the claim
     // here is that a FOLLOWED engine's passthrough is byte-for-byte what an
@@ -432,7 +429,7 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     let output = run(
         &binary,
         &dir,
-        &["exec", "--tee", "--", "sh", "-c", "echo x; exit 101"],
+        &["exec", "--tee", "--", wrapped.to_str().unwrap()],
         "",
     );
     assert_eq!(
@@ -469,7 +466,11 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
     stub_build(
         &conventional_release(&dir),
         &built(),
-        &format!("#!/bin/sh\necho \"{DECIDED}\"\necho \"{EXPLAINED}\" >&2\nexit 2\n"),
+        &serde_json::json!([{ "steps": [
+            { "stdout": format!("{DECIDED}\n") },
+            { "stderr": format!("{EXPLAINED}\n") },
+            { "exit": 2 },
+        ] }]),
     );
 
     let output = run(

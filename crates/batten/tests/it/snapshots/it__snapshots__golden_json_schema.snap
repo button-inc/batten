@@ -853,24 +853,6 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
-        },
-        {
-          "path": "ci suites",
-          "id": "ci.suites",
-          "about": "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
-          "effect": "read",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "base",
-              "short": null,
-              "long": "base",
-              "takes_value": true,
-              "positional": false,
-              "help": "The revision this checkout is diffed against"
-            }
-          ],
-          "subcommands": []
         }
       ]
     },
@@ -3947,19 +3929,10 @@ expression: stdout_of(&output)
         {
           "path": "record suites",
           "id": "record.suites",
-          "about": "Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it",
-          "effect": "write",
+          "about": "Derive what each nextest module costs from the report the runner wrote, and print it",
+          "effect": "read",
           "data_channel": false,
-          "flags": [
-            {
-              "name": "write",
-              "short": null,
-              "long": "write",
-              "takes_value": false,
-              "positional": false,
-              "help": "Write the corpus to its committed path instead of printing it"
-            }
-          ],
+          "flags": [],
           "subcommands": []
         },
         {
@@ -5382,10 +5355,6 @@ expression: stdout_of(&output)
       "path": "ci slow-needed"
     },
     {
-      "id": "ci.suites",
-      "path": "ci suites"
-    },
-    {
       "id": "claim.keys",
       "path": "claim keys"
     },
@@ -5628,6 +5597,10 @@ expression: stdout_of(&output)
     {
       "id": "record.show",
       "path": "record show"
+    },
+    {
+      "id": "record.suites",
+      "path": "record suites"
     },
     {
       "id": "release.guard",

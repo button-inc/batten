@@ -6,7 +6,8 @@
 //! The module's own `test_` rules pin the predicate over a fabricated input.
 //! This tier shows the ENGINE builds that input — the consumer's `[census.shell]`
 //! table through `documents`, `lines` for the head, `base-lines` for the base,
-//! `added` over the whole tree — so the refusals below come from a real diff
+//! `added` over the whole tree, and the detector's `shell` fact over all of them
+//! (CLOUD-2625) — so the refusals below come from a real diff
 //! against a real `origin/main` (CLOUD-845's class: a module can pass every
 //! `with input as` case and decide nothing on a real tree).
 //!
@@ -188,12 +189,14 @@ fn a_program_moved_inline_is_refused() {
 fn a_task_body_grown_by_one_line_is_refused() {
     let dir = repo(
         "shell-ban-grown",
-        &[("mise.toml", &manifest(&[("a", &["echo one"])]))],
+        // Two lines at the base: a one-command body is argv to the detector
+        // (CLOUD-2625), and a base of zero would make this a new unit.
+        &[("mise.toml", &manifest(&[("a", &["echo one", "echo two"])]))],
     );
     change(
         &dir,
         "mise.toml",
-        &manifest(&[("a", &["echo one", "echo two"])]),
+        &manifest(&[("a", &["echo one", "echo two", "echo three"])]),
     );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
@@ -213,7 +216,12 @@ fn a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls() {
             &manifest(&[("a", &["echo 1", "echo 2", "echo 3"])]),
         )],
     );
-    change(&dir, "mise.toml", &manifest(&[("b", &["echo 1"])]));
+    // Two lines: one plain command is argv, and would give no finding at all.
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("b", &["echo 1", "echo 2"])]),
+    );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
@@ -265,10 +273,15 @@ fn a_deleted_body_is_admitted() {
         "shell-ban-deleted",
         &[(
             "mise.toml",
-            &manifest(&[("a", &["echo a"]), ("b", &["echo b"])]),
+            // Two lines each, or no body is shell and the case passes vacuously.
+            &manifest(&[("a", &["echo a", "echo 1"]), ("b", &["echo b", "echo 2"])]),
         )],
     );
-    change(&dir, "mise.toml", &manifest(&[("a", &["echo a"])]));
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("a", &["echo a", "echo 1"])]),
+    );
     assert_eq!(check(&dir).status.code(), Some(0));
 }
 
@@ -337,6 +350,123 @@ fn an_added_shell_script_is_refused() {
     assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
 }
 
+/// A BATS SUITE IS SHELL TO THE BAN (CLOUD-2634). Once the last suite retired,
+/// no row read `tests/**/*.bats` any more, so this is the only gate standing
+/// between the tree and a suite coming back. Its `#!/usr/bin/env bats` names no
+/// shell, so the extension alone must decide it.
+#[test]
+fn an_added_bats_suite_is_refused() {
+    let dir = repo("shell-ban-bats", &[("README.md", "x\n")]);
+    change(
+        &dir,
+        "tests/deploy.bats",
+        "#!/usr/bin/env bats\n@test \"deploys\" { run true; }\n",
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tests/deploy.bats"), "{found:?}");
+}
+
+/// An added `path` holding `text` is refused as a shell file, pointing at it.
+fn placed_shell_is_refused(name: &str, path: &str, text: &str) {
+    let dir = repo(name, &[("README.md", "x\n")]);
+    change(&dir, path, text);
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{path}: {found:?}");
+    assert!(grew(&found, path), "{path}: {found:?}");
+}
+
+// EVERY SHELL THE DETECTOR KNOWS, BY NAME AND BY SHEBANG (CLOUD-2625, the
+// owner's widening). One case each, so a dropped extension or interpreter names
+// itself. A shebang is read off `lines`, so those files sit under `tools/**`,
+// the row's line source; an extension needs no lines at all.
+
+#[test]
+fn an_added_zsh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-zsh", "scripts/x.zsh", "echo\n");
+}
+
+#[test]
+fn an_added_ksh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-ksh", "scripts/x.ksh", "echo\n");
+}
+
+#[test]
+fn an_added_fish_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-fish", "scripts/x.fish", "echo\n");
+}
+
+#[test]
+fn an_added_csh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-csh", "scripts/x.csh", "echo\n");
+}
+
+#[test]
+fn an_added_tcsh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-tcsh", "scripts/x.tcsh", "echo\n");
+}
+
+#[test]
+fn an_added_command_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-command", "scripts/x.command", "echo\n");
+}
+
+#[test]
+fn an_added_fish_shebang_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-fish",
+        "tools/run-fish",
+        "#!/usr/bin/env fish\necho\n",
+    );
+}
+
+#[test]
+fn an_added_csh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-csh", "tools/run-csh", "#!/bin/csh\necho\n");
+}
+
+#[test]
+fn an_added_tcsh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-tcsh", "tools/run-tcsh", "#!/bin/tcsh\necho\n");
+}
+
+#[test]
+fn an_added_mksh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-mksh", "tools/run-mksh", "#!/bin/mksh\necho\n");
+}
+
+#[test]
+fn an_added_ash_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-ash", "tools/run-ash", "#!/bin/ash\necho\n");
+}
+
+#[test]
+fn an_added_yash_shebang_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-yash",
+        "tools/run-yash",
+        "#!/usr/bin/env yash\necho\n",
+    );
+}
+
+#[test]
+fn an_added_busybox_sh_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-busybox",
+        "tools/run-busybox",
+        "#!/bin/busybox sh\necho\n",
+    );
+}
+
+#[test]
+fn an_added_busybox_sh_program_through_env_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-busybox-env",
+        "tools/run-busybox-env",
+        "#!/usr/bin/env busybox sh\necho\n",
+    );
+}
+
 #[test]
 fn an_added_shebang_program_under_a_declared_directory_is_refused() {
     let dir = repo("shell-ban-shebang", &[("README.md", "x\n")]);
@@ -363,11 +493,16 @@ fn a_manifest_whose_base_is_not_text_is_judged_against_nothing() {
     let fixture = Fixture::new("shell-ban-unreadable-base")
         .config(&config())
         .git();
-    let mut base = manifest(&[("a", &["echo a"])]).into_bytes();
+    // Two lines, so the head's body is shell to the detector at all.
+    let mut base = manifest(&[("a", &["echo a", "echo b"])]).into_bytes();
     base.extend_from_slice(b"# \xff\xfe\n");
     std::fs::write(fixture.path().join("mise.toml"), base).unwrap();
     let dir = fixture.base_commit().build();
-    change(&dir, "mise.toml", &manifest(&[("a", &["echo a"])]));
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("a", &["echo a", "echo b"])]),
+    );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
@@ -433,11 +568,7 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
         .collect();
     assert_eq!(
         exempt,
-        BTreeSet::from([
-            ".claude/hooks/git-hook.sh",
-            "completions/batten.bash",
-            "setup.sh",
-        ])
+        BTreeSet::from([".claude/hooks/git-hook.sh", "completions/batten.bash",])
     );
 }
 

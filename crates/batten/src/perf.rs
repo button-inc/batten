@@ -62,10 +62,10 @@
 //! build — the same split `perf`/`perf-assert` keeps, and what lets CLOUD-875's
 //! cases be asserted at all.
 //!
-//! `mise-tasks/perf-gate.sh` composes this with `perf-compare` and is itself
-//! frozen, so its reading is a contract rather than a convention: **a skip prints
+//! `mise-tasks/perf-gate.sh` composed this with `perf-compare` and was itself
+//! frozen, so its reading was a contract rather than a convention: **a skip prints
 //! one human line, no `arm=` record, and exits 0**; a could-not-look exits
-//! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
+//! non-zero and explains itself on stderr. `perf-gate` distinguished the two by
 //! looking for `^arm=`, never by a second exit code.
 
 use std::collections::BTreeSet;
@@ -946,8 +946,8 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// from the job log, and `--quiet` suppresses every one of them — so the count
 /// answered `0` on a run that compiled the whole closure twice and would answer
 /// `0` again after the fix, which is a reading that cannot tell the two apart.
-/// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
-/// redirects this command's STDOUT to a file and greps `^arm=`.
+/// Cargo's progress goes to stderr, so nothing changed for `perf-gate.sh`, which
+/// redirected this command's STDOUT to a file and grepped `^arm=`.
 ///
 /// Returns whether it dropped the other arm's `batten` units first, which is
 /// what lets [`arms_suspect`] tell a clean head from an inherited one.
@@ -4233,27 +4233,28 @@ mod tests {
             bail!("a binary that does not exist has no surface to read");
         };
         assert!(absent.to_string().contains("could not ask"), "{absent}");
-        // The stand-in binary is a shell script, which only unix runs: off unix
-        // only the refusal above is asserted, and the exit-status and verb
+        // The stand-in binary is installed by link, which only unix has: off
+        // unix only the refusal above is asserted, and the exit-status and verb
         // mutants go unjudged there.
         if cfg!(unix) {
-            use crate::engine::make_executable;
             let document = serde_json::json!({
                 "id": "root",
                 "subcommands": [{"id": crate::surface::MEDIATION_ID, "path": "adjudicate"}],
             });
             let answers = dir.join("answers");
-            std::fs::write(
+            crate::scratch::stub_at(
                 &answers,
-                format!(
-                    "#!/bin/sh\n[ \"$1 $2 $3\" = 'spec --format json' ] || exit 9\nprintf '%s' '{document}'\n"
-                ),
-            )?;
-            make_executable(&answers)?;
+                &serde_json::json!([
+                    {
+                        "argv_prefix": ["spec", "--format", "json"],
+                        "steps": [{ "stdout": document.to_string() }],
+                    },
+                    { "steps": [{ "exit": 9 }] },
+                ]),
+            );
             assert_eq!(mediation_verb(&answers)?, "adjudicate");
             let fails = dir.join("fails");
-            std::fs::write(&fails, "#!/bin/sh\nexit 3\n")?;
-            make_executable(&fails)?;
+            crate::scratch::stub_at(&fails, &serde_json::json!([{ "steps": [{ "exit": 3 }] }]));
             let Err(refused) = mediation_verb(&fails) else {
                 bail!("a binary that exits non-zero has no surface to read");
             };

@@ -30,7 +30,7 @@
 //! This is the part that had to be settled before the code existed, because the
 //! obvious implementation is wrong here. A saga-style compensation stack unwound
 //! in the same process does not run when the container is killed —
-//! `mise-tasks/land.sh:353` records exactly that: *"a trap runs on the container
+//! `mise-tasks/land.sh:353` recorded exactly that: *"a trap runs on the container
 //! kill too."* The compensations that survive are the ones landing OUTSIDE the
 //! process: a pull request re-drafted on the forge, a lease tombstone, a
 //! cancelled run.
@@ -186,7 +186,7 @@ pub enum Precheck {
     /// Is an outstanding speculation still worth carrying?
     ///
     /// **AT THE TOP OF THE LAP, BEFORE ANYTHING CAN PUSH**, which is the property
-    /// `mise-tasks/land.sh` states in as many words: *"there is no path from a
+    /// `mise-tasks/land.sh` stated in as many words: *"there is no path from a
     /// losing bet to a push, which is what makes speculating safe rather than
     /// merely fast."* A lost bet leaves this branch carrying another branch's
     /// commits, and the lap's own replay runs immediately after — so the unwind
@@ -558,7 +558,7 @@ mod tests {
 
     /// **THE PUBLISHING ROW ASKS BEFORE IT PUBLISHES** (CLOUD-1681).
     ///
-    /// `mise-tasks/land.sh`'s invariant, quoted in this file's own header, is
+    /// `mise-tasks/land.sh`'s invariant, quoted in this file's own header, was
     /// *"there is no path from a losing bet to a push"* — and for the whole of
     /// this table's life the `Push` row carried `precheck: None` while `Replay`,
     /// `Ready` and the commit point each carried one. A pending bet reached the
@@ -681,7 +681,7 @@ mod tests {
     /// **THE BET IS SETTLED BEFORE ANYTHING IS SPENT**, and the position is the
     /// property rather than the presence.
     ///
-    /// `mise-tasks/land.sh` states the invariant in as many words: *"there is no
+    /// `mise-tasks/land.sh` stated the invariant in as many words: *"there is no
     /// path from a losing bet to a push."* A [`Precheck::BetSettled`] positioned
     /// after any effectful row would give it one — the lap would spend a matrix,
     /// or push, on a tree still carrying another branch's commits, and only then

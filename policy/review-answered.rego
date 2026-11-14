@@ -82,8 +82,8 @@ rules contains "review read absent"
 # drove this module end to end asserted the refusal's PROSE, which CLOUD-1050
 # deletes; the migration gate refuses an authored Bats suite edited in place, so
 # it retired into `crates/batten/tests/review_answered.rs`, which drives the same
-# two hook calls over the compiled binary. `mutant` resolves a gate's suite by
-# `tests/<gate>.bats`, so there is nothing for it to reach.
+# two hook calls over the compiled binary. `mutant` resolved a gate's suite by
+# `tests/<gate>.bats`, so there was nothing for it to reach.
 #MUTANT-SUITE crates/batten/tests/it/review_answered.rs
 # THE CASE IS ONE THIS MODULE DECIDES, and the first spelling named one it does
 # not. A ready with NO record at all is refused by the typed `receipt` rows in
@@ -304,8 +304,8 @@ test_a_compound_command_is_still_a_ready if {
 # select a commit, so no record is projected for one. Asserting prose is allowed
 # here would therefore pin a property of a fabricated input rather than of the
 # system, and the anchor it justified turned out to open a bypass. The real
-# behaviour is asserted end to end in `tests/review-answered.bats`, over the
-# binary, where the engine's own selection is what decides.
+# behaviour is asserted end to end in
+# `crates/batten/tests/it/review_answered.rs`, over the binary, where the engine's own selection is what decides.
 
 # An absent record is the receipt row's refusal, not this one's — so this module
 # must be silent about it rather than adding a second message.

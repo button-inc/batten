@@ -44,28 +44,74 @@ use std::process::Output;
 
 use batten::exit::ExitCode;
 
-/// A stand-in for `cargo` and `cross`, first on `PATH`.
+/// The Windows triples the cases build for: a target named here gets `.exe`.
+const WINDOWS_TARGETS: &[&str] = &["x86_64-pc-windows-gnu", "x86_64-pc-windows-msvc"];
+
+/// The stand-in's plan for `program` (`cargo` or `cross`), first on `PATH`.
 ///
 /// It logs every invocation, answers `metadata` from a file, and for a build
 /// writes the binary where the declared target directory says the builder
-/// would — unless told to fail, or to write nothing.
-const STUB: &str = r#"#!/usr/bin/env bash
-printf '%s %s\n' "$(basename "$0")" "$*" >>"$STUB_LOG"
-if [ "${1:-}" = metadata ]; then cat "$STUB_METADATA"; exit 0; fi
-if [ -n "${STUB_FAIL:-}" ]; then echo "error: the stub build failed" >&2; exit 101; fi
-[ -n "${STUB_NOBIN:-}" ] && exit 0
-t=""; b=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-  --target) t="$2"; shift ;;
-  --bin) b="$2"; shift ;;
-  esac
-  shift
-done
-case "$t" in *-windows-*) b="$b.exe" ;; esac
-mkdir -p "$STUB_TARGET/$t/dist"
-printf 'not really a binary\n' >"$STUB_TARGET/$t/dist/$b"
-"#;
+/// would — unless told to fail (`STUB_FAIL`), or to write nothing
+/// (`STUB_NOBIN`). A target is Windows when `windows` holds a file named for
+/// it, so the build appends `.exe`.
+fn stub_plan(program: &str, stubs: &Path, target: &Path) -> serde_json::Value {
+    let log = stubs.join("log").display().to_string();
+    let logged = serde_json::json!({"append": [log, format!("{program} {{argv}}\n")]});
+    let dist = format!("{}/{{argv-after:--target}}/dist", target.display());
+    let built = |suffix: &str| {
+        serde_json::json!([
+            logged,
+            {"mkdir": dist},
+            {"write": [format!("{dist}/{{argv-after:--bin}}{suffix}"), "not really a binary\n"]},
+        ])
+    };
+    serde_json::json!([
+        {"argv_prefix": ["metadata"], "steps": [
+            logged,
+            {"cat": stubs.join("metadata.json").display().to_string()},
+        ]},
+        {"env": "STUB_FAIL", "steps": [
+            logged,
+            {"stderr": "error: the stub build failed\n"},
+            {"exit": 101},
+        ]},
+        {"env": "STUB_NOBIN", "steps": [logged]},
+        {"file_exists": format!("{}/windows/{{argv-after:--target}}", stubs.display()),
+         "steps": built(".exe")},
+        {"steps": built("")},
+    ])
+}
+
+/// THE TEST STAND-IN IS NEVER SHIPPED (CLOUD-2336). `examples/stub.rs` is an
+/// `[[example]]` precisely so that this repository's own `cargo metadata`, fed
+/// to the reader `dist` names its archive from, still declares exactly one
+/// binary. The day the helper became a `[[bin]]`, the reader would refuse with
+/// "2 binary targets", and so would this case.
+#[test]
+fn the_package_ships_exactly_one_binary() {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the subject is this repository's real `cargo metadata`, which only cargo answers (CLOUD-2336)"
+    )]
+    let output = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(at_root("."))
+        .output()
+        .expect("cargo metadata runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata is JSON");
+    let package = batten::dist::package(&metadata).expect("exactly one releasable binary");
+    assert_eq!(package.bin, "batten");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\"batten-stub\""),
+        "the stand-in is still a target of the package, as an example"
+    );
+}
 
 /// One scratch workspace: its root, its stub directory and the stub's log.
 struct Bench {
@@ -79,13 +125,13 @@ fn bench(name: &str, version: &str, bins: &[&str]) -> Bench {
     let root = crate::common::scratch_repo(&format!("dist-{name}"));
     let stubs = root.join(".stubs");
     for program in ["cargo", "cross"] {
-        write(&stubs, program, STUB);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(stubs.join(program), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        crate::common::stub_at(
+            &stubs.join(program),
+            &stub_plan(program, &stubs, &root.join("target")),
+        );
+    }
+    for windows in WINDOWS_TARGETS {
+        write(&stubs, &format!("windows/{windows}"), "");
     }
     let mut targets: Vec<serde_json::Value> = bins
         .iter()
@@ -115,9 +161,6 @@ fn dist(bench: &Bench, args: &[&str], env: &[(&str, &str)]) -> Output {
         .arg("dist")
         .args(args)
         .env("PATH", std::env::join_paths(paths).unwrap())
-        .env("STUB_LOG", &bench.log)
-        .env("STUB_METADATA", bench.stubs.join("metadata.json"))
-        .env("STUB_TARGET", bench.root.join("target"))
         // An ambient builder (a release leg's own) must not pick the case's.
         .env_remove("DIST_BUILD_TOOL");
     for (name, value) in env {
@@ -141,8 +184,8 @@ fn opens_with(path: &Path, magic: &[u8]) -> bool {
 
 #[test]
 fn the_stem_is_named_from_the_workspace_and_nothing_is_built() {
-    // UNIX ONLY: the stub builders are `bash` scripts, which a Windows runner
-    // cannot put first on `PATH` as `cargo`.
+    // UNIX ONLY: the stub builders are the stand-in linked as a bare `cargo`,
+    // which a Windows `PATH` lookup (wanting `cargo.exe`) would not find.
     if !cfg!(unix) {
         return;
     }

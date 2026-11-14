@@ -55,7 +55,7 @@
 # before the push. That is a judgement, and a gate resolving to it would be the
 # model verdict non-negotiable rule 3 forbids. `crates/batten/tests/it/landing_roster.rs`
 # is the tier that drives the engine over the real committed file; the adapter's
-# own behaviour is `tests/checks-green.bats`'s and is not restated here.
+# own behaviour is `crates/batten/tests/it/checks_green.rs`'s, not restated here.
 #MUTANT-SUITE crates/batten/tests/it/landing_roster.rs
 #MUTANT guard-unread|s@^\tsome line in input.tree.lines\[landing_workflow\]$@\tsome line in []@|the_committed_landing_workflow_is_guarded
 #MUTANT guard-matches-anything|s@^\tcontains(line, "mise run checks-green")$@\ttrue@|a_landing_workflow_that_does_not_consult_the_roster_is_refused

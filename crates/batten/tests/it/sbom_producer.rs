@@ -64,7 +64,7 @@
 use crate::common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
 use batten::rules::{self, Rule};
@@ -115,59 +115,40 @@ const IDENTITY_CDX: &str = r#"{"serialNumber":"urn:uuid:0000-1",
    {"ref":"ref-action-bbb","dependsOn":[]}
  ]}"#;
 
-/// A `syft` writing the two fixture documents where `--output` says. Sentinels:
-/// `syft.fails`; `syft.volatile` stamps a fresh namespace per run, which the
-/// stability reading must see past.
-const SYFT: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-[ ! -f "$FIXTURE/syft.fails" ] || exit 1
-spdx=""
-cdx=""
-want=0
-for arg in "$@"; do
-	if [ "$want" = 1 ]; then
-		case "$arg" in
-		spdx-json=*) spdx="${arg#spdx-json=}" ;;
-		cyclonedx-json=*) cdx="${arg#cyclonedx-json=}" ;;
-		esac
-		want=0
-		continue
-	fi
-	[ "$arg" = "--output" ] && want=1
-done
-printf '%s\n' "$*" >>"$FIXTURE/syft.args"
-mkdir -p "$(dirname "$spdx")" "$(dirname "$cdx")"
-cat "$FIXTURE/spdx.fixture" >"$spdx"
-cat "$FIXTURE/cdx.fixture" >"$cdx"
-if [ -f "$FIXTURE/syft.drifts" ]; then
-	# Portable on purpose: BSD sed reads `-i`'s next word as a backup suffix,
-	# and BSD wc pads the count, so the macOS leg never drifted.
-	n=$(wc -l <"$FIXTURE/syft.args" | tr -d ' ')
-	sed "s/\"crate0\"/\"crate$n\"/" "$spdx" >"$spdx.drift"
-	mv "$spdx.drift" "$spdx"
-fi
-"#;
+/// A `syft` writing the two fixture documents where `--output` says, and
+/// logging its argv to `syft.args`. Sentinels: `syft.fails`; `syft.drifts`
+/// makes every scan after the first write `spdx.drifted` instead — the fixture
+/// with `crate0` renamed — so two scans of one tree differ.
+fn syft() -> serde_json::Value {
+    let wrote = |spdx: &str| {
+        serde_json::json!([
+            {"append": ["{env:FIXTURE}/syft.args", "{argv}\n"]},
+            {"run": ["cp", format!("{{env:FIXTURE}}/{spdx}"), "{argv-strip:spdx-json=}"]},
+            {"run": ["cp", "{env:FIXTURE}/cdx.fixture", "{argv-strip:cyclonedx-json=}"]},
+        ])
+    };
+    serde_json::json!([
+        {"file_exists": "{env:FIXTURE}/syft.fails", "steps": [{"exit": 1}]},
+        {"file_exists": "{env:FIXTURE}/syft.drifts",
+         "file_contains": ["{env:FIXTURE}/syft.args", "scan"],
+         "steps": wrote("spdx.drifted")},
+        {"steps": wrote("spdx.fixture")},
+    ])
+}
 
-const CARGO: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-[ "${1:-}" != "fetch" ] || exit 0
-[ ! -f "$FIXTURE/metadata.fails" ] || exit 1
-if [ "${1:-}" = "metadata" ]; then
-	printf '{"packages": %s}\n' "$(cat "$FIXTURE/metadata.json")"
-	exit 0
-fi
-exit 1
-"#;
-
-fn executable(path: &Path, body: &str) {
-    fs::write(path, body).expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = fs::metadata(path).expect("stat").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod");
-    }
+/// A `cargo` answering `fetch`, and `metadata` with `metadata.json`'s packages
+/// unless `metadata.fails` is there.
+fn cargo() -> serde_json::Value {
+    serde_json::json!([
+        {"argv_prefix": ["fetch"], "steps": []},
+        {"file_exists": "{env:FIXTURE}/metadata.fails", "steps": [{"exit": 1}]},
+        {"argv_prefix": ["metadata"], "steps": [
+            {"stdout": "{\"packages\": "},
+            {"cat": "{env:FIXTURE}/metadata.json"},
+            {"stdout": "}\n"},
+        ]},
+        {"steps": [{"exit": 1}]},
+    ])
 }
 
 /// The `[sbom]` table a fixture declares, with `extra` appended inside it.
@@ -210,9 +191,8 @@ impl Fixture {
         common::git_in(&repo, &["add", "-A"]);
         common::git_in(&repo, &["commit", "-qm", "fixture"]);
         fs::create_dir_all(dir.join(CACHE)).expect("cache");
-        fs::create_dir_all(dir.join("bin")).expect("bin");
-        executable(&dir.join("bin/syft"), SYFT);
-        executable(&dir.join("bin/cargo"), CARGO);
+        common::stub_at(&dir.join("bin/syft"), &syft());
+        common::stub_at(&dir.join("bin/cargo"), &cargo());
         let fixture = Self { dir };
         fixture.documents(IDENTITY_SPDX, IDENTITY_CDX);
         fixture.metadata(&format!(
@@ -227,6 +207,11 @@ impl Fixture {
 
     fn documents(&self, spdx: &str, cdx: &str) {
         common::write(&self.dir, "spdx.fixture", spdx);
+        common::write(
+            &self.dir,
+            "spdx.drifted",
+            &spdx.replace("\"crate0\"", "\"crate1\""),
+        );
         common::write(&self.dir, "cdx.fixture", cdx);
     }
 

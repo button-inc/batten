@@ -1,7 +1,9 @@
 //! CLOUD-430: `:::` bundles, and reading a capture that is still being written.
 //!
-//! Unix-only per CLOUD-113: every case here spawns a `#!/bin/sh` fixture, and
-//! two of them reach for `flock(1)` to be a genuinely independent reader.
+//! Unix-only per CLOUD-113: the live-capture cases signal a pid with `kill(1)`,
+//! and two of them reach for `flock(1)` to be a genuinely independent reader.
+//! Every child is a real program or the test stand-in, never authored shell
+//! (CLOUD-2336).
 //!
 //! The concurrency cases use **real second processes**, never two threads, and
 //! that is the acceptance clause rather than a preference: the property is about
@@ -29,17 +31,19 @@ use common::{StateHome as _, scratch};
 /// How long a case waits for a condition before giving up.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// A `#!/bin/sh` fixture, executable, that runs `body`.
-fn script(name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = scratch(name);
-    fs::create_dir_all(&dir).expect("create dir");
-    let path = dir.join("child.sh");
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write child");
-    let mut mode = fs::metadata(&path).expect("stat child").permissions();
-    mode.set_mode(0o755);
-    fs::set_permissions(&path, mode).expect("chmod child");
+/// The test stand-in, installed as a fixture child that runs `steps`.
+fn stand_in(name: &str, steps: &serde_json::Value) -> PathBuf {
+    let path = scratch(name).join("child");
+    common::stub_at(&path, &serde_json::json!([{ "steps": steps }]));
     path
+}
+
+/// A fixture child that exits `code` and says nothing.
+fn exits(name: &str, code: i32) -> String {
+    stand_in(name, &serde_json::json!([{ "exit": code }]))
+        .to_str()
+        .expect("utf-8")
+        .to_owned()
 }
 
 /// Run `batten exec` with the capture store isolated under a scratch home.
@@ -90,15 +94,7 @@ fn a_bundle_runs_every_command_and_addresses_each_one() {
     let (output, home) = exec(
         "bundle-two",
         &[
-            "exec",
-            "--",
-            "sh",
-            "-c",
-            "echo first",
-            ":::",
-            "sh",
-            "-c",
-            "echo second",
+            "exec", "--", "printf", "%s\n", "first", ":::", "printf", "%s\n", "second",
         ],
     );
     assert!(output.status.success(), "{}", said(&output));
@@ -128,7 +124,7 @@ fn a_bundle_runs_every_command_and_addresses_each_one() {
 fn a_single_command_renders_exactly_as_it_did_before_bundling() {
     // Byte-stability, and the reason the index is conditional: every reader and
     // every receipt keyed to these lines predates bundling.
-    let (output, _) = exec("bundle-single", &["exec", "--", "sh", "-c", "echo alone"]);
+    let (output, _) = exec("bundle-single", &["exec", "--", "printf", "%s\n", "alone"]);
     let record = said(&output);
     assert!(
         !record.contains("[0]"),
@@ -144,23 +140,18 @@ fn a_bundle_reports_the_first_failure_never_the_last_child() {
     // report command 3's zero. Reading the FIRST failure rather than the last
     // also keeps the answer a property of the bundle rather than of the
     // scheduler, which `--jobs` would otherwise make non-deterministic.
+    let three = exits("bundle-first-failure-child", 3);
     let (output, _) = exec(
         "bundle-first-failure",
         &[
             "exec",
             "--continue-on-error",
             "--",
-            "sh",
-            "-c",
-            "exit 0",
+            "true",
             ":::",
-            "sh",
-            "-c",
-            "exit 3",
+            &three,
             ":::",
-            "sh",
-            "-c",
-            "exit 0",
+            "true",
         ],
     );
     assert_eq!(output.status.code(), Some(3), "{}", said(&output));
@@ -175,17 +166,13 @@ fn a_bundle_stops_at_the_first_failure_unless_told_to_continue() {
     // makes "did not run" observable — a record that merely omitted the command
     // could be omitting it for any reason.
     let marker = scratch("bundle-stop").join("third-ran");
-    let touch = format!("touch {}", marker.display());
     let args: Vec<String> = vec![
         "exec".into(),
         "--".into(),
-        "sh".into(),
-        "-c".into(),
-        "exit 4".into(),
+        exits("bundle-stop-child", 4),
         ":::".into(),
-        "sh".into(),
-        "-c".into(),
-        touch.clone(),
+        "touch".into(),
+        marker.to_str().expect("utf-8").to_owned(),
     ];
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
     let (output, _) = exec("bundle-stop-home", &borrowed);
@@ -215,20 +202,12 @@ fn bundling_does_not_change_a_captures_identity() {
     // would have stored. Asserted on the DIGEST, which is the identity.
     let (alone, _) = exec(
         "bundle-identity-alone",
-        &["exec", "--", "sh", "-c", "echo same"],
+        &["exec", "--", "printf", "%s\n", "same"],
     );
     let (bundled, _) = exec(
         "bundle-identity-bundled",
         &[
-            "exec",
-            "--",
-            "sh",
-            "-c",
-            "echo other",
-            ":::",
-            "sh",
-            "-c",
-            "echo same",
+            "exec", "--", "printf", "%s\n", "other", ":::", "printf", "%s\n", "same",
         ],
     );
     let digest = |text: &str, want: &str| -> String {
@@ -250,9 +229,7 @@ fn an_empty_segment_is_a_usage_error_rather_than_a_silent_narrowing() {
     // exactly the quiet narrowing a gate must never do.
     let (output, _) = exec(
         "bundle-empty-segment",
-        &[
-            "exec", "--", "sh", "-c", "true", ":::", ":::", "sh", "-c", "true",
-        ],
+        &["exec", "--", "true", ":::", ":::", "true"],
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(said(&output).contains("is empty"), "{}", said(&output));
@@ -266,7 +243,7 @@ fn a_bad_jobs_value_names_what_was_wrong_with_it() {
     for value in ["0", "many"] {
         let (output, _) = exec(
             &format!("bundle-jobs-{value}"),
-            &["exec", "--jobs", value, "--", "sh", "-c", "true"],
+            &["exec", "--jobs", value, "--", "true"],
         );
         assert_eq!(output.status.code(), Some(1), "--jobs {value} must refuse");
         assert!(said(&output).contains("--jobs"), "{}", said(&output));
@@ -278,6 +255,10 @@ fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
     // What `--jobs` would otherwise cost: with two children in flight the order
     // things FINISH in is a property of the machine, and Batten's output has to
     // be a property of the bundle. Command 0 sleeps so it reliably finishes last.
+    let slow = stand_in(
+        "bundle-jobs-order-child",
+        &serde_json::json!([{ "sleep": 1000 }, { "stdout": "slow\n" }]),
+    );
     let (output, _) = exec(
         "bundle-jobs-order",
         &[
@@ -285,13 +266,11 @@ fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
             "--jobs",
             "2",
             "--",
-            "sh",
-            "-c",
-            "sleep 1; echo slow",
+            slow.to_str().expect("utf-8"),
             ":::",
-            "sh",
-            "-c",
-            "echo fast",
+            "printf",
+            "%s\n",
+            "fast",
         ],
     );
     assert!(output.status.success(), "{}", said(&output));
@@ -312,11 +291,53 @@ fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
     reason = "stays, and test-only: probing for `flock(1)` is asking the host a question about itself, which has no in-process form"
 )]
 fn has_flock() -> bool {
-    Command::new("sh")
-        .args(["-c", "command -v flock >/dev/null"])
+    Command::new("flock")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
-        .expect("probe for flock")
-        .success()
+        .is_ok_and(|status| status.success())
+}
+
+/// Copy a spool's watermark and data into `snapshot` while holding its lock
+/// (`flock -s` shared, `flock -n` without waiting), then answer the lock's exit
+/// status and the committed bytes from `from` up to the watermark — what the
+/// `dd`/`head -c` a shell once ran under the lock printed.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the reader is a REAL second process holding the same OS advisory lock Batten takes"
+)]
+fn snapshot_under_lock(
+    mode: &str,
+    lock: &Path,
+    watermark: &Path,
+    data: &Path,
+    snapshot: &Path,
+    from: u64,
+) -> (bool, String) {
+    fs::create_dir_all(snapshot).expect("create the snapshot directory");
+    let status = Command::new("flock")
+        .arg(mode)
+        .arg(lock)
+        .arg("cp")
+        .arg(watermark)
+        .arg(data)
+        .arg(snapshot)
+        .stdin(Stdio::null())
+        .status()
+        .expect("read the spool");
+    let name = |path: &Path| snapshot.join(path.file_name().expect("a file name"));
+    let committed: u64 = fs::read_to_string(name(watermark))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0);
+    let bytes = fs::read(name(data)).unwrap_or_default();
+    let end = usize::try_from(committed)
+        .expect("a length fits")
+        .min(bytes.len());
+    let start = usize::try_from(from).expect("an offset fits");
+    let seen = bytes.get(start..end).unwrap_or_default();
+    (status.success(), String::from_utf8_lossy(seen).into_owned())
 }
 
 /// The live spool's three paths for one stream of one command.
@@ -361,28 +382,10 @@ fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, P
 /// is asserted: the second process is the whole point, since an in-process
 /// reader would say nothing about a lock the kernel releases when its holder
 /// dies.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
-)]
-fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
+fn read_spool(lock: &Path, watermark: &Path, data: &Path, snapshot: &Path, from: u64) -> String {
     let deadline = Instant::now() + PATIENCE;
     loop {
-        let out = Command::new("flock")
-            .args([
-                "-s",
-                lock.to_str().expect("utf-8"),
-                "sh",
-                "-c",
-                &format!(
-                    "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
-                    watermark.display(),
-                    data.display()
-                ),
-            ])
-            .output()
-            .expect("read the spool");
-        let seen = String::from_utf8_lossy(&out.stdout).into_owned();
+        let (_, seen) = snapshot_under_lock("-s", lock, watermark, data, snapshot, from);
         if !seen.is_empty() || Instant::now() >= deadline {
             return seen;
         }
@@ -435,12 +438,17 @@ fn poll_until<T>(mut probe: impl FnMut() -> Option<T>) -> Option<T> {
 /// A child that says `line`, records its own pid, and then holds its capture
 /// live — for far longer than any case waits, so the live window is the case's
 /// to close rather than a race against a short `sleep` (CLOUD-2059). Returns the
-/// script and the note its pid lands in.
+/// child and the note its pid lands in.
 fn live_child(name: &str, line: &str) -> (PathBuf, PathBuf) {
     let note = scratch(&format!("{name}-pid")).join("pid");
-    let child = script(
+    fs::create_dir_all(note.parent().expect("a parent")).expect("create the note's directory");
+    let child = stand_in(
         name,
-        &format!("echo {line}\necho $$ > {}\nexec sleep 300", note.display()),
+        &serde_json::json!([
+            { "stdout": format!("{line}\n") },
+            { "write": [note.to_str().expect("utf-8"), "{pid}"] },
+            { "sleep": 300_000 },
+        ]),
     );
     (child, note)
 }
@@ -476,6 +484,7 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     let (child, child_pid) = live_child("live-read-child", "committed");
     let mut batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .state_home(&home)
@@ -495,7 +504,8 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     await_path(&watermark);
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
-    let read = |from: u64| read_spool(&lock, &watermark, &data, from);
+    let snapshot = scratch("live-read-snapshot");
+    let read = |from: u64| read_spool(&lock, &watermark, &data, &snapshot, from);
 
     let first = read(0);
     assert_eq!(
@@ -565,6 +575,7 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
     let (child, child_pid) = live_child("live-killed-child", "durable");
     let mut batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .state_home(&home)
@@ -593,31 +604,19 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
 
     // The lock is takeable — immediately, and without `-w`, which is what makes
     // this an assertion about auto-release rather than about patience.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: taking the lock from outside the process is what makes this an assertion about auto-release rather than about patience"
-    )]
-    let taken = Command::new("flock")
-        .args([
-            "-n",
-            lock.to_str().expect("utf-8"),
-            "sh",
-            "-c",
-            &format!(
-                "w=$(cat {}); head -c \"$w\" {}",
-                watermark.display(),
-                data.display()
-            ),
-        ])
-        .output()
-        .expect("take the lock a dead writer held");
-    assert!(
-        taken.status.success(),
-        "a dead writer's advisory lock must not outlive it"
+    // Taking the lock from outside the process is what makes this an assertion
+    // about auto-release rather than about patience.
+    let (taken, prefix) = snapshot_under_lock(
+        "-n",
+        &lock,
+        &watermark,
+        &data,
+        &scratch("live-killed-snapshot"),
+        0,
     );
+    assert!(taken, "a dead writer's advisory lock must not outlive it");
     assert_eq!(
-        String::from_utf8_lossy(&taken.stdout),
-        "durable\n",
+        prefix, "durable\n",
         "and the watermark still names a defined prefix"
     );
 }
@@ -633,13 +632,11 @@ fn two_concurrent_batten_processes_store_the_same_record_without_tearing() {
     // complete.
     let home = scratch("live-concurrent-home");
     fs::create_dir_all(&home).expect("create home");
-    let child = script("live-concurrent-child", "echo identical");
-
     let mut running = Vec::new();
     for _ in 0..6 {
         running.push(
             common::batten()
-                .args(["exec", "--", child.to_str().expect("utf-8")])
+                .args(["exec", "--", "printf", "%s\n", "identical"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .state_home(&home)

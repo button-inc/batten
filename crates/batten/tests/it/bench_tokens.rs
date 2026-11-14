@@ -236,6 +236,99 @@ fn an_unmethodical_table_is_refused() {
     assert!(cause.contains("bench/tokens/RESULTS.md:"), "{cause}");
 }
 
+/// A copy of the benchmark whose workloads are `declared`, one workload over
+/// `fixture`, run once without `--check` so it writes its own table.
+fn bench_declared(name: &str, fixture: &str, arms: &str) -> (Output, String) {
+    let copy = bench_copy(name);
+    std::fs::write(
+        copy.join("bench/tokens/workloads.toml"),
+        format!(
+            "version = 1\n\n[[workload]]\nid = \"w\"\ncapability = \"c\"\nquestion = \"q?\"\n\
+             fixture = \"{fixture}\"\nruns = 1\n{arms}"
+        ),
+    )
+    .expect("declare the workload");
+    let mut command = batten();
+    command.current_dir(&copy).args(["bench", "tokens"]);
+    let outcome = command.output().expect("run batten bench tokens");
+    let table = std::fs::read_to_string(copy.join("bench/tokens/RESULTS.md")).unwrap_or_default();
+    (outcome, table)
+}
+
+/// The table's row for one arm, from its name to the end of the line.
+fn row<'t>(table: &'t str, arm: &str) -> &'t str {
+    table
+        .lines()
+        .find(|line| line.starts_with(&format!("| {arm} |")))
+        .unwrap_or_default()
+}
+
+/// AN ELEMENT IS ONE ARGUMENT (CLOUD-2635): no shell splits a step, so `a b`
+/// reaches `printf` whole and prints three bytes. Joined and split again, it
+/// would print `ab`, two — which is why `%s` with no newline is the
+/// discriminating spelling.
+#[test]
+fn an_argv_element_with_a_space_stays_one_argument() {
+    if !cfg!(unix) {
+        return;
+    }
+    let (outcome, table) = bench_declared(
+        "bench-tokens-argv",
+        "scan-pointer",
+        "baseline = [[\"printf\", \"%s\", \"a b\"]]\nbatten = [[\"printf\", \"%s\", \"x\"]]\n",
+    );
+    assert_eq!(outcome.status.code(), Some(0), "{}", stderr(&outcome));
+    assert!(
+        row(&table, "baseline").starts_with("| baseline | 1 | 3 |"),
+        "{table}"
+    );
+}
+
+/// A HANDLE ELEMENT READS STEP ONE'S REPORT (CLOUD-2635): the later steps of a
+/// three-step arm get the handle `exec --capture-only` printed and show the
+/// capture, exiting 0. The same element with no capturing step before it is a
+/// refused declaration, exit 2.
+#[test]
+fn a_handle_element_reads_step_one() {
+    if !cfg!(unix) {
+        return;
+    }
+    let (outcome, table) = bench_declared(
+        "bench-tokens-handle",
+        "build-warning",
+        "baseline = [[\"cat\", \"build.log\"]]\nbatten = [\
+         [\"BATTEN\", \"exec\", \"--capture-only\", \"--\", \"cat\", \"build.log\"], \
+         [\"BATTEN\", \"capture\", \"show\", \"{{handle:stdout}}\", \"--lines\", \"1:1\"], \
+         [\"BATTEN\", \"capture\", \"show\", \"{{handle:stdout}}\", \"--lines\", \"2:2\"]]\n",
+    );
+    assert_eq!(outcome.status.code(), Some(0), "{}", stderr(&outcome));
+    let mine = row(&table, "batten");
+    assert!(
+        mine.starts_with("| batten | 3 |") && mine.ends_with("| 0 |"),
+        "{table}"
+    );
+
+    let (outcome, _) = bench_declared(
+        "bench-tokens-handle-unprinted",
+        "build-warning",
+        "baseline = [[\"cat\", \"build.log\"]]\nbatten = [\
+         [\"BATTEN\", \"capture\", \"show\", \"{{handle:stdout}}\", \"--lines\", \"1:1\"]]\n",
+    );
+    assert_eq!(outcome.status.code(), Some(2), "{}", stderr(&outcome));
+}
+
+/// A STRING STEP IS REFUSED (CLOUD-2635): it is what a shell would have split,
+/// and nothing splits it now.
+#[test]
+fn a_string_step_is_refused() {
+    let (outcome, _) = bench_declared(
+        "bench-tokens-string-step",
+        "scan-pointer",
+        "baseline = [\"cat x\"]\nbatten = [[\"cat\", \"x\"]]\n",
+    );
+    assert_eq!(outcome.status.code(), Some(2), "{}", stderr(&outcome));
+}
+
 /// The retired programs are gone and no caller resolves them by path.
 #[test]
 fn the_retired_programs_are_not_tracked() {

@@ -1629,7 +1629,7 @@ impl Harness {
                     config_surface: Declaration::Partial,
                 },
                 // The one host with a measured capture row, and it is one cell
-                // of three. `tests/board-write-record.bats` reads this host's
+                // of three. `tests/board-write-record.bats` read this host's
                 // MCP content-block response shape, so the post-tool member is
                 // reachable — as DECODED content, because [`decode`] hands the
                 // engine an already-parsed value and the member's original
@@ -3111,8 +3111,8 @@ impl Field {
 /// entirely", and that is not expressible in this return type. Since CLOUD-824
 /// there is no launcher to report it: an absent binary is a command the host
 /// cannot run, which every supported host reports through its own channel, and
-/// this consumer's provisioning (`mise run install:local`, from
-/// `session-start.sh`) fails loudly at the moment it could still be fixed.
+/// this consumer's provisioning (`mise run install:local`, a
+/// `[[startup]]` repair) fails loudly at the moment it could still be fixed.
 #[must_use]
 pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
     field.read(&decode(harness, raw)?)
@@ -6362,6 +6362,17 @@ struct Grammar {
     /// fallback also reads every program no table classifies, where `-verbose`
     /// is one word and reading its `e` as inline would refuse a mention.
     bundles: bool,
+    /// The `inline` options that name a MODULE rather than carry program text
+    /// (`python -m`): no script file follows, and no script text either
+    /// (CLOUD-2626).
+    module: &'static str,
+    /// Short options whose value is a program FILE (`awk -f`, `sed -f`), which
+    /// stops the first operand being the program text (CLOUD-2626). Not in
+    /// `valued`, so [`script_operand`] steps over the letter alone and reads the
+    /// file it names as the operand, as the fallback always did.
+    program_file: &'static str,
+    /// Long options that do the same.
+    program_file_long: &'static [&'static str],
 }
 
 impl Grammar {
@@ -6401,6 +6412,9 @@ fn grammar(program: &str) -> Grammar {
             valued: "WX",
             valued_long: &["--check-hash-based-pycs"],
             bundles: true,
+            module: "m",
+            program_file: "",
+            program_file_long: &[],
         },
         "node" | "nodejs" => Grammar {
             inline: "ep",
@@ -6414,6 +6428,9 @@ fn grammar(program: &str) -> Grammar {
                 "--input-type",
             ],
             bundles: true,
+            module: "",
+            program_file: "",
+            program_file_long: &[],
         },
         "perl" => Grammar {
             inline: "eE",
@@ -6421,6 +6438,9 @@ fn grammar(program: &str) -> Grammar {
             valued: "IMm",
             valued_long: &[],
             bundles: true,
+            module: "",
+            program_file: "",
+            program_file_long: &[],
         },
         "ruby" => Grammar {
             inline: "e",
@@ -6428,6 +6448,70 @@ fn grammar(program: &str) -> Grammar {
             valued: "rIEC",
             valued_long: &["--encoding"],
             bundles: true,
+            module: "",
+            program_file: "",
+            program_file_long: &[],
+        },
+        // The POSIX shell family and the shells `crate::shell::ShellKind`
+        // names (CLOUD-2626): `-c` makes the first operand the command string,
+        // options bundle (`-ec`), and `-o`/`-O` take an option name. Each
+        // program's citation is its row in `crate::shell`'s interpreter table.
+        "sh" | "dash" | "ksh" | "mksh" | "ash" | "yash" | "bash" | "zsh" | "csh" | "tcsh" => {
+            Grammar {
+                inline: "c",
+                inline_long: &[],
+                valued: "oO",
+                valued_long: &["--rcfile", "--init-file"],
+                bundles: true,
+                module: "",
+                program_file: "",
+                program_file_long: &[],
+            }
+        }
+        // fish: `-c`/`--command` and `-C`/`--init-command` both carry commands.
+        "fish" => Grammar {
+            inline: "cC",
+            inline_long: &["--command", "--init-command"],
+            valued: "dfo",
+            valued_long: &["--debug", "--features", "--debug-output"],
+            bundles: true,
+            module: "",
+            program_file: "",
+            program_file_long: &[],
+        },
+        // POSIX awk and mawk: no inline option; the program is the first
+        // operand unless `-f progfile` names it.
+        "awk" | "mawk" => Grammar {
+            inline: "",
+            inline_long: &[],
+            valued: "FvW",
+            valued_long: &[],
+            bundles: true,
+            module: "",
+            program_file: "f",
+            program_file_long: &[],
+        },
+        // gawk adds `-e`/`--source` text and `-E`/`--exec` as a program file.
+        "gawk" => Grammar {
+            inline: "e",
+            inline_long: &["--source"],
+            valued: "FvilW",
+            valued_long: &["--assign", "--field-separator", "--include", "--load"],
+            bundles: true,
+            module: "",
+            program_file: "fE",
+            program_file_long: &["--file", "--exec"],
+        },
+        // sed: `-e script`; `-f file`; otherwise the first operand.
+        "sed" => Grammar {
+            inline: "e",
+            inline_long: &["--expression"],
+            valued: "l",
+            valued_long: &["--line-length"],
+            bundles: true,
+            module: "",
+            program_file: "f",
+            program_file_long: &["--file"],
         },
         // The fallback keeps CLOUD-2231's original reading: exact `-c`, `-e`,
         // `-E`, `--command`, `--eval`, never a bundle.
@@ -6437,8 +6521,98 @@ fn grammar(program: &str) -> Grammar {
             valued: "",
             valued_long: &[],
             bundles: false,
+            module: "",
+            program_file: "",
+            program_file_long: &[],
         },
     }
+}
+
+/// Where an interpreter's argv carries its program, read through its family's
+/// [`grammar`] (CLOUD-2626). The detector's question, [`crate::shell::logic`]'s
+/// rule 10; [`script_operand`] asks the operand gate's narrower one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Carried {
+    /// An inline option carries program text (`-c`, `-e`, `--eval`), wherever
+    /// it stands among the options.
+    Inline,
+    /// A program-file option names it (`awk -f`), and no inline option
+    /// carries text.
+    File,
+    /// The first operand: a script file to most families, the program text
+    /// itself to awk's and sed's.
+    Operand,
+    /// None of those: a module, stdin, or nothing at all.
+    Elsewhere,
+}
+
+/// Read `arguments`, the words after `program`, for where they carry its
+/// program: the options up to the first operand, `--` or `-`, each through the
+/// family's [`grammar`].
+pub(crate) fn carried(program: &str, arguments: &[&str]) -> Carried {
+    // The answer where the options end: a program-file option outranks the
+    // operand it leaves behind.
+    fn stop(file: bool, operand: bool) -> Carried {
+        match (file, operand) {
+            (true, _) => Carried::File,
+            (false, true) => Carried::Operand,
+            (false, false) => Carried::Elsewhere,
+        }
+    }
+    let grammar = grammar(program);
+    let mut file = false;
+    let mut words = arguments.iter().copied();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            return stop(file, words.next().is_some());
+        }
+        if word == "-" {
+            return stop(file, false);
+        }
+        let (name, attached) = long_option(word);
+        if grammar.inline_long.contains(&name) {
+            return Carried::Inline;
+        }
+        let file_long = grammar.program_file_long.contains(&name);
+        if file_long || grammar.valued_long.contains(&name) {
+            file |= file_long;
+            if attached.is_none() {
+                words.next();
+            }
+            continue;
+        }
+        if word.starts_with("--") {
+            continue;
+        }
+        if !word.starts_with('-') {
+            return stop(file, true);
+        }
+        let Some(bundle) = grammar.shorts(word) else {
+            continue;
+        };
+        // The first letter that decides the bundle, a program-file option
+        // included: what follows it is that option's value.
+        let decisive = bundle
+            .char_indices()
+            .take_while(|(_, flag)| flag.is_ascii_alphanumeric())
+            .find(|(_, flag)| {
+                grammar.inline.contains(*flag)
+                    || grammar.valued.contains(*flag)
+                    || grammar.program_file.contains(*flag)
+            });
+        match decisive {
+            Some((_, flag)) if grammar.module.contains(flag) => return stop(file, false),
+            Some((_, flag)) if grammar.inline.contains(flag) => return Carried::Inline,
+            Some((at, flag)) => {
+                file |= grammar.program_file.contains(flag);
+                if at + flag.len_utf8() == bundle.len() {
+                    words.next();
+                }
+            }
+            None => {}
+        }
+    }
+    stop(file, false)
 }
 
 /// Does any first stage run a declared interpreter on a script FILE outside the
@@ -6528,7 +6702,7 @@ fn is_version_char(c: char) -> bool {
 /// The family `program` belongs to: its name with any version suffix removed,
 /// so `perl5.36` and `node22` read through `perl`'s and `node`'s grammar just
 /// as [`declares`] admits them.
-fn family(program: &str) -> &str {
+pub(crate) fn family(program: &str) -> &str {
     program.trim_end_matches(is_version_char)
 }
 
@@ -7883,6 +8057,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Derived from `Lines` and `Document` by parsing every declared
+            // body (CLOUD-2625), so unbounded in the input for both their
+            // reasons at once.
+            crate::facts::Fact::Shell => None,
             // Not resolvable on the mediated call, for `Document`'s reason plus
             // one this family adds (CLOUD-1167): it opens and parses a file of
             // unbounded size, AND the file lives outside the repository, so the
@@ -9969,7 +10147,10 @@ fn words_in(nodes: &[rable::Node]) -> usize {
 /// cost is stated rather than absorbed: an unbalanced quote in a command that
 /// ALSO opens a heredoc is not caught here. That is a miss, never a false
 /// refusal, and it is a strictly smaller hole than the one this closes.
-fn covered(nodes: &[rable::Node], command: &str) -> bool {
+///
+/// `pub(crate)` for [`crate::shell::logic`], which asks the same question of
+/// the same parser's output (CLOUD-2625) rather than growing a second guard.
+pub(crate) fn covered(nodes: &[rable::Node], command: &str) -> bool {
     let Some(end) = nodes.iter().map(|node| node.span.end).max() else {
         // No nodes at all: an empty or whitespace-only command reads clean, and
         // `segments("")` giving an empty list is relied on elsewhere.
@@ -19847,7 +20028,8 @@ deny contains "refused by themodule" if {
         assert_eq!(python.shorts("--x"), None);
         assert_eq!(python.shorts("-"), None);
         assert_eq!(python.shorts("-ce"), Some("ce"));
-        let fallback = grammar("bash");
+        // `bash` was the fallback until CLOUD-2626 gave the shells a family.
+        let fallback = grammar("frobnicate");
         assert_eq!(fallback.shorts("-c"), Some("c"));
         assert_eq!(fallback.shorts("-ab"), None);
         assert_eq!(grammar("ruby").valued, "rIEC");

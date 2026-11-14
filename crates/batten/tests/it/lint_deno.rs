@@ -1,6 +1,6 @@
 //! `[tasks."lint:deno"]` — which tracked files reach `deno fmt` (CLOUD-104),
-//! over the task's own argv in a scratch repository with a `deno` stub first on
-//! `PATH` that fails on any file it is handed that is not JSON.
+//! over the task's own argv in a scratch repository with a `deno` stand-in first
+//! on `PATH` that records every file it is handed.
 //!
 //! Since CLOUD-1991 the task is one `batten exec --tracked` argv rather than a
 //! `git ls-files | xargs` body, so this tier runs THAT argv through the engine
@@ -30,16 +30,13 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-/// A `deno` that fails on any argument naming a file that does not parse as
-/// JSON — the predicate the pathspec guards, without a formatter this job may
-/// not install. `JQ` is the pinned jq's path, written in by `common::require_tool`
-/// so the suite-job gate sees the requirement (CLOUD-2388).
-const STUB: &str = r#"#!/usr/bin/env bash
-for f in "$@"; do
-	case "$f" in -*|fmt) continue ;; esac
-	"JQ" -e . "$f" >/dev/null 2>&1 || { echo "deno-stub: $f is not JSON" >&2; exit 1; }
-done
-"#;
+/// A `deno` that records every argv it is handed, one line per call, to
+/// `bin/deno.log` — the file set the pathspec guards, without a formatter this
+/// job may not install. A corrupt file the formatter is handed reds the task;
+/// so the case asserts which files REACH it, from the record.
+fn stub_plan(log: &Path) -> serde_json::Value {
+    serde_json::json!([{"steps": [{"append": [log.display().to_string(), "{argv}\n"]}]}])
+}
 
 const CORRUPT: &str = "{ this is not json,,,";
 const COVERED: &str = "lint-deno-probe.json";
@@ -58,15 +55,7 @@ struct Repo {
 impl Repo {
     fn new(name: &str) -> Self {
         let dir = common::scratch(&format!("lint-deno-{name}"));
-        std::fs::create_dir_all(dir.join("bin")).expect("bin");
-        let deno = dir.join("bin/deno");
-        let jq = common::require_tool("jq");
-        std::fs::write(&deno, STUB.replace("JQ", &jq.to_string_lossy())).expect("stub");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&deno, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
+        common::stub_at(&dir.join("bin/deno"), &stub_plan(&dir.join("bin/deno.log")));
         common::init_repo(&dir);
         std::fs::write(dir.join("ok.json"), "{}\n").expect("clean file");
         git(&dir, &["add", "ok.json"]);
@@ -86,7 +75,11 @@ impl Repo {
     /// this repository, run through the engine under test with the stub first on
     /// `PATH`. Tokens are single-quoted globs at most, so a whitespace split with
     /// the quotes trimmed is the argv mise hands the shell.
-    fn run(&self) -> Option<i32> {
+    ///
+    /// Its exit code, and whether the formatter was handed `path`.
+    fn run(&self, path: &str) -> (Option<i32>, bool) {
+        let log = self.dir.join("bin/deno.log");
+        let _ = std::fs::remove_file(&log);
         let body = common::task_body("lint:deno");
         let argv: Vec<String> = body
             .strip_prefix("cargo run --quiet -p batten -- ")
@@ -95,37 +88,58 @@ impl Repo {
             .map(|word| word.trim_matches('\'').to_owned())
             .collect();
         let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let path = std::env::join_paths(
+        let search = std::env::join_paths(
             std::iter::once(self.dir.join("bin")).chain(std::env::split_paths(&inherited)),
         )
         .expect("a PATH entry carries no separator");
-        common::batten()
+        let code = common::batten()
             .args(&argv)
             .current_dir(&self.dir)
-            .env("PATH", path)
+            .env("PATH", search)
             .output()
             .expect("run lint:deno")
             .status
-            .code()
+            .code();
+        let handed = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .split_whitespace()
+            .any(|word| word == path);
+        (code, handed)
     }
 }
 
 #[test]
 fn a_corrupt_file_at_a_covered_path_reds_it_and_removing_it_greens_again() {
     let repo = Repo::new("covered");
-    assert_eq!(repo.run(), Some(0), "a clean tree is green");
+    assert_eq!(
+        repo.run("ok.json"),
+        (Some(0), true),
+        "a clean tree is formatted"
+    );
     repo.probe(COVERED);
-    assert_ne!(repo.run(), Some(0), "a corrupt covered file reds it");
+    assert_eq!(
+        repo.run(COVERED),
+        (Some(0), true),
+        "a corrupt covered file reaches the formatter, which reds it"
+    );
     git(&repo.dir, &["rm", "-q", "--cached", "--force", COVERED]);
     std::fs::remove_file(repo.dir.join(COVERED)).expect("remove the probe");
-    assert_eq!(repo.run(), Some(0), "removing it greens again");
+    assert_eq!(
+        repo.run(COVERED),
+        (Some(0), false),
+        "removing it greens again"
+    );
 }
 
 #[test]
 fn a_corrupt_file_under_tests_fixtures_leaves_it_green() {
     let repo = Repo::new("excluded");
     repo.probe(EXCLUDED);
-    assert_eq!(repo.run(), Some(0));
+    assert_eq!(
+        repo.run(EXCLUDED),
+        (Some(0), false),
+        "the formatter is never handed it"
+    );
 }
 
 #[test]

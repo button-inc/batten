@@ -68,23 +68,13 @@ impl Fixture {
     fn new(case: &str) -> Self {
         let dir = common::scratch(&format!("git-hook-{case}"));
         let calls = dir.join("mise-calls");
-        let stub = format!(
-            "#!/usr/bin/env bash\n\
-             if [ -n \"${{BATTEN_GATE_PID:-}}\" ] && kill -0 \"$BATTEN_GATE_PID\" 2>/dev/null; then\n\
-             \tmarker=\"$BATTEN_GATE_PID alive\"\n\
-             else\n\
-             \tmarker=\"${{BATTEN_GATE_PID:-none}} not-alive\"\n\
-             fi\n\
-             printf '%s | marker=%s\\n' \"$*\" \"$marker\" >>'{}'\n",
-            calls.display()
-        );
-        stub_runner(&dir, &stub);
+        stub_runner(&dir, &recording(&dir, &calls));
         Self { dir, calls }
     }
 
     /// Replace the recording stub with one that only exits `code`.
     fn runner_exits(&self, code: i32) {
-        stub_runner(&self.dir, &format!("#!/usr/bin/env bash\nexit {code}\n"));
+        stub_runner(&self.dir, &serde_json::json!([{"steps": [{"exit": code}]}]));
     }
 
     /// A link to the hook body named `hook`, which is how git invokes it: the
@@ -129,13 +119,37 @@ impl Fixture {
     }
 }
 
-/// Write `body` as the executable `mise` in `dir/bin`.
-fn stub_runner(dir: &Path, body: &str) {
-    let bin = dir.join("bin");
-    fs::create_dir_all(&bin).expect("create the stub dir");
-    let stub = bin.join("mise");
-    fs::write(&stub, body).expect("write the stub runner");
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("make the stub runnable");
+/// The recording `mise`'s plan: every call is logged to `calls` as
+/// `<argv> | marker=<BATTEN_GATE_PID> alive|not-alive` (`none not-alive` when
+/// unset), live meaning `kill -0` reaches it.
+///
+/// A plan cannot splice a probe's answer into a line, so a call carrying a
+/// marker probes it to a file and re-runs the stand-in as `mise __marker
+/// <argv>`, whose rule reads that file.
+fn recording(dir: &Path, calls: &Path) -> serde_json::Value {
+    let calls = calls.display().to_string();
+    let pid = dir.join("marker-pid").display().to_string();
+    let status = dir.join("marker-status").display().to_string();
+    let mise = dir.join("bin/mise").display().to_string();
+    serde_json::json!([
+        {"argv_prefix": ["__marker"], "file_contains": [status, "alive"], "steps": [
+            {"append": [calls, "{argv-after:__marker} | marker={env:BATTEN_GATE_PID} alive\n"]},
+        ]},
+        {"argv_prefix": ["__marker"], "steps": [
+            {"append": [calls, "{argv-after:__marker} | marker={env:BATTEN_GATE_PID} not-alive\n"]},
+        ]},
+        {"env": "BATTEN_GATE_PID", "steps": [
+            {"write": [pid, "{env:BATTEN_GATE_PID}"]},
+            {"probe-pid": {"pid": pid, "to": status}},
+            {"run": [mise, "__marker", "{argv}"]},
+        ]},
+        {"steps": [{"append": [calls, "{argv} | marker=none not-alive\n"]}]},
+    ])
+}
+
+/// Install the stand-in as `mise` in `dir/bin` under `plan`.
+fn stub_runner(dir: &Path, plan: &serde_json::Value) {
+    common::stub_at(&dir.join("bin/mise"), plan);
 }
 
 /// A pid that is certainly not live: the process that owned it has exited and

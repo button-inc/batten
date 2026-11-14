@@ -2924,11 +2924,26 @@ mod tests {
     /// An artifact fetched over `file://` installs a runnable binary, reads as
     /// fresh, reinstalls from the cache once the binary is gone, and a pin that
     /// does not match is refused rather than installed.
+    /// The bytes of the real `true` on PATH, an artifact that runs and exits 0
+    /// (CLOUD-2336: no test authors shell). Off unix the artifact is never run,
+    /// so plain bytes stand in.
+    fn exits_zero() -> Vec<u8> {
+        if !cfg!(unix) {
+            return b"an artifact that is never run".to_vec();
+        }
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let truth = std::env::split_paths(&path)
+            .map(|dir| dir.join("true"))
+            .find(|candidate| candidate.is_file())
+            .expect("`true` is on PATH");
+        fs::read(truth).unwrap()
+    }
+
     #[test]
     fn an_artifact_installs_verified_and_reinstalls_from_the_cache() {
         let dir = scratch("apply");
-        let artifact = dir.join("tool.sh");
-        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        let artifact = dir.join("tool");
+        let body = exits_zero();
         fs::write(&artifact, &body).unwrap();
         let mut entry = entry("tool", &digest(&body));
         entry.url = Some(format!("file://{}", artifact.display()));
@@ -2995,8 +3010,8 @@ mod tests {
     #[test]
     fn a_linked_launcher_is_fresh_only_while_it_carries_what_the_entry_declares() {
         let dir = scratch("linked");
-        let artifact = dir.join("tool.sh");
-        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        let artifact = dir.join("tool");
+        let body = b"an artifact this case never runs".to_vec();
         fs::write(&artifact, &body).unwrap();
         let mut entry = entry("tool", &digest(&body));
         entry.url = Some(format!("file://{}", artifact.display()));

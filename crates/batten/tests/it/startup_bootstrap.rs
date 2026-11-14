@@ -196,6 +196,10 @@ fn linked_fixture(name: &str, dest: &str, body: &[u8]) -> (PathBuf, PathBuf) {
     (dir, artifact)
 }
 
+/// The provisioned artifact's bytes. These cases assert where the binary lands
+/// and its mode, never run it, so no shebang and no shell (CLOUD-2336).
+const NEVER_RUN: &[u8] = b"an artifact these cases never run\n";
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -223,7 +227,7 @@ fn applying_a_linked_entry_puts_the_binary_where_a_bare_name_resolves() {
     let (dir, _artifact) = linked_fixture(
         "provision-link",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     let out = batten()
         .current_dir(&dir)
@@ -261,7 +265,7 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     let (dir, _artifact) = linked_fixture(
         "provision-relink",
         dest.to_str().expect("the scratch path is UTF-8"),
-        b"#!/bin/sh\nexit 0\n",
+        NEVER_RUN,
     );
     let landed = dest.join("probe");
 
@@ -404,5 +408,64 @@ fn the_batten_presence_row_asks_nothing_of_the_runner() {
         !check.starts_with("[\"batten\""),
         "a check whose own program is the thing that may be missing reports \
          could-not-look and is never repaired. Was: {check}"
+    );
+}
+
+/// The lines inside the fenced blocks of one README section, heading to next
+/// heading.
+fn fenced_lines(readme: &str, heading: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_section = false;
+    let mut in_fence = false;
+    for line in readme.lines() {
+        if line.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence && line.starts_with('#') {
+            in_section = line == heading;
+            continue;
+        }
+        if in_section && in_fence {
+            lines.push(line.to_owned());
+        }
+    }
+    lines
+}
+
+/// THE SETUP FIELD LIVES ON THE PLATFORM, AND ITS ONE LINE IS WRITTEN HERE.
+///
+/// An agent that has to tell an operator what the field holds needs a line to
+/// copy, and the line has to be one this tree can honour: the install line the
+/// README already documents, then the verb that runs the committed rows.
+#[test]
+fn the_documented_setup_line_is_one_the_tree_honours() {
+    let readme = std::fs::read_to_string(root().join("README.md")).expect("the README reads");
+    let documented = fenced_lines(&readme, "### Cloud environment Setup field");
+    let [line] = documented.as_slice() else {
+        panic!("the section holds exactly one fenced line, found {documented:?}");
+    };
+    let install = fenced_lines(&readme, "## Install");
+    let install = install
+        .first()
+        .expect("the install block holds the install line");
+    assert!(
+        install.ends_with("install.sh | sh"),
+        "the premise: the install block's first line is the install line. Was: {install}"
+    );
+    assert_eq!(
+        line.strip_prefix(install.as_str()),
+        Some(" && batten startup --repair"),
+        "the Setup line is the install line, byte for byte, then the startup verb"
+    );
+    for gone in ["setup.sh", "provision apply"] {
+        assert!(
+            !line.contains(gone),
+            "the Setup line names {gone}, which the field does not run"
+        );
+    }
+    assert!(
+        root().join("install.sh").is_file(),
+        "the line fetches install.sh from this repository, so it must be tracked"
     );
 }

@@ -55,7 +55,7 @@
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The roster these cases decide against.
 ///
@@ -118,9 +118,9 @@ impl Fixture {
         // The recorder is a program the CALLER names, so the fixture supplies
         // one: it appends its argv, which is what makes "one push per poll"
         // countable rather than sampled.
-        write_program(
+        common::stub_at(
             &bin.join("recorder"),
-            &format!("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{root}/signals'\n"),
+            &serde_json::json!([{ "steps": [{ "append": [format!("{root}/signals"), "{argv}\n"] }] }]),
         );
         Self { dir }
     }
@@ -202,16 +202,6 @@ impl Fixture {
             .lines()
             .map(ToOwned::to_owned)
             .collect()
-    }
-}
-
-fn write_program(path: &Path, body: &str) {
-    std::fs::write(path, body).expect("write the stub program");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .expect("make the stub executable");
     }
 }
 

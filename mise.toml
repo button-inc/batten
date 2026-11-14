@@ -456,8 +456,8 @@ CI_RETIRING_CHECKS = ""
 #
 # WHY THESE TWO AND NOT `filed-here-check`: that gate is already the engine's
 # (CLOUD-1051) and the lap reaches it through `batten check`, so listing it here
-# would run it twice. These two are still bash and still have `land.sh` as their
-# only caller — which is what slice 7's deletion would orphan.
+# would run it twice. These two were still bash and still had `land.sh` as their
+# only caller — which is what slice 7's deletion would have orphaned.
 LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
 LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
 # THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
@@ -687,7 +687,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = ".config/nextest.toml,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,engine-disk-watch,engine-prune,engine-cache,engine-epoch,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-environment,engine-lint,engine-session,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml,engine-scratch,engine-stop"
+MUTANT_GATES = ".config/nextest.toml,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,engine-disk-watch,engine-prune,engine-cache,engine-epoch,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,engine-forge,engine-forge-query,engine-git,engine-census,engine-shell,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-tokens,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/examples/stub.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-environment,engine-lint,engine-session,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml,engine-scratch,engine-stop,connector-not-granted,memories,release-trigger-independent"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1495,12 +1495,12 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 # CLOUD-827's gate, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, DELIBERATELY. `verify` and
-# `mise-tasks/land.sh` both invoke it by name, and `land.sh` is an authored shell
-# rule `shell-retirement` refuses to see edited — so retiring the gate by editing
+# `mise-tasks/land.sh` both invoked it by name, and `land.sh` was an authored shell
+# rule `shell-retirement` refused to see edited — so retiring the gate by editing
 # its callers would have meant retiring the landing loop to move one predicate.
 # `batten check --rule` is the narrowing that makes a migrated row invocable
-# instead, and this row is its first consumer. Both callers stay byte-identical
-# and out of this PR's changed-file set.
+# instead, and this row is its first consumer. Both callers stayed byte-identical
+# and out of that PR's changed-file set.
 #
 # The `[tasks.policy-test]` precedent below is the same shape for the same reason:
 # an inline `cargo run -p batten` body where a shell file used to be.
@@ -1809,8 +1809,8 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # THE BASE RIDES `MUTANT_CHANGED_SINCE`, beside `MUTANT_GATES` in `[env]`.
 #
 # COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
-# every enforced gate and says so on stderr, as `ci suites` does: too wide shows
-# in the bill, too narrow has no symptom.
+# every enforced gate and says so on stderr: too wide shows in the bill, too
+# narrow has no symptom.
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
@@ -1901,10 +1901,10 @@ description = "Gate: every row this branch put on the board was refined at creat
 # CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `prose-only-check`'s reason above:
-# `mise-tasks/land.sh` invokes it by name at the fourth stop, and `land.sh` is an
-# authored shell rule `shell-retirement` refuses to see edited — so retiring the
+# `mise-tasks/land.sh` invoked it by name at the fourth stop, and `land.sh` was an
+# authored shell rule `shell-retirement` refused to see edited — so retiring the
 # gate by editing its caller would have meant retiring the landing loop to move
-# one predicate. That call site stays byte-identical and out of this PR's
+# one predicate. That call site stayed byte-identical and out of that PR's
 # changed-file set.
 #
 # THE HEREDOC ON THAT CALL BECOMES INERT INPUT, and the channel it carried moved
@@ -1958,7 +1958,7 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # whole load-time tier over all of them ran only when a human typed the verb.
 # `privileged-lane` is a live `deny` row over this repository's own privileged CI
 # lanes and its nine `test_` rules were, by the standard `tests/run-shape.bats`
-# states in its own header, comments that happen to parse.
+# stated in its own header, comments that happen to parse.
 #
 # AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and that is forced rather
 # than stylistic: `bash-surface-not-growing` (CLOUD-929) lands in this same PR and
@@ -1969,9 +1969,9 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # command, which is what `rules/toolchain.md` reserves a file task FROM.
 #
 # THIS DELIVERS THE LOAD-TIME TIER ONLY. `tests/<gate>.bats` over the compiled
-# binary is the tier that proves the ENGINE produces the shape a predicate reads,
+# binary was the tier that proved the ENGINE produces the shape a predicate reads,
 # and a `with input as` cannot substitute for it (CLOUD-845). That is why this row
-# also carries `tests/privileged-lane.bats` rather than stopping here.
+# also carried `tests/privileged-lane.bats` rather than stopping here.
 #
 # ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
 # whose exit code a one-command task already is.
@@ -2789,9 +2789,9 @@ description = "Build the release binary the hook registrations execute"
 # NO `depends` ON `target-prune` (CLOUD-2198): the floor model it judged is
 # retired, and the hook collects before this task's own spawn.
 #
-# The one place the hook's binary is produced, so `install:local`,
-# `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
-# of a cargo line that could drift in their flags.
+# The one place the hook's binary is produced, so `install:local` and every
+# other task that `depends` on it name a task rather than copies of a cargo
+# line that could drift in their flags.
 #
 # Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
 # `cargo run` re-walks the build graph per invocation and contends for the
@@ -2862,7 +2862,7 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # `rules/scanning.md` records from CLOUD-843's two disagreeing passes.
 # Describe the row here; do not write its needle.
 #
-# BENCH_METRIC IS THE LOAD-BEARING LINE. `mise-tasks/perf-record.sh` reads it from
+# BENCH_METRIC IS THE LOAD-BEARING LINE. `batten perf record` reads it from
 # the environment and stamps it into every series entry, defaulting to
 # `wall-clock` — the invocation series. Acquisition is a different axis measured
 # over a generated fixture family, so a shared stamp would let a later reader diff
@@ -2994,14 +2994,14 @@ depends = ["build:release"]
 # invoke `batten hook --harness <h>` directly and always did.
 #
 # So the launcher's search is replaced by putting the binary where a search would
-# have ended. The destination is `install.sh:224`'s, character for character, so
+# have ended. The destination is `install.sh`'s, character for character, so
 # a developer clone and a released install resolve the same name from the same
 # place rather than through two different rules.
 #
 # THE NO-BINARY CASE STILL REACHES A HUMAN, and through a louder channel than the
 # one it replaces. The launcher failed open with a stderr line and a
 # once-per-session `$TMPDIR` marker, which is the quietest report this repository
-# produces; this step runs inside `session-start.sh`'s `step`, which emits
+# produces; this step ran inside `session-start.sh`'s `step`, which emitted
 # `::error::`, a log pointer, and a non-zero exit. At hook time, a `batten` that
 # is not there is a command the host cannot run, which every supported host
 # reports through its own channel.
@@ -3024,17 +3024,14 @@ run = [
   "{% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten engine stamp",
 ]
 
-# The provisioning seam the environment's setup script ALREADY CALLS, and which
-# this repository never defined (CLOUD-1085).
+# The provisioning seam (CLOUD-1085), and what calls it is the `[[startup]]` row
+# `host-dependencies-present` in `batten.toml`.
 #
-# THE CALL SITE IS NOT OURS AND IT IS NOT NEW. The container's setup script runs
-# `mise run deps-install` on every provision, before any session starts, and
-# soft-fails with a stderr line when the task is absent — which is what it did for
-# the whole life of this defect. So the bootstrap seam was never missing; it was a
-# DANGLING CALL, and defining the task is the entire fix. Nothing outside this
-# repository changes, which is exactly what §1 asks for: the change is in the
-# environment configuration that provisions a container, and that configuration
-# already makes the call.
+# THE CALL SITE IS A DECLARED ROW (CLOUD-2739). The environment's Setup field runs
+# `batten startup --repair` on every provision, before any session starts, and
+# that row's `repair` is `mise run deps-install`. An earlier provisioning script
+# made the call directly and soft-failed while this task was absent, so the seam
+# was a DANGLING CALL and defining the task was the entire fix.
 #
 # `install.sh`, NEVER `install:local`, and the distinction is this row's own.
 # The local task builds the WORKING TREE's binary — "a dev-clone convenience that
@@ -3053,7 +3050,8 @@ run = [
 # WHAT SUPPLIES IT CHANGED, AND THIS COMMENT NAMED THE DEAD ONE (CLOUD-1455). It
 # used to read "the setup script shadows `mise` with a wrapper", which was true of
 # the ~120-line provisioning script and false the moment that became a one-line
-# `curl … install.sh | sh && batten startup --repair`. Nothing replaced the
+# `curl … install.sh | sh && batten startup --repair` (the exact line is in
+# `README.md`, "Cloud environment Setup field"). Nothing replaced the
 # wrapper, so every third-party pinned tool 403'd in a fresh container while this
 # comment still explained why they would not. The `[[provision.env]]` rows on
 # `batten.toml`'s mise entry are what supplies it now, through a launcher
@@ -3108,7 +3106,8 @@ description = "Provision the host dependencies mise does not: the released `batt
 # provision over it, and concluded permanent impossibility.
 #
 # This task is the seam that beats it, on a property rather than a hope: the
-# container's setup script calls `mise run deps-install` on every provision,
+# `[[startup]]` row `host-dependencies-present` repairs through it when the
+# environment's Setup field runs `batten startup --repair` on every provision,
 # BEFORE Claude launches. So it is upstream of the rewrite and upstream of the
 # harness snapshot, where every hook-event surface is downstream of both.
 #
@@ -3139,12 +3138,12 @@ description = "Provision the host dependencies mise does not: the released `batt
 # is how an engine came to disagree with its pin. `program run loose` holds it.
 run = ["batten engine install", "batten wiring reclaim -y"]
 
-# The report half of the same seam, and the setup script calls this one too.
+# The report half of the same seam.
 #
-# A REPORT, NOT A GATE: the caller discards the status (`mise run deps || true`),
-# so this exists to put the answer in the provisioning log where a human reads it,
-# rather than leaving the absence to surface as an unrelated failure at first use.
-# Same reason the setup script ends with `mise ls --current`.
+# A REPORT, NOT A GATE: it exists to put the answer in a log where a human reads
+# it, rather than leaving the absence to surface as an unrelated failure at first
+# use. The gating halves are the `[[startup]]` rows `host-dependencies-present`
+# and `toolchain-is-provisioned`, whose check is `mise ls --current --missing`.
 #
 # `command -v` FIRST, because it is the whole question. "A batten exists" and "the
 # batten the hook registrations resolve" are different claims —
@@ -3273,8 +3272,8 @@ env = { MISE_LOCKFILE = "false", MISE_ENV = "agent" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
-description = "Gate: every tool [tools] declares is actually installed — the question doctor.sh structurally cannot ask"
-# `mise-tasks/doctor.sh` looks for broken bin SYMLINKS under the installs dir,
+description = "Gate: every tool [tools] declares is actually installed — the question the provisioning self-check structurally cannot ask"
+# The provisioning self-check looks for broken bin SYMLINKS under the installs dir,
 # which is a question about RESIDUE. A tool declared and never fetched leaves no
 # symlink at all and passes it — which is exactly the state a failed install
 # leaves, and the state that made CLOUD-1683's false green possible. This asks
@@ -3523,8 +3522,8 @@ description = "Session start: reclaim the hook surface from launcher-provisioned
 # than CLOUD-1079 recorded. So this closes the session-start window and does not
 # hold against a mid-session re-provision. The residue is real and is recorded
 # rather than handed to an owner; what would close it is the provisioning seam
-# `deps-install` above already describes, which the container's setup script
-# calls before any session begins — upstream of both the rewrite and the harness
+# `deps-install` above already describes, which `batten startup --repair` runs
+# from the environment's Setup field before any session begins — upstream of both the rewrite and the harness
 # snapshot.
 # QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
 # sent both streams to a `/tmp` log, and on failure printed an `::error::` line
@@ -4011,7 +4010,7 @@ run = "batten startup --repair"
 # program, and CI still calls every one of these by name: `ci-tools-check` from
 # six workflows, `rust-paths-check` from `rust.yml`, `report-only-check` from
 # `scorecard.yml` and from `verify` here, `timeout-check` from
-# `timeout-drift.yml`, and `awk-regex-check` from `mise-tasks/nonverdict-assert.sh`.
+# `timeout-drift.yml`; `mise-tasks/nonverdict-assert.sh` called `awk-regex-check`.
 # Without these rows each of those is "no task found" — which is how `hk.pkl`'s
 # `mcp-timeout-budget` step and `test:musl`'s `target-ensure` call broke in this
 # same campaign, and it is the fourth and fifth instance of one defect.
@@ -4283,7 +4282,7 @@ run = "hk check --all"
 # The predecessor spelled an unverified head `1` and an unusable checkout `2` —
 # the table inverted. Callers read the old numbers, so this maps them back, which
 # is the shim shape CLOUD-1170 established and the reason `land.sh` and
-# `tests/tree-clean.bats` need no edit to keep working.
+# `tests/tree-clean.bats` needed no edit to keep working.
 # CLOUD-193's precondition, ported off `mise-tasks/tree-clean.sh` under
 # CLOUD-1753.
 #
@@ -4527,8 +4526,8 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # CLOUD-843 and retired onto the `task` noun.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `claim-check`'s reason: `land.sh`
-# calls `mise run task-registry <verb> ...` and may not be edited, so keeping the
-# name is what makes this retirement reach the program it claims. The other
+# called `mise run task-registry <verb> ...` and could not be edited, so keeping
+# the name is what made this retirement reach the program it claims. The other
 # caller this paragraph once named, `step-receipt`, retired onto `batten step`
 # (CLOUD-843), which announces its phase through the `task` noun in-process
 # rather than through this task.
@@ -4549,9 +4548,9 @@ description = "Refuse to start a task that is already running in this clone, nam
 # onto the `singleton` noun.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, and here that is the whole of the
-# retirement's reach: `land.sh` calls `mise run singleton acquire|release` by
-# NAME, never by path, so keeping the name means `land.sh` and `tests/land.bats`
-# are not touched at all.
+# retirement's reach: `land.sh` called `mise run singleton acquire|release` by
+# NAME, never by path, so keeping the name meant `land.sh` and `tests/land.bats`
+# were not touched at all.
 #
 # THE TRANSLATION RETIRED WITH ITS LAST CALLER (CLOUD-1991): `land.sh` was the
 # only program reading the old `1`/`2`, and `land` is `batten land lap` now. The

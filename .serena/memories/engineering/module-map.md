@@ -6,14 +6,14 @@ One line per module: WHERE a responsibility lives. The WHY is each module's own
 row here, so a new module lands with its line.
 
 - `main.rs` — binary boundary: parse → `lib::run` → exit status.
-- `install.rs` — whether a published release is actually installable (CLOUD-1753), retired out of `mise-tasks/install-check.sh`.
+- `install.rs` — whether a published release is actually installable (CLOUD-1753), retired out of the install-check script.
 - `lib.rs` — library entry point, declares the module tree.
-- `suites.rs` — the per-suite cost corpus (CLOUD-352), derived from the report the bats runner already wrote.
+- `suites.rs` — the per-module cost table (CLOUD-352, CLOUD-2059), derived from the JUnit report nextest already wrote.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared once, as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each flag's env equivalent, so §8 precedence is inspectable data).
 - `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
-- `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
+- `bot.rs` — the bot lane, retired off the bot-issue script (CLOUD-1295).
 - `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
-- `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by CLOUD-1121).
+- `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off the claim-check script by CLOUD-1121).
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an exhaustive `match` rather than a lookup on strings.
 - `output.rs` — house-style §3/§4 (CLOUD-42): the `Verbosity` ladder (`silent…trace`, a derived `Ord`, so `admits` is a comparison), and the §4 attended/unattended resolution.
 - `outputs.rs` — `exec` output predicates (CLOUD-117): declared literals that, found in a wrapped command's captured stream, promote a lying exit `0` to a failure.
@@ -29,10 +29,10 @@ row here, so a new module lands with its line.
 - `arm.rs` — the declared-arm harness (CLOUD-1714): run N declared things, reduce each to a named `Observable`, hand back one `Outcome` per arm.
 - `attribution.rs` — what produced commits may carry about the tooling that made them (CLOUD-274), the mechanism for the attribution decision record (CLOUD-268).
 - `commit.rs` — the commit-subject convention (CLOUD-701): one configured regex over `%s`, judged across a range or over one pending message file.
-- `checks_green.rs` — is this SHA green over the required check set (CLOUD-1143, ported off `mise-tasks/checks-green.sh`).
-- `pr_watch.rs` — the poll around that verdict (CLOUD-1143, ported off `mise-tasks/ci-wait.sh`; renamed onto §2's declared `pr watch` by CLOUD-1214).
+- `checks_green.rs` — is this SHA green over the required check set (CLOUD-1143, ported off the checks-green script).
+- `pr_watch.rs` — the poll around that verdict (CLOUD-1143, ported off the ci-wait script; renamed onto §2's declared `pr watch` by CLOUD-1214).
 - `speculation.rs` — betting on the base that is about to exist (CLOUD-748, CLOUD-862, CLOUD-369).
-- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off `mise-tasks/main-watch.sh`)?
+- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off the main-watch script)?
 - `fast_forward.rs` — asking the bot to land a head, and reading the answer keyed to THAT request (CLOUD-1338).
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54).
 - `capture.rs` — captured child output, content-addressed in out-of-tree state (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's handles both read, built once so neither grows its own copy.
@@ -74,7 +74,7 @@ row here, so a new module lands with its line.
 - `forge.rs` — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
 - `tools.rs` — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
 - `captured.rs` — declared REDUCTIONS over responses the agent already captured (CLOUD-1188).
-- `task.rs` — CLOUD-425's READER: which long-running tasks are running right now, and what phase each is in, ported off `mise-tasks/alive.sh` (CLOUD-843).
+- `task.rs` — CLOUD-425's READER: which long-running tasks are running right now, and what phase each is in, ported off the alive script (CLOUD-843).
 - `taskset.rs` — the task runner's own argv, from a receipt minted OUTSIDE the mediated call (CLOUD-856).
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s _which store_: identity is stable for a repo's life, contents change per scan.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed predicates over the repo.
@@ -95,7 +95,7 @@ row here, so a new module lands with its line.
 - `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the `[[mcp.result]]` reductions.
 - `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
-- `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.
+- `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of the mutant and mutant-census scripts under CLOUD-1267.
 - `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
 - `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table, its `Subject` pointers and its closed `Route` list.
@@ -122,12 +122,12 @@ row here, so a new module lands with its line.
 - `secret.rs` — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
 - `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
-- `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off `mise-tasks/semver.sh`.
+- `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off the semver script.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760).
 - `preset.rs` — one manifest per vendored preset (CLOUD-1181): identity, the `scope` its modules decide, the modules themselves, and the refusal classes they raise.
 - `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of kind `policy` names a registered Rego module, and the module decides over the resolved fact set; rule members are read only at the packages the modules declared (CLOUD-1969).
-- `perf.rs` — the paired latency measurement (CLOUD-875), retired out of `mise-tasks/perf-pair.sh` under CLOUD-1059.
-- `tokens.rs` — the token-economics benchmark (CLOUD-119), retired out of `mise-tasks/token-bench.sh` and `token-bench-check.sh` under CLOUD-1753.
+- `perf.rs` — the paired latency measurement (CLOUD-875), retired out of the perf-pair script under CLOUD-1059.
+- `tokens.rs` — the token-economics benchmark (CLOUD-119), retired out of the token-bench and token-bench-check scripts under CLOUD-1753.
 - `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a policy module references by id, never writes inline.
 - `pinned.rs` — the programs the project's pin puts on `PATH` (CLOUD-1028), and the record that lets a mediated call read them.
 - `signer_posture.rs` — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
@@ -147,9 +147,9 @@ row here, so a new module lands with its line.
 - `stream_input.rs` — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
-- `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh` by CLOUD-1422).
-- `landed.rs` — whether a board column is honest about what git and the forge already did (CLOUD-186, CLOUD-1127, ported off `mise-tasks/landed-check.sh`).
-- `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121).
+- `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off the claim-race-check script by CLOUD-1422).
+- `landed.rs` — whether a board column is honest about what git and the forge already did (CLOUD-186, CLOUD-1127, ported off the landed-check script).
+- `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker payload (CLOUD-179, ported off the ready-lint script by CLOUD-1121).
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto statements that a named check passed, stored out-of-tree, plus the grandfathered `$GIT_DIR/batten-receipts/` compat layout.
 - `record.rs` — the WRITE half of the two out-of-tree verdict stores (CLOUD-1265).
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
@@ -157,6 +157,7 @@ row here, so a new module lands with its line.
 - `attestation.rs` — `batten record attestation`: a release's attestation posture, recorded for the `supply-chain` preset to decide (CLOUD-843).
 - `board_check.rs` — `batten board check` (CLOUD-1221): the board's columns, dependency graph and citations read into records the `tracker-hygiene` preset decides over.
 - `census.rs` — `batten census shell` (CLOUD-843): every place a consumer still writes shell, counted in code lines as pointers.
+- `shell.rs` — the one "is this text shell logic" detector (CLOUD-2625), decided on the `rable` AST; the census counts with it and projects it as `input.tree.shell` for the shell ban.
 - `engine.rs` — the engine pin (CLOUD-2061): `engine = { release | source }` in `batten.toml`, checked by a line scan at the top of `config::parse` BEFORE the TOML parse, so a stale engine is named before a key it cannot read fails the load. `batten engine digest` hashes the tracked inputs under `crates/` plus `Cargo.toml`/`Cargo.lock`; `batten engine stamp` records it beside the running binary (`<binary>.source`), and `install:local` stamps what it installs. A missing stamp fails a source pin.
 - `ci_signal.rs` — the CI-signal producers (CLOUD-843): landing-loop divergence and non-verdict failures, recorded for the `ci-signal` preset.
 - `ci_step.rs` — `batten ci step` (CLOUD-843): the runner-file glue a workflow step used a shell for, as one argv.

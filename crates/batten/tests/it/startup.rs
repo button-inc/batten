@@ -30,6 +30,11 @@ use std::process::Output;
 
 use common::{batten, git_in, scratch, stdout, write};
 
+/// A hook's body. `doctor gate` reads only presence and the executable bit,
+/// and no case here commits through it, so it is bytes that are never run —
+/// no shebang, no shell authored (CLOUD-2336).
+const HOOK_BODY: &str = "a hook body this case never runs\n";
+
 /// A repository whose `batten.toml` carries `rows`.
 fn fixture(name: &str, rows: &str) -> std::path::PathBuf {
     let dir = scratch(name);
@@ -155,7 +160,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     std::fs::create_dir_all(&hooks).unwrap();
     for name in ["pre-commit", "commit-msg"] {
         let at = hooks.join(name);
-        std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&at, HOOK_BODY).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -234,7 +239,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     std::fs::create_dir_all(&hooks).unwrap();
     for name in ["pre-commit", "commit-msg"] {
         let at = hooks.join(name);
-        std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&at, HOOK_BODY).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -279,7 +284,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     common::init_repo(&dir);
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(hooks.join("commit-msg"), HOOK_BODY).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -290,7 +295,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
         .unwrap();
     }
     // Present, and mode 0644: git skips it silently.
-    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(hooks.join("pre-commit"), HOOK_BODY).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -457,7 +462,7 @@ fn out_code(output: &Output) -> i32 {
 fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
     let dir = scratch("wiring-gate-links");
     write(&dir, "batten.toml", "version = 1\n\n");
-    write(&dir, "hooks/gate.sh", "#!/bin/sh\nexit 0\n");
+    write(&dir, "hooks/gate.sh", HOOK_BODY);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

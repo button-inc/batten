@@ -54,69 +54,76 @@ use common::{at_root, git_in, init_repo, scratch, write};
 
 const RULE: &str = "manifest cover other";
 
-fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
-    write(dir, name, body);
-    let path = dir.join(name);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path
-}
-
 /// A `syft` writing a one-package SPDX document with `STUB_SPDXVER` (`NONE`
 /// omits the key) wherever `--output spdx-json=` says, and an empty `CycloneDX`.
-const SYFT: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-[[ -z "${STUB_SBOM_FAILS:-}" ]] || exit 1
-spdx="" cdx="" want=0
-for arg in "$@"; do
-	if [[ "$want" == 1 ]]; then
-		case "$arg" in spdx-json=*) spdx="${arg#spdx-json=}" ;; cyclonedx-json=*) cdx="${arg#cyclonedx-json=}" ;; esac
-		want=0
-		continue
-	fi
-	[[ "$arg" != --output ]] || want=1
-done
-mkdir -p "$(dirname "$spdx")" "$(dirname "$cdx")"
-ver="${STUB_SPDXVER:-SPDX-2.3}"
-key="\"spdxVersion\":\"$ver\","
-[[ "$ver" != NONE ]] || key=""
-echo "{$key\"name\":\"batten\",\"packages\":[{\"SPDXID\":\"p\",\"name\":\"crate0\"}]}" >"$spdx"
-echo '{"components":[]}' >"$cdx"
-"#;
+fn syft() -> serde_json::Value {
+    // The document's opening brace is written alone: the stand-in reads a `{`
+    // up to the next `}` as one placeholder, so a key carrying `{env:…}` after
+    // it would be swallowed whole.
+    let document = |key: &str| {
+        format!(
+            "{key}\"name\":\"batten\",\"packages\":[{{\"SPDXID\":\"p\",\"name\":\"crate0\"}}]}}\n"
+        )
+    };
+    let wrote = |key: &str| {
+        serde_json::json!([
+            {"write": ["{argv-strip:spdx-json=}", "{"]},
+            {"append": ["{argv-strip:spdx-json=}", document(key)]},
+            {"write": ["{argv-strip:cyclonedx-json=}", "{\"components\":[]}\n"]},
+        ])
+    };
+    serde_json::json!([
+        {"env": "STUB_SBOM_FAILS", "steps": [{"exit": 1}]},
+        {"env_eq": ["STUB_SPDXVER", "NONE"], "steps": wrote("")},
+        {"env": "STUB_SPDXVER", "steps": wrote("\"spdxVersion\":\"{env:STUB_SPDXVER}\",")},
+        {"steps": wrote("\"spdxVersion\":\"SPDX-2.3\",")},
+    ])
+}
 
 /// A `cargo` whose metadata lists nothing sourced, so the copyright pass reads no
 /// cache.
-const CARGO: &str = r#"#!/usr/bin/env bash
-[[ "${1:-}" != fetch ]] || exit 0
-[[ "${1:-}" == metadata ]] || exit 1
-echo '{"packages":[]}'
-"#;
+fn cargo() -> serde_json::Value {
+    serde_json::json!([
+        {"argv_prefix": ["fetch"], "steps": []},
+        {"argv_prefix": ["metadata"], "steps": [{"stdout": "{\"packages\":[]}\n"}]},
+        {"steps": [{"exit": 1}]},
+    ])
+}
 
-/// A checker whose exit code (`STUB_FAIL` lists refusing standards) and report
+/// The standards a case may name in `STUB_FAIL`, one at a time.
+const STANDARDS: &[&str] = &["ntia", "fsct3-min"];
+
+/// A checker whose exit code (`STUB_FAIL` names the refusing standard) and report
 /// (`STUB_LIES` writes a conformant one regardless) are set independently. It
 /// prints a component name on stdout, so a leak has something to catch.
-const CHECKER: &str = r#"#!/usr/bin/env bash
-if [[ "${1:-}" == --version ]]; then [[ -z "${STUB_NOVERSION:-}" ]] || exit 1; echo 5.0.3; exit 0; fi
-standard=ntia out=""
-while [[ $# -gt 0 ]]; do
-	case "$1" in --comply) standard=$2; shift ;; --output-file) out=$2; shift ;; esac
-	shift
-done
-fail=0
-[[ " ${STUB_FAIL:-} " != *" $standard "* ]] || fail=1
-if [[ -n "$out" && -z "${STUB_NOREPORT:-}" ]]; then
-	if [[ "$fail" == 0 || -n "${STUB_LIES:-}" ]]; then
-		echo '{"totalNumberComponents":3,"componentSuppliers":{"nonconformantComponents":[]}}' >"$out"
-	else
-		echo '{"totalNumberComponents":3,"componentSuppliers":{"nonconformantComponents":["crate0","crate1"]}}' >"$out"
-	fi
-fi
-echo "crate0: no supplier; pkg:cargo/crate0@1.0.0"
-exit "$fail"
-"#;
+///
+/// `STUB_FAIL` names the standard under `--comply` exactly when
+/// `<stubs>/refuse/<STUB_FAIL>.<standard>` exists, which [`repo`] writes for
+/// each of [`STANDARDS`] paired with itself.
+fn checker(stubs: &Path) -> serde_json::Value {
+    let refused = format!(
+        "{}/refuse/{{env:STUB_FAIL}}.{{argv-after:--comply}}",
+        stubs.display()
+    );
+    let leak = serde_json::json!({"stdout": "crate0: no supplier; pkg:cargo/crate0@1.0.0\n"});
+    let report = |components: &str| {
+        serde_json::json!({"write": [
+            "{argv-after:--output-file}",
+            format!(
+                "{{\"totalNumberComponents\":3,\"componentSuppliers\":{{\"nonconformantComponents\":[{components}]}}}}\n"
+            ),
+        ]})
+    };
+    serde_json::json!([
+        {"argv": ["--version"], "env": "STUB_NOVERSION", "steps": [{"exit": 1}]},
+        {"argv": ["--version"], "steps": [{"stdout": "5.0.3\n"}]},
+        {"file_exists": refused, "env": "STUB_NOREPORT", "steps": [leak, {"exit": 1}]},
+        {"file_exists": refused, "env": "STUB_LIES", "steps": [report(""), leak, {"exit": 1}]},
+        {"file_exists": refused, "steps": [report("\"crate0\",\"crate1\""), leak, {"exit": 1}]},
+        {"env": "STUB_NOREPORT", "steps": [leak]},
+        {"steps": [report(""), leak]},
+    ])
+}
 
 /// The fixture's authority, asking `standards` of `checker`.
 fn config(standards: &str, checker: &str) -> String {
@@ -150,9 +157,12 @@ fn repo(name: &str) -> PathBuf {
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "register the module"]);
     let stubs = dir.join("bin");
-    executable(&stubs, "syft", SYFT);
-    executable(&stubs, "cargo", CARGO);
-    executable(&stubs, "sbomcheck", CHECKER);
+    common::stub_at(&stubs.join("syft"), &syft());
+    common::stub_at(&stubs.join("cargo"), &cargo());
+    common::stub_at(&stubs.join("sbomcheck"), &checker(&stubs));
+    for standard in STANDARDS {
+        write(&stubs, &format!("refuse/{standard}.{standard}"), "");
+    }
     dir
 }
 
@@ -431,17 +441,20 @@ fn check_sequence() -> Vec<String> {
 /// the rest to the real binary, and `fetch`/`metadata` answer as `CARGO` does.
 fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
     let real = env!("CARGO_BIN_EXE_batten");
-    executable(
-        dir,
-        "bin/cargo",
-        &format!(
-            "#!/usr/bin/env bash\nif [[ \"${{1:-}}\" == run ]]; then shift 5; \
-             if [[ \"$1\" == receipt ]]; then echo \"$*\" >>\"{log}\"; \
-             [[ -z \"${{STUB_RECEIPT_FAILS:-}}\" ]] || exit 1; exit 0; fi; exec \"{real}\" \"$@\"; fi\n\
-             [[ \"${{1:-}}\" != fetch ]] || exit 0\n[[ \"${{1:-}}\" == metadata ]] || exit 1\n\
-             echo '{{\"packages\":[]}}'\n",
-            log = dir.join(".receipts").display(),
-        ),
+    let log = dir.join(".receipts").display().to_string();
+    let engine = ["run", "--quiet", "-p", "batten", "--"];
+    let receipt = ["run", "--quiet", "-p", "batten", "--", "receipt"];
+    common::stub_at(
+        &dir.join("bin/cargo"),
+        &serde_json::json!([
+            {"argv_prefix": receipt, "env": "STUB_RECEIPT_FAILS",
+             "steps": [{"append": [log, "{argv-from:6}\n"]}, {"exit": 1}]},
+            {"argv_prefix": receipt, "steps": [{"append": [log, "{argv-from:6}\n"]}]},
+            {"argv_prefix": engine, "steps": [{"exec": [real, "{argv-from:6}"]}]},
+            {"argv_prefix": ["fetch"], "steps": []},
+            {"argv_prefix": ["metadata"], "steps": [{"stdout": "{\"packages\":[]}\n"}]},
+            {"steps": [{"exit": 1}]},
+        ]),
     );
     let mut last = None;
     for entry in check_sequence() {

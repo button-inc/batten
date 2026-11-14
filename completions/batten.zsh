@@ -847,36 +847,6 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(suites)
-_arguments "${_arguments_options[@]}" : \
-'--base=[The revision this checkout is diffed against]:base:_default' \
-'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
-standard\:"The default\: a finding is a violation"
-strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
-'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
-'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
-quiet\:"Suppress ordinary progress; keep warnings"
-normal\:"The default"
-verbose\:"Explain what is being checked"
-debug\:"Add resolution detail"
-trace\:"Add everything"))' \
-'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
-'*--silent[Say nothing but a verdict or a usage error]' \
-'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
-'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
-'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
-'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
-'*--debug[Add resolution detail]' \
-'*--trace[Add everything]' \
-'--no-color[Never colour stderr, whatever it is attached to]' \
-'--no-input[Never prompt; treat the run as unattended]' \
-'-y[Confirm a destructive operation that would otherwise refuse]' \
-'--yes[Confirm a destructive operation that would otherwise refuse]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-&& ret=0
-;;
 (step)
 _arguments "${_arguments_options[@]}" : \
 '--summary=[Fence the tail of the command'\''s output into the runner'\''s run summary under this title]:summary:_default' \
@@ -929,10 +899,6 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-ci-help-command-$line[1]:"
         case $line[1] in
             (slow-needed)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(suites)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6564,7 +6530,6 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
-'--write[Write the corpus to its committed path instead of printing it]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -9593,10 +9558,6 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(suites)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
 (step)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11328,7 +11289,6 @@ _batten__subcmd__checks__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__ci_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
-'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
 'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11338,7 +11298,6 @@ _batten__subcmd__ci_commands() {
 _batten__subcmd__ci__subcmd__help_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
-'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
 'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11359,11 +11318,6 @@ _batten__subcmd__ci__subcmd__help__subcmd__step_commands() {
     local commands; commands=()
     _describe -t commands 'batten ci help step commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__suites_commands] )) ||
-_batten__subcmd__ci__subcmd__help__subcmd__suites_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten ci help suites commands' commands "$@"
-}
 (( $+functions[_batten__subcmd__ci__subcmd__slow-needed_commands] )) ||
 _batten__subcmd__ci__subcmd__slow-needed_commands() {
     local commands; commands=()
@@ -11373,11 +11327,6 @@ _batten__subcmd__ci__subcmd__slow-needed_commands() {
 _batten__subcmd__ci__subcmd__step_commands() {
     local commands; commands=()
     _describe -t commands 'batten ci step commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci__subcmd__suites_commands] )) ||
-_batten__subcmd__ci__subcmd__suites_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten ci suites commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__claim_commands] )) ||
 _batten__subcmd__claim_commands() {
@@ -12185,7 +12134,6 @@ _batten__subcmd__help__subcmd__checks__subcmd__green_commands() {
 _batten__subcmd__help__subcmd__ci_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
-'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
 'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
     )
     _describe -t commands 'batten help ci commands' commands "$@"
@@ -12199,11 +12147,6 @@ _batten__subcmd__help__subcmd__ci__subcmd__slow-needed_commands() {
 _batten__subcmd__help__subcmd__ci__subcmd__step_commands() {
     local commands; commands=()
     _describe -t commands 'batten help ci step commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__ci__subcmd__suites_commands] )) ||
-_batten__subcmd__help__subcmd__ci__subcmd__suites_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten help ci suites commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__claim_commands] )) ||
 _batten__subcmd__help__subcmd__claim_commands() {
@@ -12959,7 +12902,7 @@ _batten__subcmd__help__subcmd__receipt__subcmd__verified_commands() {
 (( $+functions[_batten__subcmd__help__subcmd__record_commands] )) ||
 _batten__subcmd__help__subcmd__record_commands() {
     local commands; commands=(
-'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
+'suites:Derive what each nextest module costs from the report the runner wrote, and print it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
 'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \
@@ -14477,7 +14420,7 @@ _batten__subcmd__receipt__subcmd__verified_commands() {
 (( $+functions[_batten__subcmd__record_commands] )) ||
 _batten__subcmd__record_commands() {
     local commands; commands=(
-'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
+'suites:Derive what each nextest module costs from the report the runner wrote, and print it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
 'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \
@@ -14606,7 +14549,7 @@ _batten__subcmd__record__subcmd__forge_commands() {
 (( $+functions[_batten__subcmd__record__subcmd__help_commands] )) ||
 _batten__subcmd__record__subcmd__help_commands() {
     local commands; commands=(
-'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
+'suites:Derive what each nextest module costs from the report the runner wrote, and print it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
 'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \

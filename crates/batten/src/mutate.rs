@@ -148,7 +148,7 @@ const ENGINE: &str = "crates/batten/src";
 /// The namespace an engine subject's name carries.
 ///
 /// **A PREFIX RATHER THAN THE BARE MODULE NAME, BECAUSE THE NAMES COLLIDE.**
-/// `mise-tasks/doctor.sh` is a gate called `doctor` and `crates/batten/src/
+/// `mise-tasks/doctor.sh` was a gate called `doctor` and `crates/batten/src/
 /// doctor.rs` transliterates to `doctor` too — so a bare name would have made
 /// `subjects` overwrite the shell gate's row with the module's, and left
 /// `sources_for` still resolving the shell task, which means the module's
@@ -1116,8 +1116,7 @@ fn subject_name(root: &Path, path: &str) -> String {
 /// runners, and never by none.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
-/// sweep's `no-such-gate` report into silence; could-not-look widens here as it
-/// does in `ci suites`.
+/// sweep's `no-such-gate` report into silence; could-not-look widens.
 #[must_use]
 pub fn touched(
     root: &Path,

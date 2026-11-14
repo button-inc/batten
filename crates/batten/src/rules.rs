@@ -8508,7 +8508,7 @@ pub(crate) fn parse_node(
 /// The most documents one run may acquire before it refuses (CLOUD-850).
 ///
 /// **A backstop, not a tuned threshold, and the distinction is the whole
-/// justification.** `mise-tasks/perf-assert.sh` budgets four paths and deliberately
+/// justification.** `perf-assert` budgets four paths and deliberately
 /// budgets no `check` path, on a reason that is sound and stays: *"`check` is
 /// bounded by the repository it is pointed at — a tree walk over a large
 /// consumer repo is legitimately slower and no ceiling here could tell that
@@ -9922,6 +9922,13 @@ pub(crate) fn tree_document(
     // more coming. The prelude grows per family; the projection loop below does
     // not.
     let mut projected = project_paths(cache, declared, resolved);
+    // `input.tree.shell` (CLOUD-2625): the detector over the declared homes,
+    // read off the two maps the loop below moves out.
+    let mut shell = crate::census::tree_fact(
+        &projected.parsed,
+        &projected.read_lines,
+        resolved.git.base_delta.as_ref(),
+    );
 
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
     // `Fact::ALL` rather than writing keys means a fact the tree surface gains
@@ -10095,6 +10102,9 @@ pub(crate) fn tree_document(
             // changed nothing", which is the distinction the whole fact exists
             // to keep.
             crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
+            // CLOUD-2625. Computed before this loop takes `documents` and
+            // `lines`, because it is derived from both.
+            crate::facts::Fact::Shell => std::mem::take(&mut shell),
             crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
             | crate::facts::Fact::Stop
@@ -11427,7 +11437,7 @@ fn unconserved_cases(
             continue;
         }
         // THE SUITE-QUALIFIED ARM IS TRIED FIRST, then the bare one — the same
-        // resolution order `mise-tasks/replay.sh` uses over the same arms, because
+        // resolution order `mise-tasks/replay.sh` used over the same arms, because
         // one ledger with two readers and two grammars is a ledger that reports
         // different things to different gates.
         //

@@ -357,11 +357,11 @@
       // STOP PROPOSING RENOVATE 44 UNTIL THE SEAM IS RENAMED (CLOUD-1262).
       //
       // Renovate 44 reads the `RENOVATE_CONFIG` environment variable as INLINE
-      // JSON5 config. `mise-tasks/renovate-config-validator.sh:32` uses that same
-      // name for the path seam its suite sets, so the validator is handed
-      // `/tmp/bats-run-.../renovate.json5` as config CONTENT and dies at
+      // JSON5 config. `mise-tasks/renovate-config-validator.sh:32` used that same
+      // name for the path seam its suite set, so the validator was handed
+      // `/tmp/bats-run-.../renovate.json5` as config CONTENT and died at
       // `JSON5: invalid character 't' at 1:2` — the `t` of `/tmp`. Caught by
-      // `tests/renovate-config-validator.bats:37`, which is the gate doing its job.
+      // `tests/renovate-config-validator.bats:37`, which was the gate doing its job.
       //
       // THE MEASURED REASON THIS IS A RULE AND NOT A COMMENT. That collision was
       // already known, already explained directly above `mise.toml`'s own pin

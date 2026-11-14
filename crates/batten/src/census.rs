@@ -14,25 +14,24 @@
 //! Three homes, each with the reading the consumer's own ban already applies:
 //!
 //! * **A manifest's command strings** — a declared key's triple-quoted body
-//!   (every code line), its one-line value, and its multi-line array entries (each
-//!   only when it carries shell syntax). Grouped into named units where the
-//!   manifest declares a unit header, so a task runner's tasks are named.
-//! * **A workflow's steps** — every code line of a `run: |` / `run: >` block,
-//!   bounded by indentation, and a one-line `run:` carrying shell syntax.
-//! * **A shell file** — a tracked `.sh`, `.bash` or `.bats` path, or one whose
-//!   shebang names a shell. Its code lines.
+//!   (every code line, when the body is shell logic), its one-line value, and
+//!   its multi-line array entries (each when the string it holds is shell
+//!   logic). Grouped into named units where the manifest declares a unit header,
+//!   so a task runner's tasks are named.
+//! * **A workflow's steps** — every code line of a `run: |` / `run: >` block
+//!   that is shell logic, bounded by indentation, and a one-line `run:` that is.
+//! * **A shell file** — a tracked path [`crate::shell::shell_path`] names, or
+//!   one whose shebang [`crate::shell::shebang`] reads as a shell. Its code
+//!   lines.
 //!
-//! The first two are EXACTLY the detection a line-unit ban over the same files
-//! applies — the `shell-hygiene` preset's `no-new-shell` module, which reads
-//! this same `[census.shell]` table as its list of homes, through a glob
-//! language [`ShellCensus::validate`] holds to what both matchers read alike
-//! (`*`, `?`, `**`) — down to its quirks:
-//! a one-liner's first word is read with its quote still attached, and an array
-//! entry is judged without a comment test. That is deliberate. A census that
-//! counted differently from the gate would make "the census reads 0" and "the
-//! gate passes" two claims that can disagree, and
-//! `crates/batten/tests/it/census_shell.rs` runs both over one fixture to prove
-//! they do not.
+//! Whether a text is shell logic is [`crate::shell::logic`]'s answer on the
+//! parser's AST (CLOUD-2625), never a scan here. The ban — the `shell-hygiene`
+//! preset's `no-new-shell` module, which reads this same `[census.shell]` table
+//! as its list of homes, through a glob language [`ShellCensus::validate`] holds
+//! to what both matchers read alike (`*`, `?`, `**`) — reads the same answer
+//! through [`tree_fact`], so the two agree BY CONSTRUCTION: there is one
+//! detection, computed here, and the module only compares its two sides.
+//! `crates/batten/tests/it/census_shell.rs` still runs both over one fixture.
 //!
 //! # What is the consumer's, never the engine's (non-negotiable rule 1)
 //!
@@ -188,79 +187,89 @@ fn ban_unread(glob: &str) -> Option<char> {
 }
 
 // ---------------------------------------------------------------------------
-// The grammar of "is this shell".
+// Where the shell is: which lines of a home carry it. Whether a text IS shell
+// is `crate::shell`'s, and nothing here re-decides it.
 // ---------------------------------------------------------------------------
-
-/// Characters a shell interprets and an argv never needs.
-const METACHARACTERS: [char; 9] = ['|', ';', '&', '$', '`', '<', '>', '(', ')'];
-
-/// Words that only a shell can run as a first word.
-const KEYWORDS: [&str; 9] = [
-    "if", "for", "while", "until", "case", "set", "export", "source", ".",
-];
-
-/// Shells a shebang may name.
-const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "dash", "ksh"];
-
-/// File extensions that are shell whatever the first line says.
-const EXTENSIONS: [&str; 3] = [".sh", ".bash", ".bats"];
 
 /// The two quotes that open a multi-line string body.
 const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 
 /// A line that is not blank and not a comment.
 ///
-/// The grammar's mutation rows. Each one breaks a clause the ban's own module
-/// carries, so a census that lost it would count differently from the gate; each
-/// is caught by the unit case it names, run from this file.
+/// The census's own mutation rows: each breaks a clause of WHERE a home's
+/// lines are, and each is caught by the unit case it names, run from this file.
+/// Whether a text is shell is the detector's, whose rows live in `shell.rs`.
 //MUTANT-SUITE crates/batten/src/census.rs
 //MUTANT comments-counted|s@    !text.is_empty() && !text.starts_with('#')@    !text.is_empty()@|a_body_counts_its_code_lines_and_skips_comments_and_blanks
-//MUTANT metacharacters-unread|s@    if value.contains(METACHARACTERS) {@    if false {@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT env-prefix-unread|s@ \x7c\x7c first.contains('=')@ \x7c\x7c false@|a_plain_argv_is_not_shell_and_a_pipeline_is
 //MUTANT block-never-ends|s@        indent(line) + 2$@        indent(line) + 200@|a_block_ends_at_the_first_line_at_or_left_of_its_key
-//MUTANT workflow-one-liner-unread|s@        } else if !rest.is_empty() && shell_syntax(rest) {@        } else if false {@|a_block_ends_at_the_first_line_at_or_left_of_its_key
+//MUTANT workflow-one-liner-unread|s@^        } else if let Some(reason) = shell_reason(&yaml_scalar(rest)) {$@        } else if let Some(reason) = None::<\&'static str> {@|a_block_ends_at_the_first_line_at_or_left_of_its_key
 #[must_use]
 pub fn code_line(line: &str) -> bool {
     let text = line.trim();
     !text.is_empty() && !text.starts_with('#')
 }
 
-/// Whether a command string needs a shell rather than an argv to run.
-///
-/// The first word is read as written, quote included — the ban's reading, kept
-/// so the two can never disagree about one value.
-#[must_use]
-pub fn shell_syntax(value: &str) -> bool {
-    if value.contains(METACHARACTERS) {
-        return true;
+/// The detector's reason when `text` is shell logic, `None` when it is argv.
+fn shell_reason(text: &str) -> Option<&'static str> {
+    match crate::shell::logic(text) {
+        crate::shell::Verdict::Shell(reason) => Some(reason),
+        crate::shell::Verdict::Argv(_) => None,
     }
-    let first = value.trim().split(' ').next().unwrap_or_default();
-    KEYWORDS.contains(&first) || first.contains('=')
 }
 
-/// Whether a path is shell by its name alone.
-#[must_use]
-pub fn shell_path(path: &str) -> bool {
-    EXTENSIONS.iter().any(|extension| path.ends_with(extension))
+/// A body of source lines, parsed ONCE as one text: its reason when it is
+/// shell logic. A body holding one plain command is not.
+fn body_reason(lines: &[&str], body: std::ops::Range<usize>) -> Option<&'static str> {
+    shell_reason(&lines.get(body)?.join("\n"))
 }
 
-/// Whether a first line is a shebang naming a shell.
-#[must_use]
-pub fn shell_shebang(first: &str) -> bool {
-    first.starts_with("#!")
-        && first
-            .replace('/', " ")
-            .split(' ')
-            .any(|word| SHELLS.contains(&word))
+/// A TOML value's shell reason, judged on the string it holds rather than on
+/// its quoting: `run = "a | b"` is a pipeline, not one quoted word. An inline
+/// array is shell when any of its strings is. A value TOML cannot read is
+/// judged as written, which leaves the detector to call a stray quote
+/// unparseable rather than reading it clean.
+fn toml_reason(value: &str) -> Option<&'static str> {
+    let parsed = toml::from_str::<toml::Table>(&format!("v = {value}"))
+        .ok()
+        .and_then(|mut table| table.remove("v"));
+    match parsed {
+        Some(toml::Value::String(text)) => shell_reason(&text),
+        Some(toml::Value::Array(items)) => items
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .find_map(shell_reason),
+        _ => shell_reason(value),
+    }
+}
+
+/// A one-line YAML scalar as the string it holds, its quoting removed; the
+/// text as written where YAML reads it as something other than a string.
+fn yaml_scalar(value: &str) -> String {
+    yaml_rust2::YamlLoader::load_from_str(value)
+        .ok()
+        .and_then(|documents| {
+            documents
+                .first()
+                .and_then(|doc| doc.as_str().map(str::to_owned))
+        })
+        .unwrap_or_else(|| value.to_owned())
 }
 
 /// Every line index of `lines` a manifest's `keys` make shell, in order.
-///
-/// A key's triple-quoted body contributes its code lines; a one-line value and a
-/// multi-line array's entries contribute themselves when they carry shell syntax.
 #[must_use]
 pub fn manifest_lines(lines: &[&str], keys: &[String]) -> BTreeSet<usize> {
-    let mut shell = BTreeSet::new();
+    manifest_reasons(lines, keys).into_keys().collect()
+}
+
+/// Every line index of `lines` a manifest's `keys` make shell, with the
+/// detector's reason.
+///
+/// A key's triple-quoted body is parsed as one text, and when it is shell every
+/// code line of it counts; a one-line value and a multi-line array's entries
+/// count themselves when the string each holds is shell.
+#[must_use]
+pub fn manifest_reasons(lines: &[&str], keys: &[String]) -> BTreeMap<usize, &'static str> {
+    let mut shell = BTreeMap::new();
     for key in keys {
         let assign = format!("{key} = ");
         for (i, line) in lines.iter().enumerate() {
@@ -269,21 +278,23 @@ pub fn manifest_lines(lines: &[&str], keys: &[String]) -> BTreeSet<usize> {
                 continue;
             };
             // A body opener: the quote opens a string that does not close here.
-            if let Some(quote) = QUOTES.iter().find(|quote| value.starts_with(**quote)) {
-                let rest = value.get(quote.len()..).unwrap_or_default();
-                if rest.contains(quote) {
-                    continue;
-                }
+            // One that closes on its own line is a one-line value, below.
+            if let Some(quote) = QUOTES.iter().find(|quote| value.starts_with(**quote))
+                && !value.get(quote.len()..).unwrap_or_default().contains(quote)
+            {
                 let closer = lines
                     .iter()
                     .enumerate()
                     .skip(i + 1)
                     .find(|(_, other)| other.contains(quote))
                     .map(|(j, _)| j);
-                if let Some(closer) = closer {
-                    shell.extend(
-                        (i + 1..closer).filter(|&j| lines.get(j).is_some_and(|l| code_line(l))),
-                    );
+                if let Some(closer) = closer
+                    && let Some(reason) = body_reason(lines, i + 1..closer)
+                {
+                    for j in (i + 1..closer).filter(|&j| lines.get(j).is_some_and(|l| code_line(l)))
+                    {
+                        shell.entry(j).or_insert(reason);
+                    }
                 }
                 continue;
             }
@@ -296,16 +307,18 @@ pub fn manifest_lines(lines: &[&str], keys: &[String]) -> BTreeSet<usize> {
                     .find(|(_, other)| other.trim().starts_with(']'))
                     .map(|(j, _)| j);
                 if let Some(closer) = closer {
-                    shell.extend(
-                        (i + 1..closer)
-                            .filter(|&j| lines.get(j).is_some_and(|l| shell_syntax(l.trim()))),
-                    );
+                    for j in i + 1..closer {
+                        let entry = lines.get(j).map_or("", |l| l.trim().trim_end_matches(','));
+                        if let Some(reason) = toml_reason(entry) {
+                            shell.entry(j).or_insert(reason);
+                        }
+                    }
                 }
                 continue;
             }
-            // A one-line value, quotes and all.
-            if shell_syntax(value) {
-                shell.insert(i);
+            // A one-line value, judged on the string it holds.
+            if let Some(reason) = toml_reason(value) {
+                shell.entry(i).or_insert(reason);
             }
         }
     }
@@ -342,7 +355,20 @@ fn key_column(line: &str) -> usize {
 /// opened nearest above it, so the per-step counts sum to the file's total.
 #[must_use]
 pub fn workflow_steps(lines: &[&str]) -> BTreeMap<usize, BTreeSet<usize>> {
-    let mut owner: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut steps: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+    for (line, (step, _)) in workflow_owned(lines) {
+        steps.entry(step).or_default().insert(line);
+    }
+    steps
+}
+
+/// Every shell line of a workflow, mapped to the step that owns it and the
+/// detector's reason.
+///
+/// A `run: |` or `run: >` block is fed to the detector as its SOURCE lines,
+/// never folded, so two lines are two commands whichever marker opened them.
+fn workflow_owned(lines: &[&str]) -> BTreeMap<usize, (usize, &'static str)> {
+    let mut owner: BTreeMap<usize, (usize, &'static str)> = BTreeMap::new();
     for (i, line) in lines.iter().enumerate() {
         let Some(rest) = run_key(line) else {
             continue;
@@ -355,20 +381,19 @@ pub fn workflow_steps(lines: &[&str]) -> BTreeMap<usize, BTreeSet<usize>> {
                 .skip(i + 1)
                 .find(|(_, other)| !other.trim().is_empty() && indent(other) <= column)
                 .map_or(lines.len(), |(k, _)| k);
+            let Some(reason) = body_reason(lines, i + 1..closer) else {
+                continue;
+            };
             for j in i + 1..closer {
                 if lines.get(j).is_some_and(|l| code_line(l)) {
-                    owner.insert(j, i);
+                    owner.insert(j, (i, reason));
                 }
             }
-        } else if !rest.is_empty() && shell_syntax(rest) {
-            owner.insert(i, i);
+        } else if let Some(reason) = shell_reason(&yaml_scalar(rest)) {
+            owner.insert(i, (i, reason));
         }
     }
-    let mut steps: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
-    for (line, step) in owner {
-        steps.entry(step).or_default().insert(line);
-    }
-    steps
+    owner
 }
 
 // ---------------------------------------------------------------------------
@@ -593,7 +618,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         };
         // Decoding every tracked file to ask about its first two bytes would
         // cost the whole tree for the few files that can be shell at all.
-        if !is_workflow && !shell_path(path) && !bytes.starts_with(b"#!") {
+        if !is_workflow && !crate::shell::shell_path(path) && !bytes.starts_with(b"#!") {
             continue;
         }
         let text = String::from_utf8_lossy(&bytes);
@@ -618,7 +643,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
             continue;
         }
         let first = lines.first().copied().unwrap_or_default();
-        if !(shell_path(path) || shell_shebang(first)) {
+        if !(crate::shell::shell_path(path) || crate::shell::shebang(first).is_some()) {
             continue;
         }
         let count = lines.iter().filter(|line| code_line(line)).count();
@@ -650,6 +675,165 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         total: manifests + steps + files,
     };
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// The fact the ban reads.
+// ---------------------------------------------------------------------------
+
+/// The `[census.shell]` homes a tree document declares, found by SHAPE as the
+/// `shell-hygiene` preset finds them: any declared document carrying
+/// `census.shell`. Read leniently, field by field, for the same reason the
+/// module did: a row that hands over no such table has declared no homes.
+struct Homes {
+    /// Manifest path -> its command keys, unioned across rows naming one path.
+    manifests: BTreeMap<String, Vec<String>>,
+    /// The workflow globs.
+    workflows: Vec<Selector>,
+}
+
+impl Homes {
+    fn find(documents: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let mut homes = Homes {
+            manifests: BTreeMap::new(),
+            workflows: Vec::new(),
+        };
+        let declarations = documents
+            .values()
+            .filter_map(|doc| doc.get("census")?.get("shell"))
+            .filter(|shell| shell.is_object());
+        for shell in declarations {
+            let rows = shell.get("manifest").and_then(serde_json::Value::as_array);
+            for row in rows.into_iter().flatten() {
+                let Some(path) = row.get("path").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let keys = row.get("keys").and_then(serde_json::Value::as_array);
+                let entry = homes.manifests.entry(path.to_owned()).or_default();
+                for key in keys
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                {
+                    if !entry.iter().any(|known| known == key) {
+                        entry.push(key.to_owned());
+                    }
+                }
+            }
+            let globs = shell.get("workflows").and_then(serde_json::Value::as_array);
+            for glob in globs
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+            {
+                if let Ok(selector) = Selector::new(glob) {
+                    homes.workflows.push(selector);
+                }
+            }
+        }
+        homes
+    }
+
+    /// One path's entry on one side: its kind and its shell lines, or `None`
+    /// for a path that is no home and no shell file. `lines` is `None` where the
+    /// row did not hand the path over as lines.
+    fn entry(&self, path: &str, lines: Option<&[&str]>) -> Option<serde_json::Value> {
+        let (kind, reasons): (&str, BTreeMap<usize, &'static str>) =
+            if let Some(keys) = self.manifests.get(path) {
+                ("manifest", manifest_reasons(lines?, keys))
+            } else if self.workflows.iter().any(|selector| selector.matches(path)) {
+                let owned = workflow_owned(lines?);
+                (
+                    "workflow",
+                    owned
+                        .into_iter()
+                        .map(|(j, (_, reason))| (j, reason))
+                        .collect(),
+                )
+            } else {
+                let first = lines
+                    .and_then(|lines| lines.first().copied())
+                    .unwrap_or_default();
+                let reason = if crate::shell::shell_path(path) {
+                    "path"
+                } else if crate::shell::shebang(first).is_some() {
+                    "shebang"
+                } else {
+                    return None;
+                };
+                let counted = lines
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| code_line(line))
+                    .map(|(j, _)| (j, reason))
+                    .collect();
+                ("file", counted)
+            };
+        let lines: Vec<serde_json::Value> = reasons
+            .into_iter()
+            .map(|(j, reason)| serde_json::json!({"line": j + 1, "reason": reason}))
+            .collect();
+        Some(serde_json::json!({"kind": kind, "lines": lines}))
+    }
+}
+
+/// `input.tree.shell` (CLOUD-2625): every declared home's shell lines, and
+/// every shell file, on both sides of the row's delta, as the detector reads
+/// them.
+///
+/// The head side reads `input.tree.lines` and the delta's `added` paths, so an
+/// added file is shell by its name even where no line source covers it; the base
+/// side reads the delta's `base-lines`. A path absent from a side is either no
+/// home or one that side could not read, and the ban reads both as nothing
+/// there — never as clean.
+///
+/// Pointer-only (non-negotiable rule 4): a kind, a 1-based line and the
+/// detector's reason. Never a byte of the body.
+#[must_use]
+pub fn tree_fact(
+    documents: &serde_json::Map<String, serde_json::Value>,
+    head: &serde_json::Map<String, serde_json::Value>,
+    delta: Option<&crate::git::BaseDelta>,
+) -> serde_json::Value {
+    let homes = Homes::find(documents);
+    let lines_of = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_array()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|line| line.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let added = delta
+        .map(|delta| delta.added.as_slice())
+        .unwrap_or_default();
+    let paths: BTreeSet<&str> = head
+        .keys()
+        .map(String::as_str)
+        .chain(added.iter().map(String::as_str))
+        .collect();
+    let mut head_side = serde_json::Map::new();
+    for path in paths {
+        let owned = head.get(path).map(lines_of);
+        let borrowed: Option<Vec<&str>> = owned
+            .as_ref()
+            .map(|lines| lines.iter().map(String::as_str).collect());
+        if let Some(entry) = homes.entry(path, borrowed.as_deref()) {
+            head_side.insert(path.to_owned(), entry);
+        }
+    }
+    let mut base_side = serde_json::Map::new();
+    for (path, lines) in delta.map(|delta| &delta.base_lines).into_iter().flatten() {
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        if let Some(entry) = homes.entry(path, Some(&borrowed)) {
+            base_side.insert(path.clone(), entry);
+        }
+    }
+    serde_json::json!({"head": head_side, "base": base_side})
 }
 
 /// `batten census shell`: render the census of this repository.
@@ -713,6 +897,8 @@ mod tests {
         assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
     }
 
+    /// Through the detector (CLOUD-2625): a plain command is argv, a list and
+    /// an assignment prefix are shell.
     #[test]
     fn a_plain_argv_is_not_shell_and_a_pipeline_is() {
         let lines = [
@@ -727,11 +913,42 @@ mod tests {
     }
 
     #[test]
-    fn a_keyword_is_read_with_its_quote_attached() {
-        // The ban's reading, kept so the census and the gate cannot disagree: a
-        // quoted value's first word carries the quote, so no keyword matches.
-        assert!(!shell_syntax("\"set -e\""));
-        assert!(shell_syntax("set -e"));
+    fn set_e_is_argv_whichever_way_it_is_quoted() {
+        // INVERTED BY CLOUD-2625. The scan read a quoted value's first word with
+        // its quote attached and listed `set` as a keyword, so `"set -e"` was
+        // argv and a bare `set -e` shell. On the grammar both are one plain
+        // command: `set` is a word like any other.
+        let lines = [
+            "run = \"set -e\"",
+            "run = 'set -e'",
+            "run = [",
+            "  \"set -e\",",
+            "]",
+        ];
+        assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
+    }
+
+    #[test]
+    fn a_quoted_metacharacter_is_one_word_and_a_bare_one_is_shell() {
+        // The value is judged on the string TOML hands back, so the TOML quote is
+        // gone and the shell quote inside it is what decides.
+        let lines = [
+            "run = \"echo 'a|b'\"",
+            "run = 'echo \">\" x'",
+            "run = \"a | b\"",
+            "run = '''ls *.rs'''",
+        ];
+        let reasons = manifest_reasons(&lines, &keys(&["run"]));
+        assert_eq!(
+            reasons.into_iter().collect::<Vec<_>>(),
+            [(2, "Pipeline"), (3, "glob")]
+        );
+    }
+
+    #[test]
+    fn a_body_of_one_plain_command_is_not_shell() {
+        let lines = ["run = '''", "cargo build \\", "  --release", "'''"];
+        assert!(manifest_lines(&lines, &keys(&["run"])).is_empty());
     }
 
     #[test]
@@ -780,14 +997,19 @@ mod tests {
             "      - name: n",
             "        run: >",
             "          echo three",
+            "          echo four",
             "      - run: mise run verify",
             "      - run: a && b",
+            "      - run: >",
+            "          echo five",
         ];
         let steps = workflow_steps(&lines);
         assert_eq!(steps.get(&3), Some(&BTreeSet::from([4, 7])));
-        assert_eq!(steps.get(&10), Some(&BTreeSet::from([11])));
-        assert_eq!(steps.get(&12), None, "a single command is not shell");
-        assert_eq!(steps.get(&13), Some(&BTreeSet::from([13])));
+        // A folded block is fed as its source lines: two lines, two commands.
+        assert_eq!(steps.get(&10), Some(&BTreeSet::from([11, 12])));
+        assert_eq!(steps.get(&13), None, "a single command is not shell");
+        assert_eq!(steps.get(&14), Some(&BTreeSet::from([14])));
+        assert_eq!(steps.get(&15), None, "a one-command block is not shell");
     }
 
     #[test]
@@ -797,21 +1019,13 @@ mod tests {
     }
 
     #[test]
-    fn a_shebang_naming_a_shell_is_shell_and_one_naming_another_language_is_not() {
-        assert!(shell_shebang("#!/usr/bin/env bash"));
-        assert!(shell_shebang("#!/bin/sh"));
-        assert!(!shell_shebang("#!/usr/bin/env python3"));
-        assert!(!shell_shebang("# bash"));
-        assert!(shell_path("x.bats") && shell_path("a/b.sh") && !shell_path("a/sh"));
-    }
-
-    #[test]
     fn units_are_named_by_their_header_and_lone_lines_stand_alone() {
         let lines = [
             "run = \"a | b\"",
             "[tasks.a]",
             "run = '''",
             "echo a",
+            "echo b",
             "'''",
             "[tasks.\"b:c\"]",
             "run = \"x; y\"",
@@ -830,7 +1044,7 @@ mod tests {
             .collect();
         assert_eq!(
             rendered,
-            [(1, None, 1), (2, Some("a"), 1), (6, Some("b:c"), 1)]
+            [(1, None, 1), (2, Some("a"), 2), (7, Some("b:c"), 1)]
         );
     }
 

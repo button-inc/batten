@@ -627,8 +627,8 @@ names_a_message_source(stage) if {
 
 # ---------------------------------------------------------------------------
 # The predicate's own tests (CLOUD-835). They are the LOAD-TIME half only: what
-# proves this gate decides is `tests/run-shape.bats`, which drives the compiled
-# binary over a real envelope, because a `with input as` fabricates its own
+# proves this gate decides is `crates/batten/tests/it/run_shape.rs`, which drives
+# the compiled binary over a real envelope, because a `with input as` fabricates its own
 # input and can be green over a shape the engine never produces (CLOUD-845).
 # ---------------------------------------------------------------------------
 

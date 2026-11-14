@@ -1654,21 +1654,14 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
     // A gate that passes only when the variable carries the expected value. The
     // gate is the assertion, so a dropped pair reddens the case rather than
     // leaving it to a follow-up read.
-    let gate = dir.join("gate.sh");
-    std::fs::write(
+    let gate = dir.join("gate");
+    common::stub_at(
         &gate,
-        format!(
-            "#!/bin/sh\ntest \"${{{}}}\" = \"speculated-base\"\n",
-            batten::speculation::PUBLISHED_AS
-        ),
-    )
-    .expect("write the gate");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate runnable");
-    }
+        &serde_json::json!([
+            {"env_eq": [batten::speculation::PUBLISHED_AS, "speculated-base"], "steps": []},
+            {"steps": [{"exit": 1}]},
+        ]),
+    );
     let command = vec![gate.to_string_lossy().into_owned()];
 
     let published = vec![(

@@ -40,7 +40,7 @@
 //!
 //! `git/ref/heads/main` rather than `commits/main`, because the body is a single
 //! ref object: the smallest response that answers the question. The predecessor
-//! (`mise-tasks/main-watch.sh`) chose it for the same reason and says so.
+//! (`mise-tasks/main-watch.sh`) chose it for the same reason and said so.
 //!
 //! # What this module does NOT do
 //!
@@ -196,7 +196,7 @@ impl Poll {
     /// movement would cost a whole CI run per unreachable forge.
     ///
     /// **AND AN EMPTY BASE IS NOT A BASE**, which is the arm the first port of
-    /// this dropped. `mise-tasks/main-watch.bats` refuses one outright — *"no
+    /// this dropped. `mise-tasks/main-watch.bats` refused one outright — *"no
     /// base to compare against is a refusal, not a silent block"* — because an
     /// empty base compares unequal to every sha, so the first poll reports
     /// movement and the lap laps forever. Answering `None` here is the same
@@ -382,7 +382,7 @@ mod tests {
     /// **AN EMPTY BASE IS NOT A BASE, and the first port of this dropped the
     /// arm.**
     ///
-    /// `mise-tasks/main-watch.bats` refuses one outright: *"no base to compare
+    /// `mise-tasks/main-watch.bats` refused one outright: *"no base to compare
     /// against is a refusal, not a silent block"*, because an empty base
     /// compares unequal to every sha — so the first poll reports movement, the
     /// lap abandons a run it never needed to, and it does that every lap

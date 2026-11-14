@@ -76,7 +76,7 @@ workflow_path := ".github/workflows/release-artifacts.yml"
 # SPELLED HERE AND TIED TO THEIR PRODUCERS BY A GATE, not by agreement: the
 # compiled tier `the_names_the_module_demands_are_the_names_the_producers_write`
 # (crates/batten/tests/it/release_assets.rs) asks `[tasks.sbom]`'s `--names`,
-# `[tasks.sbom-binary-record]`'s `--names <target>` and `mise-tasks/dist.sh
+# `[tasks.sbom-binary-record]`'s `--names <target>` and `batten dist <target>
 # --stem` for every name and requires a release carrying exactly those to be
 # clean, so a constant that drifts from its producer, or a producer that drifts
 # from the constant, reds that tier. Both directions carry a `#MUTANT` row: the
