@@ -303,6 +303,17 @@ mod nonverdict;
 #[cfg(unix)]
 mod ntia;
 mod obligations_bound;
+#[cfg(unix)]
+mod offbox_daemon;
+#[cfg(unix)]
+mod offbox_hook;
+mod offbox_push;
+#[cfg(unix)]
+mod offbox_restore;
+mod offbox_rotate;
+#[cfg(unix)]
+mod offbox_snapshot;
+mod offbox_status;
 mod one_pr;
 mod outcome_advice;
 // The decoy is a `#!/bin/sh` script whose permission bits are the mechanism, so
@@ -417,6 +428,7 @@ mod secrets_kind;
 mod semver_gate;
 mod session_drain;
 mod session_provisioning;
+mod session_source;
 mod shell_banned;
 mod shell_retirement;
 mod shell_retirement_cost;
@@ -431,6 +443,7 @@ mod sleep_ban;
 mod snapshots;
 #[cfg(unix)]
 mod sonar_gate;
+mod source_claude_code;
 mod spawn_ceilings;
 mod spawn_census;
 mod spawn_census_clippy;

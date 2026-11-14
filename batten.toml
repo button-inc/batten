@@ -13720,6 +13720,18 @@ kind = "document"
 target = "policy/perf-assert.rego"
 
 [[verdict]]
+id = "hook measure late"
+gloss = "a hook arm's measured p50 is over the 10 ms target this repository publishes"
+class = """
+The target and the ceiling answer different questions: the p50 target is what a mediated call normally costs, the p95 budget is what it must never exceed. With only the ceiling gated a hook path could go from 3 ms to 90 ms and every gate stayed green, and an agent pays that on every tool call. So this fires on the ordinary cost, not on an outlier. Fix what got slower. A waiver is the owner's to grant, as a dated `[[waiver]]` row; moving the target means moving `targets` in `policy/perf-assert.rego` AND README's target column together.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict]]
 id = "path measure partial"
 gloss = "the perf record carries no measurement for a path this repository budgets"
 class = """

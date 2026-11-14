@@ -48,6 +48,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use gix::objs::Write as _;
+
 use crate::Result;
 use crate::fetch::{self, Call};
 
@@ -223,6 +225,61 @@ fn base64_of(raw: &str) -> String {
 /// transport failure — all could-not-look (exit `3`), never a verdict about the
 /// lease. A lease gate that could not read the lease has not judged it.
 pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
+    let response = discover(remote, service)?;
+    refuse_throttle(&response)?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: ref discovery answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_advertisement(&response.body, service)
+}
+
+/// The discovery STATUS alone, for a caller whose question is whether the remote
+/// answers at all (CLOUD-2718).
+///
+/// [`advertise`] folds every non-200 into one error, which is right for a lease
+/// reader — it has no verdict to give over a remote it could not read — and wrong
+/// for a caller asking whether a repository is reachable with this credential:
+/// `401`, `403` and `404` are that question's ANSWER, not a failure to ask it.
+/// Measured through an agent proxy on 2026-11-14: `200` once the repository was
+/// attached to the session, `403` before, and `403` for a name that does not
+/// exist, so a refusal here cannot tell unattached from misspelled.
+///
+/// # Errors
+///
+/// A transport failure, or a [`Throttled`] answer — both could-not-look (exit
+/// `3`). Every other status the server sent is returned, never judged.
+pub fn probe(remote: &str, service: Service) -> Result<u16> {
+    let response = discover(remote, service)?;
+    refuse_throttle(&response)?;
+    Ok(response.status)
+}
+
+/// One discovery, read both ways: the advertisement where the remote served
+/// one, and the status where it refused — [`probe`]'s answer and
+/// [`advertise`]'s from a single request.
+///
+/// For a caller that must know the remote answers AND what it holds before it
+/// decides anything, and has no business asking twice.
+///
+/// # Errors
+///
+/// A transport failure, a [`Throttled`] answer, or a `200` whose body is not a
+/// well-formed advertisement — all could-not-look.
+pub fn survey(remote: &str, service: Service) -> Result<std::result::Result<Advertisement, u16>> {
+    let response = discover(remote, service)?;
+    refuse_throttle(&response)?;
+    if response.status != 200 {
+        return Ok(Err(response.status));
+    }
+    parse_advertisement(&response.body, service).map(Ok)
+}
+
+/// One discovery exchange, unjudged: the request [`advertise`] and [`probe`]
+/// share, so the two cannot come to spell the endpoint differently.
+fn discover(remote: &str, service: Service) -> Result<fetch::Response> {
     let url = format!(
         "{}/info/refs?service={}",
         remote.trim_end_matches('/'),
@@ -232,21 +289,16 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
         url: &url,
         headers: &headers("*/*", None),
         body: None,
+        file: None,
         direct: false,
         patch: false,
         delete: false,
         credentials: &[],
     }])?;
-    let response = responses
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
-    if response.status != 200 {
-        return Err(anyhow::anyhow!(
-            "lease: ref discovery answered {} rather than 200",
-            response.status
-        ));
-    }
-    parse_advertisement(&response.body, service)
+    responses
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))
 }
 
 /// Parse a smart-HTTP advertisement body.
@@ -348,6 +400,114 @@ pub enum Outcome {
         /// The server's own reason, carried verbatim as a pointer for a reader.
         reason: String,
     },
+    /// The forge refused for now and said to slow down (CLOUD-2729).
+    ///
+    /// **Its own outcome, because it is neither of the other two.** Nothing was
+    /// applied and nothing was lost to another writer: the same push is expected
+    /// to succeed later. This module reads no clock and waits for nothing, so the
+    /// two values are the forge's own and the caller turns them into a wait.
+    Throttled {
+        /// `Retry-After`, in seconds, where the forge stated one.
+        retry_after: Option<u64>,
+        /// `x-ratelimit-reset`, an epoch second, where remaining read zero.
+        reset_at: Option<u64>,
+    },
+}
+
+/// A throttle met where there is no [`Outcome`] to carry it: discovery and
+/// fetch (CLOUD-2729).
+///
+/// An error a caller matches BY TYPE (`downcast_ref::<Throttled>()`), so "the
+/// forge says slow down, for this long" stays distinguishable from "the
+/// repository is unreachable" all the way up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Throttled {
+    /// `Retry-After`, in seconds, where the forge stated one.
+    pub retry_after: Option<u64>,
+    /// `x-ratelimit-reset`, an epoch second, where remaining read zero.
+    pub reset_at: Option<u64>,
+}
+
+impl std::fmt::Display for Throttled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("lease: the forge throttled this request")
+    }
+}
+
+impl std::error::Error for Throttled {}
+
+impl From<Throttled> for Outcome {
+    fn from(throttled: Throttled) -> Self {
+        Outcome::Throttled {
+            retry_after: throttled.retry_after,
+            reset_at: throttled.reset_at,
+        }
+    }
+}
+
+/// The throttle a response states, if it states one.
+///
+/// A response is a throttle when its status is `429`; when its status is `403`
+/// or `503` AND it carries `Retry-After`; or when it carries
+/// `x-ratelimit-remaining: 0`. A bare `403` is not one — that is the forge
+/// saying no, and reading it as "wait" would retry a refusal forever.
+///
+/// The two header reads are [`crate::rest::throttle_headers`]'s, the reader the
+/// REST tier's own backoff is built on, so the two cannot come to disagree about
+/// what the forge said.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT plain-403-reads-as-throttle|s@^        \x7c\x7c (matches!(response.status, 403 \x7c 503) && retry_after.is_some())$@        \x7c\x7c matches!(response.status, 403 \x7c 503)@|a_bare_403_is_a_refusal_and_never_a_throttle
+//MUTANT retry-after-value-dropped|s@^        retry_after,$@        retry_after: None,@|a_429_is_a_throttle_carrying_the_wait_it_named
+fn throttle_of(response: &fetch::Response) -> Option<Throttled> {
+    let header = |name: &str| response.header(name).map(str::to_owned);
+    let (retry_after, reset_at) = crate::rest::throttle_headers(header);
+    let refused = response.status == 429
+        || (matches!(response.status, 403 | 503) && retry_after.is_some())
+        || crate::rest::exhausted(header);
+    refused.then_some(Throttled {
+        retry_after,
+        reset_at,
+    })
+}
+
+/// Refuse a throttled response as the typed [`Throttled`] error.
+//MUTANT throttle-reads-as-plain-failure|s@^    match throttle_of(response) {$@    match None::<Throttled> {@|a_429_is_a_throttle_carrying_the_wait_it_named
+fn refuse_throttle(response: &fetch::Response) -> Result<()> {
+    match throttle_of(response) {
+        Some(throttled) => Err(anyhow::Error::new(throttled)),
+        None => Ok(()),
+    }
+}
+
+/// `Ok(outcome)` where `err` is a [`Throttled`], and `err` back otherwise: how a
+/// function that HAS an outcome reports a throttle met on one of its reads.
+fn throttled_outcome(err: anyhow::Error) -> Result<Outcome> {
+    match err.downcast_ref::<Throttled>() {
+        Some(throttled) => Ok(Outcome::from(*throttled)),
+        None => Err(err),
+    }
+}
+
+/// What a receive-pack response did.
+///
+/// **AN APPLIED SWAP WINS.** A reply that reports the ref updated is
+/// [`Outcome::Applied`] even when it also says the rate limit is now spent:
+/// the push landed, and reporting a throttle instead would have the caller
+/// retry a swap that already happened.
+fn outcome_of(response: &fetch::Response) -> Result<Outcome> {
+    if response.status == 200 && matches!(parse_report(&response.body), Ok(Outcome::Applied)) {
+        return Ok(Outcome::Applied);
+    }
+    if let Some(throttled) = throttle_of(response) {
+        return Ok(Outcome::from(throttled));
+    }
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: receive-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_report(&response.body)
 }
 
 /// Parse receive-pack's report-status.
@@ -504,6 +664,7 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
             Some(&content_type),
         ),
         body: Some(&body),
+        file: None,
         direct: false,
         patch: false,
         delete: false,
@@ -512,13 +673,7 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
     let response = responses
         .first()
         .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
-    if response.status != 200 {
-        return Err(anyhow::anyhow!(
-            "lease: receive-pack answered {} rather than 200",
-            response.status
-        ));
-    }
-    parse_report(&response.body)
+    outcome_of(response)
 }
 
 /// A git object, as both halves of its identity: the id it hashes to and the
@@ -646,18 +801,76 @@ const PACK_VERSION: u32 = 2;
 ///
 /// A body that will not compress, or a trailer that will not hash.
 pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
+    let mut pack = Vec::new();
+    pack_to(&mut pack, objects.len(), objects.iter().map(Ok))?;
+    Ok(pack)
+}
+
+/// A writer that hashes what passes through it, so a pack's trailer is taken
+/// over the bytes as they are written rather than over a buffer of all of them.
+struct Hashing<W> {
+    inner: W,
+    hasher: gix::hash::Hasher,
+}
+
+impl<W: std::io::Write> std::io::Write for Hashing<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        self.hasher.update(&bytes[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// [`pack_of`], STREAMED: write a packfile of `count` objects to `out`, taking
+/// each object from `objects` only when it is its turn (CLOUD-2729).
+///
+/// Peak memory is one object plus the compressor's window, whatever the pack
+/// holds. The header, each compressed member and the trailing checksum are the
+/// same bytes [`pack_of`] produces — it is this function over a `Vec`.
+///
+/// # Errors
+///
+/// A write `out` refuses, a body that will not compress, a trailer that will not
+/// hash, an object the iterator fails to produce, or an iterator that yields a
+/// different number of objects than `count` — the header has already promised
+/// the count, so a pack that disagrees with it is one a server half-reads.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT streamed-pack-differs-from-buffered|s@^        self.hasher.update(\&bytes\[..written\]);$@@|the_streamed_pack_is_the_buffered_pack_and_reads_back
+pub fn pack_to<W, O>(
+    out: W,
+    count: usize,
+    objects: impl IntoIterator<Item = Result<O>>,
+) -> Result<()>
+where
+    W: std::io::Write,
+    O: std::borrow::Borrow<Object>,
+{
     use std::io::Write as _;
 
-    let count = u32::try_from(objects.len())
-        .map_err(|_| anyhow::anyhow!("lease: a pack cannot carry {} objects", objects.len()))?;
-    let mut pack = Vec::from(*b"PACK");
-    pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
-    pack.extend_from_slice(&count.to_be_bytes());
+    let refused = |err: std::io::Error| anyhow::anyhow!("lease: the pack will not write: {err}");
+    let declared = u32::try_from(count)
+        .map_err(|_| anyhow::anyhow!("lease: a pack cannot carry {count} objects"))?;
+    let mut out = Hashing {
+        inner: out,
+        hasher: gix::hash::hasher(gix::hash::Kind::Sha1),
+    };
+    out.write_all(b"PACK").map_err(refused)?;
+    out.write_all(&PACK_VERSION.to_be_bytes())
+        .map_err(refused)?;
+    out.write_all(&declared.to_be_bytes()).map_err(refused)?;
+    let mut written = 0_usize;
     for object in objects {
+        let object = object?;
+        let object = object.borrow();
         // The type/size header: four size bits in the first byte beside the
         // type, then seven per continuation byte, little-endian, with the high
         // bit meaning "another byte follows".
         let size = object.body.len();
+        let mut header = Vec::with_capacity(10);
         #[expect(
             clippy::cast_possible_truncation,
             reason = "masked to four bits before the cast"
@@ -671,7 +884,7 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
         let mut rest = size >> 4;
         while let Some(left) = std::num::NonZeroUsize::new(rest) {
             // Below 0x80 by construction, so the continuation bit is added.
-            pack.push(byte + 0x80);
+            header.push(byte + 0x80);
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "masked to seven bits before the cast"
@@ -681,24 +894,28 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
             }
             rest = left.get() >> 7;
         }
-        pack.push(byte);
-        let mut encoder =
-            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        header.push(byte);
+        out.write_all(&header).map_err(refused)?;
+        let mut encoder = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::default());
         encoder
             .write_all(&object.body)
-            .and_then(|()| encoder.finish())
-            .map_err(|err| anyhow::anyhow!("lease: an object will not compress: {err}"))
-            .map(|compressed| pack.extend_from_slice(&compressed))?;
+            .and_then(|()| encoder.finish().map(drop))
+            .map_err(|err| anyhow::anyhow!("lease: an object will not compress: {err}"))?;
+        written += 1;
+    }
+    if written != count {
+        return Err(anyhow::anyhow!(
+            "lease: the pack header promises {count} objects and {written} were written"
+        ));
     }
     // THE TRAILER IS OVER EVERYTHING BEFORE IT, which is what makes a truncated
     // pack detectable by the server rather than half-applied.
-    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
-    hasher.update(&pack);
+    let Hashing { mut inner, hasher } = out;
     let checksum = hasher
         .try_finalize()
         .map_err(|err| anyhow::anyhow!("lease: the pack trailer will not hash: {err}"))?;
-    pack.extend_from_slice(checksum.as_slice());
-    Ok(pack)
+    inner.write_all(checksum.as_slice()).map_err(refused)?;
+    inner.flush().map_err(refused)
 }
 
 /// Read the undeltified objects out of a packfile.
@@ -1055,6 +1272,7 @@ pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
             )),
         ),
         body: Some(&body),
+        file: None,
         direct: false,
         patch: false,
         delete: false,
@@ -3226,6 +3444,8 @@ pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
 /// A transport failure, an unreadable report, or a repository whose objects will
 /// not enumerate. **A lost race is not an error** — it is [`Outcome::Rejected`],
 /// for the reason [`cas`] states.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT applied-swap-reads-rejected|s@^    if old == head {$@    if false {@|a_lost_reply_is_read_as_applied_on_the_retry
 pub fn push(
     remote: &str,
     repo: &std::path::Path,
@@ -3233,8 +3453,18 @@ pub fn push(
     head: &str,
     admit: &dyn Fn(&str) -> bool,
 ) -> Result<Outcome> {
-    let advertisement = advertise(remote, Service::ReceivePack)?;
+    let advertisement = match advertise(remote, Service::ReceivePack) {
+        Ok(advertisement) => advertisement,
+        Err(err) => return throttled_outcome(err),
+    };
     let old = advertisement.head_of(reference);
+    // ALREADY THERE (CLOUD-2729). A swap the server applied whose reply was lost
+    // leaves the ref at `head`, and the retry would otherwise read its own
+    // success as a lost race: `old` is no longer a value the caller admitted.
+    // Nothing is sent, because there is nothing left to change.
+    if old == head {
+        return Ok(Outcome::Applied);
+    }
     // THE CALLER'S ASSERTION, before anything is sent (CLOUD-2056). The CAS
     // below only proves the ref did not move DURING the swap; whether `old` is a
     // value this push may replace at all is the caller's to say, from what it
@@ -3249,20 +3479,593 @@ pub fn push(
     // and any base but the advertised one either sends too little (a broken
     // push) or re-sends history the remote has had for months.
     let base = (old != ZERO).then_some(old);
-    let objects: Vec<Object> = crate::git::objects_to_send(repo, base, head)?
-        .into_iter()
-        .map(|raw| Object {
-            id: raw.id,
-            kind: raw.kind,
-            body: raw.body,
-        })
-        .collect();
+    let ids = crate::git::object_ids_to_send(repo, base, head)?;
     let update = Update {
         old: old.to_owned(),
         new: head.to_owned(),
         name: reference.to_owned(),
     };
-    swap(remote, &update, &pack_of(&objects)?)
+    // THE REQUEST IS BUILT IN A FILE AND SENT FROM IT (CLOUD-2729), so a push
+    // holds one object at a time whatever it carries. The file lives under the
+    // repository's own git directory — never in a worktree, where it would read
+    // as an untracked change mid-landing — and is removed on every path out.
+    let request = Scratch::under(repo)?;
+    let reader = crate::git::ObjectReader::open(repo)?;
+    let file = std::fs::File::create(&request.0)
+        .map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))?;
+    write_request(std::io::BufWriter::new(file), &update, &ids, &|id| {
+        reader.read(id).map(|raw| Object {
+            id: raw.id,
+            kind: raw.kind,
+            body: raw.body,
+        })
+    })?;
+    let outcome = outcome_of(&send_request(remote, &request.0)?)?;
+    let Outcome::Rejected { reason } = outcome else {
+        return Ok(outcome);
+    };
+    // REJECTED, AND YET THERE: the same lost-reply case met one step later,
+    // when an earlier attempt's swap landed between this push's advertisement
+    // and its own. A second reading that cannot be taken changes nothing — the
+    // rejection stands.
+    let applied =
+        advertise(remote, Service::ReceivePack).is_ok_and(|now| now.head_of(reference) == head);
+    if applied {
+        return Ok(Outcome::Applied);
+    }
+    Ok(Outcome::Rejected { reason })
+}
+
+/// The capability that makes a command list all-or-nothing.
+const ATOMIC: &str = "atomic";
+
+/// What the first command of a list asks for, after its NUL: a report, and
+/// that the list apply whole or not at all.
+const FIRST_ASKS: &str = "\0report-status atomic";
+
+/// Send several ref updates as ONE command list that applies whole or not at
+/// all (CLOUD-2724).
+///
+/// Each update is conditioned on its own `old`, so the list applies only while
+/// every named ref still reads what the caller saw. `atomic` is asked for on
+/// the first command, and **a remote that does not offer it is refused before
+/// anything is sent**: without it a server may apply some commands and not
+/// others, and a caller that removes one ref because another now reaches its
+/// commit would have removed it for nothing.
+///
+/// **The pack holds only what the remote lacks.** For each update that sets a
+/// commit, [`crate::git::commit_ids_to_send`] takes that commit and its tree's
+/// closure and subtracts the tree of every commit the remote advertises that is
+/// present in `repo`. No parent is walked, so a parent the remote holds and
+/// `repo` does not is never asked for and never sent.
+///
+/// # Errors
+///
+/// A transport failure, an unreadable report, a remote that does not offer
+/// `atomic`, or an update whose new commit `repo` does not hold. A list the
+/// server refused is [`Outcome::Rejected`], and a throttle is
+/// [`Outcome::Throttled`].
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT atomic-not-asked-for|s@^const FIRST_ASKS: \&str = "\\0report-status atomic";$@const FIRST_ASKS: \&str = "\\0report-status";@|a_session_that_pushes_during_the_pass_refuses_the_whole_push
+//MUTANT non-atomic-remote-is-sent-to|s@^    if !offered {$@    if false {@|a_remote_without_atomic_is_refused_and_nothing_is_sent
+//MUTANT advertised-commits-are-resent|s@^    let have: Vec<String> = advertisement.refs.values().cloned().collect();$@    let have: Vec<String> = Vec::new();@|a_quiet_session_is_archived_and_its_ref_removed
+pub fn swap_many(remote: &str, repo: &std::path::Path, updates: &[Update]) -> Result<Outcome> {
+    let advertisement = match advertise(remote, Service::ReceivePack) {
+        Ok(advertisement) => advertisement,
+        Err(err) => return throttled_outcome(err),
+    };
+    let offered = advertisement.capabilities.iter().any(|each| each == ATOMIC);
+    if !offered {
+        return Err(anyhow::anyhow!(
+            "lease: the remote does not offer `{ATOMIC}`, so a command list is not sent"
+        ));
+    }
+    let have: Vec<String> = advertisement.refs.values().cloned().collect();
+    let mut ids: Vec<String> = Vec::new();
+    for update in updates.iter().filter(|update| update.new != ZERO) {
+        for id in crate::git::commit_ids_to_send(repo, &update.new, &have)? {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("lease: the push request will not write: {err}");
+    let request = Scratch::under(repo)?;
+    let reader = crate::git::ObjectReader::open(repo)?;
+    let file = std::fs::File::create(&request.0)
+        .map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))?;
+    let mut out = std::io::BufWriter::new(file);
+    for (index, update) in updates.iter().enumerate() {
+        let capabilities = if index == 0 { FIRST_ASKS } else { "" };
+        let command = format!(
+            "{} {} {}{capabilities}\n",
+            update.old, update.new, update.name
+        );
+        std::io::Write::write_all(&mut out, &pktline(&command)?).map_err(refused)?;
+    }
+    std::io::Write::write_all(&mut out, FLUSH).map_err(refused)?;
+    let bodies = ids.iter().map(|id| {
+        reader.read(id).map(|raw| Object {
+            id: raw.id,
+            kind: raw.kind,
+            body: raw.body,
+        })
+    });
+    pack_to(out, ids.len(), bodies)?;
+    outcome_of(&send_request(remote, &request.0)?)
+}
+
+/// A file this module writes and removes: the push request being sent.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    /// A fresh name under `repo`'s git directory.
+    fn under(repo: &std::path::Path) -> Result<Self> {
+        let dir = crate::git::git_dir(repo)?;
+        Ok(Scratch(dir.join(format!(
+            "batten-push-{}-{}.request",
+            std::process::id(),
+            nonce()
+        ))))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Write a receive-pack request to `out`: the command, a flush, then the pack
+/// of `ids`, each body taken from `read` only when it is written.
+///
+/// **LAZY, AND THAT IS THE WHOLE POINT.** `ids` is forty bytes an object; a body
+/// is whatever the object is. Reading every body before writing any is the
+/// 950 MB peak this replaces.
+///
+/// # Errors
+///
+/// As [`pack_to`], and whatever `read` returns.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT push-buffers-every-object|s@^    let bodies = ids.iter().map(\x7cid\x7c read(id));$@    let bodies = ids.iter().map(\x7cid\x7c read(id)).collect::<Vec<_>>().into_iter();@|a_push_request_holds_one_object_at_a_time
+fn write_request<W: std::io::Write>(
+    mut out: W,
+    update: &Update,
+    ids: &[String],
+    read: &dyn Fn(&str) -> Result<Object>,
+) -> Result<()> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("lease: the push request will not write: {err}");
+    out.write_all(&pktline(&update.command())?)
+        .map_err(refused)?;
+    out.write_all(FLUSH).map_err(refused)?;
+    let bodies = ids.iter().map(|id| read(id));
+    pack_to(out, ids.len(), bodies)
+}
+
+/// POST the receive-pack request held in `request`.
+fn send_request(remote: &str, request: &std::path::Path) -> Result<fetch::Response> {
+    let url = format!(
+        "{}/{}",
+        remote.trim_end_matches('/'),
+        Service::ReceivePack.as_str()
+    );
+    let content_type = format!("application/x-{}-request", Service::ReceivePack.as_str());
+    fetch::spend(&[Call {
+        url: &url,
+        headers: &headers(
+            &format!("application/x-{}-result", Service::ReceivePack.as_str()),
+            Some(&content_type),
+        ),
+        body: None,
+        file: Some(request),
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?
+    .into_iter()
+    .next()
+    .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))
+}
+
+/// Fetch the one commit `id` from `remote` at depth 1, writing its objects into
+/// `repo` as they arrive, and return how many were written (CLOUD-2729).
+///
+/// **By id, with no advertisement.** A session's snapshot may be reachable only
+/// as a parent of an archive tip, which no ref names; the forge serves a wanted
+/// id it can reach. `deepen 1` is what keeps a want on an archive tip from
+/// returning the archive's whole closure.
+///
+/// **Memory does not grow with the snapshot.** The answer is streamed into an
+/// [`Intake`], which holds one pack member at a time and writes it before
+/// reading the next. A delta is resolved against `repo` — its base read back by
+/// id — rather than against a list of everything read so far.
+///
+/// The answer is bounded by silence, not by its length: see [`fetch::stream`].
+///
+/// # Errors
+///
+/// A [`Throttled`] answer, any other non-200 status, a transport failure, a
+/// pack that will not read or ends early, or an answer that does not carry the
+/// commit asked for. All could-not-look.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT shallow-fetch-omits-deepen|s@^    body.extend_from_slice(\&pktline("deepen 1\\n")?);$@@|a_shallow_fetch_takes_one_commit_and_not_its_parent
+pub fn fetch_shallow(remote: &str, repo: &std::path::Path, id: &str) -> Result<usize> {
+    let wanted = gix::ObjectId::from_hex(id.as_bytes())
+        .map_err(|_| crate::error::UsageError::raise(format!("lease: {id} is not an object id")))?;
+    let handle = crate::git::open_for_write(repo)?;
+    let mut intake = Intake::into(&handle);
+    let body = shallow_request(id)?;
+    let response = fetch::stream(
+        &Call {
+            url: &format!(
+                "{}/{}",
+                remote.trim_end_matches('/'),
+                Service::UploadPack.as_str()
+            ),
+            headers: &headers(
+                &format!("application/x-{}-result", Service::UploadPack.as_str()),
+                Some(&format!(
+                    "application/x-{}-request",
+                    Service::UploadPack.as_str()
+                )),
+            ),
+            body: Some(&body),
+            file: None,
+            direct: false,
+            patch: false,
+            delete: false,
+            credentials: &[],
+        },
+        &mut |chunk: &[u8]| intake.feed(chunk),
+    )?;
+    if response.status != 200 {
+        refuse_throttle(&response)?;
+        return Err(anyhow::anyhow!(
+            "lease: upload-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    let written = intake.finish()?;
+    if handle.find_object(wanted).is_err() {
+        return Err(anyhow::anyhow!(
+            "lease: the shallow fetch did not carry {id}, the commit it asked for"
+        ));
+    }
+    Ok(written)
+}
+
+/// The `want`/`deepen 1`/`done` body.
+fn shallow_request(want: &str) -> Result<Vec<u8>> {
+    let mut body = pktline(&format!("want {want} no-progress ofs-delta\n"))?;
+    body.extend_from_slice(&pktline("deepen 1\n")?);
+    body.extend_from_slice(FLUSH);
+    body.extend_from_slice(&pktline("done\n")?);
+    Ok(body)
+}
+
+/// Where a streamed upload-pack answer is in its own grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// The pkt-framed section before the pack: `shallow` lines, `NAK`.
+    Framed,
+    /// The pack's twelve-byte header.
+    Header,
+    /// The pack's members.
+    Members,
+    /// The pack's twenty-byte trailer.
+    Trailer,
+    /// Everything was read.
+    Done,
+}
+
+/// One pack member part-way through being read.
+struct Member {
+    /// Where its header started, in the pack's own offsets.
+    start: usize,
+    /// Its kind, or `None` for a delta, which takes its base's.
+    kind: Option<gix::object::Kind>,
+    /// The base a delta applies to.
+    base: Option<gix::ObjectId>,
+    /// The inflated size its header declares.
+    size: usize,
+    inflate: flate2::Decompress,
+    body: Vec<u8>,
+}
+
+/// A streamed upload-pack answer, written into a repository one object at a
+/// time as its bytes arrive (CLOUD-2729).
+///
+/// [`objects_in`] reads a whole pack out of one buffer into one list, which is
+/// right for a lease and unaffordable for a snapshot. This holds the bytes not
+/// yet consumed and ONE member, writes each object when its stream ends, and
+/// keeps only a map from pack offset to object id — which is all an offset
+/// delta needs, since the base it names is read back from the repository.
+struct Intake<'repo> {
+    repo: &'repo gix::Repository,
+    stage: Stage,
+    /// Bytes received and not yet consumed.
+    pending: Vec<u8>,
+    /// The pack offset of `pending`'s first byte, once inside the pack.
+    offset: usize,
+    /// Members the header promised and that have not been written.
+    left: u32,
+    member: Option<Member>,
+    at_offset: BTreeMap<usize, gix::ObjectId>,
+    written: usize,
+}
+
+impl<'repo> Intake<'repo> {
+    fn into(repo: &'repo gix::Repository) -> Self {
+        Intake {
+            repo,
+            stage: Stage::Framed,
+            pending: Vec::new(),
+            offset: 0,
+            left: 0,
+            member: None,
+            at_offset: BTreeMap::new(),
+            written: 0,
+        }
+    }
+
+    /// Take the next bytes of the answer, and consume as much as is complete.
+    fn feed(&mut self, chunk: &[u8]) -> Result<()> {
+        self.pending.extend_from_slice(chunk);
+        while self.step()? {}
+        Ok(())
+    }
+
+    /// How many objects were written, once the whole pack has been read.
+    fn finish(&self) -> Result<usize> {
+        if self.stage != Stage::Done {
+            return Err(anyhow::anyhow!(
+                "lease: the fetched pack ended before its last member"
+            ));
+        }
+        Ok(self.written)
+    }
+
+    /// Drop `count` consumed bytes, and move the pack offset with them.
+    fn consume(&mut self, count: usize) {
+        self.pending.drain(..count);
+        self.offset += count;
+    }
+
+    /// Advance once. `false` means more bytes are needed.
+    fn step(&mut self) -> Result<bool> {
+        match self.stage {
+            Stage::Framed => {
+                let Some(head) = self.pending.get(..4) else {
+                    return Ok(false);
+                };
+                if head == b"PACK" {
+                    self.stage = Stage::Header;
+                    return Ok(true);
+                }
+                let length = std::str::from_utf8(head)
+                    .ok()
+                    .and_then(|hex| usize::from_str_radix(hex, 16).ok())
+                    .ok_or_else(|| anyhow::anyhow!("lease: the answer is not a packfile"))?;
+                // A flush or delimiter is four bytes and carries no payload.
+                let length = length.max(4);
+                if self.pending.len() < length {
+                    return Ok(false);
+                }
+                self.pending.drain(..length);
+                Ok(true)
+            }
+            Stage::Header => {
+                let Some(header) = self.pending.get(..12) else {
+                    return Ok(false);
+                };
+                let version = u32::from_be_bytes([header[4], header[5], header[6], header[7]]);
+                if version != PACK_VERSION {
+                    return Err(anyhow::anyhow!(
+                        "lease: the pack is version {version}, which this reader does not speak"
+                    ));
+                }
+                self.left = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
+                self.pending.drain(..12);
+                self.offset = 12;
+                self.stage = if self.left == 0 {
+                    Stage::Trailer
+                } else {
+                    Stage::Members
+                };
+                Ok(true)
+            }
+            Stage::Members => self.member_step(),
+            Stage::Trailer => {
+                if self.pending.len() < 20 {
+                    return Ok(false);
+                }
+                self.pending.drain(..20);
+                self.stage = Stage::Done;
+                Ok(true)
+            }
+            Stage::Done => Ok(false),
+        }
+    }
+
+    /// Read a member's header, or inflate more of the member in hand.
+    fn member_step(&mut self) -> Result<bool> {
+        let Some(mut member) = self.member.take() else {
+            let Some((number, size, base, read)) = member_header(&self.pending)? else {
+                return Ok(false);
+            };
+            let start = self.offset;
+            let (kind, base) = match base {
+                None => (
+                    Some(pack_kind(number).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "lease: the pack carries object type {number}, which this reader \
+                             does not resolve"
+                        )
+                    })?),
+                    None,
+                ),
+                Some(Base::Id(id)) => (None, Some(id)),
+                Some(Base::Back(distance)) => {
+                    let at = start.checked_sub(distance).ok_or_else(|| {
+                        anyhow::anyhow!("lease: an offset delta points before the pack")
+                    })?;
+                    let id = *self.at_offset.get(&at).ok_or_else(|| {
+                        anyhow::anyhow!("lease: an offset delta names no member of this pack")
+                    })?;
+                    (None, Some(id))
+                }
+            };
+            self.consume(read);
+            self.member = Some(Member {
+                start,
+                kind,
+                base,
+                size,
+                inflate: flate2::Decompress::new(true),
+                // ONE SPARE BYTE, so a stream that inflates past its declared
+                // size is seen to, rather than stalling on a full buffer.
+                body: Vec::with_capacity(size + 1),
+            });
+            return Ok(true);
+        };
+        let before = member.inflate.total_in();
+        let status = member
+            .inflate
+            .decompress_vec(
+                &self.pending,
+                &mut member.body,
+                flate2::FlushDecompress::None,
+            )
+            .map_err(|err| anyhow::anyhow!("lease: a pack member will not inflate: {err}"))?;
+        let consumed = usize::try_from(member.inflate.total_in() - before)
+            .map_err(|_| anyhow::anyhow!("lease: a pack member's length does not fit"))?;
+        self.consume(consumed);
+        if status != flate2::Status::StreamEnd {
+            if member.body.len() > member.size {
+                return Err(anyhow::anyhow!(
+                    "lease: a pack member inflated past the {} bytes its header claims",
+                    member.size
+                ));
+            }
+            self.member = Some(member);
+            // No input consumed and no end reached: the rest has not arrived.
+            return Ok(consumed > 0 && !self.pending.is_empty());
+        }
+        if member.body.len() != member.size {
+            return Err(anyhow::anyhow!(
+                "lease: a pack member inflated to {} bytes and its header claims {}",
+                member.body.len(),
+                member.size
+            ));
+        }
+        // A DELTA'S INFLATED BYTES ARE INSTRUCTIONS, NOT AN OBJECT, and its
+        // base is read back from the repository — where every earlier member
+        // of this pack already is.
+        let (kind, body) = match (member.kind, member.base) {
+            (Some(kind), _) => (kind, member.body),
+            (None, Some(base)) => {
+                let found = self.repo.find_object(base).map_err(|_| {
+                    anyhow::anyhow!("lease: a delta names base {base}, which the repository lacks")
+                })?;
+                (found.kind, apply_delta(&found.data, &member.body)?)
+            }
+            (None, None) => {
+                return Err(anyhow::anyhow!(
+                    "lease: a pack member has neither a kind nor a base"
+                ));
+            }
+        };
+        let id = self
+            .repo
+            .objects
+            .write_buf(kind, &body)
+            .map_err(|err| anyhow::anyhow!("lease: a fetched object will not write: {err}"))?;
+        self.at_offset.insert(member.start, id);
+        self.written += 1;
+        self.left -= 1;
+        if self.left == 0 {
+            self.stage = Stage::Trailer;
+        }
+        Ok(true)
+    }
+}
+
+/// A pack member's header: its type number, its inflated size, its delta base
+/// if it is one, and how many bytes the header took.
+type MemberHeader = (u8, usize, Option<Base>, usize);
+
+/// What a delta member names as its base.
+enum Base {
+    /// By object id (a reference delta).
+    Id(gix::ObjectId),
+    /// By the distance back to its base's own start (an offset delta).
+    Back(usize),
+}
+
+/// A member's header off the front of `bytes`: its type number, its inflated
+/// size, its delta base if it is one, and how many bytes the header took.
+/// `None` means the header has not all arrived.
+fn member_header(bytes: &[u8]) -> Result<Option<MemberHeader>> {
+    let mut cursor = 0_usize;
+    let Some(first) = bytes.first().copied() else {
+        return Ok(None);
+    };
+    cursor += 1;
+    let number = (first >> 4) & 0x07;
+    let mut size = usize::from(first & 0x0f);
+    let mut shift = 4_u32;
+    let mut more = first & 0x80 != 0;
+    while more {
+        let Some(byte) = bytes.get(cursor).copied() else {
+            return Ok(None);
+        };
+        cursor += 1;
+        let part = usize::from(byte & 0x7f)
+            .checked_shl(shift)
+            .ok_or_else(|| anyhow::anyhow!("lease: a pack member's size does not fit"))?;
+        size += part;
+        shift += 7;
+        more = byte & 0x80 != 0;
+    }
+    let base = match number {
+        OFS_DELTA => {
+            let Some(mut byte) = bytes.get(cursor).copied() else {
+                return Ok(None);
+            };
+            cursor += 1;
+            let mut distance = usize::from(byte & 0x7f);
+            while byte & 0x80 != 0 {
+                let Some(next) = bytes.get(cursor).copied() else {
+                    return Ok(None);
+                };
+                cursor += 1;
+                byte = next;
+                distance = distance
+                    .checked_add(1)
+                    .and_then(|value| value.checked_shl(7))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("lease: an offset delta's distance does not fit")
+                    })?
+                    + usize::from(byte & 0x7f);
+            }
+            Some(Base::Back(distance))
+        }
+        REF_DELTA => {
+            let Some(raw) = bytes.get(cursor..cursor + 20) else {
+                return Ok(None);
+            };
+            cursor += 20;
+            let id = gix::ObjectId::try_from(raw)
+                .map_err(|_| anyhow::anyhow!("lease: a reference delta's base is not an id"))?;
+            Some(Base::Id(id))
+        }
+        _ => None,
+    };
+    Ok(Some((number, size, base, cursor)))
 }
 
 /// The id `remote` advertises for `qualified`, or a usage error naming the ref.
@@ -3358,6 +4161,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
             )),
         ),
         body: Some(&body),
+        file: None,
         direct: false,
         patch: false,
         delete: false,
@@ -3366,6 +4170,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
     let response = responses
         .first()
         .ok_or_else(|| anyhow::anyhow!("lease: upload-pack returned no answer"))?;
+    refuse_throttle(response)?;
     if response.status != 200 {
         return Err(anyhow::anyhow!(
             "lease: upload-pack answered {} rather than 200",
@@ -3875,6 +4680,354 @@ pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries
     decide(paths, head, wanted.as_deref(), ancestral)
 }
 
+/// A remote standing in for the network, for this crate's own tests
+/// (CLOUD-2729).
+///
+/// **It holds refs and objects and applies what it is sent**, which the first
+/// version did not: that one answered `unpack ok` to everything and never moved
+/// a ref, so it could show neither a rejected swap nor a fetch of what an
+/// earlier push stored. A command is applied only while its ref reads `old`,
+/// exactly as receive-pack decides it.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+pub(crate) mod testing {
+    use super::{
+        Call, FLUSH, Object, Service, ZERO, fetch, objects_in, pack_of, pkt_split, pktline,
+    };
+
+    /// The remote every stand-in case names.
+    pub(crate) const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
+
+    /// Frame `lines` as pkt-lines, an empty one being a flush.
+    pub(crate) fn framed(lines: &[&str]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for line in lines {
+            if line.is_empty() {
+                body.extend_from_slice(FLUSH);
+            } else {
+                body.extend_from_slice(&pktline(line).expect("frame"));
+            }
+        }
+        body
+    }
+
+    /// Which of the three smart-HTTP requests a call is.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Kind {
+        /// `GET info/refs`.
+        Discovery,
+        /// `POST git-upload-pack`.
+        Upload,
+        /// `POST git-receive-pack`.
+        Receive,
+    }
+
+    /// "Answer the next `left` requests of `kind` with this status and these
+    /// headers", without touching a ref or an object.
+    pub(crate) struct Canned {
+        pub(crate) kind: Kind,
+        pub(crate) left: usize,
+        pub(crate) status: u16,
+        pub(crate) headers: Vec<(String, String)>,
+    }
+
+    /// "Before applying the next `left` command lists, set `name` to `id`": the
+    /// only way to show a swap the server rejects, since a push reads `old`
+    /// from the advertisement and a plain ref table would always accept it.
+    pub(crate) struct Moved {
+        pub(crate) left: usize,
+        pub(crate) name: String,
+        pub(crate) id: String,
+        /// The ids the moves after the first set, in order; when it runs out
+        /// the last one is used again.
+        pub(crate) then: Vec<String>,
+    }
+
+    /// The remote: its refs, its objects, the status it answers with, every
+    /// call it was asked, and the switches a case sets.
+    pub(crate) struct Stand {
+        pub(crate) status: u16,
+        pub(crate) refs: Vec<(String, String)>,
+        pub(crate) objects: Vec<Object>,
+        pub(crate) asked: Vec<String>,
+        pub(crate) sent: Vec<Vec<u8>>,
+        /// Requests seen, by kind.
+        pub(crate) discoveries: usize,
+        pub(crate) uploads: usize,
+        pub(crate) receives: usize,
+        pub(crate) canned: Vec<Canned>,
+        /// Apply the next swap and then fail its reply.
+        pub(crate) lose_next_reply: bool,
+        pub(crate) moved: Option<Moved>,
+        /// Advertise no `atomic` capability.
+        pub(crate) no_atomic: bool,
+    }
+
+    pub(crate) type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
+
+    impl Stand {
+        /// What `name` reads, or [`ZERO`].
+        pub(crate) fn head_of(&self, name: &str) -> String {
+            self.refs
+                .iter()
+                .find(|(held, _)| held == name)
+                .map_or_else(|| ZERO.to_owned(), |(_, id)| id.clone())
+        }
+
+        fn set(&mut self, name: &str, id: &str) {
+            self.refs.retain(|(held, _)| held != name);
+            if id != ZERO {
+                self.refs.push((name.to_owned(), id.to_owned()));
+            }
+        }
+
+        fn keep(&mut self, objects: Vec<Object>) {
+            for object in objects {
+                if !self.objects.iter().any(|held| held.id == object.id) {
+                    self.objects.push(object);
+                }
+            }
+        }
+
+        fn object(&self, id: &str) -> Option<&Object> {
+            self.objects.iter().find(|object| object.id == id)
+        }
+
+        /// `commit` and everything its tree reaches that this remote holds —
+        /// what a `deepen 1` answer carries, and never the commit's parents.
+        fn shallow_closure(&self, commit: &str) -> Vec<Object> {
+            let mut out = Vec::new();
+            let Some(found) = self.object(commit) else {
+                return out;
+            };
+            out.push(found.clone());
+            let text = String::from_utf8_lossy(&found.body);
+            let mut pending: Vec<String> = text
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("tree "))
+                .map(str::to_owned)
+                .into_iter()
+                .collect();
+            while let Some(id) = pending.pop() {
+                let Some(object) = self.object(&id) else {
+                    continue;
+                };
+                if out.iter().any(|held| held.id == object.id) {
+                    continue;
+                }
+                out.push(object.clone());
+                if object.kind == gix::object::Kind::Tree {
+                    pending.extend(tree_children(&object.body));
+                }
+            }
+            out
+        }
+
+        /// The ref advertisement for `service`: every ref, with the
+        /// capabilities on the first.
+        fn advertisement(&self, service: &str) -> Vec<u8> {
+            let offered = if self.no_atomic { "" } else { " atomic" };
+            let mut lines = vec![format!("# service={service}\n"), String::new()];
+            for (index, (name, id)) in self.refs.iter().enumerate() {
+                let capabilities = if index == 0 {
+                    format!("\0report-status{offered}")
+                } else {
+                    String::new()
+                };
+                lines.push(format!("{id} {name}{capabilities}\n"));
+            }
+            lines.push(String::new());
+            framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+        }
+
+        /// Apply one receive-pack request and say what happened to it.
+        fn receive(&mut self, body: &[u8]) -> crate::Result<Vec<u8>> {
+            let (commands, pack) = pkt_split(body)?;
+            if let Some(moved) = self.moved.as_mut().filter(|moved| moved.left > 0) {
+                moved.left -= 1;
+                let (name, id) = (moved.name.clone(), moved.id.clone());
+                if !moved.then.is_empty() {
+                    moved.id = moved.then.remove(0);
+                }
+                self.set(&name, &id);
+            }
+            if pack.len() >= 12 {
+                self.keep(objects_in(pack)?);
+            }
+            let mut report = vec![String::from("unpack ok\n")];
+            // `atomic`, asked for on the first command: the list applies whole
+            // or not at all, as receive-pack does it.
+            let atomic = commands.first().is_some_and(|first| {
+                first.split_once('\0').is_some_and(|(_, asked)| {
+                    asked.split_whitespace().any(|each| each == super::ATOMIC)
+                })
+            });
+            let parsed: Vec<(&str, &str, &str)> = commands
+                .iter()
+                .filter_map(|command| {
+                    let command = command.split('\0').next().unwrap_or_default().trim();
+                    let mut words = command.split(' ');
+                    Some((words.next()?, words.next()?, words.next()?))
+                })
+                .collect();
+            let moved = |stand: &Stand, old: &str, name: &str| stand.head_of(name) != old;
+            if atomic && parsed.iter().any(|(old, _, name)| moved(self, old, name)) {
+                for (old, _, name) in &parsed {
+                    let why = if moved(self, old, name) {
+                        "the ref moved"
+                    } else {
+                        "atomic push failed"
+                    };
+                    report.push(format!("ng {name} {why}\n"));
+                }
+            } else {
+                for (old, new, name) in parsed {
+                    if self.head_of(name) == old {
+                        self.set(name, new);
+                        report.push(format!("ok {name}\n"));
+                    } else {
+                        report.push(format!("ng {name} the ref moved\n"));
+                    }
+                }
+            }
+            report.push(String::new());
+            Ok(framed(
+                &report.iter().map(String::as_str).collect::<Vec<_>>(),
+            ))
+        }
+    }
+
+    /// The ids a tree's entries name.
+    fn tree_children(body: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = body;
+        while let Some(nul) = rest.iter().position(|byte| *byte == 0) {
+            let Some(raw) = rest.get(nul + 1..nul + 21) else {
+                break;
+            };
+            out.push(super::hex_of(raw));
+            rest = &rest[nul + 21..];
+        }
+        out
+    }
+
+    /// The ids of the objects the pack of a receive-pack request carries.
+    ///
+    /// Unix only, as the one module that asks is: the off-box cases install an
+    /// executable scanner stand-in, which needs a mode bit.
+    #[cfg(unix)]
+    pub(crate) fn pack_ids(request: &[u8]) -> Vec<String> {
+        let Ok((_, pack)) = pkt_split(request) else {
+            return Vec::new();
+        };
+        if pack.len() < 12 {
+            return Vec::new();
+        }
+        objects_in(pack)
+            .map(|objects| objects.into_iter().map(|object| object.id).collect())
+            .unwrap_or_default()
+    }
+
+    /// A remote answering `200` over `refs`, serving `objects`.
+    pub(crate) fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
+        let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
+            status: 200,
+            refs: refs
+                .iter()
+                .map(|(name, id)| ((*name).to_owned(), (*id).to_owned()))
+                .collect(),
+            objects,
+            asked: Vec::new(),
+            sent: Vec::new(),
+            discoveries: 0,
+            uploads: 0,
+            receives: 0,
+            canned: Vec::new(),
+            lose_next_reply: false,
+            moved: None,
+            no_atomic: false,
+        }));
+        let answering = std::rc::Rc::clone(&stand);
+        let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
+            let mut stand = answering.borrow_mut();
+            let mut answers = Vec::new();
+            for call in calls {
+                stand.asked.push(call.url.to_owned());
+                let sent = match call.file {
+                    Some(path) => std::fs::read(path).expect("the request file"),
+                    None => call.body.map(<[u8]>::to_vec).unwrap_or_default(),
+                };
+                let kind = if call.url.contains("service=") {
+                    stand.discoveries += 1;
+                    Kind::Discovery
+                } else if call.url.ends_with(Service::UploadPack.as_str()) {
+                    stand.uploads += 1;
+                    Kind::Upload
+                } else {
+                    stand.receives += 1;
+                    Kind::Receive
+                };
+                if let Some(canned) = stand
+                    .canned
+                    .iter_mut()
+                    .find(|canned| canned.kind == kind && canned.left > 0)
+                {
+                    canned.left -= 1;
+                    answers.push(fetch::Response {
+                        status: canned.status,
+                        body: Vec::new(),
+                        headers: canned.headers.clone(),
+                    });
+                    stand.sent.push(sent);
+                    continue;
+                }
+                let body = match kind {
+                    Kind::Discovery => {
+                        let service = call.url.split_once("service=").map_or("", |(_, s)| s);
+                        stand.advertisement(service)
+                    }
+                    Kind::Upload => {
+                        let (lines, _) = pkt_split(&sent)?;
+                        let want = lines
+                            .iter()
+                            .find_map(|line| line.strip_prefix("want "))
+                            .and_then(|rest| rest.split_whitespace().next())
+                            .unwrap_or_default()
+                            .to_owned();
+                        if lines.iter().any(|line| line.trim() == "deepen 1") {
+                            let mut body = framed(&[&format!("shallow {want}\n"), "", "NAK\n"]);
+                            body.extend_from_slice(&pack_of(&stand.shallow_closure(&want))?);
+                            body
+                        } else {
+                            let mut body = framed(&["NAK\n"]);
+                            body.extend_from_slice(&pack_of(&stand.objects)?);
+                            body
+                        }
+                    }
+                    Kind::Receive => {
+                        let report = stand.receive(&sent)?;
+                        if std::mem::take(&mut stand.lose_next_reply) {
+                            stand.sent.push(sent);
+                            return Err(anyhow::anyhow!("the reply was lost"));
+                        }
+                        report
+                    }
+                };
+                stand.sent.push(sent);
+                answers.push(fetch::Response {
+                    status: stand.status,
+                    body,
+                    headers: Vec::new(),
+                });
+            }
+            Ok(answers)
+        });
+        fetch::stand_in(remote);
+        stand
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -3902,83 +5055,7 @@ mod tests {
         );
     }
 
-    fn framed(lines: &[&str]) -> Vec<u8> {
-        let mut body = Vec::new();
-        for line in lines {
-            if line.is_empty() {
-                body.extend_from_slice(FLUSH);
-            } else {
-                body.extend_from_slice(&pktline(line).expect("frame"));
-            }
-        }
-        body
-    }
-
-    /// A remote standing in for the network: the refs it advertises, the
-    /// objects it serves, the status it answers, and every call it was asked.
-    struct Stand {
-        status: u16,
-        refs: Vec<(String, String)>,
-        objects: Vec<Object>,
-        asked: Vec<String>,
-        sent: Vec<Vec<u8>>,
-    }
-
-    type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
-
-    /// A remote answering `200` over `refs`, serving `objects`.
-    fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
-        let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
-            status: 200,
-            refs: refs
-                .iter()
-                .map(|(name, id)| ((*name).to_owned(), (*id).to_owned()))
-                .collect(),
-            objects,
-            asked: Vec::new(),
-            sent: Vec::new(),
-        }));
-        // It answers this thread's smart-HTTP calls: an advertisement for
-        // `info/refs`, `NAK` and a pack for upload-pack, and an applied report
-        // for receive-pack.
-        let answering = std::rc::Rc::clone(&stand);
-        let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
-            let mut stand = answering.borrow_mut();
-            let mut answers = Vec::new();
-            for call in calls {
-                stand.asked.push(call.url.to_owned());
-                stand
-                    .sent
-                    .push(call.body.map(<[u8]>::to_vec).unwrap_or_default());
-                let body = if let Some((_, service)) = call.url.split_once("service=") {
-                    let mut lines = vec![format!("# service={service}\n"), String::new()];
-                    for (index, (name, id)) in stand.refs.iter().enumerate() {
-                        let capabilities = if index == 0 { "\0report-status" } else { "" };
-                        lines.push(format!("{id} {name}{capabilities}\n"));
-                    }
-                    lines.push(String::new());
-                    framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
-                } else if call.url.ends_with(Service::UploadPack.as_str()) {
-                    let mut body = framed(&["NAK\n"]);
-                    body.extend_from_slice(&pack_of(&stand.objects)?);
-                    body
-                } else {
-                    framed(&["unpack ok\n", ""])
-                };
-                answers.push(fetch::Response {
-                    status: stand.status,
-                    body,
-                    headers: Vec::new(),
-                });
-            }
-            Ok(answers)
-        });
-        fetch::stand_in(remote);
-        stand
-    }
-
-    /// The remote every stand-in case names.
-    const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
+    use super::testing::{REMOTE, framed, standing};
 
     /// A lease object whose body is `body`.
     fn lease_of(body: &Body) -> Object {
@@ -6607,5 +7684,505 @@ mod staleness_tests {
             format!("{no_head:?}"),
             "two different could-not-looks must not report the same reason"
         );
+    }
+}
+
+/// CLOUD-2729: a push sent from a file, a fetch at depth 1, and a throttle
+/// told apart from a failure — over the stand-in that applies what it is sent.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod transport_tests {
+    use super::testing::{Canned, Kind, Moved, REMOTE, framed, standing};
+    use super::*;
+    use crate::gitwrite::{Content, commit_tree, init_bare, read_blob, tree_index};
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    const MIB: usize = 1024 * 1024;
+    const BRANCH: &str = "refs/heads/session/acme/widgets/harness-0123456789abcdef";
+
+    fn bare(name: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name).join("repo");
+        init_bare(&dir).expect("init_bare");
+        dir
+    }
+
+    fn snapshot(dir: &Path, files: &[(&str, &str)], parents: &[String], time: i64) -> String {
+        let entries: Vec<(String, Content)> = files
+            .iter()
+            .map(|(path, body)| ((*path).to_owned(), Content::Bytes(body.as_bytes().to_vec())))
+            .collect();
+        commit_tree(dir, &entries, parents, time, "snapshot")
+            .expect("commit_tree")
+            .0
+    }
+
+    /// Every object `head` reaches in `dir`, parents included.
+    fn objects_of(dir: &Path, head: &str) -> Vec<Object> {
+        let reader = crate::git::ObjectReader::open(dir).expect("open");
+        crate::git::object_ids_to_send(dir, None, head)
+            .expect("ids")
+            .iter()
+            .map(|id| {
+                let raw = reader.read(id).expect("read");
+                Object {
+                    id: raw.id,
+                    kind: raw.kind,
+                    body: raw.body,
+                }
+            })
+            .collect()
+    }
+
+    fn blob(body: Vec<u8>) -> Object {
+        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, &body)
+            .expect("hash");
+        Object {
+            id: id.to_string(),
+            kind: gix::object::Kind::Blob,
+            body,
+        }
+    }
+
+    fn canned(kind: Kind, left: usize, status: u16, headers: &[(&str, &str)]) -> Canned {
+        Canned {
+            kind,
+            left,
+            status,
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
+    }
+
+    fn throttle_in(err: &anyhow::Error) -> Option<Throttled> {
+        err.downcast_ref::<Throttled>().copied()
+    }
+
+    /// A writer that takes at most seven bytes a call, as a slow sink would.
+    struct Trickle(Vec<u8>);
+
+    impl std::io::Write for Trickle {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let taken = bytes.len().min(7);
+            self.0.extend_from_slice(&bytes[..taken]);
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Fails by: the streamed form writing other bytes than the buffered one,
+    /// or a trailer that is not the checksum of what precedes it.
+    #[test]
+    fn the_streamed_pack_is_the_buffered_pack_and_reads_back() {
+        let objects = vec![
+            lease_object("first", 1).unwrap(),
+            blob((0..100_000_u32).map(|n| (n % 253) as u8).collect()),
+            lease_object("second", 2).unwrap(),
+        ];
+        let buffered = pack_of(&objects).unwrap();
+        let mut streamed = Trickle(Vec::new());
+        pack_to(&mut streamed, objects.len(), objects.iter().map(Ok)).unwrap();
+        assert_eq!(streamed.0, buffered);
+
+        let (members, trailer) = streamed.0.split_at(streamed.0.len() - 20);
+        let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+        hasher.update(members);
+        assert_eq!(
+            hasher.try_finalize().unwrap().as_slice(),
+            trailer,
+            "the trailer is the checksum of everything before it"
+        );
+        let read: Vec<String> = objects_in(&streamed.0)
+            .unwrap()
+            .into_iter()
+            .map(|object| object.id)
+            .collect();
+        let sent: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
+        assert_eq!(read, sent);
+
+        // A count the iterator does not meet is refused, never padded.
+        assert!(pack_to(Vec::new(), 4, objects.iter().map(Ok)).is_err());
+    }
+
+    /// A sink that counts what reaches it.
+    struct Counting(Rc<Cell<usize>>);
+
+    impl std::io::Write for Counting {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.set(self.0.get() + bytes.len());
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One mebibyte that does not compress, different for each `seed`.
+    fn noise(seed: u64) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut out = Vec::with_capacity(MIB);
+        while out.len() < MIB {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.extend_from_slice(&state.to_le_bytes());
+        }
+        out
+    }
+
+    /// Sixty-four objects of a mebibyte each, read by a reader that checks, at
+    /// every read, how much it has handed over that the sink has not yet seen.
+    ///
+    /// Fails by: the request being assembled from bodies read ahead of the
+    /// write — which is every body at once, the 950 MB peak this row removes.
+    #[test]
+    fn a_push_request_holds_one_object_at_a_time() {
+        let read = Rc::new(Cell::new(0_usize));
+        let written = Rc::new(Cell::new(0_usize));
+        let peak = Rc::new(Cell::new(0_usize));
+        let ids: Vec<String> = (0..64_u64).map(|n| n.to_string()).collect();
+        let update = Update {
+            old: ZERO.to_owned(),
+            new: "1".repeat(40),
+            name: BRANCH.to_owned(),
+        };
+        let reader = {
+            let (read, written, peak) = (Rc::clone(&read), Rc::clone(&written), Rc::clone(&peak));
+            move |id: &str| -> Result<Object> {
+                let held = read.get().saturating_sub(written.get());
+                peak.set(peak.get().max(held));
+                read.set(read.get() + MIB);
+                Ok(blob(noise(id.parse().expect("a seed"))))
+            }
+        };
+        write_request(Counting(Rc::clone(&written)), &update, &ids, &reader).unwrap();
+        // THE PREMISE: the bodies did not compress, so bytes written track
+        // bytes read and the difference measures what was held.
+        assert!(written.get() >= 64 * MIB, "{}", written.get());
+        assert!(
+            peak.get() <= 4 * MIB,
+            "held {} bytes of object data at once",
+            peak.get()
+        );
+    }
+
+    /// Fails by: a want at depth 1 answered with the commit's history, or the
+    /// request never asking for depth 1 at all.
+    #[test]
+    fn a_shallow_fetch_takes_one_commit_and_not_its_parent() {
+        let source = bare("lease-shallow-source");
+        let parent = snapshot(&source, &[("old.txt", "old")], &[], 1);
+        let head = snapshot(
+            &source,
+            &[("a/new.txt", "new"), ("b.txt", "b")],
+            std::slice::from_ref(&parent),
+            2,
+        );
+        let stand = standing(&[], objects_of(&source, &head));
+        // THE PREMISE: the remote holds the parent, so its absence below is the
+        // fetch's doing.
+        assert!(stand.borrow().objects.iter().any(|held| held.id == parent));
+
+        let into = bare("lease-shallow-into");
+        let written = fetch_shallow(REMOTE, &into, &head).unwrap();
+
+        assert_eq!(written, 5, "the commit, two trees and two blobs");
+        let stand = stand.borrow();
+        assert_eq!(
+            (stand.discoveries, stand.uploads, stand.receives),
+            (0, 1, 0)
+        );
+        let request = String::from_utf8_lossy(stand.sent.last().unwrap()).into_owned();
+        assert!(request.contains("deepen 1"), "{request}");
+        assert!(request.contains(&format!("want {head}")), "{request}");
+        let index = tree_index(&into, &head).unwrap();
+        let paths: Vec<&str> = index.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["a/new.txt", "b.txt"]);
+        assert_eq!(read_blob(&into, &index[0].1).unwrap(), b"new");
+        assert!(
+            !crate::git::has_object(&into, &parent),
+            "depth 1 stops here"
+        );
+    }
+
+    /// Fails by: a fetch that names a commit the answer does not carry, or a
+    /// truncated answer, reading as a fetch that worked.
+    #[test]
+    fn a_shallow_fetch_that_carries_nothing_asked_for_is_an_error() {
+        let source = bare("lease-shallow-missing-source");
+        let head = snapshot(&source, &[("a.txt", "a")], &[], 1);
+        standing(&[], Vec::new());
+        let into = bare("lease-shallow-missing-into");
+        assert!(fetch_shallow(REMOTE, &into, &head).is_err());
+        assert!(fetch_shallow(REMOTE, &into, "not-an-id").is_err());
+    }
+
+    /// Fails by: a swap the server applied, whose reply was lost, reading on
+    /// the retry as a race lost to somebody else.
+    #[test]
+    fn a_lost_reply_is_read_as_applied_on_the_retry() {
+        let repo = bare("lease-lost-reply");
+        let head = snapshot(&repo, &[("state/a", "one")], &[], 1);
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().lose_next_reply = true;
+        let create_only = |old: &str| old == ZERO;
+
+        assert!(push(REMOTE, &repo, BRANCH, &head, &create_only).is_err());
+        // THE PREMISE: the server applied it, and now holds what was pushed.
+        assert_eq!(stand.borrow().head_of(BRANCH), head);
+        assert!(stand.borrow().objects.iter().any(|held| held.id == head));
+
+        assert_eq!(
+            push(REMOTE, &repo, BRANCH, &head, &create_only).unwrap(),
+            Outcome::Applied
+        );
+        assert_eq!(stand.borrow().receives, 1, "the retry sends nothing");
+        let left: Vec<_> = std::fs::read_dir(&repo)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("batten-push-"))
+            .collect();
+        assert!(left.is_empty(), "the request file is removed: {left:?}");
+    }
+
+    /// Fails by: a swap the server refused reading as applied, or the other
+    /// writer's value being overwritten.
+    #[test]
+    fn a_ref_moved_under_a_push_is_rejected_and_keeps_the_other_value() {
+        let repo = bare("lease-moved");
+        let other = snapshot(&repo, &[("state/a", "theirs")], &[], 1);
+        let head = snapshot(&repo, &[("state/a", "ours")], &[], 2);
+        let stand = standing(&[], objects_of(&repo, &other));
+        stand.borrow_mut().moved = Some(Moved {
+            left: 1,
+            name: BRANCH.to_owned(),
+            id: other.clone(),
+            then: Vec::new(),
+        });
+
+        let outcome = push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap();
+        assert!(matches!(outcome, Outcome::Rejected { .. }), "{outcome:?}");
+        assert_eq!(stand.borrow().head_of(BRANCH), other);
+
+        // AND REJECTED YET THERE: the ref moved to the very id being pushed,
+        // which is an earlier attempt of this push having landed.
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().moved = Some(Moved {
+            left: 1,
+            name: BRANCH.to_owned(),
+            id: head.clone(),
+            then: Vec::new(),
+        });
+        assert_eq!(
+            push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap(),
+            Outcome::Applied
+        );
+    }
+
+    /// Fails by: "slow down, for this long" reading as an unreachable
+    /// repository, or arriving without the wait the forge named.
+    #[test]
+    fn a_429_is_a_throttle_carrying_the_wait_it_named() {
+        let repo = bare("lease-throttled");
+        let head = snapshot(&repo, &[("state/a", "one")], &[], 1);
+        let wait = [("retry-after", "120")];
+        let expected = Throttled {
+            retry_after: Some(120),
+            reset_at: None,
+        };
+
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().canned = vec![canned(Kind::Discovery, 3, 429, &wait)];
+        assert_eq!(
+            push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap(),
+            Outcome::from(expected)
+        );
+        let refusal = advertise(REMOTE, Service::ReceivePack).unwrap_err();
+        assert_eq!(throttle_in(&refusal), Some(expected));
+        let refusal = probe(REMOTE, Service::ReceivePack).unwrap_err();
+        assert_eq!(throttle_in(&refusal), Some(expected));
+        assert_eq!(stand.borrow().receives, 0, "a throttled push sends nothing");
+
+        // AND ON THE SWAP ITSELF, where there is an outcome to carry it.
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().canned = vec![canned(Kind::Receive, 1, 429, &wait)];
+        assert_eq!(
+            push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap(),
+            Outcome::from(expected)
+        );
+        assert_eq!(stand.borrow().head_of(BRANCH), ZERO, "nothing was applied");
+
+        // AND ON A FETCH.
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().canned = vec![canned(Kind::Upload, 1, 429, &wait)];
+        let refusal = fetch_shallow(REMOTE, &repo, &head).unwrap_err();
+        assert_eq!(throttle_in(&refusal), Some(expected));
+    }
+
+    /// Fails by: the forge saying no being retried forever as "wait".
+    #[test]
+    fn a_bare_403_is_a_refusal_and_never_a_throttle() {
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().canned = vec![canned(Kind::Discovery, 1, 403, &[("retry-after", "60")])];
+        let refusal = advertise(REMOTE, Service::ReceivePack).unwrap_err();
+        assert_eq!(
+            throttle_in(&refusal),
+            Some(Throttled {
+                retry_after: Some(60),
+                reset_at: None
+            })
+        );
+
+        stand.borrow_mut().canned = vec![canned(Kind::Discovery, 2, 403, &[])];
+        let refusal = advertise(REMOTE, Service::ReceivePack).unwrap_err();
+        assert_eq!(throttle_in(&refusal), None, "{refusal:#}");
+        assert_eq!(probe(REMOTE, Service::ReceivePack).unwrap(), 403);
+    }
+
+    /// Fails by: a spent limit going unreported, or a reset instant being read
+    /// off a response that has limit left.
+    #[test]
+    fn zero_remaining_is_a_throttle_carrying_the_reset_instant() {
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().canned = vec![canned(
+            Kind::Discovery,
+            1,
+            200,
+            &[
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-reset", "1700000600"),
+            ],
+        )];
+        let refusal = advertise(REMOTE, Service::ReceivePack).unwrap_err();
+        assert_eq!(
+            throttle_in(&refusal),
+            Some(Throttled {
+                retry_after: None,
+                reset_at: Some(1_700_000_600)
+            })
+        );
+
+        let healthy = fetch::Response {
+            status: 200,
+            body: Vec::new(),
+            headers: vec![
+                (String::from("x-ratelimit-remaining"), String::from("41")),
+                (
+                    String::from("x-ratelimit-reset"),
+                    String::from("1700000600"),
+                ),
+            ],
+        };
+        assert_eq!(throttle_of(&healthy), None);
+    }
+
+    /// Fails by: a push that landed being reported as throttled, so its caller
+    /// retries a swap that already happened.
+    #[test]
+    fn an_applied_swap_wins_over_a_spent_limit() {
+        let spent = vec![(String::from("x-ratelimit-remaining"), String::from("0"))];
+        let applied = fetch::Response {
+            status: 200,
+            body: framed(&["unpack ok\n", "ok refs/heads/x\n", ""]),
+            headers: spent.clone(),
+        };
+        assert_eq!(outcome_of(&applied).unwrap(), Outcome::Applied);
+
+        let refused = fetch::Response {
+            status: 200,
+            body: framed(&["unpack ok\n", "ng refs/heads/x the ref moved\n", ""]),
+            headers: spent,
+        };
+        assert!(matches!(
+            outcome_of(&refused).unwrap(),
+            Outcome::Throttled { .. }
+        ));
+    }
+
+    fn member(number: u8, payload: &[u8], prefix: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+
+        let size = payload.len();
+        let mut out = Vec::new();
+        let mut byte = (number << 4) | u8::try_from(size & 0x0f).unwrap();
+        let mut rest = size >> 4;
+        while rest > 0 {
+            out.push(byte | 0x80);
+            byte = u8::try_from(rest & 0x7f).unwrap();
+            rest >>= 7;
+        }
+        out.push(byte);
+        out.extend_from_slice(prefix);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(payload).unwrap();
+        out.extend_from_slice(&encoder.finish().unwrap());
+        out
+    }
+
+    /// An insert-only delta over a base of `base_len` bytes, yielding `text`.
+    fn delta(base_len: usize, text: &[u8]) -> Vec<u8> {
+        let mut out = vec![
+            u8::try_from(base_len).unwrap(),
+            u8::try_from(text.len()).unwrap(),
+            u8::try_from(text.len()).unwrap(),
+        ];
+        out.extend_from_slice(text);
+        out
+    }
+
+    /// A pack a real server would send — one base, one offset delta, one
+    /// reference delta — fed three bytes at a time.
+    ///
+    /// Fails by: a delta resolved against anything but the repository, or a
+    /// member read only when it arrives in one piece.
+    #[test]
+    fn a_fetched_delta_is_resolved_against_the_repository() {
+        let base = blob(b"the base text, under 128 bytes".to_vec());
+        let mut pack = Vec::from(*b"PACK");
+        pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
+        pack.extend_from_slice(&3_u32.to_be_bytes());
+        let base_at = pack.len();
+        pack.extend_from_slice(&member(3, &base.body, &[]));
+        let offset_at = pack.len();
+        let back = u8::try_from(offset_at - base_at).unwrap();
+        pack.extend_from_slice(&member(
+            OFS_DELTA,
+            &delta(base.body.len(), b"hello world"),
+            &[back],
+        ));
+        let raw_base = gix::ObjectId::from_hex(base.id.as_bytes()).unwrap();
+        pack.extend_from_slice(&member(
+            REF_DELTA,
+            &delta(base.body.len(), b"second text"),
+            raw_base.as_slice(),
+        ));
+        pack.extend_from_slice(&[0_u8; 20]);
+        let mut answer = framed(&["shallow 1\n", "", "NAK\n"]);
+        answer.extend_from_slice(&pack);
+
+        let dir = bare("lease-intake-delta");
+        let handle = crate::git::open_for_write(&dir).unwrap();
+        let mut intake = Intake::into(&handle);
+        for chunk in answer.chunks(3) {
+            intake.feed(chunk).unwrap();
+        }
+        assert_eq!(intake.finish().unwrap(), 3);
+        for text in [&b"hello world"[..], &b"second text"[..]] {
+            assert_eq!(read_blob(&dir, &blob(text.to_vec()).id).unwrap(), text);
+        }
+
+        // A pack cut short is an error, never a shorter fetch.
+        let mut cut = Intake::into(&handle);
+        cut.feed(&answer[..answer.len() - 25]).unwrap();
+        assert!(cut.finish().is_err());
     }
 }

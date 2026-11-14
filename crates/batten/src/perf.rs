@@ -1452,10 +1452,29 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             wired,
             repo.as_path(),
         ),
+        // THE SAME TWO CALLS WITH THE OFF-BOX DAEMON WATCH ON (CLOUD-2736): the
+        // state repository variable set and a daemon's lock held, so each run
+        // pays the appended inbox line, the shared try-lock and the two small
+        // reads an agent with the feature on pays on every tool call.
+        (
+            "hook-offbox",
+            Some(hooks.join("claude-code.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
+        (
+            "posttool-offbox",
+            Some(hooks.join("claude-code-posttool.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
     ];
 
     let mut records = Vec::new();
     for (id, input, cmd, dir) in plan {
+        // HELD FOR THE ARM'S WHOLE MEASUREMENT, as a daemon holds it for its
+        // life, and released when this binding drops.
+        let _daemon = daemon_for(id, &state_text, dir)?;
         records.push(measure_arm(
             dir,
             &out,
@@ -1744,7 +1763,7 @@ fn bench(
         args.push(input.to_string_lossy().into_owned());
     }
 
-    let arms: Vec<(&'static str, Vec<String>)> = if id == "posttool" {
+    let arms: Vec<(&'static str, Vec<String>)> = if id.starts_with("posttool") {
         // ONE STATE ROOT PER ARM, AND EMPTY BEFORE EVERY RUN. This is the only
         // arm whose binaries WRITE, and both would otherwise share the store: the
         // head arm's capture would then be a blob the base arm's run already
@@ -1787,6 +1806,17 @@ fn bench(
         (String::from("XDG_DATA_HOME"), state.to_owned()),
         (String::from("APPDATA"), state.to_owned()),
         (String::from("LOCALAPPDATA"), state.to_owned()),
+        // SET ON THE OFF-BOX ARMS AND EMPTIED ON EVERY OTHER (CLOUD-2736): a
+        // cloud session sets this variable for every process, and an arm that
+        // inherited it would be measuring the feature under another arm's name.
+        (
+            String::from(crate::session::STATE_REPO_ENV),
+            String::from(if id.ends_with(OFFBOX_ARM) {
+                "example/state"
+            } else {
+                ""
+            }),
+        ),
     ];
     if !run(dir, Tool::Hyperfine, &args, &env)? {
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
@@ -1810,6 +1840,53 @@ fn bench(
             record(label, id, result)
         })
         .collect()
+}
+
+/// The suffix of an arm that runs with the off-box daemon watch on.
+const OFFBOX_ARM: &str = "-offbox";
+
+/// The state root an arm's binary resolves: the shared one, or the per-arm one
+/// [`bench`] gives the arms that write.
+fn arm_state_root(id: &str, state: &str) -> String {
+    if id.starts_with("posttool") {
+        format!("{state}-head")
+    } else {
+        state.to_owned()
+    }
+}
+
+/// The stand-in daemon an off-box arm runs against, and nothing for any other.
+fn daemon_for(id: &str, state: &str, dir: &Path) -> Result<Option<std::fs::File>> {
+    if !id.ends_with(OFFBOX_ARM) {
+        return Ok(None);
+    }
+    stand_in_daemon(&arm_state_root(id, state), dir).map(Some)
+}
+
+/// Stand in for a running off-box daemon in the state directory of `dir` under
+/// `state_root`: hold its lock exclusively and leave a status file that reads
+/// as keeping up, so the hook's probe answers alive on every run.
+///
+/// No `session` line and an `inbox_read` far ahead: the first reads as this
+/// session, and the second keeps a growing inbox from ever reading as stuck.
+fn stand_in_daemon(state_root: &str, dir: &Path) -> Result<std::fs::File> {
+    let offbox = crate::state::repo_state_dir_under(Path::new(state_root), dir)?
+        .join(crate::offbox_watch::DIR);
+    std::fs::create_dir_all(&offbox).context("perf: could not create the off-box directory")?;
+    std::fs::write(
+        offbox.join(crate::offbox_watch::STATUS),
+        format!("pid 1\ninbox_read {}\nattached yes\n", u64::MAX / 2),
+    )
+    .context("perf: could not write the stand-in daemon's status")?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(offbox.join(crate::offbox_watch::LOCK))
+        .context("perf: could not open the stand-in daemon's lock")?;
+    fs4::FileExt::try_lock(&lock)
+        .map_err(|_| anyhow::anyhow!("perf: the stand-in daemon's lock is already held."))?;
+    Ok(lock)
 }
 
 /// `env VAR=… <argv>`, which is how a per-arm environment is supplied at all:

@@ -398,6 +398,7 @@ fn ask_endpoint(
         body: Some(bytes.as_slice()),
         patch: false,
         delete: false,
+        file: None,
         direct: false,
         credentials: &[],
     };

@@ -9351,6 +9351,245 @@ esac
     ;;
 esac
 ;;
+(offbox)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__offbox_commands" \
+"*::: :->offbox" \
+&& ret=0
+
+    case $state in
+    (offbox)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-offbox-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(push)
+_arguments "${_arguments_options[@]}" : \
+'--session=[The harness'\''s own identifier for the session whose state is pushed]:session:_default' \
+'--harness=[The harness the session belongs to; it selects where the session'\''s records are read from]:harness:_default' \
+'--transcript=[The transcript path the harness named for this session, where it named one]:transcript:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(restore)
+_arguments "${_arguments_options[@]}" : \
+'--session=[The harness'\''s own identifier for the session whose state is pushed]:session:_default' \
+'--harness=[The harness the session belongs to; it selects where the session'\''s records are read from]:harness:_default' \
+'--from=[The session this one continues; its snapshot is restored when this session has none]:from:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(rotate)
+_arguments "${_arguments_options[@]}" : \
+'--remote=[The state repository'\''s URL, whose finished sessions are rotated into its archive]:remote:_default' \
+'--quiet-runs=[How many consecutive passes a session'\''s branch must go unchanged before it is rotated (default 6)]:quiet_runs:_default' \
+'--install-url=[The install script'\''s URL, which the printed workflow downloads and runs for this version]:install_url:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--print-workflow[Print the workflow file that runs a pass on a schedule, and do nothing else]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+'--session=[The harness'\''s own identifier for the session whose state is pushed]:session:_default' \
+'--harness=[The harness the session belongs to; it selects where the session'\''s records are read from]:harness:_default' \
+'--transcript=[The transcript path the harness named for this session, where it named one]:transcript:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__offbox__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-offbox-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(push)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(restore)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rotate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (artifacts)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -10913,6 +11152,42 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(offbox)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__offbox_commands" \
+"*::: :->offbox" \
+&& ret=0
+
+    case $state in
+    (offbox)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-offbox-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(push)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(restore)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rotate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (artifacts)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__artifacts_commands" \
@@ -11003,6 +11278,7 @@ _batten_commands() {
 'census:Count what this repository declares it is retiring, as pointers' \
 'engine:Report and record which engine this binary is, against a config'\''s pin' \
 'test:Judge this branch'\''s tests against their base revision' \
+'offbox:Keep this session'\''s state in a repository off this machine' \
 'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12035,6 +12311,7 @@ _batten__subcmd__help_commands() {
 'census:Count what this repository declares it is retiring, as pointers' \
 'engine:Report and record which engine this binary is, against a config'\''s pin' \
 'test:Judge this branch'\''s tests against their base revision' \
+'offbox:Keep this session'\''s state in a repository off this machine' \
 'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12721,6 +12998,42 @@ _batten__subcmd__help__subcmd__mutate__subcmd__census_commands() {
 _batten__subcmd__help__subcmd__mutate__subcmd__sweep_commands() {
     local commands; commands=()
     _describe -t commands 'batten help mutate sweep commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox_commands] )) ||
+_batten__subcmd__help__subcmd__offbox_commands() {
+    local commands; commands=(
+'status:Whether the state repository the environment names can be written from here' \
+'push:Snapshot one session and make it the value of its ref on the state repository' \
+'restore:Put a session'\''s pushed snapshot back where it was read from, in a container that does not have it' \
+'rotate:Rotate the state repository'\''s finished sessions into its archive and remove their branches, discarding nothing' \
+'run:Run this session'\''s off-box daemon until it is killed\: push when there is something new, wait when the forge says to' \
+    )
+    _describe -t commands 'batten help offbox commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox__subcmd__push_commands] )) ||
+_batten__subcmd__help__subcmd__offbox__subcmd__push_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help offbox push commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox__subcmd__restore_commands] )) ||
+_batten__subcmd__help__subcmd__offbox__subcmd__restore_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help offbox restore commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox__subcmd__rotate_commands] )) ||
+_batten__subcmd__help__subcmd__offbox__subcmd__rotate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help offbox rotate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox__subcmd__run_commands] )) ||
+_batten__subcmd__help__subcmd__offbox__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help offbox run commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__offbox__subcmd__status_commands] )) ||
+_batten__subcmd__help__subcmd__offbox__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help offbox status commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__override_commands] )) ||
 _batten__subcmd__help__subcmd__override_commands() {
@@ -13942,6 +14255,85 @@ _batten__subcmd__mutate__subcmd__help__subcmd__sweep_commands() {
 _batten__subcmd__mutate__subcmd__sweep_commands() {
     local commands; commands=()
     _describe -t commands 'batten mutate sweep commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox_commands] )) ||
+_batten__subcmd__offbox_commands() {
+    local commands; commands=(
+'status:Whether the state repository the environment names can be written from here' \
+'push:Snapshot one session and make it the value of its ref on the state repository' \
+'restore:Put a session'\''s pushed snapshot back where it was read from, in a container that does not have it' \
+'rotate:Rotate the state repository'\''s finished sessions into its archive and remove their branches, discarding nothing' \
+'run:Run this session'\''s off-box daemon until it is killed\: push when there is something new, wait when the forge says to' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten offbox commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help_commands] )) ||
+_batten__subcmd__offbox__subcmd__help_commands() {
+    local commands; commands=(
+'status:Whether the state repository the environment names can be written from here' \
+'push:Snapshot one session and make it the value of its ref on the state repository' \
+'restore:Put a session'\''s pushed snapshot back where it was read from, in a container that does not have it' \
+'rotate:Rotate the state repository'\''s finished sessions into its archive and remove their branches, discarding nothing' \
+'run:Run this session'\''s off-box daemon until it is killed\: push when there is something new, wait when the forge says to' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten offbox help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__push_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__push_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help push commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__restore_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__restore_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help restore commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__rotate_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__rotate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help rotate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__run_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help run commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__help__subcmd__status_commands] )) ||
+_batten__subcmd__offbox__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox help status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__push_commands] )) ||
+_batten__subcmd__offbox__subcmd__push_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox push commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__restore_commands] )) ||
+_batten__subcmd__offbox__subcmd__restore_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox restore commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__rotate_commands] )) ||
+_batten__subcmd__offbox__subcmd__rotate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox rotate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__run_commands] )) ||
+_batten__subcmd__offbox__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox run commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__offbox__subcmd__status_commands] )) ||
+_batten__subcmd__offbox__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten offbox status commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__override_commands] )) ||
 _batten__subcmd__override_commands() {

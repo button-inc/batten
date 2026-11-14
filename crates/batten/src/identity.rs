@@ -1117,6 +1117,27 @@ mod secret_span {
         pub(super) fn keying_input(&self) -> &str {
             &self.0
         }
+
+        /// Replace this span's first occurrence in `line` with `marker`, and
+        /// say whether it was there (CLOUD-2726).
+        ///
+        /// **The one way a span touches other bytes, and it can only remove
+        /// them.** It consumes the span and returns a boolean, so nothing of
+        /// the span leaves: a redactor needs the bytes gone from a staged copy,
+        /// and that is a narrower thing than reading them. An empty span is
+        /// never found — it would match everywhere and insert a marker where
+        /// nothing was matched.
+        #[must_use]
+        pub fn replace_in(self, line: &mut String, marker: &str) -> bool {
+            if self.0.is_empty() {
+                return false;
+            }
+            let Some(at) = line.find(self.0.as_str()) else {
+                return false;
+            };
+            line.replace_range(at..at + self.0.len(), marker);
+            true
+        }
     }
 }
 

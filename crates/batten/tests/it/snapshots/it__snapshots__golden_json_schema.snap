@@ -2611,6 +2611,169 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "offbox",
+      "id": "offbox",
+      "about": "Keep this session's state in a repository off this machine",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "offbox push",
+          "id": "offbox.push",
+          "about": "Snapshot one session and make it the value of its ref on the state repository",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness the session belongs to; it selects where the session's records are read from"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness's own identifier for the session whose state is pushed"
+            },
+            {
+              "name": "transcript",
+              "short": null,
+              "long": "transcript",
+              "takes_value": true,
+              "positional": false,
+              "help": "The transcript path the harness named for this session, where it named one"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "offbox restore",
+          "id": "offbox.restore",
+          "about": "Put a session's pushed snapshot back where it was read from, in a container that does not have it",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "from",
+              "short": null,
+              "long": "from",
+              "takes_value": true,
+              "positional": false,
+              "help": "The session this one continues; its snapshot is restored when this session has none"
+            },
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness the session belongs to; it selects where the session's records are read from"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness's own identifier for the session whose state is pushed"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "offbox rotate",
+          "id": "offbox.rotate",
+          "about": "Rotate the state repository's finished sessions into its archive and remove their branches, discarding nothing",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "install_url",
+              "short": null,
+              "long": "install-url",
+              "takes_value": true,
+              "positional": false,
+              "help": "The install script's URL, which the printed workflow downloads and runs for this version"
+            },
+            {
+              "name": "print_workflow",
+              "short": null,
+              "long": "print-workflow",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the workflow file that runs a pass on a schedule, and do nothing else"
+            },
+            {
+              "name": "quiet_runs",
+              "short": null,
+              "long": "quiet-runs",
+              "takes_value": true,
+              "positional": false,
+              "help": "How many consecutive passes a session's branch must go unchanged before it is rotated (default 6)"
+            },
+            {
+              "name": "remote",
+              "short": null,
+              "long": "remote",
+              "takes_value": true,
+              "positional": false,
+              "help": "The state repository's URL, whose finished sessions are rotated into its archive"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "offbox run",
+          "id": "offbox.run",
+          "about": "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness the session belongs to; it selects where the session's records are read from"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness's own identifier for the session whose state is pushed"
+            },
+            {
+              "name": "transcript",
+              "short": null,
+              "long": "transcript",
+              "takes_value": true,
+              "positional": false,
+              "help": "The transcript path the harness named for this session, where it named one"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "offbox status",
+          "id": "offbox.status",
+          "about": "Whether the state repository the environment names can be written from here",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "override",
       "id": "override",
       "about": "Issued admissions: an override is a record, never a variable somebody knows",
@@ -5556,6 +5719,10 @@ expression: stdout_of(&output)
     {
       "id": "mutate.census",
       "path": "mutate census"
+    },
+    {
+      "id": "offbox.status",
+      "path": "offbox status"
     },
     {
       "id": "payload",

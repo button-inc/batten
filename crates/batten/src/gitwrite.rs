@@ -119,6 +119,7 @@ pub fn write_objects(dir: &Path, objects: &[Object]) -> Result<usize> {
 /// A repository that will not open, an id that will not parse, or a ref the
 /// backend refuses to move.
 pub fn set_ref(dir: &Path, reference: &str, id: &str) -> Result<()> {
+    crate::testing::step()?;
     let repo = crate::git::open_for_write(dir)?;
     let target = gix::ObjectId::from_hex(id.as_bytes())
         .map_err(|err| anyhow::anyhow!("gitwrite: {id} is not an object id: {err}"))?;
@@ -1634,6 +1635,480 @@ impl Node {
     }
 }
 
+/// What one entry of a [`commit_tree`] tree holds (CLOUD-2725).
+///
+/// **`Blob` is why a large snapshot is affordable.** A snapshot grows to
+/// hundreds of megabytes of transcript segments that never change once closed;
+/// naming a stored blob by id carries such a file forward without reading it
+/// again, where bytes would put the whole snapshot in memory on every push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Content {
+    /// The file's bytes, written as a new blob.
+    Bytes(Vec<u8>),
+    /// The id of a blob the repository already holds.
+    Blob(String),
+}
+
+/// Open `dir` ITSELF as a bare repository, or refuse.
+///
+/// **Exact, never discovery.** `git::open_for_write` discovers upward, so a
+/// snapshot directory that failed to initialise would open the enclosing
+/// checkout and the snapshot's objects would land in the project's own odb. A
+/// `dir` that is a checkout, a plain directory inside one, or absent is a usage
+/// error.
+fn open_bare(dir: &Path) -> Result<gix::Repository> {
+    let refused = || {
+        crate::UsageError::raise(format!(
+            "gitwrite: {} is not a bare repository",
+            dir.display()
+        ))
+    };
+    let repo = gix::open_opts(dir, gix::open::Options::isolated()).map_err(|_| refused())?;
+    if !repo.is_bare() {
+        return Err(refused());
+    }
+    Ok(repo)
+}
+
+/// Make `dir` a bare repository, in-process (CLOUD-2725).
+///
+/// A `dir` that already opens as one is left exactly as it is — no ref and no
+/// object changes. An absent or empty `dir` is initialised.
+///
+/// # Errors
+///
+/// A usage error where `dir` holds anything and is not a bare repository:
+/// `gix::init_bare` alone fails on a non-empty directory, and the check comes
+/// first so the refusal names the cause.
+pub fn init_bare(dir: &Path) -> Result<()> {
+    if open_bare(dir).is_ok() {
+        return Ok(());
+    }
+    let occupied = std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some());
+    if occupied {
+        return Err(crate::UsageError::raise(format!(
+            "gitwrite: {} is not empty and is not a bare repository, so it will not be initialised",
+            dir.display()
+        )));
+    }
+    gix::init_bare(dir)
+        .map(drop)
+        .map_err(|err| anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display()))
+}
+
+/// Refuse a path list a tree cannot hold, before anything is written.
+///
+/// Each of these is a usage error: an absolute path; an empty path; a trailing
+/// `/`; an empty, `.`, `..` or `.git` segment; two entries with one path; one
+/// entry's path being a directory of another's (`a` and `a/b`).
+fn refuse_unholdable(entries: &[(String, Content)]) -> Result<()> {
+    let refused =
+        |path: &str, why: &str| crate::UsageError::raise(format!("gitwrite: `{path}` {why}"));
+    let mut seen = std::collections::BTreeSet::new();
+    for (path, _) in entries {
+        if path.is_empty() || path.starts_with('/') || path.ends_with('/') {
+            return Err(refused(path, "is empty, absolute or ends in a separator"));
+        }
+        for segment in path.split('/') {
+            if matches!(segment, "" | "." | ".." | ".git") {
+                return Err(refused(path, "has a segment a tree cannot hold"));
+            }
+        }
+        if !seen.insert(path.as_str()) {
+            return Err(refused(path, "is named twice"));
+        }
+    }
+    for (path, _) in entries {
+        for (cut, _) in path.match_indices('/') {
+            let prefix = &path[..cut];
+            if seen.contains(prefix) {
+                return Err(refused(prefix, "is both a file and a directory"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The id a [`Content::Blob`] entry names, once the repository is shown to hold
+/// it as a blob.
+fn stored_blob(repo: &gix::Repository, id: &str) -> Result<gix::ObjectId> {
+    let refused = || {
+        crate::UsageError::raise(format!(
+            "gitwrite: {id} is not a blob this repository holds"
+        ))
+    };
+    let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| refused())?;
+    let held = repo
+        .find_object(named)
+        .is_ok_and(|object| object.kind == gix::object::Kind::Blob);
+    if !held {
+        return Err(refused());
+    }
+    Ok(named)
+}
+
+/// The parents a caller named, as ids. Never looked up: a commit may name a
+/// parent this repository does not hold.
+fn parent_ids(parents: &[String]) -> Result<Vec<gix::ObjectId>> {
+    parents
+        .iter()
+        .map(|parent| {
+            gix::ObjectId::from_hex(parent.as_bytes()).map_err(|_| {
+                crate::UsageError::raise(format!("gitwrite: {parent} is not a commit id"))
+            })
+        })
+        .collect()
+}
+
+/// Write one commit whose tree is exactly `entries`, in the bare repository
+/// `dir`, and return its id and then its tree's id (CLOUD-2725).
+///
+/// **It moves no ref and writes no index.** The caller decides what the commit
+/// is for; this only makes it exist. `parents` are commit ids, and an empty list
+/// gives an orphan commit whatever `HEAD` reads.
+///
+/// **Identity is constant and the time is supplied.** Author and committer are
+/// `batten <batten@localhost>` at `time` seconds since the epoch, offset 0. The
+/// clock is never read here, so equal entries, parents, time and message always
+/// give the same commit id — and two snapshots differ exactly when their tree
+/// ids do.
+///
+/// Every file is regular and non-executable. An empty `entries` list gives the
+/// commit of the empty tree.
+///
+/// # Errors
+///
+/// A usage error, with nothing written, where `dir` is not itself a bare
+/// repository, a path is one a tree cannot hold (see `refuse_unholdable`), or a
+/// [`Content::Blob`] names something the repository does not hold as a blob.
+/// An object the odb refuses is an internal error.
+//MUTANT-SUITE crates/batten/src/gitwrite.rs
+//MUTANT snapshot-commit-parents-onto-head|s@^    let parents = parent_ids(parents)?;$@    let parents: Vec<gix::ObjectId> = repo.head_id().ok().map(gix::Id::detach).into_iter().collect();@|an_empty_parent_list_is_an_orphan_whatever_head_reads
+//MUTANT commit-time-read-from-the-clock|s@^        time: crate::git::utc_at(time),$@        time: gix::date::Time::now_utc(),@|the_commit_carries_the_time_it_was_given
+//MUTANT given-parents-dropped|s@^    let parents = parent_ids(parents)?;$@    let parents: Vec<gix::ObjectId> = Vec::new();@|the_given_parents_are_the_commits_parents_in_order
+//MUTANT blob-entry-names-the-wrong-blob|s@^    Ok(named)$@    Ok(gix::ObjectId::empty_blob(gix::hash::Kind::Sha1))@|a_blob_entry_carries_a_stored_file_forward_without_rewriting_it
+//MUTANT unknown-blob-id-accepted|s@^    if !held {$@    if false {@|an_unknown_blob_is_refused_and_nothing_is_written
+//MUTANT dotdot-path-written|s@^            if matches!(segment, "" \x7c "." \x7c ".." \x7c ".git") {$@            if matches!(segment, "" \x7c "." \x7c ".git") {@|an_unholdable_path_is_refused_and_nothing_is_written
+//MUTANT file-and-directory-share-a-name|s@^            if seen.contains(prefix) {$@            if false {@|an_unholdable_path_is_refused_and_nothing_is_written
+//MUTANT returned-tree-id-is-not-the-commits|s@^    Ok((commit.to_string(), tree.to_string()))$@    Ok((commit.to_string(), commit.to_string()))@|the_returned_tree_id_is_the_commits_and_ignores_the_time
+//MUTANT tree-index-skips-nested-paths|s@^            EntryKind::Tree => walk(repo, entry.oid.to_owned(), \&format!("{path}/"), out)?,$@            EntryKind::Tree => {}@|the_index_and_the_blobs_round_trip_every_path
+//MUTANT bare-open-discovers-upward|s@^    let repo = gix::open_opts(dir, gix::open::Options::isolated()).map_err(\x7c_\x7c refused())?;$@    let repo = crate::git::open_for_write(dir).map_err(\x7c_\x7c refused())?;@|a_directory_inside_a_repository_is_never_opened_by_discovery
+pub fn commit_tree(
+    dir: &Path,
+    entries: &[(String, Content)],
+    parents: &[String],
+    time: i64,
+    message: &str,
+) -> Result<(String, String)> {
+    let repo = open_bare(dir)?;
+    refuse_unholdable(entries)?;
+    let parents = parent_ids(parents)?;
+    // EVERY NAMED BLOB IS CHECKED BEFORE ANY BYTE IS WRITTEN, so a refusal
+    // leaves the odb exactly as it was.
+    let mut stored = Vec::with_capacity(entries.len());
+    for (path, content) in entries {
+        if let Content::Blob(id) = content {
+            stored.push((path, stored_blob(&repo, id)?));
+        }
+    }
+    let mut root = Node::default();
+    for (path, id) in stored {
+        root.insert(path, (gix::objs::tree::EntryKind::Blob, id));
+    }
+    for (path, content) in entries {
+        let Content::Bytes(bytes) = content else {
+            continue;
+        };
+        let id = repo
+            .write_blob(bytes)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {path} will not write: {err}"))?
+            .detach();
+        root.insert(path, (gix::objs::tree::EntryKind::Blob, id));
+    }
+    let tree = root.write(&repo)?;
+    let who = gix::actor::Signature {
+        name: "batten".into(),
+        email: "batten@localhost".into(),
+        time: crate::git::utc_at(time),
+    };
+    let commit = gix::objs::Commit {
+        tree,
+        parents: parents.into_iter().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: message.into(),
+        extra_headers: Vec::new(),
+    };
+    let commit = repo
+        .write_object(&commit)
+        .map_err(|err| anyhow::anyhow!("gitwrite: the commit will not write: {err}"))?
+        .detach();
+    Ok((commit.to_string(), tree.to_string()))
+}
+
+/// Store `bytes` as a blob in the bare repository `dir` and return its id
+/// (CLOUD-2719).
+///
+/// For a caller assembling a tree too large to hand [`commit_tree`] as bytes:
+/// each file is written as it is read and named by [`Content::Blob`], so no two
+/// files' contents are in memory together.
+///
+/// # Errors
+///
+/// A usage error where `dir` is not a bare repository; an internal error where
+/// the odb refuses the write.
+pub fn write_blob(dir: &Path, bytes: &[u8]) -> Result<String> {
+    let repo = open_bare(dir)?;
+    Ok(repo
+        .write_blob(bytes)
+        .map_err(|err| anyhow::anyhow!("gitwrite: a blob will not write: {err}"))?
+        .detach()
+        .to_string())
+}
+
+/// The tree id of `commit`, a commit the bare repository `dir` already holds
+/// (CLOUD-2725).
+///
+/// # Errors
+///
+/// A usage error where `dir` is not a bare repository; an internal error where
+/// `commit` is absent or is not a commit.
+pub fn tree_id(dir: &Path, commit: &str) -> Result<String> {
+    let repo = open_bare(dir)?;
+    Ok(snapshot_tree(&repo, commit)?.to_string())
+}
+
+/// The tree the commit spelled `commit` names: [`tree_of`] over a hex id.
+fn snapshot_tree(repo: &gix::Repository, commit: &str) -> Result<gix::ObjectId> {
+    let id = gix::ObjectId::from_hex(commit.as_bytes())
+        .map_err(|_| anyhow::anyhow!("gitwrite: {commit} is not a commit id"))?;
+    tree_of(repo, id)
+}
+
+/// Every blob in `commit`'s tree as `(path, blob id)`, sorted by path
+/// (CLOUD-2725).
+///
+/// An executable blob is listed like a regular one. Paired with
+/// [`Content::Blob`], this is how a caller carries an unchanged file into the
+/// next commit by id, having read none of it.
+///
+/// # Errors
+///
+/// A usage error where `dir` is not a bare repository. An internal error where
+/// the commit or a tree will not read, or where the tree holds a symlink or a
+/// gitlink: this reads snapshots this crate wrote, and neither can be in one.
+pub fn tree_index(dir: &Path, commit: &str) -> Result<Vec<(String, String)>> {
+    let repo = open_bare(dir)?;
+    let mut out = Vec::new();
+    walk(&repo, snapshot_tree(&repo, commit)?, "", &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// [`tree_index`]'s recursion: one tree level, with `prefix` already ending in
+/// its separator.
+fn walk(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<(String, String)>,
+) -> Result<()> {
+    use gix::objs::tree::EntryKind;
+
+    let found = repo
+        .find_tree(tree)
+        .map_err(|err| anyhow::anyhow!("gitwrite: tree {tree} will not read: {err}"))?;
+    let decoded = found
+        .decode()
+        .map_err(|err| anyhow::anyhow!("gitwrite: tree {tree} will not decode: {err}"))?;
+    for entry in &decoded.entries {
+        let path = format!("{prefix}{}", entry.filename);
+        match entry.mode.kind() {
+            EntryKind::Tree => walk(repo, entry.oid.to_owned(), &format!("{path}/"), out)?,
+            EntryKind::Blob | EntryKind::BlobExecutable => {
+                out.push((path, entry.oid.to_string()));
+            }
+            EntryKind::Link | EntryKind::Commit => {
+                return Err(anyhow::anyhow!(
+                    "gitwrite: `{path}` is a symlink or a gitlink, which no snapshot holds"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The bytes of the blob `id` in the bare repository `dir` (CLOUD-2725).
+///
+/// # Errors
+///
+/// A usage error where `dir` is not a bare repository; an internal error where
+/// `id` is absent or names something other than a blob.
+pub fn read_blob(dir: &Path, id: &str) -> Result<Vec<u8>> {
+    let repo = open_bare(dir)?;
+    let unread = || anyhow::anyhow!("gitwrite: {id} is not a blob this repository holds");
+    let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| unread())?;
+    let object = repo.find_object(named).map_err(|_| unread())?;
+    if object.kind != gix::object::Kind::Blob {
+        return Err(unread());
+    }
+    Ok(object.data.clone())
+}
+
+/// How many bytes the blob `id` holds, read from its header alone, or `None`
+/// where the bare repository `dir` holds no such blob.
+#[must_use]
+pub fn blob_len(dir: &Path, id: &str) -> Option<u64> {
+    let repo = open_bare(dir).ok()?;
+    let named = gix::ObjectId::from_hex(id.as_bytes()).ok()?;
+    let header = repo.find_header(named).ok()?;
+    (header.kind() == gix::object::Kind::Blob).then(|| header.size())
+}
+
+/// Delete one loose object file. Windows will not delete a file marked
+/// read-only, which is how a loose object is stored, so the mark is cleared
+/// where the first try is refused.
+fn remove_object(path: &Path) -> bool {
+    if std::fs::remove_file(path).is_ok() {
+        return true;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let mut permissions = meta.permissions();
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "the file is deleted on the next line; on Unix the first try already succeeded"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).is_ok() && std::fs::remove_file(path).is_ok()
+}
+
+/// Delete every loose object in the bare repository `dir` that no commit in
+/// `keep` reaches, and return how many were deleted (CLOUD-2738).
+///
+/// The walk covers each commit in `keep`, its tree and blobs, and each parent
+/// that is present in `dir` — a snapshot fetched at depth 1 names a parent that
+/// is not, and an absent object is simply not walked.
+///
+/// **Every refusal comes before any deletion**, and each deletes nothing.
+///
+/// **Packs are left alone.** With anything under `objects/pack/` the function
+/// deletes nothing and returns 0: nothing here writes a pack locally, and if
+/// that ever changes this must not guess what one holds.
+///
+/// **A kill part-way leaves unreachable objects behind**, which the next call
+/// removes. No reachable object is ever deleted, so nothing needs repair.
+///
+/// # Errors
+///
+/// A usage error where `dir` is not itself a bare repository, where `keep` is
+/// empty — a call that would empty the repository is never what a caller
+/// means — or where a `keep` id is not a commit `dir` holds. An internal error
+/// where a kept commit or one of its trees will not decode.
+//MUTANT-SUITE crates/batten/src/gitwrite.rs
+//MUTANT empty-keep-empties-the-repository|s@^    if keep.is_empty() {$@    if false {@|an_empty_keep_is_refused_and_nothing_is_pruned
+//MUTANT prune-runs-over-a-pack|s@^    if packed {$@    if false {@|a_repository_with_a_pack_is_left_alone
+//MUTANT parent-of-a-kept-commit-pruned|s@^                pending.extend(commit.parent_ids().map(gix::Id::detach));$@@|a_parent_of_a_kept_commit_is_kept
+//MUTANT reachable-object-pruned|s@^            if reached.contains(\&id) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
+//MUTANT unreachable-object-kept|s@^            if remove_object(\&object.path()) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
+pub fn prune_unreachable(dir: &Path, keep: &[String]) -> Result<usize> {
+    use gix::objs::tree::EntryKind;
+
+    let repo = open_bare(dir)?;
+    if keep.is_empty() {
+        return Err(crate::UsageError::raise(
+            "gitwrite: no commit was named to keep, so nothing is pruned",
+        ));
+    }
+    let mut pending: Vec<gix::ObjectId> = Vec::new();
+    for id in keep {
+        let unknown = || {
+            crate::UsageError::raise(format!(
+                "gitwrite: {id} is not a commit {} holds, so nothing is pruned",
+                dir.display()
+            ))
+        };
+        let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| unknown())?;
+        let object = repo.find_object(named).map_err(|_| unknown())?;
+        if object.kind != gix::object::Kind::Commit {
+            return Err(unknown());
+        }
+        pending.push(named);
+    }
+    let store = dir.join("objects");
+    let packed =
+        std::fs::read_dir(store.join("pack")).is_ok_and(|mut entries| entries.next().is_some());
+    if packed {
+        return Ok(0);
+    }
+
+    let mut reached: std::collections::BTreeSet<gix::ObjectId> = std::collections::BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        // An object that is not here — the parent of a commit fetched at depth
+        // 1 — has nothing to walk and nothing to delete.
+        let Ok(object) = repo.find_object(id) else {
+            continue;
+        };
+        match object.kind {
+            gix::object::Kind::Commit => {
+                let commit = object.into_commit();
+                let tree = commit
+                    .tree_id()
+                    .map_err(|err| anyhow::anyhow!("gitwrite: {id} has no tree: {err}"))?;
+                pending.push(tree.detach());
+                pending.extend(commit.parent_ids().map(gix::Id::detach));
+            }
+            gix::object::Kind::Tree => {
+                let tree = object.into_tree();
+                let decoded = tree
+                    .decode()
+                    .map_err(|err| anyhow::anyhow!("gitwrite: tree {id} will not decode: {err}"))?;
+                for entry in &decoded.entries {
+                    if entry.mode.kind() != EntryKind::Commit {
+                        pending.push(entry.oid.to_owned());
+                    }
+                }
+            }
+            gix::object::Kind::Blob | gix::object::Kind::Tag => {}
+        }
+    }
+
+    // THE WALK IS WHOLE BEFORE THE FIRST DELETION. A loose object is
+    // `objects/<two hex>/<the rest>`; anything else under `objects/` — a
+    // temporary file, `info/` — is not one and is left.
+    let mut removed = 0_usize;
+    let Ok(fans) = std::fs::read_dir(&store) else {
+        return Ok(0);
+    };
+    for fan in fans.flatten() {
+        let Ok(objects) = std::fs::read_dir(fan.path()) else {
+            continue;
+        };
+        for object in objects.flatten() {
+            let name = format!(
+                "{}{}",
+                fan.file_name().to_string_lossy(),
+                object.file_name().to_string_lossy()
+            );
+            let Ok(id) = gix::ObjectId::from_hex(name.as_bytes()) else {
+                continue;
+            };
+            if reached.contains(&id) {
+                continue;
+            }
+            if remove_object(&object.path()) {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Give a directory a git repository carrying its current contents as one
 /// commit.
 ///
@@ -2274,5 +2749,435 @@ mod tests {
             assert_eq!(mode & 0o777, 0o644);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// CLOUD-2725: a commit built from bytes, in a bare repository that is no
+/// checkout. Read-back is the raw object, so a case states what git stores
+/// rather than what a second decoder makes of it.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tree_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A fresh bare repository alone in its own scratch parent.
+    fn bare(name: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name).join("snapshot");
+        init_bare(&dir).expect("init_bare");
+        dir
+    }
+
+    /// How many loose objects `dir` holds.
+    fn objects(dir: &Path) -> usize {
+        let Ok(fans) = std::fs::read_dir(dir.join("objects")) else {
+            return 0;
+        };
+        fans.flatten()
+            .filter(|fan| fan.file_name().len() == 2)
+            .filter_map(|fan| std::fs::read_dir(fan.path()).ok())
+            .map(Iterator::count)
+            .sum()
+    }
+
+    /// The commit `id` as git stores it.
+    fn raw(dir: &Path, id: &str) -> String {
+        let repo = open_bare(dir).expect("open");
+        let object = repo
+            .find_object(gix::ObjectId::from_hex(id.as_bytes()).expect("an id"))
+            .expect("the commit");
+        String::from_utf8(object.data.clone()).expect("a commit is text")
+    }
+
+    fn bytes(path: &str, body: &str) -> (String, Content) {
+        (path.to_owned(), Content::Bytes(body.as_bytes().to_vec()))
+    }
+
+    fn is_usage(result: &Result<(String, String)>) -> bool {
+        result
+            .as_ref()
+            .is_err_and(|err| err.downcast_ref::<crate::UsageError>().is_some())
+    }
+
+    /// Fails by: the clock being read instead of the argument.
+    #[test]
+    fn the_commit_carries_the_time_it_was_given() {
+        let dir = bare("gitwrite-tree-time");
+        for time in [0, 1_700_000_000] {
+            let (commit, _) = commit_tree(&dir, &[bytes("a", "one")], &[], time, "m").unwrap();
+            let text = raw(&dir, &commit);
+            assert!(
+                text.contains(&format!("author batten <batten@localhost> {time} +0000\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!(
+                    "committer batten <batten@localhost> {time} +0000\n"
+                )),
+                "{text}"
+            );
+        }
+    }
+
+    /// Fails by: an orphan snapshot being parented onto whatever `HEAD` reads.
+    #[test]
+    fn an_empty_parent_list_is_an_orphan_whatever_head_reads() {
+        let dir = bare("gitwrite-tree-orphan");
+        let (first, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "first").unwrap();
+        std::fs::write(dir.join("HEAD"), format!("{first}\n")).unwrap();
+        // THE PREMISE: `HEAD` resolves, so a builder that read it would find a
+        // parent to use.
+        assert!(open_bare(&dir).unwrap().head_id().is_ok());
+        let (second, _) = commit_tree(&dir, &[bytes("a", "two")], &[], 2, "second").unwrap();
+        assert!(
+            !raw(&dir, &second).contains("\nparent "),
+            "an orphan has no parent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("HEAD")).unwrap(),
+            format!("{first}\n"),
+            "no ref moves"
+        );
+    }
+
+    /// Fails by: a given parent being dropped, reordered, or required to exist.
+    #[test]
+    fn the_given_parents_are_the_commits_parents_in_order() {
+        let dir = bare("gitwrite-tree-parents");
+        let (held, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "held").unwrap();
+        let absent = "1234567890123456789012345678901234567890".to_owned();
+        let parents = [absent.clone(), held.clone()];
+        let (child, _) = commit_tree(&dir, &[bytes("a", "two")], &parents, 2, "child").unwrap();
+        let text = raw(&dir, &child);
+        let named: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .collect();
+        assert_eq!(named, [absent.as_str(), held.as_str()]);
+    }
+
+    /// Fails by: an id that depends on anything but the arguments.
+    #[test]
+    fn the_id_is_a_function_of_the_content_alone() {
+        let dir = bare("gitwrite-tree-content");
+        let entries = [bytes("a", "one"), bytes("d/b", "two")];
+        let (first, _) = commit_tree(&dir, &entries, &[], 5, "m").unwrap();
+        let (again, _) = commit_tree(&dir, &entries, &[], 5, "m").unwrap();
+        assert_eq!(first, again);
+        let changed = [bytes("a", "onf"), bytes("d/b", "two")];
+        let (other, _) = commit_tree(&dir, &changed, &[], 5, "m").unwrap();
+        assert_ne!(first, other);
+        let before = tree_index(&dir, &first).unwrap();
+        let after = tree_index(&dir, &other).unwrap();
+        assert_ne!(before[0], after[0], "the changed entry moved");
+        assert_eq!(before[1], after[1], "the other entry's blob id did not");
+    }
+
+    /// Fails by: a carried-forward file being rewritten, or naming another blob.
+    #[test]
+    fn a_blob_entry_carries_a_stored_file_forward_without_rewriting_it() {
+        let dir = bare("gitwrite-tree-blob");
+        let entries = [bytes("a", "one"), bytes("d/b", "two")];
+        let (first, first_tree) = commit_tree(&dir, &entries, &[], 5, "m").unwrap();
+        let index = tree_index(&dir, &first).unwrap();
+        let carried: Vec<(String, Content)> = index
+            .iter()
+            .map(|(path, id)| (path.clone(), Content::Blob(id.clone())))
+            .collect();
+        let held = objects(&dir);
+        let (_, second_tree) = commit_tree(&dir, &carried, &[], 6, "m").unwrap();
+        assert_eq!(first_tree, second_tree);
+        assert_eq!(objects(&dir), held + 1, "only the commit is new");
+        let swapped = [
+            ("a".to_owned(), Content::Blob(index[1].1.clone())),
+            ("d/b".to_owned(), Content::Blob(index[1].1.clone())),
+        ];
+        let (_, third_tree) = commit_tree(&dir, &swapped, &[], 6, "m").unwrap();
+        assert_ne!(first_tree, third_tree);
+    }
+
+    /// Fails by: a commit naming a blob nobody stored.
+    #[test]
+    fn an_unknown_blob_is_refused_and_nothing_is_written() {
+        let dir = bare("gitwrite-tree-unknown-blob");
+        let (commit, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "m").unwrap();
+        let held = objects(&dir);
+        let absent = "1234567890123456789012345678901234567890".to_owned();
+        for id in [absent, commit, "not-an-id".to_owned()] {
+            let entries = [
+                bytes("fresh", "new bytes"),
+                ("b".to_owned(), Content::Blob(id)),
+            ];
+            assert!(is_usage(&commit_tree(&dir, &entries, &[], 2, "m")));
+        }
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: a path a tree cannot hold reaching the odb.
+    #[test]
+    fn an_unholdable_path_is_refused_and_nothing_is_written() {
+        let dir = bare("gitwrite-tree-paths");
+        let held = objects(&dir);
+        let refused: [&[&str]; 10] = [
+            &["../escape"],
+            &["a/../b"],
+            &["/abs"],
+            &[""],
+            &["a/"],
+            &["a//b"],
+            &["./a"],
+            &["a/.git/config"],
+            &["a", "a"],
+            &["a/b", "a"],
+        ];
+        for paths in refused {
+            let entries: Vec<(String, Content)> =
+                paths.iter().map(|path| bytes(path, "x")).collect();
+            assert!(
+                is_usage(&commit_tree(&dir, &entries, &[], 1, "m")),
+                "{paths:?}"
+            );
+        }
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: a caller comparing snapshots by an id that is not the tree's.
+    #[test]
+    fn the_returned_tree_id_is_the_commits_and_ignores_the_time() {
+        let dir = bare("gitwrite-tree-id");
+        let entries = [bytes("a", "one")];
+        let (early, early_tree) = commit_tree(&dir, &entries, &[], 1, "m").unwrap();
+        let (late, late_tree) = commit_tree(&dir, &entries, &[], 2, "m").unwrap();
+        assert_ne!(early, late);
+        assert_eq!(early_tree, late_tree);
+        assert_eq!(tree_id(&dir, &early).unwrap(), early_tree);
+        assert!(raw(&dir, &late).starts_with(&format!("tree {late_tree}\n")));
+        let (empty, empty_tree) = commit_tree(&dir, &[], &[], 1, "m").unwrap();
+        assert_eq!(
+            empty_tree,
+            gix::ObjectId::empty_tree(gix::hash::Kind::Sha1).to_string()
+        );
+        assert!(tree_index(&dir, &empty).unwrap().is_empty());
+    }
+
+    /// Fails by: a nested path missing from the index, or a blob reading back
+    /// as other bytes.
+    #[test]
+    fn the_index_and_the_blobs_round_trip_every_path() {
+        let dir = bare("gitwrite-tree-round-trip");
+        let entries = [
+            bytes("z", "last"),
+            bytes("a/b/c", "deep"),
+            bytes("a/d", "shallow"),
+            bytes("a.txt", ""),
+        ];
+        let (commit, _) = commit_tree(&dir, &entries, &[], 1, "m").unwrap();
+        let index = tree_index(&dir, &commit).unwrap();
+        let paths: Vec<&str> = index.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["a.txt", "a/b/c", "a/d", "z"]);
+        for (path, id) in &index {
+            let wanted = entries
+                .iter()
+                .find_map(|(named, content)| match content {
+                    Content::Bytes(body) if named == path => Some(body.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(read_blob(&dir, id).unwrap(), wanted, "{path}");
+        }
+        assert!(read_blob(&dir, &commit).is_err(), "a commit is not a blob");
+        assert!(
+            tree_index(&dir, &index[0].1).is_err(),
+            "a blob is not a commit"
+        );
+    }
+
+    /// Fails by: `init_bare` disturbing a repository, or initialising over
+    /// somebody's files; and by anything landing outside the bare directory.
+    #[test]
+    fn init_bare_leaves_a_repository_alone_and_refuses_an_occupied_directory() {
+        let dir = bare("gitwrite-tree-init");
+        let (commit, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "m").unwrap();
+        std::fs::write(dir.join("HEAD"), format!("{commit}\n")).unwrap();
+        let held = objects(&dir);
+        init_bare(&dir).unwrap();
+        assert_eq!(objects(&dir), held);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("HEAD")).unwrap(),
+            format!("{commit}\n")
+        );
+        assert!(!dir.join(".git").exists(), "bare: no nested git dir");
+        assert!(!dir.join("index").exists(), "no index is written");
+        let siblings: Vec<_> = std::fs::read_dir(dir.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(siblings, ["snapshot"], "nothing beside the repository");
+
+        let occupied = crate::scratch::scratch("gitwrite-tree-init-occupied");
+        std::fs::write(occupied.join("notes.txt"), "mine").unwrap();
+        let refusal = init_bare(&occupied).unwrap_err();
+        assert!(refusal.downcast_ref::<crate::UsageError>().is_some());
+        assert!(!occupied.join("objects").exists());
+    }
+
+    /// Fails by: a directory that is not itself a bare repository being
+    /// resolved upward to one that encloses it.
+    #[test]
+    fn a_directory_inside_a_repository_is_never_opened_by_discovery() {
+        let checkout = crate::scratch::scratch("gitwrite-tree-no-discovery");
+        init_on_main(&checkout).unwrap();
+        let inside = checkout.join("sub");
+        std::fs::create_dir_all(&inside).unwrap();
+        let held = objects(&checkout.join(".git"));
+        for dir in [&inside, &checkout] {
+            assert!(is_usage(&commit_tree(dir, &[bytes("a", "x")], &[], 1, "m")));
+        }
+        assert_eq!(objects(&checkout.join(".git")), held);
+
+        // AND INSIDE A BARE ONE, where discovery would find a repository that
+        // passes the bareness check.
+        let outer = bare("gitwrite-tree-no-discovery-bare");
+        let nested = outer.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let held = objects(&outer);
+        assert!(is_usage(&commit_tree(
+            &nested,
+            &[bytes("a", "x")],
+            &[],
+            1,
+            "m"
+        )));
+        assert_eq!(objects(&outer), held);
+    }
+
+    // --- the prune (CLOUD-2738) ------------------------------------------------
+
+    fn is_usage_count(result: &Result<usize>) -> bool {
+        result
+            .as_ref()
+            .is_err_and(|err| err.downcast_ref::<crate::UsageError>().is_some())
+    }
+
+    /// Two orphan commits that share the blob at `shared`, with one file each
+    /// of their own.
+    fn two_commits(dir: &Path) -> (String, String) {
+        let first = [bytes("shared", "both"), bytes("only/first", "one")];
+        let second = [bytes("shared", "both"), bytes("only/second", "two")];
+        let (first, _) = commit_tree(dir, &first, &[], 1, "first").unwrap();
+        let (second, _) = commit_tree(dir, &second, &[], 2, "second").unwrap();
+        (first, second)
+    }
+
+    /// Fails by: an object the kept commit reaches deleted, or one only an
+    /// earlier commit reached left behind.
+    #[test]
+    fn pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest() {
+        let dir = bare("gitwrite-prune");
+        let (first, second) = two_commits(&dir);
+        let gone = tree_index(&dir, &first)
+            .unwrap()
+            .into_iter()
+            .find(|(path, _)| path == "only/first")
+            .unwrap()
+            .1;
+        // The first commit alone reaches: itself, its root tree, the `only`
+        // tree, and its own blob.
+        let held = objects(&dir);
+
+        let removed = prune_unreachable(&dir, std::slice::from_ref(&second)).unwrap();
+
+        assert_eq!(removed, 4);
+        assert_eq!(objects(&dir), held - 4);
+        let index = tree_index(&dir, &second).unwrap();
+        let paths: Vec<&str> = index.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["only/second", "shared"]);
+        for (path, id) in &index {
+            let body = if path == "shared" { "both" } else { "two" };
+            assert_eq!(read_blob(&dir, id).unwrap(), body.as_bytes());
+        }
+        assert!(read_blob(&dir, &gone).is_err(), "the first's own blob");
+        assert!(tree_id(&dir, &first).is_err(), "the first commit");
+        // And a second run finds nothing left to remove.
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+    }
+
+    /// Fails by: a kept commit's parent, present here, deleted from under it.
+    #[test]
+    fn a_parent_of_a_kept_commit_is_kept() {
+        let dir = bare("gitwrite-prune-parent");
+        let (first, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "first").unwrap();
+        let (second, _) = commit_tree(
+            &dir,
+            &[bytes("a", "two")],
+            std::slice::from_ref(&first),
+            2,
+            "second",
+        )
+        .unwrap();
+        let held = objects(&dir);
+
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+
+        assert_eq!(objects(&dir), held);
+        assert_eq!(tree_index(&dir, &first).unwrap().len(), 1);
+    }
+
+    /// Fails by: a call naming nothing to keep emptying the repository.
+    #[test]
+    fn an_empty_keep_is_refused_and_nothing_is_pruned() {
+        let dir = bare("gitwrite-prune-empty");
+        let (_, second) = two_commits(&dir);
+        let held = objects(&dir);
+
+        assert!(is_usage_count(&prune_unreachable(&dir, &[])));
+        // An id that is not here, one that is not an id, and one that is here
+        // and is a tree: none is a commit to keep.
+        let tree = tree_id(&dir, &second).unwrap();
+        for unknown in [
+            "0123456789abcdef0123456789abcdef01234567",
+            "not-an-id",
+            &tree,
+        ] {
+            let keep = [second.clone(), unknown.to_owned()];
+            assert!(is_usage_count(&prune_unreachable(&dir, &keep)), "{unknown}");
+        }
+
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: loose objects deleted from a repository whose pack this
+    /// function has not read.
+    #[test]
+    fn a_repository_with_a_pack_is_left_alone() {
+        let dir = bare("gitwrite-prune-pack");
+        let (_, second) = two_commits(&dir);
+        let pack = dir.join("objects").join("pack");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(pack.join("pack-0000.pack"), b"PACK").unwrap();
+        let held = objects(&dir);
+
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: a directory that is not itself a bare repository resolved
+    /// upward, and the enclosing checkout's objects pruned.
+    #[test]
+    fn a_prune_never_opens_a_repository_by_discovery() {
+        let checkout = crate::scratch::scratch("gitwrite-prune-no-discovery");
+        init_on_main(&checkout).unwrap();
+        let inside = checkout.join("sub");
+        std::fs::create_dir_all(&inside).unwrap();
+        let held = objects(&checkout.join(".git"));
+        let keep = [String::from("0123456789abcdef0123456789abcdef01234567")];
+
+        for dir in [&inside, &checkout] {
+            assert!(is_usage_count(&prune_unreachable(dir, &keep)));
+        }
+
+        assert_eq!(objects(&checkout.join(".git")), held);
     }
 }

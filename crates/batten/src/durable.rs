@@ -249,6 +249,7 @@ pub fn replace_as(
     contents: impl AsRef<[u8]>,
     persist: Persist,
 ) -> std::io::Result<()> {
+    crate::testing::step()?;
     let target = resolve(path.as_ref());
     let directory = directory_of(&target);
     let temp = temp_beside(&target);

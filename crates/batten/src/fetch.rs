@@ -54,6 +54,31 @@ use crate::error::UsageError;
 /// finite for a server that accepts and never answers.
 const TOTAL_TIMEOUT: Duration = Duration::from_mins(1);
 
+/// How long a STREAMED answer may go without delivering a byte (CLOUD-2729).
+///
+/// An idle bound rather than a total one, because the size of a fetched pack
+/// is not known in advance: a reply that keeps arriving is healthy however
+/// long it takes, and one that stops is the hang the total bound exists for.
+const IDLE_TIMEOUT: Duration = Duration::from_mins(1);
+
+/// One mebibyte, the unit the total bound scales by.
+const MIB: u64 = 1024 * 1024;
+
+/// How much of a file body is read per frame.
+const FILE_CHUNK: u64 = 64 * 1024;
+
+/// The total bound for an exchange whose request body is `bytes` long: the
+/// base, plus one second per mebibyte sent (CLOUD-2729).
+///
+/// The fixed minute was sized for a lease, which is one tiny commit. A session
+/// snapshot is tens of megabytes, and a bound that does not grow with the body
+/// fails every large push on a slow link however healthy the exchange is.
+//MUTANT-SUITE crates/batten/src/fetch.rs
+//MUTANT timeout-ignores-body-size|s@^    base + Duration::from_secs(bytes / MIB)$@    base + Duration::from_secs(bytes / MIB / u64::MAX)@|the_total_bound_grows_with_the_body
+fn total_for(base: Duration, bytes: u64) -> Duration {
+    base + Duration::from_secs(bytes / MIB)
+}
+
 /// How long to wait for the connection alone.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -243,6 +268,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         url,
         headers,
         body: None,
+        file: None,
         direct: false,
         patch: false,
         delete: false,
@@ -268,6 +294,7 @@ pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
         url,
         headers,
         body: None,
+        file: None,
         direct: true,
         patch: false,
         delete: false,
@@ -291,6 +318,13 @@ pub struct Call<'a> {
     pub headers: &'a [(String, String)],
     /// The request body, or `None` for a GET.
     pub body: Option<&'a [u8]>,
+    /// The request body as a FILE, read in chunks as it is sent (CLOUD-2729).
+    ///
+    /// For a body too large to hold: a pushed pack is written to a file as it
+    /// is built and sent from there, so the transport never has it in memory.
+    /// A call sets this or `body`, never both; where both are set the file
+    /// wins. The method follows it exactly as it follows `body`.
+    pub file: Option<&'a std::path::Path>,
     /// Send a present body as `PATCH` rather than `POST`.
     ///
     /// A flag on the body-carrying arm rather than a free method, for the reason
@@ -365,6 +399,7 @@ impl std::fmt::Debug for Call<'_> {
                     .collect::<Vec<_>>(),
             )
             .field("body-bytes", &self.body.map(<[u8]>::len))
+            .field("body-file", &self.file.is_some())
             .field("direct", &self.direct)
             .finish()
     }
@@ -674,6 +709,188 @@ async fn tunnel(
 /// How much of a proxy's CONNECT response is read before giving up on it.
 const PROXY_HEAD_LIMIT: usize = 8192;
 
+/// Where a streamed answer's bytes go, a chunk at a time.
+pub type Sink<'a> = dyn FnMut(&[u8]) -> Result<()> + 'a;
+
+/// One call whose `200` answer is handed to `sink` as it arrives, rather than
+/// buffered (CLOUD-2729).
+///
+/// **For an answer whose size is not known in advance** — a fetched pack. The
+/// returned [`Response`] carries the status and headers and an EMPTY body when
+/// the status was `200`; any other status is buffered and returned whole, since
+/// it is an answer about the request and never the payload.
+///
+/// The bound on the body is [`IDLE_TIMEOUT`] without a byte, not a total. A
+/// redirect is not followed: the answer is returned as it is.
+///
+/// # Errors
+///
+/// As [`spend`], plus whatever `sink` returns, and a body that stops arriving.
+pub fn stream(call: &Call<'_>, sink: &mut Sink<'_>) -> Result<Response> {
+    #[cfg(test)]
+    if let Some(answers) =
+        STAND_IN.with(|slot| slot.borrow().as_ref().map(|remote| remote(&[*call])))
+    {
+        let mut answer = answers?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("fetch: the stand-in returned no answer"))?;
+        if answer.status == 200 {
+            // IN PIECES, as a network would deliver it, so a sink that only
+            // works on a whole body does not pass here.
+            for chunk in std::mem::take(&mut answer.body).chunks(STAND_IN_CHUNK) {
+                sink(chunk)?;
+            }
+        }
+        return Ok(answer);
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| anyhow::anyhow!("fetch: cannot start a runtime: {err}"))?;
+    let answer = runtime.block_on(async {
+        one_exchange(
+            call.url,
+            &carried_to(call.headers, call.url, &[], call.credentials),
+            (call.body, call.file),
+            call.direct,
+            (call.patch, call.delete),
+            Some(sink),
+        )
+        .await
+        .map(|(answer, _)| answer)
+    });
+    runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+    answer
+}
+
+/// The piece size a stand-in's streamed answer is delivered in. Deliberately
+/// not a power of two, so a reader that assumes aligned chunks is caught.
+#[cfg(test)]
+const STAND_IN_CHUNK: usize = 1000;
+
+/// Hand `body` to `sink` frame by frame, failing once `idle` passes without one.
+///
+/// **THE DEADLINE MOVES WITH EVERY FRAME**, which is the whole difference
+/// between an idle bound and a total one: a reply that keeps arriving never
+/// meets it, and one that stops meets it `idle` later.
+//MUTANT-SUITE crates/batten/src/fetch.rs
+//MUTANT shallow-fetch-bounded-in-total|s@^        deadline = tokio::time::Instant::now() + idle;$@@|a_steady_answer_outlives_the_idle_bound_and_a_stalled_one_does_not
+async fn drain<B>(mut body: B, idle: Duration, sink: &mut Sink<'_>) -> Result<()>
+where
+    B: hyper::body::Body<Data = hyper::body::Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    let mut deadline = tokio::time::Instant::now() + idle;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, body.frame())
+            .await
+            .map_err(|_| anyhow::anyhow!("fetch: the answer stopped arriving"))?;
+        let Some(frame) = frame else {
+            return Ok(());
+        };
+        let frame = frame.map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?;
+        deadline = tokio::time::Instant::now() + idle;
+        if let Ok(data) = frame.into_data() {
+            sink(&data)?;
+        }
+    }
+}
+
+/// A request body: bytes in hand, or a file read as it is sent.
+type Outgoing = http_body_util::Either<http_body_util::Full<hyper::body::Bytes>, FileBody>;
+
+/// What a request sends, before it becomes a body.
+enum Sent<'a> {
+    /// Bytes the caller holds.
+    Bytes(&'a [u8]),
+    /// A file, opened and measured.
+    File(FileBody),
+}
+
+impl Sent<'_> {
+    /// How many bytes the request body is, which is what the total bound
+    /// scales by.
+    fn len(&self) -> u64 {
+        match self {
+            Sent::Bytes(bytes) => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            Sent::File(file) => file.left,
+        }
+    }
+
+    fn into_body(self) -> Outgoing {
+        match self {
+            Sent::Bytes(bytes) => http_body_util::Either::Left(http_body_util::Full::new(
+                hyper::body::Bytes::copy_from_slice(bytes),
+            )),
+            Sent::File(file) => http_body_util::Either::Right(file),
+        }
+    }
+}
+
+/// A request body read from a file a chunk at a time (CLOUD-2729).
+///
+/// **Its length is exact and stated**, so the request carries `Content-Length`
+/// rather than chunked framing, which a git endpoint behind a proxy is not
+/// guaranteed to accept. The read is a plain blocking one: this runs on a
+/// current-thread runtime serving exactly one exchange, so there is nothing
+/// else for the thread to do while a local file answers.
+struct FileBody {
+    file: std::fs::File,
+    left: u64,
+}
+
+impl FileBody {
+    fn open(path: &std::path::Path) -> Result<Self> {
+        let file = std::fs::File::open(path)
+            .map_err(|err| anyhow::anyhow!("fetch: the request body will not open: {err}"))?;
+        let left = file
+            .metadata()
+            .map_err(|err| anyhow::anyhow!("fetch: the request body will not measure: {err}"))?
+            .len();
+        Ok(FileBody { file, left })
+    }
+}
+
+impl hyper::body::Body for FileBody {
+    type Data = hyper::body::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<std::result::Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+    {
+        use std::io::Read as _;
+
+        if self.left == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        let want = usize::try_from(self.left.min(FILE_CHUNK)).unwrap_or(0);
+        let mut chunk = vec![0_u8; want];
+        std::task::Poll::Ready(Some(match self.file.read(&mut chunk) {
+            // SHORTER THAN IT WAS MEASURED: the declared length can no longer
+            // be met, and sending fewer bytes than promised is a request the
+            // server would wait on.
+            Ok(0) => Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)),
+            Ok(read) => {
+                chunk.truncate(read);
+                self.left -= u64::try_from(read).unwrap_or(u64::MAX).min(self.left);
+                Ok(hyper::body::Frame::data(hyper::body::Bytes::from(chunk)))
+            }
+            Err(err) => Err(err),
+        }))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.left == 0
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(self.left)
+    }
+}
+
 /// Follow the request to its answer, through at most [`MAX_REDIRECTS`] hops.
 ///
 /// `--location` was a load-bearing `curl` flag with a one-line reason —
@@ -708,9 +925,10 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let (answer, location) = one_exchange(
             &target,
             &carried,
-            call.body,
+            (call.body, call.file),
             call.direct,
             (call.patch, call.delete),
+            None,
         )
         .await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
@@ -902,11 +1120,17 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],
-    body: Option<&[u8]>,
+    (body, file): (Option<&[u8]>, Option<&std::path::Path>),
     direct: bool,
     (patch, delete): (bool, bool),
+    sink: Option<&mut Sink<'_>>,
 ) -> Result<(Response, Option<String>)> {
-    let (connect_timeout, total_timeout) = bounds();
+    let (connect_timeout, base_timeout) = bounds();
+    let sent = match file {
+        Some(named) => Sent::File(FileBody::open(named)?),
+        None => Sent::Bytes(body.unwrap_or_default()),
+    };
+    let total_timeout = total_for(base_timeout, sent.len());
     let uri: hyper::Uri = url
         .parse()
         .map_err(|_| UsageError::raise("fetch: the URL will not parse".to_owned()))?;
@@ -929,19 +1153,16 @@ async fn one_exchange(
                 proxy_for(uri.host().unwrap_or_default())
             },
         });
-    let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
-        Client::builder(TokioExecutor::new()).build(https);
+    let client: Client<_, Outgoing> = Client::builder(TokioExecutor::new()).build(https);
 
     let mut request = hyper::Request::builder()
         .uri(uri)
-        .method(method_for(body, (patch, delete)));
+        .method(method_for(body.or(file.map(|_| &[][..])), (patch, delete)));
     for (name, value) in sent_headers(headers) {
         request = request.header(name, value);
     }
     let request = request
-        .body(http_body_util::Full::new(
-            hyper::body::Bytes::copy_from_slice(body.unwrap_or_default()),
-        ))
+        .body(sent.into_body())
         .map_err(|_| anyhow::anyhow!("fetch: the request will not build"))?;
 
     // The TOTAL bound, over connect plus exchange plus body. The connect timeout
@@ -971,12 +1192,22 @@ async fn one_exchange(
                 .map(|value| (name.as_str().to_lowercase(), value.to_owned()))
         })
         .collect();
-    let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
-        .await
-        .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
-        .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
-        .to_bytes()
-        .to_vec();
+    // A STREAMED ANSWER GOES TO THE SINK, AND ONLY A `200` IS STREAMED. Any
+    // other status is an answer about the request — a refusal, a throttle — and
+    // its body is small and is the caller's to read, so it is buffered under
+    // the total bound like every other answer.
+    let body = match sink {
+        Some(sink) if status == 200 => {
+            drain(answer.into_body(), IDLE_TIMEOUT.min(base_timeout), sink).await?;
+            Vec::new()
+        }
+        _ => tokio::time::timeout(total_timeout, answer.into_body().collect())
+            .await
+            .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
+            .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
+            .to_bytes()
+            .to_vec(),
+    };
     Ok((
         Response {
             status,
@@ -1214,6 +1445,7 @@ mod tests {
             body: None,
             patch: false,
             delete: false,
+            file: None,
             direct: false,
             credentials: &["x-session-token"],
         };
@@ -1394,5 +1626,133 @@ mod tests {
                 "{raw:?} must fall back to the declared bounds"
             );
         }
+    }
+}
+
+/// CLOUD-2729: a body sent from a file, a bound that grows with it, and an
+/// answer bounded by silence rather than by its length.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod stream_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Fails by: a large push held to the bound a lease was sized for.
+    #[test]
+    fn the_total_bound_grows_with_the_body() {
+        assert_eq!(total_for(TOTAL_TIMEOUT, 1024), Duration::from_secs(60));
+        assert_eq!(
+            total_for(TOTAL_TIMEOUT, 300 * MIB),
+            Duration::from_secs(360)
+        );
+        assert_eq!(
+            total_for(Duration::from_millis(250), 1024),
+            Duration::from_millis(250),
+            "an override stays the strictest value for a small body"
+        );
+    }
+
+    /// A body whose frames arrive after stated gaps.
+    struct Paced {
+        frames: VecDeque<(Duration, &'static [u8])>,
+        waiting: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>>,
+    }
+
+    impl hyper::body::Body for Paced {
+        type Data = hyper::body::Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<std::result::Result<hyper::body::Frame<Self::Data>, Self::Error>>>
+        {
+            let Some((gap, _)) = self.frames.front().copied() else {
+                return std::task::Poll::Ready(None);
+            };
+            let sleep = self.waiting.get_or_insert_with(|| {
+                Box::pin(async move {
+                    // A bound on a future that never completes: the gap,
+                    // without a second timer primitive in the crate.
+                    let _ = tokio::time::timeout(gap, std::future::pending::<()>()).await;
+                })
+            });
+            if sleep.as_mut().poll(context).is_pending() {
+                return std::task::Poll::Pending;
+            }
+            self.waiting = None;
+            let (_, bytes) = self.frames.pop_front().expect("a front frame");
+            std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(
+                hyper::body::Bytes::from_static(bytes),
+            ))))
+        }
+    }
+
+    fn drained(gaps: &[u64], idle: u64) -> (Result<()>, usize) {
+        let body = Paced {
+            frames: gaps
+                .iter()
+                .map(|gap| (Duration::from_millis(*gap), &b"abcd"[..]))
+                .collect(),
+            waiting: None,
+        };
+        let mut taken = 0;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let outcome = runtime.block_on(drain(
+            body,
+            Duration::from_millis(idle),
+            &mut |chunk: &[u8]| {
+                taken += chunk.len();
+                Ok(())
+            },
+        ));
+        (outcome, taken)
+    }
+
+    /// The bound and the gaps are INPUTS, scaled a thousand to one: a reply
+    /// arriving every 20 units for 300 against an idle bound of 60 completes,
+    /// which a total bound of 60 would have cut; one that then goes quiet for
+    /// far longer than the bound fails, having delivered what came first.
+    ///
+    /// Fails by: the answer being bounded in total, or not bounded at all.
+    #[test]
+    fn a_steady_answer_outlives_the_idle_bound_and_a_stalled_one_does_not() {
+        let (steady, taken) = drained(&[20; 15], 60);
+        assert!(steady.is_ok(), "{steady:?}");
+        assert_eq!(taken, 60, "every frame reached the sink");
+
+        let (stalled, taken) = drained(&[20, 20, 2000], 60);
+        let refusal = stalled.expect_err("a silent answer is cut");
+        assert!(
+            format!("{refusal}").contains("stopped arriving"),
+            "{refusal}"
+        );
+        assert_eq!(taken, 8, "what arrived before the silence was delivered");
+    }
+
+    /// Fails by: a file body sending other bytes than the file holds, or
+    /// claiming a length it does not have.
+    #[test]
+    fn a_file_body_is_read_whole_in_frames_of_a_stated_total() {
+        use hyper::body::Body as _;
+
+        let dir = crate::scratch::scratch("fetch-file-body");
+        let path = dir.join("body");
+        let bytes: Vec<u8> = (0..200_000_u32).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let body = FileBody::open(&path).unwrap();
+        assert_eq!(body.size_hint().exact(), Some(200_000));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let read = runtime
+            .block_on(http_body_util::BodyExt::collect(body))
+            .unwrap()
+            .to_bytes();
+        assert_eq!(read.as_ref(), bytes.as_slice());
     }
 }

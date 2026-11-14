@@ -119,6 +119,8 @@ pub mod mint;
 pub mod minted;
 pub mod mutate;
 pub mod o200k;
+pub mod offbox;
+pub mod offbox_watch;
 pub mod outcome;
 pub mod output;
 pub mod outputs;
@@ -172,6 +174,7 @@ pub mod selfwrite;
 /// longer resolve one.
 pub mod semver;
 pub mod session;
+pub mod sessions;
 pub mod severity;
 pub mod signer_posture;
 pub mod sink;
@@ -669,7 +672,304 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 replay::run(&root, &base, json, out)
             }
         },
+        // No config chain: the switch is the environment's alone (CLOUD-2717
+        // ruling 2), so no key could layer over it.
+        Some(Command::Offbox { command }) => match command {
+            cli::OffboxCommand::Status => run_offbox_status(out),
+            cli::OffboxCommand::Push {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_push(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Run {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_daemon(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Restore {
+                session,
+                harness,
+                from,
+            } => run_offbox_restore(out, &session, &harness, from.as_deref()),
+            cli::OffboxCommand::Rotate {
+                remote,
+                quiet_runs,
+                print_workflow,
+                install_url,
+            } => run_offbox_rotate(
+                out,
+                remote.as_deref(),
+                quiet_runs.as_deref(),
+                print_workflow,
+                install_url.as_deref(),
+            ),
+        },
     }
+}
+
+/// The daemon's real clock, pause and randomness (CLOUD-2721).
+struct DaemonWorld;
+
+impl offbox::World for DaemonWorld {
+    fn now(&mut self) -> i64 {
+        i64::try_from(now_unix()).unwrap_or(i64::MAX)
+    }
+
+    fn pause(&mut self, millis: u64) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a loop that has no end to wait for: the daemon runs until it is killed, and `millis` is the caller's own declared beat — `offbox::run`'s wake, or its bounded lock retry"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+
+    fn random(&mut self) -> u64 {
+        let mut bytes = [0_u8; 8];
+        // Jitter only spreads daemons apart; where the OS has no entropy to
+        // give, the process id still differs between two of them.
+        if getrandom::fill(&mut bytes).is_err() {
+            return u64::from(std::process::id());
+        }
+        u64::from_le_bytes(bytes)
+    }
+}
+
+/// `batten offbox run` (CLOUD-2721): the daemon, until it is killed.
+///
+/// What it reads from the world is read here: the switch, the origin, the
+/// scanner's rows. The clock is the daemon's to read — it decides no gate.
+fn run_offbox_daemon(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    if value.trim().is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let root = git::repo_root(Path::new("."))?;
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let transcript = transcript.map(PathBuf::from);
+    let predecessor = std::env::var(session::PARENT_ENV).ok();
+    let history = crate::sessions::machine_sources(harness, transcript.as_deref());
+    let launch = offbox::run(
+        &offbox::Launching {
+            project_root: &root,
+            provisions: &provisions,
+            harness,
+            session,
+            transcript: transcript.as_deref(),
+            value: &value,
+            origin: origin.as_deref(),
+            predecessor: predecessor.as_deref(),
+            wakes: None,
+            history: &history,
+            byte_cap: offbox::BYTE_CAP,
+        },
+        &mut DaemonWorld,
+    )?;
+    writeln!(out, "{}", launch.token())?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten offbox rotate` (CLOUD-2724): one rotation pass and its token, or —
+/// under `--print-workflow` — the workflow file that runs one on a schedule,
+/// which installs `batten` from `install_url`.
+///
+/// The clock is read here, at the verb's boundary, for the archive commit's time;
+/// it decides nothing, since "finished" is a count of passes.
+fn run_offbox_rotate(
+    out: &mut dyn Write,
+    remote: Option<&str>,
+    quiet_runs: Option<&str>,
+    print_workflow: bool,
+    install_url: Option<&str>,
+) -> Result<ExitCode> {
+    if print_workflow {
+        let Some(install_url) = install_url.filter(|url| !url.trim().is_empty()) else {
+            return Err(UsageError::raise(
+                "offbox rotate: --print-workflow needs --install-url, the install script the workflow downloads",
+            ));
+        };
+        write!(
+            out,
+            "{}",
+            offbox::rotate_workflow(install_url.trim(), env!("CARGO_PKG_VERSION"))
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let Some(remote) = remote.map(str::trim).filter(|url| !url.is_empty()) else {
+        return Err(UsageError::raise(
+            "offbox rotate: --remote is needed, the state repository's URL",
+        ));
+    };
+    let quiet_runs = match quiet_runs {
+        None => offbox::QUIET_RUNS,
+        Some(typed) => typed.trim().parse::<u64>().map_err(|_| {
+            UsageError::raise(format!(
+                "offbox rotate: --quiet-runs takes a whole number of passes, and `{typed}` is not one"
+            ))
+        })?,
+    };
+    // One scratch repository per remote, under the machine's state root: a
+    // cache of the archive's tip, pruned to it after every applied pass.
+    let key = blake3::hash(remote.as_bytes()).to_hex();
+    let scratch = state::state_root()?
+        .join("offbox-rotate")
+        .join(format!("{}.git", &key[..16]));
+    std::fs::create_dir_all(&scratch)?;
+    let rotated = offbox::rotate_once(
+        remote,
+        &scratch,
+        quiet_runs,
+        i64::try_from(now_unix()).unwrap_or(i64::MAX),
+    )?;
+    writeln!(out, "{}", rotated.token())?;
+    Ok(rotated.code())
+}
+
+/// `batten offbox restore` (CLOUD-2723): one restore, one token.
+///
+/// The predecessor is `--from`, else the environment's: the session this one
+/// continues, restored from when this session has no snapshot of its own.
+fn run_offbox_restore(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    from: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // Loaded for the forge's credential names, as `offbox push` loads it.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let ambient = std::env::var(session::PARENT_ENV).ok();
+    let restored = offbox::restore_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: None,
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        from.or(ambient.as_deref()),
+    )?;
+    writeln!(out, "{}", restored.token())?;
+    Ok(restored.code())
+}
+
+/// `batten offbox push` (CLOUD-2720): one snapshot, one swap, one token.
+///
+/// Everything the push takes from the world is read here, at the boundary: the
+/// switch from the environment, the origin from the clone, the scanner's rows
+/// and the forge's credential names from the config, and the clock.
+fn run_offbox_push(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // The config is where the scanner's rows are, and loading it is what
+    // declares the forge's credential names, as `batten land` relies on. A
+    // project with no config has no scanner, and the push says so.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let push = offbox::push_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: transcript.map(PathBuf::from),
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        &[],
+    )?;
+    if push.outcome == offbox::Pushed::Refused(offbox::Refusal::ScannerFailed) {
+        return Err(anyhow::anyhow!(
+            "offbox: the secret scanner ran and its answer could not be trusted, so nothing was pushed"
+        ));
+    }
+    writeln!(out, "{}", push.outcome.token())?;
+    Ok(push.outcome.code())
+}
+
+/// `batten offbox status` (CLOUD-2718): one token, and the exit that goes with it.
+///
+/// The origin is read from the clone and the repository from the environment, so
+/// this is the one place the two meet. A clone whose remotes cannot be read is
+/// the same answer as one with no origin: there is no host to derive a remote
+/// from, and the token says so.
+fn run_offbox_status(out: &mut dyn Write) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).ok();
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let status = offbox::status(value.as_deref(), origin.as_deref())?;
+    writeln!(out, "{}", status.token())?;
+    Ok(status.code())
 }
 
 /// Set on the re-exec after a self-update, so the updated engine never updates
@@ -16687,6 +16987,11 @@ fn run_lease_acquire(
                     writeln!(out, "lease: lost the race for it")?;
                     Ok(ExitCode::Violation)
                 }
+                // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+                Ok(lease::Outcome::Throttled { .. }) => {
+                    writeln!(err, "::error:: lease: the forge throttled the request")?;
+                    Ok(ExitCode::Internal)
+                }
                 Err(reason) => {
                     writeln!(err, "::error:: lease: {reason}")?;
                     Ok(ExitCode::Internal)
@@ -16740,6 +17045,11 @@ fn ask_the_holder_to_stand_down(
             lease::writer_version()
         )?,
         Ok(lease::Outcome::Rejected { .. }) => {}
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => writeln!(
+            err,
+            "::error:: lease: the stand-down request: the forge throttled it"
+        )?,
         Err(reason) => writeln!(err, "::error:: lease: the stand-down request: {reason}")?,
     }
     Ok(())
@@ -16806,6 +17116,11 @@ fn run_lease_renew(
             Ok(ExitCode::Success)
         }
         Ok(lease::Outcome::Rejected { .. }) => Ok(ExitCode::Violation),
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -17165,6 +17480,11 @@ fn run_lease_release(
             )?;
             Ok(ExitCode::Success)
         }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -17229,6 +17549,11 @@ fn run_lease_reserve(
         Ok(lease::Outcome::Rejected { .. }) => {
             writeln!(out, "lease: could not reserve; the lease moved")?;
             Ok(ExitCode::Violation)
+        }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
         }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -19243,6 +19568,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
+        offbox_post(harness, &envelope);
         post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
@@ -19489,6 +19815,7 @@ fn run_hook(
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
     let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
+    let decision = offbox_gate(harness, &envelope, decision);
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -20667,6 +20994,205 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 /// Composes the handler's answer with the engine's first, so the call site in
 /// `run_hook` stays one line under `rustfmt`: measured, the four-argument form
 /// wrapped to six lines and put `run_hook` back over `too_many_lines`.
+/// This checkout's off-box directory, or `None` with the state repository
+/// variable unset — in which case no file under it is opened (CLOUD-2736).
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT unset-still-writes-the-inbox|s@^    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(\x7cvalue\x7c !value.trim().is_empty()) {$@    if false {@|unset_opens_no_file_and_denies_nothing
+fn offbox_watch_dir() -> Option<PathBuf> {
+    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(|value| !value.trim().is_empty()) {
+        return None;
+    }
+    // THE DAEMON'S OWN ROOT: `offbox run` resolves the repository from its
+    // working directory, so the hook resolves the same one, never a config
+    // anchor that could sit beneath it.
+    let root = git::repo_root(hook_authority_root()).ok()?;
+    Some(state::repo_state_dir(&root).ok()?.join(offbox_watch::DIR))
+}
+
+/// The post-tool half of the daemon watch (CLOUD-2736): tell the daemon a tool
+/// call happened, and count whether it was there to hear.
+///
+/// One appended line, one shared try-lock, two small reads, one small write
+/// where the count moved. **It starts nothing and reaches no network.** Silent
+/// on failure, like every recorder at this boundary.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT hook-spawns-the-daemon|s@^    let heard = offbox_watch::probe(\&dir, leaf.as_deref());$@    let _ = std::process::Command::new("batten").args(["offbox", "status"]).spawn(); let heard = offbox_watch::probe(\&dir, leaf.as_deref());@|the_hook_starts_no_process
+fn offbox_post(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let session = envelope.session.as_deref();
+    let _ = offbox_watch::message(&dir, session.unwrap_or("-"));
+    let leaf = session.map(|session| offbox_watch::leaf(harness.as_str(), session));
+    let heard = offbox_watch::probe(&dir, leaf.as_deref());
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    if heard == offbox_watch::Liveness::Alive {
+        seen.misses = 0;
+        seen.owed = false;
+    } else {
+        seen.misses = seen.misses.saturating_add(1);
+        seen.owed = true;
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The finding that says the daemon is down and what fixes it.
+fn offbox_down(says: &str, remedy: &str) -> refusal::Refusal {
+    refusal::Refusal::engine(
+        verdict::Native::OffboxDaemonDown,
+        &[verdict::Subject::Artifact {
+            artifact: says.to_owned(),
+        }],
+        refusal::Fix::Run(remedy.to_owned()),
+    )
+    .with_command_route(remedy)
+}
+
+/// The advising half of the daemon watch (CLOUD-2736), on every event but the
+/// post-tool one — which on most hosts carries no advice, so its word waits in
+/// the hook's own file for the next event that does.
+///
+/// At session start the daemon is looked for outright and no miss is counted,
+/// so the agent can launch it before its first tool call. The daemon's attach
+/// note is relayed once: nothing is denied for an unreachable state repository.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT attach-note-repeated-every-call|s@^            seen.noted = true;$@@|the_attach_note_is_relayed_once_and_denies_nothing
+fn offbox_advise(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event == hook::Event::PostTool {
+        return;
+    }
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    let starting = envelope.event == hook::Event::SessionStart;
+    if let Some(session) = envelope
+        .session
+        .as_deref()
+        .filter(|_| starting || seen.owed)
+    {
+        let name = harness.as_str();
+        let found = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+        let remedy =
+            offbox_watch::remedy(&dir, found, session, name, envelope.transcript.as_deref());
+        if let (Some(says), Some(remedy)) = (found.says(), remedy) {
+            push_finding(
+                advice,
+                severity::AdvisoryTier::Caution,
+                offbox_down(says, &remedy),
+            );
+        }
+        seen.owed = false;
+    }
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    match offbox_watch::field(&status, "attached") {
+        Some("no") if !seen.noted => {
+            let note = std::fs::read_to_string(dir.join(offbox_watch::NOTE)).unwrap_or_default();
+            if let Some(line) = note.lines().next().filter(|line| !line.is_empty()) {
+                // The daemon's own sentence is the subject: it names the
+                // repository and both remedies, and the hook only relays it.
+                push_finding(
+                    advice,
+                    severity::AdvisoryTier::Caution,
+                    refusal::Refusal::engine(
+                        verdict::Native::WorkspaceStateBroken,
+                        &[verdict::Subject::Artifact {
+                            artifact: line.to_owned(),
+                        }],
+                        refusal::Fix::None,
+                    ),
+                );
+            }
+            seen.noted = true;
+        }
+        Some("yes") => seen.noted = false,
+        _ => {}
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The daemon gate (CLOUD-2736): after the grace, a pre-tool call is refused
+/// until the agent has run the command that brings the daemon back.
+///
+/// It only ever turns an allow into a deny, and only on a host KNOWN to let an
+/// agent keep a process running. In order: the relaunch command with the
+/// background mark is this gate's to allow, and without the mark it is refused
+/// with the instruction to background it; the `kill` remedy is allowed in the
+/// state it remedies; then five or more misses and a daemon that is still not
+/// alive ON THIS CALL refuse. The probe is taken now, so a daemon relaunched a
+/// moment ago is seen at once and a stale count denies nothing.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT gate-applies-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {$@    if false {@|a_host_with_no_known_background_facility_is_advised_and_never_denied
+//MUTANT foreground-relaunch-admitted|s@^        if backgrounded {$@        if true {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT background-relaunch-denied|s@^        if backgrounded {$@        if false {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT dead-daemon-never-denied|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if true {@|a_dead_daemon_is_denied_after_the_grace_with_the_relaunch_command
+//MUTANT denied-before-the-grace|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if false {@|a_dead_daemon_is_allowed_inside_the_grace
+//MUTANT stale-miss-count-denies-a-live-daemon|s@^    let now = offbox_watch::probe(\&dir, Some(\&offbox_watch::leaf(name, session)));$@    let now = offbox_watch::Liveness::Dead;@|a_relaunched_daemon_is_seen_at_once_whatever_the_count
+fn offbox_gate(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    decision: hook::Decision,
+) -> hook::Decision {
+    // EVERY DECISION THAT LETS THE CALL RUN, not the plain allow alone: a
+    // pre-approved call and a waived one proceed just the same, and a
+    // repository that grants its ordinary commands would otherwise never meet
+    // this gate at all. A refusal or an escalation already speaks, and stands.
+    let speaks = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
+    if envelope.event != hook::Event::PreTool || speaks {
+        return decision;
+    }
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {
+        return decision;
+    }
+    let (Some(dir), Some(session)) = (offbox_watch_dir(), envelope.session.as_deref()) else {
+        return decision;
+    };
+    let name = harness.as_str();
+    let transcript = envelope.transcript.as_deref();
+    let relaunch = offbox_watch::relaunch(session, name, transcript);
+    let command = envelope.command.trim();
+    if command == relaunch {
+        let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+        if backgrounded {
+            return decision;
+        }
+        return hook::Decision::Deny(
+            refusal::Refusal::engine(
+                verdict::Native::OffboxDaemonForeground,
+                &[verdict::Subject::Artifact {
+                    artifact: String::from("run it in the background"),
+                }],
+                refusal::Fix::Run(relaunch.clone()),
+            )
+            .with_command_route(&relaunch),
+        );
+    }
+    if offbox_watch::Seen::read(&dir).misses < offbox_watch::GRACE {
+        return decision;
+    }
+    let now = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+    let (Some(says), Some(remedy)) = (
+        now.says(),
+        offbox_watch::remedy(&dir, now, session, name, transcript),
+    ) else {
+        return decision;
+    };
+    if command == remedy {
+        return decision;
+    }
+    hook::Decision::Deny(offbox_down(says, &remedy))
+}
+
 fn admitted(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
@@ -21010,7 +21536,7 @@ fn collect_batch_advice(
 ) -> Result<()> {
     // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
     // session, so it is written before any declared handler provisions anything.
-    stamp_session(envelope);
+    stamp_session(harness, envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -21028,6 +21554,7 @@ fn collect_batch_advice(
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
+    offbox_advise(harness, envelope, advice);
     Ok(())
 }
 
@@ -21043,16 +21570,86 @@ fn collect_batch_advice(
 /// Fails open and silently, like every other side effect at this boundary: a
 /// session start is not a call being adjudicated, and a clone with no readable
 /// git directory is one where `claim check` reports the missing stamp itself.
-fn stamp_session(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+///
+/// # Held back for a restore (CLOUD-2723)
+///
+/// The stamp makes the receipts store non-empty, and a restore would then put
+/// the restored receipts aside instead of back in place. So where the state
+/// repository variable is set, the host is known to let an agent run the
+/// daemon, and this session has no restore record yet, a session start writes
+/// `stamp-owed` instead and the stamp is paid on a later event: once the
+/// restore record exists, or the daemon reports the restore `unavailable`.
+/// It is paid DATED AT THE SESSION'S START, which is what the gate reads.
+///
+/// **There is no fallback that pays it anyway.** A daemon that is never
+/// started is the daemon gate's to refuse; an unstamped session cannot claim.
+//MUTANT-SUITE crates/batten/tests/it/offbox_restore.rs
+//MUTANT stamp-written-before-restore|s@^        if defer_stamp(harness, envelope) {$@        if false {@|a_session_start_with_no_restore_record_owes_its_stamp
+//MUTANT stamp-written-while-restore-is-pending|s@^    if restored \x7c\x7c unavailable {$@    if true {@|an_owed_stamp_is_not_paid_while_the_restore_is_pending
+//MUTANT owed-stamp-never-paid|s@^    if restored \x7c\x7c unavailable {$@    if false {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT paid-stamp-dated-at-payment|s@^        if claim::stamp_session_at(\&receipts, began).is_ok() {$@        if claim::stamp_session(\&receipts).is_ok() {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT stamp-deferred-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) \x7c\x7c !owes {$@    if !owes {@|a_host_with_no_background_facility_is_stamped_at_once
+fn stamp_session(harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event == hook::Event::SessionStart {
+        if defer_stamp(harness, envelope) {
+            return;
+        }
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+        // `run_claim_check` reads it: a linked worktree dates its own session.
+        let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    pay_owed_stamp(harness, envelope);
+}
+
+/// Whether this session's restore record exists under the off-box directory.
+fn restore_recorded(dir: &Path, harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    envelope.session.as_deref().is_some_and(|session| {
+        offbox_watch::restored_path(dir, &offbox_watch::leaf(harness.as_str(), session)).exists()
+    })
+}
+
+/// At a session start: whether the stamp is held back, having written the
+/// file that says so.
+fn defer_stamp(harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    let Some(dir) = offbox_watch_dir() else {
+        return false;
+    };
+    let owes = envelope.session.is_some() && !restore_recorded(&dir, harness, envelope);
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) || !owes {
+        return false;
+    }
+    // Not written is not owed: a stamp that could never be paid would leave
+    // the session unable to claim for good.
+    std::fs::create_dir_all(&dir).is_ok()
+        && durable::replace(dir.join(offbox_watch::STAMP_OWED), b"").is_ok()
+}
+
+/// On any event after the start: pay a stamp that is owed, once the restore
+/// has reached an answer or the daemon has said it cannot.
+fn pay_owed_stamp(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
         return;
     };
-    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
-    // `run_claim_check` reads it: a linked worktree dates its own session.
-    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
+    let owed = dir.join(offbox_watch::STAMP_OWED);
+    let Ok(began) = std::fs::metadata(&owed).and_then(|meta| meta.modified()) else {
+        return;
+    };
+    let restored = restore_recorded(&dir, harness, envelope);
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    let unavailable = offbox_watch::field(&status, "restored") == Some("unavailable");
+    if restored || unavailable {
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        let receipts = git_dir.join(RECEIPT_DIR);
+        if claim::stamp_session_at(&receipts, began).is_ok() {
+            let _ = std::fs::remove_file(&owed);
+        }
+    }
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).
@@ -29655,10 +30252,16 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             )?;
         }
     }
+    // LAST, and only with the state repository variable set (CLOUD-2722):
+    // whether this checkout's state is leaving the machine. It changes no exit.
+    if let Some(offbox) = &report.offbox {
+        output::line(out, offbox)?;
+    }
     Ok(session_code(&report))
 }
 
 //MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
+//MUTANT session-code-reads-the-offbox-field|s@^    match report.open {$@    if report.offbox.is_some() { return ExitCode::Usage; } match report.open {@|the_offbox_report_changes_no_exit_code
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
     // than unfinished work (CLOUD-1760). The two arms answer different questions —

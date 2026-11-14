@@ -2415,6 +2415,127 @@ pub fn objects_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec
     Ok(out)
 }
 
+/// [`objects_to_send`]'s set as IDS alone, so a caller can read each body when
+/// it writes it rather than holding every one at once (CLOUD-2729).
+///
+/// The same set: the commits in `base..head`, then every tree and blob their
+/// trees reach, minus what `base`'s own tree reaches. Commits come first, in
+/// walk order; the rest is in id order, which a pack does not care about.
+///
+/// # Errors
+///
+/// As [`objects_to_send`].
+pub fn object_ids_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = repo.rev_parse_single(head).map_err(|_| refused())?;
+    let base_id = match base {
+        Some(base) => Some(repo.rev_parse_single(base).map_err(|_| refused())?.detach()),
+        None => None,
+    };
+    let mut walk = repo.rev_walk([head_id.detach()]);
+    if let Some(base_id) = base_id {
+        walk = walk.with_hidden([base_id]);
+    }
+    let walk = walk.all().map_err(|_| refused())?;
+
+    let mut carried = std::collections::BTreeSet::new();
+    if let Some(base_id) = base_id
+        && let Ok(commit) = repo.find_commit(base_id)
+        && let Ok(tree) = commit.tree()
+    {
+        collect_tree(&repo, tree.id().detach(), &mut carried, None);
+    }
+
+    let mut ids = Vec::new();
+    let mut reached = std::collections::BTreeSet::new();
+    for step in walk {
+        let Ok(info) = step else {
+            return Err(refused());
+        };
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        ids.push(info.id.to_string());
+        let tree_id = commit.tree_id().map_err(|_| refused())?.detach();
+        collect_tree(&repo, tree_id, &mut reached, None);
+    }
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// The ids a push of the one commit `head` adds when the remote already holds
+/// the commits `have` (CLOUD-2724): `head` itself, then every tree and blob its
+/// tree reaches, minus what the tree of each `have` commit that is present here
+/// reaches.
+///
+/// **No parent is walked.** `head` may name parents this repository does not
+/// hold — a rotation makes each archived session's tip a parent without
+/// fetching it — and the caller's claim is that the remote holds every one of
+/// them. A `have` id that is not here subtracts nothing, which errs toward
+/// sending.
+///
+/// # Errors
+///
+/// A usage error where `head` is not a commit this repository holds.
+pub fn commit_ids_to_send(dir: &Path, head: &str, have: &[String]) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let commit = repo.find_commit(head_id).map_err(|_| refused())?;
+    let mut carried = std::collections::BTreeSet::new();
+    for held in have {
+        if let Ok(id) = gix::ObjectId::from_hex(held.as_bytes())
+            && let Ok(held) = repo.find_commit(id)
+            && let Ok(tree) = held.tree_id()
+        {
+            collect_tree(&repo, tree.detach(), &mut carried, None);
+        }
+    }
+    let mut reached = std::collections::BTreeSet::new();
+    let tree = commit.tree_id().map_err(|_| refused())?.detach();
+    collect_tree(&repo, tree, &mut reached, None);
+    let mut ids = vec![head_id.to_string()];
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// One open repository to read objects out of by id, one at a time
+/// (CLOUD-2729).
+///
+/// A handle rather than a function taking a directory, because a streamed pack
+/// reads every object it sends and reopening the repository per object would
+/// cost a discovery each.
+#[allow(missing_debug_implementations)]
+pub struct ObjectReader(gix::Repository);
+
+impl ObjectReader {
+    /// Open the repository at `dir`.
+    ///
+    /// # Errors
+    ///
+    /// A directory that is not a repository.
+    pub fn open(dir: &Path) -> Result<Self> {
+        Ok(ObjectReader(open(dir)?))
+    }
+
+    /// The object `id`, payload and kind.
+    ///
+    /// # Errors
+    ///
+    /// An id that will not parse, or an object the odb cannot produce. A missing
+    /// object is an error rather than an omission, for [`objects_to_send`]'s
+    /// reason.
+    pub fn read(&self, id: &str) -> Result<RawObject> {
+        let missing = || anyhow::anyhow!("git: object {id} cannot be read from the repository");
+        let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| missing())?;
+        let object = self.0.find_object(named).map_err(|_| missing())?;
+        Ok(RawObject {
+            id: id.to_owned(),
+            kind: object.kind,
+            body: object.data.clone(),
+        })
+    }
+}
+
 /// Walk a tree, recording every tree and blob under it that `seen` does not carry.
 ///
 /// **`sink` is `None` for the EXCLUSION walk and `Some` for the send walk**, and

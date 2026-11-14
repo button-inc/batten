@@ -658,6 +658,11 @@ mod tests {
                 // it, which is the fail-safe reading for a consumer treating an
                 // allowlist entry as a prefix (CLOUD-121).
                 "mutate census".to_owned(),
+                // Whether the state repository answers discovery (CLOUD-2718).
+                // `read`, beside `doctor forge`'s GETs: one discovery request,
+                // no file written and no directory created. The `offbox` noun
+                // is absent for `receipt`'s reason — its later verbs push.
+                "offbox status".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
                 // verdict — so `read` is the honest classification and the
@@ -1115,6 +1120,14 @@ mod tests {
             "mutate".to_owned(),
             "mutate census".to_owned(),
             "mutate sweep".to_owned(),
+            // Off-box session state (CLOUD-2717). The noun is unclassified
+            // because the verbs that follow `status` write a remote.
+            "offbox".to_owned(),
+            "offbox push".to_owned(),
+            "offbox restore".to_owned(),
+            "offbox rotate".to_owned(),
+            "offbox run".to_owned(),
+            "offbox status".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
             // reads stdin, projects one allowlisted field, and renders no
             // verdict — so `read` is the honest classification and the

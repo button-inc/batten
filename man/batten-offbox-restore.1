@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-offbox-restore 1  batten 
+.SH NAME
+batten\-offbox\-restore \- Put a session\*(Aqs pushed snapshot back where it was read from, in a container that does not have it
+.SH SYNOPSIS
+\fBbatten offbox restore\fR [\fB\-\-from\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-session\fR> <\fB\-\-harness\fR> 
+.SH DESCRIPTION
+Put a session\*(Aqs pushed snapshot back where it was read from, in a container that does not have it
+.SH OPTIONS
+.TP
+\fB\-\-session\fR \fI<session>\fR
+The harness\*(Aqs own identifier for the session whose state is pushed
+.TP
+\fB\-\-harness\fR \fI<harness>\fR
+The harness the session belongs to; it selects where the session\*(Aqs records are read from
+.TP
+\fB\-\-from\fR \fI<from>\fR
+The session this one continues; its snapshot is restored when this session has none
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
