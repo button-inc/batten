@@ -314,6 +314,8 @@ mod nonverdict;
 #[cfg(unix)]
 mod ntia;
 mod obligations_bound;
+#[cfg(unix)]
+mod offbox_snapshot;
 mod offbox_status;
 mod one_pr;
 mod outcome_advice;
