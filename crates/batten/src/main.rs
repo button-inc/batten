@@ -42,6 +42,11 @@ fn main() -> ExitCode {
     if let Some(code) = batten::mutate::schema::recorded(std::env::args_os()) {
         return code;
     }
+    // THE WRAPPER EACH CASE OF A JOURNALED STEP RUNS UNDER (CLOUD-2772): the
+    // argv is the journal's directory, then the case's.
+    if let Some(code) = batten::mutate::resume::wrapped(std::env::args_os()) {
+        return code;
+    }
     // AS A GIT HOOK (CLOUD-2339): every git hook links to this binary, and
     // everything after a hook name in argv[0] is git's.
     if let Some(code) = batten::githook::dispatched(std::env::args_os()) {
