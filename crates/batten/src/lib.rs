@@ -19768,14 +19768,11 @@ fn preapproval_context(
     advice: &mut Vec<advisory::Advice>,
     ceiling: Option<&advisory::Channel>,
 ) -> Option<String> {
-    if !matches!(decision, hook::Decision::Preapproved(_)) {
-        return None;
-    }
     // THE CORRECTION IS ANNOUNCED IN THIS ONE DOCUMENT (CLOUD-1939): which class
     // refused and that the filter went, never the command (rule 4).
     //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-    //MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
-    if CORRECTED.get().is_some() {
+    //MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() \&\& matches!(decision, hook::Decision::Preapproved(_)) {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
+    if CORRECTED.get().is_some() && matches!(decision, hook::Decision::Preapproved(_)) {
         push_finding(
             advice,
             severity::AdvisoryTier::Advisory,
@@ -19788,7 +19785,7 @@ fn preapproval_context(
             ),
         );
     }
-    if advice.is_empty() {
+    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
         return None;
     }
     let taken = std::mem::take(advice);
@@ -20888,8 +20885,8 @@ static CORRECTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 //MUTANT strip-filter-not-applied|s@^    let Some(command) = hook::filter_free_command(policy, envelope) else {$@    let Some(command) = None::<String> else {@|a_piped_preapproved_verdict_runs_without_the_filter
 //MUTANT sequence-rewritten|s@^    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {$@    if false {@|a_sequenced_tail_keeps_its_deny
 //MUTANT rewrite-ignores-reachability|s@^        .preapprove_reachable(\&envelope.raw_event)$@        .preapprove_reachable(\&envelope.raw_event) \x7c\x7c true@|the_exit_code_harness_still_refuses
-//MUTANT rewrite-without-preapproval|s@^        grant @ hook::Decision::Preapproved(_) => {$@        grant @ (hook::Decision::Preapproved(_) \x7c hook::Decision::Allow) => {@|a_piped_verdict_that_is_only_allowed_keeps_its_deny
-//MUTANT rewrite-skips-readjudication|s@^    match compose(None, policy, \&corrected, facts) {$@    match hook::Decision::Preapproved(refusal.clone()) {@|a_corrected_call_another_rule_refuses_keeps_its_deny
+//MUTANT rewrite-without-preapproval|s@^    let granted = matches!(regraded, hook::Decision::Preapproved(_));$@    let granted = matches!(regraded, hook::Decision::Preapproved(_) \x7c hook::Decision::Allow);@|a_piped_verdict_that_is_only_allowed_keeps_its_deny
+//MUTANT rewrite-skips-readjudication|s@^    let regraded = compose(None, policy, \&corrected, facts);$@    let regraded = hook::Decision::Preapproved(refusal.clone());@|a_corrected_call_another_rule_refuses_keeps_its_deny
 fn correct_piped_verdict(
     decision: hook::Decision,
     policy: &hook::Policy,
@@ -20917,14 +20914,14 @@ fn correct_piped_verdict(
     if let Some(input) = corrected.input.as_object_mut() {
         input.insert("command".to_owned(), serde_json::Value::String(command));
     }
-    match compose(None, policy, &corrected, facts) {
-        grant @ hook::Decision::Preapproved(_) => {
-            *envelope = corrected;
-            let _ = CORRECTED.set(());
-            grant
-        }
-        _ => decision,
+    let regraded = compose(None, policy, &corrected, facts);
+    let granted = matches!(regraded, hook::Decision::Preapproved(_));
+    if !granted {
+        return decision;
     }
+    *envelope = corrected;
+    let _ = CORRECTED.set(());
+    regraded
 }
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
