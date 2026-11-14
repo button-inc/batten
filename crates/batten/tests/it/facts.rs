@@ -38,8 +38,8 @@ use batten::facts::{
     EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY, GIT_INDEX, GIT_RANGE,
     GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING,
     LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
-    RED_HEAD, REVIEW, SHELL, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED,
-    TRAVERSALS, USES, WAIVED,
+    RED_HEAD, REVIEW, SHELL, SHELL_INTRODUCED, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
+    TOOL_VERDICT, TRACKED, TRAVERSALS, USES, WAIVED,
 };
 
 #[test]
@@ -166,6 +166,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::DispatchCleared => DISPATCH_CLEARED,
             // CLOUD-2270. One record read and a stat per failed run.
             Fact::RedHead => RED_HEAD,
+            // CLOUD-2335. One bounded read of the file the write names.
+            Fact::ShellIntroduced => SHELL_INTRODUCED,
         }
     };
 
@@ -174,8 +176,8 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        // 45 with `Shell` (CLOUD-2625).
-        45,
+        // 46 with `ShellIntroduced` (CLOUD-2335).
+        46,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );
