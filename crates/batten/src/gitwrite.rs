@@ -1846,6 +1846,26 @@ pub fn commit_tree(
     Ok((commit.to_string(), tree.to_string()))
 }
 
+/// Store `bytes` as a blob in the bare repository `dir` and return its id
+/// (CLOUD-2719).
+///
+/// For a caller assembling a tree too large to hand [`commit_tree`] as bytes:
+/// each file is written as it is read and named by [`Content::Blob`], so no two
+/// files' contents are in memory together.
+///
+/// # Errors
+///
+/// A usage error where `dir` is not a bare repository; an internal error where
+/// the odb refuses the write.
+pub fn write_blob(dir: &Path, bytes: &[u8]) -> Result<String> {
+    let repo = open_bare(dir)?;
+    Ok(repo
+        .write_blob(bytes)
+        .map_err(|err| anyhow::anyhow!("gitwrite: a blob will not write: {err}"))?
+        .detach()
+        .to_string())
+}
+
 /// The tree id of `commit`, a commit the bare repository `dir` already holds
 /// (CLOUD-2725).
 ///

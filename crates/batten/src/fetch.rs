@@ -1127,7 +1127,7 @@ async fn one_exchange(
 ) -> Result<(Response, Option<String>)> {
     let (connect_timeout, base_timeout) = bounds();
     let sent = match file {
-        Some(path) => Sent::File(FileBody::open(path)?),
+        Some(named) => Sent::File(FileBody::open(named)?),
         None => Sent::Bytes(body.unwrap_or_default()),
     };
     let total_timeout = total_for(base_timeout, sent.len());
@@ -1655,7 +1655,7 @@ mod stream_tests {
     /// A body whose frames arrive after stated gaps.
     struct Paced {
         frames: VecDeque<(Duration, &'static [u8])>,
-        waiting: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+        waiting: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>>,
     }
 
     impl hyper::body::Body for Paced {
@@ -1667,14 +1667,16 @@ mod stream_tests {
             context: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Option<std::result::Result<hyper::body::Frame<Self::Data>, Self::Error>>>
         {
-            use std::future::Future as _;
-
             let Some((gap, _)) = self.frames.front().copied() else {
                 return std::task::Poll::Ready(None);
             };
-            let sleep = self
-                .waiting
-                .get_or_insert_with(|| Box::pin(tokio::time::sleep(gap)));
+            let sleep = self.waiting.get_or_insert_with(|| {
+                Box::pin(async move {
+                    // A bound on a future that never completes: the gap,
+                    // without a second timer primitive in the crate.
+                    let _ = tokio::time::timeout(gap, std::future::pending::<()>()).await;
+                })
+            });
             if sleep.as_mut().poll(context).is_pending() {
                 return std::task::Poll::Pending;
             }

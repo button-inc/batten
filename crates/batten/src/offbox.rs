@@ -40,9 +40,14 @@
 //! `policy/module-layering.rego` forbids the `hook -> offbox` edge so no
 //! mediated call can come to depend on a network answer.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
 use crate::Result;
 use crate::exit::ExitCode;
+use crate::gitwrite::{self, Content};
 use crate::lease::{self, Service};
+use crate::sessions::{Cursor, Fidelity, REPLACED, SessionRef, SessionSource};
 
 /// The directory under [`crate::state::state_root`] the off-box feature owns.
 ///
@@ -164,6 +169,687 @@ pub fn attach_note(value: &str) -> String {
          it may also be misspelled in `{}`.",
         crate::session::STATE_REPO_ENV
     )
+}
+
+// --- the snapshot (CLOUD-2719) -------------------------------------------------
+
+/// The directory, under the per-checkout off-box directory, that holds one
+/// directory per session.
+const SESSIONS: &str = "sessions";
+
+/// A session's local snapshot repository, inside its session directory.
+const REPO: &str = "repo.git";
+
+/// The ref, in a session's local repository, naming the commit last pushed or
+/// absorbed. The push slice moves it; a snapshot only reads it.
+pub const LAST: &str = "refs/offbox/last";
+
+/// The file recording, for each feed, how far it has been shipped.
+const CURSORS: &str = "cursor.json";
+
+/// Scratch for redaction, removed on every path out.
+const STAGING: &str = "staging";
+
+/// The staged file new transcript records are redacted in before they are
+/// appended to a segment.
+pub const INCOMING: &str = "incoming.jsonl";
+
+/// One mebibyte.
+const MIB: u64 = 1024 * 1024;
+
+/// A segment file is closed at the first record boundary at or past this.
+const SEGMENT: u64 = MIB;
+
+/// A record larger than this is cut into files of this size. GitHub refuses an
+/// object over 100 MB, and this keeps every file under it.
+const PART: usize = 50 * 1024 * 1024;
+
+/// How many record bytes are asked of a source at a time, whatever the cap.
+const READ: u64 = 8 * MIB;
+
+/// The entries of the state directory that are stores. An allow-list of one:
+/// everything else there is rebuilt (`provision/`, `cache/`) or is this
+/// feature's own working state.
+const STATE_STORES: [&str; 1] = ["captures"];
+
+/// The prefix every store in the project's git directory carries.
+const GIT_STORE_PREFIX: &str = "batten-";
+
+/// `batten-*` entries of the git directory that are NOT stores: two locks, a
+/// per-process ledger, a pid registry, and this module's own request file. An
+/// exclude-list, so a store added later is included by default.
+const GIT_EXCLUDED: [&str; 5] = [
+    "batten-singleton",
+    "batten-mcp-spawns",
+    "batten-land-lock",
+    "batten-tasks",
+    "batten-push-",
+];
+
+/// The tree roots whose files are only ever added, never rewritten: carried
+/// forward file by file, where a store is carried forward whole.
+const APPENDED: [&str; 3] = ["transcript", "history", "absorbed"];
+
+/// Who a snapshot belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Meta {
+    /// The harness's name.
+    pub harness: String,
+    /// The real session id, as the harness spells it.
+    pub session: String,
+    /// The project origin's path, `<owner>/<name>`.
+    pub origin: String,
+}
+
+/// One session whose records go into a snapshot.
+#[allow(missing_debug_implementations)]
+pub struct Feed<'a> {
+    /// Where its records go in the tree: `transcript/<key>` for the live
+    /// session, `history/<leaf>/transcript/<key>` for an imported one.
+    pub prefix: String,
+    /// Where its records come from.
+    pub source: &'a dyn SessionSource,
+    /// Which of the source's sessions it is.
+    pub session: SessionRef,
+}
+
+/// Why no snapshot was built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The pinned scanner is not declared or not installed.
+    ScannerAbsent,
+    /// The scanner ran and its answer could not be trusted.
+    ScannerFailed,
+}
+
+/// What [`snapshot`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Snapshot {
+    /// One orphan commit in the session's local repository.
+    Built {
+        /// The commit.
+        commit: String,
+        /// Its tree, which is what tells two snapshots apart: it does not
+        /// depend on the commit time.
+        tree: String,
+        /// The record bytes this call appended.
+        new_bytes: u64,
+        /// How many spans were replaced by a marker.
+        spans_redacted: usize,
+        /// The feed prefixes whose last read returned no further record.
+        ended: Vec<String>,
+    },
+    /// Nothing was committed: nothing unredacted may be.
+    Refused(Refusal),
+}
+
+/// The last segment of a session's ref, and the name of its local directory:
+/// `<harness>-<hash>`, the hash being the first sixteen hex digits of the
+/// BLAKE3 of the session id. Session ids are harness-defined and may not be
+/// valid in a ref name; a digest always is.
+#[must_use]
+pub fn leaf(harness: &str, session: &str) -> String {
+    let digest = blake3::hash(session.as_bytes()).to_hex();
+    format!("{harness}-{}", &digest[..16])
+}
+
+/// Where a session's local snapshot files live:
+/// `<repo_state_dir>/offbox/sessions/<leaf>/`.
+///
+/// **Per session, because the ref is.** A later session in the same checkout
+/// starts with an empty directory and inherits none of the earlier one's
+/// transcript, cursors or last-pushed commit.
+///
+/// # Errors
+///
+/// A project root whose state directory cannot be named.
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT session-files-shared-across-sessions|s@^        .join(leaf(\&meta.harness, \&meta.session)))$@        .join("shared"))@|a_second_session_in_one_checkout_gets_its_own_directory
+pub fn session_dir(project_root: &Path, meta: &Meta) -> Result<PathBuf> {
+    Ok(crate::state::repo_state_dir(project_root)?
+        .join(DIR)
+        .join(SESSIONS)
+        .join(leaf(&meta.harness, &meta.session)))
+}
+
+/// A session's local bare repository.
+#[must_use]
+pub fn local_repo(session_dir: &Path) -> PathBuf {
+    session_dir.join(REPO)
+}
+
+/// How far one feed has been shipped: the source's own cursor, and the segment
+/// file and byte length the records before that cursor reached.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Position {
+    /// The source's cursor, hex-encoded: it is opaque bytes.
+    cursor: String,
+    /// Which directory of segments is being written. It goes up when a source
+    /// is replaced, and the old generation's files stay.
+    generation: u64,
+    /// The segment file being appended to, if any has been started.
+    file: Option<String>,
+    /// How long that file is, as far as this cursor covers.
+    length: u64,
+    /// Why the source could not be read in full, where it could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fidelity: Option<String>,
+}
+
+type Cursors = BTreeMap<String, Position>;
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len() / 2)
+        .filter_map(|index| u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok())
+        .collect()
+}
+
+fn load_cursors(dir: &Path) -> Cursors {
+    std::fs::read(dir.join(CURSORS))
+        .ok()
+        .and_then(|body| serde_json::from_slice(&body).ok())
+        .unwrap_or_default()
+}
+
+fn cursors_bytes(cursors: &Cursors) -> Result<Vec<u8>> {
+    let mut body = serde_json::to_vec_pretty(cursors)
+        .map_err(|err| anyhow::anyhow!("offbox: the cursor file will not serialise: {err}"))?;
+    body.push(b'\n');
+    Ok(body)
+}
+
+fn persist(dir: &Path, cursors: &Cursors) -> Result<()> {
+    crate::durable::replace(dir.join(CURSORS), cursors_bytes(cursors)?)
+        .map_err(|err| anyhow::anyhow!("offbox: the cursor file will not write: {err}"))
+}
+
+/// Every regular file under `root`, as its `/`-separated path relative to
+/// `root` and where it is. Sorted, and a link is never followed or listed.
+fn files_under(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
+    let mut pending = vec![(String::new(), root.to_path_buf())];
+    while let Some((prefix, next)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push((relative, entry.path())),
+                Ok(kind) if kind.is_file() => found.push((relative, entry.path())),
+                _ => {}
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A segment file's number, off its `NNNNNN.<ext>` name.
+fn segment_index(name: &str) -> Option<u64> {
+    name.split('.').next()?.parse().ok()
+}
+
+/// Put a feed's segment files back to what its cursor entry covers: a file
+/// longer than the entry says is cut to that length, and a file the entry does
+/// not reach is removed.
+///
+/// **This is what makes a kill harmless.** Records are appended first and the
+/// cursor is replaced after, so a crash leaves bytes the cursor does not cover
+/// — bytes the source will hand back, because the source's cursor did not move
+/// either. Cutting them is what stops a record being stored twice.
+fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
+    let generation = dir.join(prefix).join(position.generation.to_string());
+    let current = position.file.as_deref().and_then(segment_index);
+    for (name, path) in files_under(&generation) {
+        let Some(index) = segment_index(&name) else {
+            continue;
+        };
+        let refused =
+            |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not be put back: {err}");
+        match current {
+            Some(current) if index < current => {}
+            Some(current) if index == current => {
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .map_err(refused)?;
+                if file.metadata().map_err(refused)?.len() > position.length {
+                    file.set_len(position.length).map_err(refused)?;
+                }
+            }
+            _ => std::fs::remove_file(&path).map_err(refused)?,
+        }
+    }
+    Ok(())
+}
+
+/// Append `stream` — records, each followed by a newline — to a feed's segment
+/// files, and return how many bytes were written.
+///
+/// A file is closed at the first record boundary at or past [`SEGMENT`]. A
+/// record larger than [`PART`] starts a new file and is cut every [`PART`]
+/// bytes; a file that does not end at a record boundary is named `.part`.
+/// Concatenating a generation's files in name order gives the stream back
+/// exactly. A file already has its final name while it is being appended to,
+/// and a closed file is never written again — so its blob id is stable and it
+/// is sent once.
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT closed-segment-rewritten|s@^            .filter(\x7cname\x7c name.ends_with(".jsonl") \&\& position.length < SEGMENT);$@            .filter(\x7cname\x7c name.ends_with(".jsonl"));@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT oversized-record-replaced-by-a-digest|s@^            for (at, chunk) in piece.chunks(PART).enumerate() {$@            for (at, chunk) in piece.chunks(PART).take(1).enumerate() {@|an_oversized_record_is_cut_into_parts_and_never_replaced
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "the names compared are this function's own, written three lines below in lower case"
+)]
+fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8]) -> Result<u64> {
+    use std::io::Write as _;
+
+    let generation = dir.join(prefix).join(position.generation.to_string());
+    let refused = |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not write: {err}");
+    std::fs::create_dir_all(&generation).map_err(refused)?;
+    let mut next = position
+        .file
+        .as_deref()
+        .and_then(segment_index)
+        .map_or(0, |index| index + 1);
+    let mut written = 0_u64;
+    for piece in stream.split_inclusive(|byte| *byte == b'\n') {
+        if piece.len() > PART {
+            let parts = piece.len().div_ceil(PART);
+            for (at, chunk) in piece.chunks(PART).enumerate() {
+                let ending = if at + 1 == parts { "jsonl" } else { "part" };
+                let name = format!("{next:06}.{ending}");
+                next += 1;
+                std::fs::write(generation.join(&name), chunk).map_err(refused)?;
+                position.file = Some(name);
+                position.length = chunk.len() as u64;
+                written += chunk.len() as u64;
+            }
+            continue;
+        }
+        let open = position
+            .file
+            .clone()
+            .filter(|name| name.ends_with(".jsonl") && position.length < SEGMENT);
+        let name = open.unwrap_or_else(|| {
+            let name = format!("{next:06}.jsonl");
+            next += 1;
+            position.length = 0;
+            name
+        });
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(generation.join(&name))
+            .map_err(refused)?;
+        file.write_all(piece).map_err(refused)?;
+        position.file = Some(name);
+        position.length += piece.len() as u64;
+        written += piece.len() as u64;
+    }
+    Ok(written)
+}
+
+/// Redact `paths` under `staging`, sorting a failure into the two refusals.
+///
+/// A usage error is the scanner not being there; anything else is the scanner
+/// having run and its answer not being trustworthy. Neither may be read as
+/// "nothing to redact".
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT scanner-failure-still-builds|s@^        Err(_) => Err(Refusal::ScannerFailed),$@        Err(_) => Ok(0),@|a_missing_or_failing_scanner_refuses_and_writes_nothing
+fn scrub(
+    provisions: &[crate::provision::Provision],
+    project_root: &Path,
+    staging: &Path,
+    paths: &[String],
+) -> std::result::Result<usize, Refusal> {
+    match crate::secrets::redact(provisions, project_root, staging, paths) {
+        Ok(spans) => Ok(spans),
+        Err(err) if err.downcast_ref::<crate::error::UsageError>().is_some() => {
+            Err(Refusal::ScannerAbsent)
+        }
+        Err(_) => Err(Refusal::ScannerFailed),
+    }
+}
+
+/// The store a tree path belongs to: its first two segments, for a path under
+/// `state/` or `git/`. A store moves whole, so this is the unit a carry-forward
+/// decides over.
+fn store_of(path: &str) -> Option<&str> {
+    if !path.starts_with("state/") && !path.starts_with("git/") {
+        return None;
+    }
+    let second = path.match_indices('/').nth(1).map(|(at, _)| at);
+    Some(second.map_or(path, |at| &path[..at]))
+}
+
+/// Every store file this checkout has, as its tree path and where it is.
+///
+/// `state/<entry>/…` from the state directory, by allow-list; `git/<entry>/…`
+/// from the project's per-worktree git directory, by exclude-list.
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT provision-dir-included|s@^            if !STATE_STORES.contains(\&entry.as_str()) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT lock-entry-included|s@^            if excluded \x7c\x7c relative.ends_with(".lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "a lock is named by the code that takes it, always `.lock` in lower case"
+)]
+fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
+    if let Ok(state) = crate::state::repo_state_dir(project_root) {
+        for (relative, path) in files_under(&state) {
+            let entry = relative.split('/').next().unwrap_or_default().to_owned();
+            if !STATE_STORES.contains(&entry.as_str()) {
+                continue;
+            }
+            found.push((format!("state/{relative}"), path));
+        }
+    }
+    if let Ok(git) = crate::git::git_dir(project_root) {
+        for (relative, path) in files_under(&git) {
+            let entry = relative.split('/').next().unwrap_or_default();
+            if !entry.starts_with(GIT_STORE_PREFIX) {
+                continue;
+            }
+            let excluded = GIT_EXCLUDED
+                .iter()
+                .any(|name| entry == *name || (name.ends_with('-') && entry.starts_with(name)));
+            if excluded || relative.ends_with(".lock") {
+                continue;
+            }
+            found.push((format!("git/{relative}"), path));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The size of every local segment file that is not in the last snapshot's
+/// tree: what a push that was not applied has left waiting.
+fn pending_bytes(dir: &Path, last: &BTreeMap<String, String>) -> u64 {
+    APPENDED
+        .iter()
+        .flat_map(|root| {
+            files_under(&dir.join(root))
+                .into_iter()
+                .map(move |(relative, path)| (format!("{root}/{relative}"), path))
+        })
+        .filter(|(tree_path, _)| !last.contains_key(tree_path))
+        .filter_map(|(_, path)| std::fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .sum()
+}
+
+/// Build one snapshot of a session as an orphan commit in its local repository
+/// (CLOUD-2719).
+///
+/// The tree is `meta.json`, `cursor.json`, every store under `state/` and
+/// `git/` whole, and the session's records under `transcript/` and `history/`
+/// in immutable segment files, with whatever another writer left under
+/// `absorbed/`.
+///
+/// **Each snapshot holds everything the previous one held**, which is what
+/// makes replacing the session's ref safe. A store that is absent locally is
+/// carried forward whole from the last snapshot by blob id; a store that exists
+/// is taken as it is now, so a file the store removed itself is gone. Segment,
+/// history and absorbed files are never rewritten, so those are carried forward
+/// file by file.
+///
+/// **Nothing unredacted is committed.** The stores are copied to a staging
+/// directory and redacted on every call, and new records are redacted once,
+/// whole, before they are cut into segments. The stores go first: a scanner
+/// that is absent or fails refuses the snapshot before any cursor entry is
+/// written or any record read.
+///
+/// **This function reads no clock.** `time` is the commit time, and `byte_cap`
+/// the most new record bytes this call may add — counted together with what an
+/// unapplied push has already left waiting, so a snapshot never grows past the
+/// cap between two applied pushes. Stores are always included whole.
+///
+/// # Errors
+///
+/// A file that will not read or write, or a repository that will not take the
+/// commit. A scanner that is absent or fails is not an error: it is
+/// [`Snapshot::Refused`].
+//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
+//MUTANT unredacted-bytes-committed|s@^            let redacted = std::fs::read(staging.join(INCOMING)).map_err(unread)?;$@            let redacted = stream;@|matched_spans_are_redacted_in_stores_and_records
+//MUTANT cursor-entry-written-after-the-first-append|s@^    persist(\&dir, \&cursors)?; // every feed has its entry before any append$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
+//MUTANT unread-feed-has-no-cursor-entry|s@^        cursors.entry(feed.prefix.clone()).or_default();$@@|a_feed_the_cap_never_reached_still_has_a_cursor_entry
+//MUTANT cap-ignores-pending-bytes|s@^    let pending = pending_bytes(\&dir, \&last);$@    let pending = 0;@|the_byte_cap_counts_what_an_unapplied_push_left_waiting
+//MUTANT crash-tail-kept-and-reread|s@^        recover(\&dir, \&feed.prefix, \&position)?;$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
+//MUTANT replaced-source-overwrites-its-generation|s@^                    position.generation += 1;$@@|a_replaced_source_starts_a_new_generation
+//MUTANT second-snapshot-drops-a-path|s@^        if appended \x7c\x7c absent_store {$@        if absent_store {@|a_second_snapshot_holds_everything_the_first_did
+//MUTANT locally-deleted-store-dropped|s@^        if appended \x7c\x7c absent_store {$@        if appended {@|a_store_deleted_locally_is_carried_forward_whole
+//MUTANT file-a-store-removed-is-resurrected|s@^        if appended \x7c\x7c absent_store {$@        if appended \x7c\x7c store.is_some() {@|a_file_a_store_removed_itself_stays_removed
+pub fn snapshot(
+    project_root: &Path,
+    provisions: &[crate::provision::Provision],
+    meta: &Meta,
+    feeds: &[Feed<'_>],
+    time: i64,
+    byte_cap: u64,
+) -> Result<Snapshot> {
+    let dir = session_dir(project_root, meta)?;
+    let repo = local_repo(&dir);
+    let staging = dir.join(STAGING);
+    let unwritten =
+        |err: std::io::Error| anyhow::anyhow!("offbox: a snapshot file will not write: {err}");
+    let unread =
+        |err: std::io::Error| anyhow::anyhow!("offbox: a snapshot file will not read: {err}");
+    std::fs::create_dir_all(&dir).map_err(unwritten)?;
+    gitwrite::init_bare(&repo)?;
+    // A staging directory a killed call left behind is scratch, never content.
+    let _ = std::fs::remove_dir_all(&staging);
+    let outcome = build(
+        project_root,
+        provisions,
+        meta,
+        feeds,
+        (time, byte_cap),
+        (&dir, &repo, &staging),
+        (&unwritten, &unread),
+    );
+    let _ = std::fs::remove_dir_all(&staging);
+    outcome
+}
+
+/// [`snapshot`]'s body, apart from it so the staging directory is removed on
+/// every path out — a refusal and an error as much as a build.
+#[allow(clippy::too_many_lines)]
+fn build(
+    project_root: &Path,
+    provisions: &[crate::provision::Provision],
+    meta: &Meta,
+    feeds: &[Feed<'_>],
+    (time, byte_cap): (i64, u64),
+    (dir, repo, staging): (&Path, &Path, &Path),
+    (unwritten, unread): (
+        &dyn Fn(std::io::Error) -> anyhow::Error,
+        &dyn Fn(std::io::Error) -> anyhow::Error,
+    ),
+) -> Result<Snapshot> {
+    let dir = dir.to_path_buf();
+    let last: BTreeMap<String, String> = match crate::git::resolve_ref(repo, LAST)? {
+        Some(commit) => gitwrite::tree_index(repo, &commit)?.into_iter().collect(),
+        None => BTreeMap::new(),
+    };
+    let mut entries: BTreeMap<String, Content> = BTreeMap::new();
+    let mut spans_redacted = 0_usize;
+
+    // THE STORES FIRST, AND `meta.json` WITH THEM, so the scanner has run — or
+    // refused — before any cursor entry is written or any record is read.
+    let meta_body = serde_json::to_vec_pretty(&serde_json::json!({
+        "harness": meta.harness,
+        "session": meta.session,
+        "origin": meta.origin,
+        "writer": env!("CARGO_PKG_VERSION"),
+    }))
+    .map_err(|err| anyhow::anyhow!("offbox: the snapshot's meta will not serialise: {err}"))?;
+    let stores = store_files(project_root);
+    let mut staged: Vec<String> = vec![String::from("meta.json")];
+    std::fs::create_dir_all(staging).map_err(unwritten)?;
+    std::fs::write(staging.join("meta.json"), &meta_body).map_err(unwritten)?;
+    for (tree_path, source) in &stores {
+        let target = staging.join(tree_path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(unwritten)?;
+        }
+        std::fs::copy(source, &target).map_err(unread)?;
+        staged.push(tree_path.clone());
+    }
+    match scrub(provisions, project_root, staging, &staged) {
+        Ok(spans) => spans_redacted += spans,
+        Err(refusal) => return Ok(Snapshot::Refused(refusal)),
+    }
+    let local_stores: BTreeSet<String> = stores
+        .iter()
+        .filter_map(|(tree_path, _)| store_of(tree_path).map(str::to_owned))
+        .collect();
+    for tree_path in &staged {
+        let bytes = std::fs::read(staging.join(tree_path)).map_err(unread)?;
+        let id = gitwrite::write_blob(repo, &bytes)?;
+        entries.insert(tree_path.clone(), Content::Blob(id));
+    }
+
+    // EVERY FEED GIVEN GETS A CURSOR ENTRY BEFORE ANY BYTE OF IT IS APPENDED,
+    // so a directory holding segment files and no entry can only have come
+    // from another writer.
+    let mut cursors = load_cursors(&dir);
+    for feed in feeds {
+        cursors.entry(feed.prefix.clone()).or_default();
+    }
+    persist(&dir, &cursors)?; // every feed has its entry before any append
+
+    let pending = pending_bytes(&dir, &last);
+    let mut added = 0_u64;
+    let mut ended = Vec::new();
+    for feed in feeds {
+        if pending + added >= byte_cap {
+            // The cap is spent: a feed not reached keeps the entry it was given.
+            break;
+        }
+        let mut position = cursors.get(&feed.prefix).cloned().unwrap_or_default();
+        recover(&dir, &feed.prefix, &position)?;
+        while pending + added < byte_cap {
+            let room = (byte_cap - pending - added).min(READ);
+            let batch = feed
+                .source
+                .read(&feed.session, &Cursor(unhex(&position.cursor)), room)?;
+            match batch.fidelity {
+                Fidelity::Unavailable(token) => {
+                    position.fidelity = Some(token.to_owned());
+                    break;
+                }
+                Fidelity::Partial(token) if token == REPLACED => {
+                    // A NEW DIRECTORY, AND THE OLD ONE STAYS: what was read
+                    // from the file that is gone is still the session's.
+                    position.generation += 1;
+                    position.cursor = hex(&batch.cursor.0);
+                    position.file = None;
+                    position.length = 0;
+                    position.fidelity = None;
+                    cursors.insert(feed.prefix.clone(), position.clone());
+                    persist(&dir, &cursors)?;
+                    continue;
+                }
+                Fidelity::Partial(token) => position.fidelity = Some(token.to_owned()),
+                Fidelity::Full => position.fidelity = None,
+            }
+            if batch.records.is_empty() {
+                if batch.fidelity == Fidelity::Full {
+                    ended.push(feed.prefix.clone());
+                }
+                break;
+            }
+            // REDACTED WHOLE, BEFORE IT IS CUT, so a span cannot straddle two
+            // files unseen.
+            let mut stream = Vec::new();
+            for record in &batch.records {
+                stream.extend_from_slice(&record.bytes);
+                stream.push(b'\n');
+            }
+            std::fs::write(staging.join(INCOMING), &stream).map_err(unwritten)?;
+            match scrub(provisions, project_root, staging, &[String::from(INCOMING)]) {
+                Ok(spans) => spans_redacted += spans,
+                Err(refusal) => return Ok(Snapshot::Refused(refusal)),
+            }
+            let redacted = std::fs::read(staging.join(INCOMING)).map_err(unread)?;
+            // APPENDED FIRST, THE CURSOR REPLACED AFTER: a kill between the two
+            // leaves bytes `recover` cuts, never a cursor past what is stored.
+            added += append_stream(&dir, &feed.prefix, &mut position, &redacted)?;
+            position.cursor = hex(&batch.cursor.0);
+            cursors.insert(feed.prefix.clone(), position.clone());
+            persist(&dir, &cursors)?;
+        }
+        cursors.insert(feed.prefix.clone(), position);
+    }
+    persist(&dir, &cursors)?;
+    entries.insert(
+        String::from(CURSORS),
+        Content::Blob(gitwrite::write_blob(repo, &cursors_bytes(&cursors)?)?),
+    );
+
+    // THE APPENDED ROOTS, one file at a time. A file the last snapshot already
+    // holds, and that no feed is still appending to, is named by the id it had:
+    // it is never rewritten, so it is never read again.
+    let open: BTreeSet<String> = cursors
+        .iter()
+        .filter_map(|(prefix, position)| {
+            let file = position.file.as_ref()?;
+            Some(format!("{prefix}/{}/{file}", position.generation))
+        })
+        .collect();
+    for root in APPENDED {
+        for (relative, path) in files_under(&dir.join(root)) {
+            let tree_path = format!("{root}/{relative}");
+            let fresh = open.contains(&tree_path) || !last.contains_key(&tree_path);
+            let id = if fresh {
+                gitwrite::write_blob(repo, &std::fs::read(&path).map_err(unread)?)?
+            } else {
+                last.get(&tree_path).cloned().unwrap_or_default()
+            };
+            entries.insert(tree_path, Content::Blob(id));
+        }
+    }
+
+    // CARRIED FORWARD. Per file for the appended roots; per STORE for the rest,
+    // and only for a store that is absent locally altogether.
+    for (path, id) in &last {
+        if entries.contains_key(path) {
+            continue;
+        }
+        let appended = APPENDED
+            .iter()
+            .any(|root| path.starts_with(&format!("{root}/")));
+        let store = store_of(path);
+        let absent_store = store.is_some_and(|store| !local_stores.contains(store));
+        if appended || absent_store {
+            entries.insert(path.clone(), Content::Blob(id.clone()));
+        }
+    }
+
+    let listed: Vec<(String, Content)> = entries.into_iter().collect();
+    let (commit, tree) = gitwrite::commit_tree(repo, &listed, &[], time, "snapshot")?;
+    Ok(Snapshot::Built {
+        commit,
+        tree,
+        new_bytes: added,
+        spans_redacted,
+        ended,
+    })
 }
 
 #[cfg(test)]

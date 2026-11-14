@@ -440,7 +440,7 @@ impl From<Throttled> for Outcome {
 //MUTANT retry-after-value-dropped|s@^        retry_after,$@        retry_after: None,@|a_429_is_a_throttle_carrying_the_wait_it_named
 fn throttle_of(response: &fetch::Response) -> Option<Throttled> {
     let header = |name: &str| response.header(name).map(str::to_owned);
-    let (retry_after, reset_at) = crate::rest::throttle_headers(&header);
+    let (retry_after, reset_at) = crate::rest::throttle_headers(header);
     let refused = response.status == 429
         || (matches!(response.status, 403 | 503) && retry_after.is_some())
         || crate::rest::exhausted(header);
@@ -3893,6 +3893,10 @@ impl<'repo> Intake<'repo> {
     }
 }
 
+/// A pack member's header: its type number, its inflated size, its delta base
+/// if it is one, and how many bytes the header took.
+type MemberHeader = (u8, usize, Option<Base>, usize);
+
 /// What a delta member names as its base.
 enum Base {
     /// By object id (a reference delta).
@@ -3904,7 +3908,7 @@ enum Base {
 /// A member's header off the front of `bytes`: its type number, its inflated
 /// size, its delta base if it is one, and how many bytes the header took.
 /// `None` means the header has not all arrived.
-fn member_header(bytes: &[u8]) -> Result<Option<(u8, usize, Option<Base>, usize)>> {
+fn member_header(bytes: &[u8]) -> Result<Option<MemberHeader>> {
     let mut cursor = 0_usize;
     let Some(first) = bytes.first().copied() else {
         return Ok(None);

@@ -1494,6 +1494,13 @@ test_the_mediated_path_must_not_reach_offbox if {
 		"crates/batten/src/offbox.rs",
 		[internal("lease", 10), internal("state", 11), internal("git", 12), internal("session", 13)],
 	)
+
+	# CLOUD-2719's snapshot: what it commits with, redacts with, reads from
+	# and writes its cursor file through.
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/offbox.rs",
+		[internal("gitwrite", 20), internal("secrets", 21), internal("sessions", 22), internal("durable", 23)],
+	)
 }
 
 # CLOUD-1010's session-source contract. The mediated path must not reach it, and
