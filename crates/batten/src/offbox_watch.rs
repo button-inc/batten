@@ -40,6 +40,24 @@ pub const NOTE: &str = "note";
 /// The hook's own file: `misses <n>`, `noted <0|1>` and `owed <0|1>`.
 pub const HOOK: &str = "hook";
 
+/// The directory, under [`DIR`], holding one directory per session.
+pub const SESSIONS: &str = "sessions";
+
+/// A session's restore record, in its own directory: the commit id restored,
+/// or `none`. A plain file, so the hook can see it without opening a repository.
+pub const RESTORED: &str = "restored";
+
+/// The empty file saying a session's start stamp was held back for a restore.
+/// Its modification time is the session's start.
+pub const STAMP_OWED: &str = "stamp-owed";
+
+/// Where, under the off-box directory `dir`, the session with this [`leaf`]
+/// keeps its restore record.
+#[must_use]
+pub fn restored_path(dir: &Path, leaf: &str) -> std::path::PathBuf {
+    dir.join(SESSIONS).join(leaf).join(RESTORED)
+}
+
 /// How far behind the inbox a daemon may be before it is stuck. It reads the
 /// inbox every five seconds, so a healthy one is never this far behind.
 pub const BEHIND: u64 = 16 * 1024;
