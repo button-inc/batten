@@ -1109,6 +1109,8 @@ fn own_prefix(sub: &str) -> String {
 //MUTANT-SUITE crates/batten/src/offbox.rs
 //MUTANT admit-accepts-any-tip|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7c_: \&str\x7c true;@|a_rejected_push_fetches_absorbs_and_is_applied
 //MUTANT admit-refuses-an-absent-ref|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7cold: \&str\x7c last.as_deref() == Some(old);@|a_ref_rotated_away_is_recreated_on_the_first_attempt
+//MUTANT push-ignores-the-push-lock|s@^    if pushing.is_none() {$@    if false {@|a_push_waits_for_the_push_lock_and_writes_nothing
+//MUTANT prune-after-a-failed-push|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                gitwrite::prune_unreachable(\&repo, std::slice::from_ref(\&commit))?; return Ok(Push::only(Pushed::Throttled(throttle)));@|nothing_is_pruned_after_a_throttled_or_a_rejected_push
 //MUTANT throttled-push-retried-at-once|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                let _ = throttle;@|a_throttled_push_returns_at_once_and_loses_nothing
 //MUTANT unchanged-snapshot-still-sent|s@^        if unchanged {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
 //MUTANT pushed-cursor-recorded-before-the-swap|s@^        let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;$@        record_pushed(\&dir, \&repo, \&commit)?; let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;@|a_throttled_push_returns_at_once_and_loses_nothing
@@ -1132,6 +1134,12 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
     let dir = session_dir(session.project_root, &session.meta)?;
     let repo = local_repo(&dir);
     let name = reference(&session.meta);
+    // ONE PUSHER AT A TIME (CLOUD-2738), for the whole run: the prune below
+    // must never meet a commit another process is part-way through building.
+    let pushing = take_push_lock(&dir)?;
+    if pushing.is_none() {
+        return Ok(Push::only(Pushed::Contended));
+    }
 
     let source =
         crate::sessions::source_named(&session.meta.harness, session.transcript.as_deref());
@@ -1178,6 +1186,10 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
         match outcome {
             lease::Outcome::Applied => {
                 gitwrite::set_ref(&repo, LAST, &commit)?;
+                // ONLY NOW, AND ONLY HERE (CLOUD-2738): the remote holds this
+                // commit, and it holds everything the one before it held, so
+                // what it does not reach is a cache of superseded objects.
+                gitwrite::prune_unreachable(&repo, std::slice::from_ref(&commit))?;
                 // AFTER THE REF, never before: a kill between the two leaves
                 // this file behind the ref, which only has another daemon
                 // import records the ref already holds.
@@ -1220,6 +1232,26 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
         outcome: Pushed::Contended,
         ended,
     })
+}
+
+/// The lock a push or a restore of one session holds for its whole run, in the
+/// session's own directory.
+const PUSH_LOCK: &str = "push.lock";
+
+/// Take the session's push lock, or `None` where another process holds it: the
+/// daemon and a hand-run `batten offbox push` are the two this keeps apart.
+fn take_push_lock(dir: &Path) -> Result<Option<std::fs::File>> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: the push lock will not open: {err}");
+    std::fs::create_dir_all(dir).map_err(refused)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(PUSH_LOCK))
+        .map_err(refused)?;
+    let taken = fs4::FileExt::try_lock(&file).is_ok();
+    Ok(taken.then_some(file))
 }
 
 /// Replace `pushed.json` with the `cursor.json` the snapshot `commit` carried.
@@ -1922,6 +1954,9 @@ pub enum Restored {
     Throttled(lease::Throttled),
     /// Discovery answered that this machine may not read the repository.
     Unattached,
+    /// Another process holds the session's push lock; nothing was done and
+    /// nothing is recorded (CLOUD-2738).
+    Contended,
 }
 
 impl Restored {
@@ -1933,6 +1968,7 @@ impl Restored {
             Restored::Nothing => NOTHING_RESTORED,
             Restored::Throttled(_) => "throttled",
             Restored::Unattached => Status::Unattached.token(),
+            Restored::Contended => "contended",
         }
     }
 
@@ -1941,7 +1977,7 @@ impl Restored {
     pub const fn code(&self) -> ExitCode {
         match self {
             Restored::Snapshot(_) | Restored::Nothing => ExitCode::Success,
-            Restored::Throttled(_) => ExitCode::Violation,
+            Restored::Throttled(_) | Restored::Contended => ExitCode::Violation,
             Restored::Unattached => ExitCode::Usage,
         }
     }
@@ -2033,6 +2069,7 @@ fn newest(
 //MUTANT archive-restore-sets-last|s@^        if found.live \&\& own {$@        if true {@|a_rotated_session_is_restored_from_the_archive_index
 //MUTANT predecessor-transcript-adopted-as-own|s@^        absorb(session.project_root, \&session.meta, \&found.commit, own)?;$@        absorb(session.project_root, \&session.meta, \&found.commit, true)?;@|a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside
 //MUTANT nothing-found-leaves-restored-unwritten|s@^    record_restored(\&dir, NOTHING_RESTORED)?;$@@|nothing_to_restore_from_is_recorded_as_none
+//MUTANT restore-ignores-the-push-lock|s@^    if restoring.is_none() {$@    if false {@|a_restore_waits_for_the_push_lock
 //MUTANT throttled-restore-recorded-as-none|s@^        Some(throttle) => Ok(Restored::Throttled(\*throttle)),$@        Some(_) => Ok(Restored::Nothing),@|a_throttled_restore_records_nothing
 pub fn restore_once(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
     match restore(session, predecessor) {
@@ -2069,9 +2106,15 @@ fn restore(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored>
             ));
         }
     }
-    let refs = lease::advertise(&session.remote, Service::UploadPack)?;
     let dir = session_dir(session.project_root, &session.meta)?;
     let repo = local_repo(&dir);
+    // THE PUSH LOCK, for the whole run (CLOUD-2738): a restore writes fetched
+    // objects that nothing reaches yet, and a push's prune must not meet them.
+    let restoring = take_push_lock(&dir)?;
+    if restoring.is_none() {
+        return Ok(Restored::Contended);
+    }
+    let refs = lease::advertise(&session.remote, Service::UploadPack)?;
 
     // This session's own snapshots first; then the predecessor's, by the same
     // two steps, under its own ref name.
@@ -2663,10 +2706,15 @@ impl<'a> Daemon<'a> {
                 self.unattached()?;
                 Attempt::Failed
             }
+            // A push by hand holds the lock: still pending, and asked again
+            // on the next wake.
+            Ok(Restored::Contended) => Attempt::Contended,
             Err(_) => Attempt::Failed,
         };
-        if result != Attempt::Done {
-            "unavailable".clone_into(&mut self.status.restored);
+        match result {
+            Attempt::Done => {}
+            Attempt::Contended => "pending".clone_into(&mut self.status.restored),
+            _ => "unavailable".clone_into(&mut self.status.restored),
         }
         let owed = self.owed;
         self.settle(result, world);
@@ -3458,6 +3506,7 @@ mod push_tests {
         put(&one.transcript, "{\"n\":1}\n");
         assert_eq!(one.push().outcome, Pushed::Applied);
         let pushed = std::fs::read(one.dir().join(PUSHED)).unwrap();
+        let (own, held) = (one.last().unwrap(), one.repo());
 
         // Three other writers' snapshots, each moved in ahead of one swap.
         let elsewhere = base.join("elsewhere.git");
@@ -3490,6 +3539,9 @@ mod push_tests {
         assert_eq!(outcome.code(), ExitCode::Violation);
         assert_eq!(receives(&stand), 1 + 3);
         assert_eq!(std::fs::read(one.dir().join(PUSHED)).unwrap(), pushed);
+        // Nothing was applied, so nothing was pruned (CLOUD-2738): the
+        // snapshot this writer last pushed is still whole here.
+        assert!(gitwrite::tree_index(&held, &own).is_ok());
         // What was absorbed on the way is kept for the next push: the
         // first store went where a store lives, the second differed from it.
         assert_eq!(
@@ -3944,7 +3996,7 @@ mod push_tests {
             .into_iter()
             .map(|(path, _)| path)
             .collect();
-        assert_eq!(left, [RESTORED], "nothing else was written");
+        assert_eq!(left, [PUSH_LOCK, RESTORED], "nothing else was written");
     }
 
     /// Fails by: a throttle being recorded as nothing to restore.
@@ -4036,6 +4088,162 @@ mod push_tests {
             .unwrap()
             .join("mutate/schema/journal.jsonl");
         assert_eq!(std::fs::read_to_string(back).unwrap(), "{}\n");
+    }
+
+    // --- the prune (CLOUD-2738) -----------------------------------------------
+
+    /// The loose objects a repository holds, by id.
+    fn loose(repo: &Path) -> BTreeSet<String> {
+        files_under(&repo.join("objects"))
+            .into_iter()
+            .filter(|(path, _)| path.len() == 41 && path.as_bytes()[2] == b'/')
+            .map(|(path, _)| path.replace('/', ""))
+            .collect()
+    }
+
+    fn hold_push_lock(dir: &Path) -> std::fs::File {
+        std::fs::create_dir_all(dir).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(PUSH_LOCK))
+            .unwrap();
+        fs4::FileExt::try_lock(&lock).unwrap();
+        lock
+    }
+
+    /// Fails by: superseded objects left behind after an applied push, or a
+    /// carried-forward segment's blob pruned from under the next one.
+    #[test]
+    fn the_local_repository_holds_only_the_last_pushed_snapshot() {
+        const OPEN: &str = "transcript/main/0/000001.jsonl";
+        let base = base("offbox-prune-bounded");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        // More than one segment, so the first is closed and carried by id.
+        put(&one.transcript, &records(0..1200, 1000));
+        let mut commits = Vec::new();
+        let mut open = Vec::new();
+        for round in 0..3 {
+            add(&one.transcript, &records(5000 + round..5001 + round, 4));
+            assert_eq!(one.push().outcome, Pushed::Applied, "round {round}");
+            let last = one.last().unwrap();
+            let index = gitwrite::tree_index(&one.repo(), &last).unwrap();
+            let (_, blob) = index.into_iter().find(|(path, _)| path == OPEN).unwrap();
+            open.push(blob);
+            commits.push(last);
+        }
+
+        let repo = one.repo();
+        for superseded in &open[..2] {
+            assert!(gitwrite::read_blob(&repo, superseded).is_err());
+        }
+        for superseded in &commits[..2] {
+            assert!(gitwrite::tree_id(&repo, superseded).is_err());
+        }
+        assert!(gitwrite::read_blob(&repo, &open[2]).is_ok());
+        // Exactly what `last` reaches: a prune of the same commit finds nothing.
+        let held = loose(&repo);
+        assert_eq!(
+            gitwrite::prune_unreachable(&repo, &commits[2..]).unwrap(),
+            0
+        );
+        assert_eq!(loose(&repo), held);
+
+        // And the next push still builds on it, its closed segment sent by id.
+        add(&one.transcript, &records(6000..6001, 4));
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let tree = one.remote(&stand);
+        let sent: String = ["transcript/main/0/000000.jsonl", OPEN]
+            .iter()
+            .map(|path| String::from_utf8_lossy(&tree[*path]).into_owned())
+            .collect();
+        assert_eq!(sent, text(&one.transcript));
+    }
+
+    /// Fails by: a prune after a push the forge did not take, which removes
+    /// what `last` — still the older snapshot — is read from.
+    #[test]
+    fn nothing_is_pruned_after_a_throttled_or_a_rejected_push() {
+        let base = base("offbox-prune-failed");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, &records(0..2, 4));
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let (last, held) = (one.last().unwrap(), loose(&one.repo()));
+        add(&one.transcript, &records(2..3, 4));
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Receive,
+            left: 1,
+            status: 429,
+            headers: Vec::new(),
+        });
+
+        assert!(matches!(one.push().outcome, Pushed::Throttled(_)));
+
+        assert!(loose(&one.repo()).is_superset(&held));
+        assert_eq!(one.tree(&last).len(), 3, "meta, cursors, one segment");
+        // The rejected half is `three_rejected_swaps_are_contended_after_three_posts`.
+    }
+
+    /// Fails by: another writer's fetched snapshot kept in the local
+    /// repository after its files were copied out and a push was applied.
+    #[test]
+    fn an_absorbed_snapshot_is_released_once_a_push_is_applied() {
+        let (_stand, _one, two, first) = two_writers("offbox-prune-absorbed");
+
+        assert!(gitwrite::tree_id(&two.repo(), &first).is_err());
+        assert!(two.dir().join(ABSORBED).join(&first).is_dir());
+        let last = two.last().unwrap();
+        assert_eq!(
+            gitwrite::prune_unreachable(&two.repo(), &[last]).unwrap(),
+            0
+        );
+    }
+
+    /// Fails by: two processes building in one repository at once, so one's
+    /// prune meets the other's half-built commit.
+    #[test]
+    fn a_push_waits_for_the_push_lock_and_writes_nothing() {
+        let base = base("offbox-prune-push-lock");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, &records(0..2, 4));
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let held = loose(&one.repo());
+        add(&one.transcript, &records(2..3, 4));
+        let lock = hold_push_lock(&one.dir());
+
+        let outcome = one.push().outcome;
+
+        assert_eq!(outcome, Pushed::Contended);
+        assert_eq!(loose(&one.repo()), held);
+        assert_eq!(receives(&stand), 1);
+        drop(lock);
+        assert_eq!(one.push().outcome, Pushed::Applied);
+    }
+
+    /// Fails by: a restore writing fetched objects into a repository a push is
+    /// building in.
+    #[test]
+    fn a_restore_waits_for_the_push_lock() {
+        let base = base("offbox-prune-restore-lock");
+        let stand = standing(&[], Vec::new());
+        let (_writer, _) = pushed_once(&base, &stand, "s");
+        let fresh = Writer::new(&base, "fresh", "s");
+        let lock = hold_push_lock(&fresh.dir());
+        let uploads = stand.borrow().uploads;
+
+        let waited = fresh.restore(None);
+
+        assert_eq!(waited, Restored::Contended);
+        assert_eq!(waited.token(), "contended");
+        assert_eq!(waited.code(), ExitCode::Violation);
+        assert_eq!(stand.borrow().uploads, uploads, "no upload-pack POST");
+        assert_eq!(fresh.restored(), None);
+        drop(lock);
+        assert!(matches!(fresh.restore(None), Restored::Snapshot(_)));
     }
 
     // --- the import (CLOUD-2735) ----------------------------------------------

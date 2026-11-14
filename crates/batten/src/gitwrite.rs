@@ -1955,6 +1955,149 @@ pub fn read_blob(dir: &Path, id: &str) -> Result<Vec<u8>> {
     Ok(object.data.clone())
 }
 
+/// Delete one loose object file. Windows will not delete a file marked
+/// read-only, which is how a loose object is stored, so the mark is cleared
+/// where the first try is refused.
+fn remove_object(path: &Path) -> bool {
+    if std::fs::remove_file(path).is_ok() {
+        return true;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let mut permissions = meta.permissions();
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "the file is deleted on the next line; on Unix the first try already succeeded"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).is_ok() && std::fs::remove_file(path).is_ok()
+}
+
+/// Delete every loose object in the bare repository `dir` that no commit in
+/// `keep` reaches, and return how many were deleted (CLOUD-2738).
+///
+/// The walk covers each commit in `keep`, its tree and blobs, and each parent
+/// that is present in `dir` — a snapshot fetched at depth 1 names a parent that
+/// is not, and an absent object is simply not walked.
+///
+/// **Every refusal comes before any deletion**, and each deletes nothing.
+///
+/// **Packs are left alone.** With anything under `objects/pack/` the function
+/// deletes nothing and returns 0: nothing here writes a pack locally, and if
+/// that ever changes this must not guess what one holds.
+///
+/// **A kill part-way leaves unreachable objects behind**, which the next call
+/// removes. No reachable object is ever deleted, so nothing needs repair.
+///
+/// # Errors
+///
+/// A usage error where `dir` is not itself a bare repository, where `keep` is
+/// empty — a call that would empty the repository is never what a caller
+/// means — or where a `keep` id is not a commit `dir` holds. An internal error
+/// where a kept commit or one of its trees will not decode.
+//MUTANT-SUITE crates/batten/src/gitwrite.rs
+//MUTANT empty-keep-empties-the-repository|s@^    if keep.is_empty() {$@    if false {@|an_empty_keep_is_refused_and_nothing_is_pruned
+//MUTANT prune-runs-over-a-pack|s@^    if packed {$@    if false {@|a_repository_with_a_pack_is_left_alone
+//MUTANT parent-of-a-kept-commit-pruned|s@^                pending.extend(commit.parent_ids().map(gix::Id::detach));$@@|a_parent_of_a_kept_commit_is_kept
+//MUTANT reachable-object-pruned|s@^            if reached.contains(\&id) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
+//MUTANT unreachable-object-kept|s@^            if remove_object(\&object.path()) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
+pub fn prune_unreachable(dir: &Path, keep: &[String]) -> Result<usize> {
+    use gix::objs::tree::EntryKind;
+
+    let repo = open_bare(dir)?;
+    if keep.is_empty() {
+        return Err(crate::UsageError::raise(
+            "gitwrite: no commit was named to keep, so nothing is pruned",
+        ));
+    }
+    let mut pending: Vec<gix::ObjectId> = Vec::new();
+    for id in keep {
+        let unknown = || {
+            crate::UsageError::raise(format!(
+                "gitwrite: {id} is not a commit {} holds, so nothing is pruned",
+                dir.display()
+            ))
+        };
+        let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| unknown())?;
+        let object = repo.find_object(named).map_err(|_| unknown())?;
+        if object.kind != gix::object::Kind::Commit {
+            return Err(unknown());
+        }
+        pending.push(named);
+    }
+    let store = dir.join("objects");
+    let packed =
+        std::fs::read_dir(store.join("pack")).is_ok_and(|mut entries| entries.next().is_some());
+    if packed {
+        return Ok(0);
+    }
+
+    let mut reached: std::collections::BTreeSet<gix::ObjectId> = std::collections::BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        // An object that is not here — the parent of a commit fetched at depth
+        // 1 — has nothing to walk and nothing to delete.
+        let Ok(object) = repo.find_object(id) else {
+            continue;
+        };
+        match object.kind {
+            gix::object::Kind::Commit => {
+                let commit = object.into_commit();
+                let tree = commit
+                    .tree_id()
+                    .map_err(|err| anyhow::anyhow!("gitwrite: {id} has no tree: {err}"))?;
+                pending.push(tree.detach());
+                pending.extend(commit.parent_ids().map(gix::Id::detach));
+            }
+            gix::object::Kind::Tree => {
+                let tree = object.into_tree();
+                let decoded = tree
+                    .decode()
+                    .map_err(|err| anyhow::anyhow!("gitwrite: tree {id} will not decode: {err}"))?;
+                for entry in &decoded.entries {
+                    if entry.mode.kind() != EntryKind::Commit {
+                        pending.push(entry.oid.to_owned());
+                    }
+                }
+            }
+            gix::object::Kind::Blob | gix::object::Kind::Tag => {}
+        }
+    }
+
+    // THE WALK IS WHOLE BEFORE THE FIRST DELETION. A loose object is
+    // `objects/<two hex>/<the rest>`; anything else under `objects/` — a
+    // temporary file, `info/` — is not one and is left.
+    let mut removed = 0_usize;
+    let Ok(fans) = std::fs::read_dir(&store) else {
+        return Ok(0);
+    };
+    for fan in fans.flatten() {
+        let Ok(objects) = std::fs::read_dir(fan.path()) else {
+            continue;
+        };
+        for object in objects.flatten() {
+            let name = format!(
+                "{}{}",
+                fan.file_name().to_string_lossy(),
+                object.file_name().to_string_lossy()
+            );
+            let Ok(id) = gix::ObjectId::from_hex(name.as_bytes()) else {
+                continue;
+            };
+            if reached.contains(&id) {
+                continue;
+            }
+            if remove_object(&object.path()) {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Give a directory a git repository carrying its current contents as one
 /// commit.
 ///
@@ -2896,5 +3039,134 @@ mod tree_tests {
             "m"
         )));
         assert_eq!(objects(&outer), held);
+    }
+
+    // --- the prune (CLOUD-2738) ------------------------------------------------
+
+    fn is_usage_count(result: &Result<usize>) -> bool {
+        result
+            .as_ref()
+            .is_err_and(|err| err.downcast_ref::<crate::UsageError>().is_some())
+    }
+
+    /// Two orphan commits that share the blob at `shared`, with one file each
+    /// of their own.
+    fn two_commits(dir: &Path) -> (String, String) {
+        let first = [bytes("shared", "both"), bytes("only/first", "one")];
+        let second = [bytes("shared", "both"), bytes("only/second", "two")];
+        let (first, _) = commit_tree(dir, &first, &[], 1, "first").unwrap();
+        let (second, _) = commit_tree(dir, &second, &[], 2, "second").unwrap();
+        (first, second)
+    }
+
+    /// Fails by: an object the kept commit reaches deleted, or one only an
+    /// earlier commit reached left behind.
+    #[test]
+    fn pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest() {
+        let dir = bare("gitwrite-prune");
+        let (first, second) = two_commits(&dir);
+        let gone = tree_index(&dir, &first)
+            .unwrap()
+            .into_iter()
+            .find(|(path, _)| path == "only/first")
+            .unwrap()
+            .1;
+        // The first commit alone reaches: itself, its root tree, the `only`
+        // tree, and its own blob.
+        let held = objects(&dir);
+
+        let removed = prune_unreachable(&dir, std::slice::from_ref(&second)).unwrap();
+
+        assert_eq!(removed, 4);
+        assert_eq!(objects(&dir), held - 4);
+        let index = tree_index(&dir, &second).unwrap();
+        let paths: Vec<&str> = index.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(paths, ["only/second", "shared"]);
+        for (path, id) in &index {
+            let body = if path == "shared" { "both" } else { "two" };
+            assert_eq!(read_blob(&dir, id).unwrap(), body.as_bytes());
+        }
+        assert!(read_blob(&dir, &gone).is_err(), "the first's own blob");
+        assert!(tree_id(&dir, &first).is_err(), "the first commit");
+        // And a second run finds nothing left to remove.
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+    }
+
+    /// Fails by: a kept commit's parent, present here, deleted from under it.
+    #[test]
+    fn a_parent_of_a_kept_commit_is_kept() {
+        let dir = bare("gitwrite-prune-parent");
+        let (first, _) = commit_tree(&dir, &[bytes("a", "one")], &[], 1, "first").unwrap();
+        let (second, _) = commit_tree(
+            &dir,
+            &[bytes("a", "two")],
+            std::slice::from_ref(&first),
+            2,
+            "second",
+        )
+        .unwrap();
+        let held = objects(&dir);
+
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+
+        assert_eq!(objects(&dir), held);
+        assert_eq!(tree_index(&dir, &first).unwrap().len(), 1);
+    }
+
+    /// Fails by: a call naming nothing to keep emptying the repository.
+    #[test]
+    fn an_empty_keep_is_refused_and_nothing_is_pruned() {
+        let dir = bare("gitwrite-prune-empty");
+        let (_, second) = two_commits(&dir);
+        let held = objects(&dir);
+
+        assert!(is_usage_count(&prune_unreachable(&dir, &[])));
+        // An id that is not here, one that is not an id, and one that is here
+        // and is a tree: none is a commit to keep.
+        let tree = tree_id(&dir, &second).unwrap();
+        for unknown in [
+            "0123456789abcdef0123456789abcdef01234567",
+            "not-an-id",
+            &tree,
+        ] {
+            let keep = [second.clone(), unknown.to_owned()];
+            assert!(is_usage_count(&prune_unreachable(&dir, &keep)), "{unknown}");
+        }
+
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: loose objects deleted from a repository whose pack this
+    /// function has not read.
+    #[test]
+    fn a_repository_with_a_pack_is_left_alone() {
+        let dir = bare("gitwrite-prune-pack");
+        let (_, second) = two_commits(&dir);
+        let pack = dir.join("objects").join("pack");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(pack.join("pack-0000.pack"), b"PACK").unwrap();
+        let held = objects(&dir);
+
+        assert_eq!(prune_unreachable(&dir, &[second]).unwrap(), 0);
+
+        assert_eq!(objects(&dir), held);
+    }
+
+    /// Fails by: a directory that is not itself a bare repository resolved
+    /// upward, and the enclosing checkout's objects pruned.
+    #[test]
+    fn a_prune_never_opens_a_repository_by_discovery() {
+        let checkout = crate::scratch::scratch("gitwrite-prune-no-discovery");
+        init_on_main(&checkout).unwrap();
+        let inside = checkout.join("sub");
+        std::fs::create_dir_all(&inside).unwrap();
+        let held = objects(&checkout.join(".git"));
+        let keep = [String::from("0123456789abcdef0123456789abcdef01234567")];
+
+        for dir in [&inside, &checkout] {
+            assert!(is_usage_count(&prune_unreachable(dir, &keep)));
+        }
+
+        assert_eq!(objects(&checkout.join(".git")), held);
     }
 }
