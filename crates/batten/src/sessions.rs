@@ -109,6 +109,26 @@ pub const UNREADABLE: &str = "source-unreadable";
 /// than the cursor, or opening with a different record.
 pub const REPLACED: &str = "source-replaced";
 
+/// A source that cannot be enumerated at all, where there is no [`Batch`] to
+/// carry the fidelity: [`SessionSource::list`]'s could-not-look.
+///
+/// An error a caller matches BY TYPE, so "there are no sessions" — an empty
+/// list — never stands in for "the place sessions are kept could not be read".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unavailable(pub &'static str);
+
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "sessions: the source is unavailable ({})",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for Unavailable {}
+
 /// The records after a cursor, the cursor after them, and how whole they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Batch {
@@ -208,6 +228,10 @@ fn record_id(bytes: &[u8]) -> Option<String> {
 ///
 /// An empty line is not a record. The terminator is not part of a record.
 #[must_use]
+//MUTANT-SUITE crates/batten/tests/it/source_claude_code.rs
+//MUTANT unterminated-line-returned|s@^        if line.last() != Some(&b'\\n') {$@        if false {@|an_unterminated_line_is_withheld_until_it_ends
+//MUTANT bounded-read-skips-a-line|s@^        if taken >= max_bytes {$@        if taken >= max_bytes { at += 1;@|a_bounded_read_returns_every_line_exactly_once
+//MUTANT truncated-file-keeps-its-cursor|s@^    if replaced {$@    if false {@|a_truncated_file_is_partial
 //MUTANT-SUITE crates/batten/tests/it/session_source.rs
 //MUTANT partial-trailing-record-returned|s@^        if line.last() != Some(&b'\\n') {$@        if false {@|a_half_written_line_waits_for_its_newline
 //MUTANT record-bytes-normalised|s@^        line.pop();$@        line.pop(); line.retain(\x7cbyte\x7c !byte.is_ascii_whitespace());@|records_are_the_files_lines_byte_for_byte
@@ -349,10 +373,213 @@ pub fn source_for(harness: Harness, transcript: Option<&Path>) -> Sourced {
             // file there is no source, and saying so is not a survey gap.
             None => Sourced::Surveyed(Box::new(JsonlFile::at(Path::new("")))),
         },
-        Harness::ClaudeCode => Sourced::Unsurveyed("CLOUD-1011"),
+        Harness::ClaudeCode => Sourced::Surveyed(Box::new(claude_code::ClaudeCode::at(
+            &claude_code::root_from(
+                transcript,
+                std::env::var(claude_code::ROOT_ENV).ok().as_deref(),
+                etcetera::home_dir().ok().as_deref(),
+            )
+            .unwrap_or_default(),
+        ))),
         Harness::CodexCli => Sourced::Unsurveyed("CLOUD-1012"),
         Harness::GeminiCli => Sourced::Unsurveyed("CLOUD-1013"),
         Harness::Cursor => Sourced::Unsurveyed("CLOUD-1014"),
         Harness::CopilotCli => Sourced::Unsurveyed("CLOUD-1015"),
+    }
+}
+
+/// Claude Code's session source (CLOUD-1011): one append-only JSON-lines file
+/// per session under a projects directory, with subagent transcripts in a
+/// `subagents` directory beside the session they belong to.
+///
+/// An inline module rather than a file of its own under a `sessions/`
+/// directory: every gate that scans this crate's sources reads `src/*.rs`, and
+/// a nested file would sit outside all of them.
+///
+/// **Nothing waits for the agent to flush.** Its transcript "is written
+/// asynchronously and may lag the in-memory conversation", so a record not yet
+/// on disk is simply picked up by the next read.
+///
+/// No record's content is interpreted beyond `sessionId` and `cwd` — and
+/// `uuid`, which [`read_jsonl`] reads — and none is ever printed.
+//MUTANT-SUITE crates/batten/tests/it/source_claude_code.rs
+//MUTANT session-without-an-author-listed|s@^                        (None, None) => continue,$@                        (None, None) => (String::from("unauthored"), String::new()),@|every_authored_session_is_listed_sorted_with_its_cwd
+//MUTANT directory-link-followed|s@^                        let real_dir = entry.file_type().is_ok_and(\x7ckind\x7c kind.is_dir());$@                        let real_dir = entry.path().is_dir();@|a_directory_link_is_not_followed
+//MUTANT subagent-file-listed-as-its-own-session|s@^                        (Some(sub), _) => (parent, sub),$@                        (Some(sub), _) => (sub, String::new()),@|a_subagent_file_is_listed_under_its_parent_session
+pub mod claude_code {
+    use std::io::BufRead as _;
+    use std::path::{Path, PathBuf};
+
+    use super::{Batch, Cursor, MISSING, SessionRef, SessionSource, Unavailable, read_jsonl};
+    use crate::Result;
+
+    /// The variable that names the projects directory outright.
+    pub const ROOT_ENV: &str = "BATTEN_TRANSCRIPT_ROOT";
+
+    /// The directory, under a session's own, that holds its subagents' files.
+    const SUBAGENTS: &str = "subagents";
+
+    /// The projects directory to read.
+    ///
+    /// Two levels above the envelope's transcript path when the caller has one
+    /// — `<root>/<encoded working directory>/<session id>.jsonl` — otherwise
+    /// the variable, otherwise the agent's default under `home`. The first is
+    /// preferred because it is where THIS session's agent is actually writing,
+    /// whatever relocated its config directory.
+    #[must_use]
+    pub fn root_from(
+        transcript: Option<&Path>,
+        named: Option<&str>,
+        home: Option<&Path>,
+    ) -> Option<PathBuf> {
+        transcript
+            .and_then(|path| path.parent()?.parent())
+            .map(Path::to_path_buf)
+            .or_else(|| named.filter(|root| !root.is_empty()).map(PathBuf::from))
+            .or_else(|| home.map(|home| home.join(".claude").join("projects")))
+    }
+
+    /// The source over one projects directory.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ClaudeCode {
+        root: PathBuf,
+    }
+
+    impl ClaudeCode {
+        /// The source over the projects directory at `root`.
+        #[must_use]
+        pub fn at(root: &Path) -> Self {
+            ClaudeCode {
+                root: root.to_path_buf(),
+            }
+        }
+    }
+
+    /// What one transcript file says about whose it is.
+    #[derive(Default)]
+    struct Named {
+        /// The first AUTHORED session id, which identifies a session's own file.
+        authored: Option<String>,
+        /// The first session id of any record, which a subagent's file carries
+        /// for the session that started it.
+        any: Option<String>,
+        /// The working directory the identifying record carries.
+        project: Option<PathBuf>,
+    }
+
+    /// Read `path` a line at a time until it has said whose it is.
+    fn named(path: &Path) -> Named {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            #[serde(rename = "sessionId")]
+            session_id: Option<String>,
+            cwd: Option<String>,
+        }
+        let mut found = Named::default();
+        let Ok(file) = std::fs::File::open(path) else {
+            return found;
+        };
+        let mut reader = std::io::BufReader::new(file);
+        loop {
+            let mut raw = Vec::new();
+            if !reader
+                .read_until(b'\n', &mut raw)
+                .is_ok_and(|read| read > 0)
+            {
+                return found;
+            }
+            let Ok(line) = std::str::from_utf8(&raw) else {
+                continue;
+            };
+            let fields = serde_json::from_str::<Fields>(line).ok();
+            if found.any.is_none() {
+                found.any = fields
+                    .as_ref()
+                    .and_then(|fields| fields.session_id.clone())
+                    .filter(|id| !id.is_empty());
+            }
+            if let Some(id) = crate::transcript::authored_session_id(line) {
+                found.authored = Some(id);
+                found.project = fields.and_then(|fields| fields.cwd).map(PathBuf::from);
+                return found;
+            }
+        }
+    }
+
+    impl SessionSource for ClaudeCode {
+        /// Every session under the root: one per `.jsonl` file that has an
+        /// authored `sessionId`, and one per file under a `subagents`
+        /// directory, listed under its parent session's id with a sub-key.
+        ///
+        /// Sorted, and a directory link is never followed.
+        ///
+        /// # Errors
+        ///
+        /// [`Unavailable`] where the root is not a directory. One unreadable
+        /// directory beneath it is not a failed listing of the rest.
+        fn list(&self) -> Result<Vec<SessionRef>> {
+            if !self.root.is_dir() {
+                return Err(anyhow::Error::new(Unavailable(MISSING)));
+            }
+            let mut sessions = Vec::new();
+            let mut pending = vec![self.root.clone()];
+            while let Some(next) = pending.pop() {
+                let Ok(entries) = std::fs::read_dir(&next) else {
+                    continue;
+                };
+                // THE ENTRY'S OWN TYPE, WHICH DOES NOT FOLLOW A LINK: this walk
+                // keeps no visited set, so a linked directory cycle under the
+                // root would never end — `transcript::census`'s own reason.
+                let mut names: Vec<(PathBuf, bool)> = entries
+                    .flatten()
+                    .map(|entry| {
+                        let real_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                        (entry.path(), real_dir)
+                    })
+                    .collect();
+                names.sort();
+                for (path, real_dir) in names {
+                    if real_dir {
+                        pending.push(path);
+                        continue;
+                    }
+                    if path.extension().is_none_or(|ext| ext != "jsonl") {
+                        continue;
+                    }
+                    let said = named(&path);
+                    let holder = path.parent();
+                    let subagent = holder
+                        .filter(|dir| dir.file_name().is_some_and(|name| name == SUBAGENTS))
+                        .and(path.file_stem())
+                        .map(|stem| stem.to_string_lossy().into_owned());
+                    // A subagent's parent is the session its records name, or
+                    // the session directory its `subagents` directory sits in.
+                    let parent = said.any.clone().unwrap_or_else(|| {
+                        holder
+                            .and_then(Path::parent)
+                            .and_then(Path::file_name)
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    });
+                    let (id, sub) = match (subagent, said.authored) {
+                        (Some(sub), _) => (parent, sub),
+                        (None, Some(id)) => (id, String::new()),
+                        (None, None) => continue,
+                    };
+                    sessions.push(SessionRef {
+                        id,
+                        project: said.project,
+                        locator: path.to_string_lossy().into_owned(),
+                        sub,
+                    });
+                }
+            }
+            sessions.sort();
+            Ok(sessions)
+        }
+
+        fn read(&self, session: &SessionRef, from: &Cursor, max_bytes: u64) -> Result<Batch> {
+            Ok(read_jsonl(Path::new(&session.locator), from, max_bytes))
+        }
     }
 }
