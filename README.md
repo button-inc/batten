@@ -196,9 +196,9 @@ per-clone setup and the task tour.
 ## Performance
 
 Batten runs as a `PreToolUse` hook, so its cost is paid on **every** mediated
-tool call rather than once per commit. These are measured numbers, not targets —
-`mise run perf` reproduces them, and `mise run perf-assert` fails when a
-measured p95 leaves its budget.
+tool call rather than once per commit. The p50 and p95 columns are measured
+numbers — `mise run perf` reproduces them — and `mise run perf-assert` fails
+when a measured p95 leaves its budget or a hook arm's p50 leaves its target.
 
 `wired` is the number an agent actually waits on: the entry point
 `.claude/settings.json` invokes, launcher included, **derived from that file at
@@ -206,15 +206,21 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path          | what it does                                           | p50    | p95    | budget   |
-| ------------- | ------------------------------------------------------ | ------ | ------ | -------- |
-| `noop`        | process start, command tree, render                    | 2.1 ms | 2.4 ms | ≤ 100 ms |
-| `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | ≤ 100 ms |
-| `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
-| `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
-| `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
-| `stop`        | an end of turn — decode, state record, drain detached  | —      | —      | ≤ 100 ms |
-| `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| path          | what it does                                           | p50    | p95    | target  | budget   |
+| ------------- | ------------------------------------------------------ | ------ | ------ | ------- | -------- |
+| `noop`        | process start, command tree, render                    | 2.1 ms | 2.4 ms | —       | ≤ 100 ms |
+| `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | —       | ≤ 100 ms |
+| `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |
+| `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `stop`        | an end of turn — decode, state record, drain detached  | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |
+
+**Two numbers, two questions.** The `target` is held against the **p50**: what
+a mediated call normally costs. The `budget` is held against the **p95**: what
+it must never exceed. `perf-assert` reports each under its own class, so a
+finding says which one was missed. `noop` and `check` carry no target because
+neither is on the path of a mediated call.
 
 `posttool` is the same envelope decode plus the response capture, and its cells
 are `—` for `passthrough`'s reason: the series above comes from a quieter

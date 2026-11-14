@@ -157,6 +157,11 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 /// output shape, reduced by the writer rather than by a pipeline in front of
 /// it. The keys are the caller's, so no producer's field names reach the core.
 ///
+/// **Further token keys follow the first, comma-separated** (CLOUD-2730):
+/// `<name-key>=<first>,<second>` also records `<name>/<second> <token>` for each
+/// line that carries the second field. One record then holds two readings of
+/// the same measurement, and the first key's lines are exactly what they were.
+///
 /// # Errors
 ///
 /// A [`UsageError`] for a `pick` that is not two non-empty keys, and every
@@ -192,31 +197,42 @@ fn pick_keys(pick: &str) -> Option<(&str, &str)> {
 /// (`arm=… path=…`) is not taken for an absolute one — and carries a non-empty
 /// value for both keys. A key given twice on one line reads its LAST value, the
 /// reading the retired `awk` program made.
-fn picked(raw: &str, name: &str, token: &str) -> String {
+fn picked(raw: &str, name: &str, tokens: &str) -> String {
     let opener = format!("{name}=");
+    let mut wanted = tokens.split(',').filter(|token| !token.is_empty());
+    let token = wanted.next().unwrap_or_default();
+    let further: Vec<&str> = wanted.collect();
     let mut reduced = String::new();
     for line in raw.lines().filter(|line| line.starts_with(&opener)) {
-        let mut named = None;
-        let mut value = None;
-        for (key, field) in line
+        let fields: Vec<(&str, &str)> = line
             .split_whitespace()
             .filter_map(|field| field.split_once('='))
-        {
-            if key == name {
-                named = Some(field);
+            .collect();
+        // A key given twice on one line reads its LAST value.
+        let last = |key: &str| {
+            fields
+                .iter()
+                .rev()
+                .find(|(held, _)| *held == key)
+                .map(|(_, field)| *field)
+                .filter(|field| !field.is_empty())
+        };
+        let (Some(named), Some(value)) = (last(name), last(token)) else {
+            continue;
+        };
+        reduced.push_str(named);
+        reduced.push(' ');
+        reduced.push_str(value);
+        reduced.push('\n');
+        for key in &further {
+            if let Some(value) = last(key) {
+                reduced.push_str(named);
+                reduced.push('/');
+                reduced.push_str(key);
+                reduced.push(' ');
+                reduced.push_str(value);
+                reduced.push('\n');
             }
-            if key == token {
-                value = Some(field);
-            }
-        }
-        if let (Some(named), Some(value)) = (named, value)
-            && !named.is_empty()
-            && !value.is_empty()
-        {
-            reduced.push_str(named);
-            reduced.push(' ');
-            reduced.push_str(value);
-            reduced.push('\n');
         }
     }
     reduced

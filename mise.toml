@@ -2739,7 +2739,7 @@ description = "Gate: the committed benchmark table is what a fresh run produces,
 run = "cargo run --quiet -p batten -- bench tokens --check"
 
 [tasks.record-perf]
-description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
+description = "Effect: reduce `perf` records to a p95 and a p50 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
 # THE REDUCTION IS THE WRITER'S SINCE CLOUD-1991. `--pick path=p95` keeps every
 # stdin line opening with `path=` and records `<path> <p95>` from it — the
 # `awk` program this body ran in front of `record tool`, whose field names are
@@ -2749,7 +2749,11 @@ description = "Effect: reduce `perf` records to a p95 per path and record them w
 # finding whose cause is this task. The verb refuses it as could-not-look (exit
 # 3, where the body used 2) and writes nothing. stdin reaches the verb as it
 # reached the body: `perf.yml` redirects the measurement into `mise run`.
-run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95"
+# `,p50` IS THE TARGET'S READING (CLOUD-2730). The same record gains
+# `<path>/p50 <p50>` beside each `<path> <p95>`, so `perf-assert` holds the hook
+# arms to their 10 ms p50 target from the measurement that already holds them to
+# the 100 ms p95 ceiling. One record, because the key is one binary's digest.
+run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95,p50"
 
 # The gate the producer above feeds, and the same wrapper shape `lock-complete`
 # takes: the task name and the rule id are one object, so the workflow step, this
