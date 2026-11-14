@@ -2841,7 +2841,15 @@ pub struct Unclaimed {
 pub struct Manifest {
     /// The manifest's repo-relative path.
     pub path: String,
-    /// The keys whose values are commands, as they are spelled before ` = `.
+    /// The carrier whose fields this manifest's commands are, by its id in
+    /// `crate::shell_detect::CARRIERS` (`mise-task` or `hk-step`, the two with a
+    /// manifest reader). Exactly one of `carrier` and `keys`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<String>,
+    /// The keys whose values are commands, as they are spelled before ` = `,
+    /// for a manifest no carrier describes. Exactly one of `carrier` and
+    /// `keys`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<String>,
     /// The header prefix that opens one named unit — a task table, say. Every
     /// shell line between one such header and the next is that unit's. Absent,

@@ -4072,6 +4072,7 @@ line_sources = [
   "mise.toml",
   "hk.pkl",
   ".github/workflows/*.yml",
+  "action.yml",
 ]
 documents = ["batten.toml"]
 base = "origin/main"
@@ -6107,8 +6108,15 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 # change that grows it is refused as growth.
 #MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
 #MUTANT setup-sh-still-exempt|s@^  "completions/batten.bash",$@  "completions/batten.bash", "setup.sh",@|the_exemption_set_is_exactly_the_files_that_must_be_shell
+#
+# `action.yml` IS A WORKFLOW HOME TOO (CLOUD-2627): a composite action's steps
+# are the same `gha-run` carrier as a workflow's, and its four `shell: bash`
+# steps were shell nothing counted. The manifests name their carrier
+# (`crate::shell::CARRIERS`) rather than its keys; `mise-task` reads `run` and
+# `hk-step` reads `check`/`fix`, so the homes compared between refs are
+# unchanged.
 [census.shell]
-workflows = [".github/workflows/*.yml"]
+workflows = [".github/workflows/*.yml", "action.yml"]
 exempt = [
   ".claude/hooks/git-hook.sh",
   "completions/batten.bash",
@@ -6116,12 +6124,12 @@ exempt = [
 
 [[census.shell.manifest]]
 path = "mise.toml"
-keys = ["run"]
+carrier = "mise-task"
 unit = "[tasks."
 
 [[census.shell.manifest]]
 path = "hk.pkl"
-keys = ["check", "fix"]
+carrier = "hk-step"
 
 # CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
 # globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes

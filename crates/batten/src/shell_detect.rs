@@ -20,7 +20,9 @@
 //!
 //! # What this does not decide
 //!
-//! Which carriers run a text through a shell is a later row's. Which
+//! Which config fields run a text through a shell, and which spelling of one
+//! avoids it, is the cited [`CARRIERS`] table (CLOUD-2627), read through
+//! [`form`] and [`judge`]; a census reader exists for three of its rows. Which
 //! interpreters take a script (`perl -e`, `sh -c`) is rule 10's, read from the
 //! cited [`INTERPRETERS`] table through the mediation walk's own per-family
 //! option grammar (CLOUD-2626). The mediation walk in `hook.rs`
@@ -588,6 +590,309 @@ pub fn shell_path(path: &str) -> bool {
     EXTENSIONS.iter().any(|extension| path.ends_with(extension))
 }
 
+// ---------------------------------------------------------------------------
+// Carriers (CLOUD-2627): which config field hands its value to which shell,
+// and which spelling of it avoids one.
+// ---------------------------------------------------------------------------
+
+/// Whether a value reaches a shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Form {
+    /// The value is handed to a shell as a script: [`logic`] judges its text.
+    Shell,
+    /// The value is an argv the carrier spawns with no shell. Still judged by
+    /// the interpreter table: `["sh", "-c", …]` re-enters a shell.
+    Exec,
+}
+
+/// How a carrier's value is spelled, which is what decides its [`Form`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Spelling<'a> {
+    /// One string.
+    Text(&'a str),
+    /// A list of strings.
+    List(&'a [&'a str]),
+    /// A command whose program and arguments are separate fields — a Claude
+    /// Code hook's `command` beside `args`, an hk structured command — given
+    /// as program then arguments.
+    Structured(&'a [&'a str]),
+}
+
+/// How a carrier reads a one-string value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextForm {
+    /// As a whole: the form named.
+    Is(Form),
+    /// A `!` prefix makes it a shell script (the text after the `!`); without
+    /// one it is exec.
+    Bang,
+}
+
+/// One carrier: a config field whose value a tool runs. Each row's doc
+/// comment is its citation. A row holds no path: which files carry it is the
+/// consumer's declaration.
+///
+/// A spelling a row does not declare (`None`) is read as [`Form::Shell`]: an
+/// uncited spelling is never granted exec form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Carrier {
+    /// The id a `[[census.shell.manifest]]` row names it by.
+    pub id: &'static str,
+    /// The fields whose values are commands, as they are spelled before
+    /// `=` or `:`.
+    pub fields: &'static [&'static str],
+    /// How one string is read.
+    text: Option<TextForm>,
+    /// How a list of strings is read.
+    list: Option<Form>,
+    /// How a structured command is read.
+    structured: Option<Form>,
+}
+
+/// mise task: a `run` string goes through `sh -o errexit -c` (Unix) or
+/// `cmd /c` (Windows), and **a `run` array is a list of shell strings, not
+/// argv**. A task-level `shell =` changes which shell, never the form; the
+/// default-shell settings are global-only.
+/// <https://mise.jdx.dev/tasks/toml-tasks.html>
+/// <https://mise.jdx.dev/configuration/settings.html>
+pub const MISE_TASK: Carrier = Carrier {
+    id: "mise-task",
+    fields: &["run"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: Some(Form::Shell), // a list of shell strings, never argv
+    structured: None,
+};
+
+/// hk step: a `check`/`fix` string goes through `sh -o errexit -c`; a
+/// structured command runs with no shell. A step's `shell` changes which.
+/// <https://hk.jdx.dev/configuration.html>
+pub const HK_STEP: Carrier = Carrier {
+    id: "hk-step",
+    fields: &["check", "fix"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: Some(Form::Exec),
+};
+
+/// GitHub Actions: `run:` goes through `bash -e {0}`, or with `shell: bash`
+/// through `bash --noprofile --norc -eo pipefail {0}`. It has no no-shell
+/// form; only `uses:` avoids a shell. Composite actions require `shell:`.
+/// <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax>
+pub const GHA_RUN: Carrier = Carrier {
+    id: "gha-run",
+    fields: &["run"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: None,
+};
+
+/// Dockerfile: the shell form of `RUN`/`CMD`/`ENTRYPOINT` goes through
+/// `/bin/sh -c`; the JSON-array exec form runs with no shell. `SHELL` changes
+/// only the shell form.
+/// <https://docs.docker.com/reference/dockerfile/>
+const DOCKERFILE: Carrier = Carrier {
+    id: "dockerfile",
+    fields: &["RUN", "CMD", "ENTRYPOINT"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: Some(Form::Exec),
+    structured: None,
+};
+
+/// just: a recipe line runs through `sh -cu`, one shell per line; a shebang
+/// recipe runs as a temporary file, and `[script]` through `sh -eu`. `set
+/// shell` changes which. <https://just.systems/man/en/settings.html>
+const JUST: Carrier = Carrier {
+    id: "just",
+    fields: &["recipe"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: None,
+};
+
+/// npm: a `scripts` entry runs through `/bin/sh` (`cmd.exe` on Windows);
+/// `script-shell` changes which.
+/// <https://docs.npmjs.com/cli/v10/using-npm/config#script-shell>
+const NPM_SCRIPT: Carrier = Carrier {
+    id: "npm-script",
+    fields: &["scripts"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: None,
+};
+
+/// devcontainer: a lifecycle command string runs through `/bin/sh`; an array
+/// runs with no shell. <https://containers.dev/implementors/json_reference/>
+const DEVCONTAINER: Carrier = Carrier {
+    id: "devcontainer",
+    fields: &[
+        "initializeCommand",
+        "onCreateCommand",
+        "updateContentCommand",
+        "postCreateCommand",
+        "postStartCommand",
+        "postAttachCommand",
+    ],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: Some(Form::Exec),
+    structured: None,
+};
+
+/// git: an `alias.*` value with a `!` prefix is a shell command; without one
+/// it is a git subcommand. <https://git-scm.com/docs/git-config>
+const GIT_ALIAS: Carrier = Carrier {
+    id: "git-alias",
+    fields: &["alias"],
+    text: Some(TextForm::Bang),
+    list: None,
+    structured: None,
+};
+
+/// batten hook handler: `[[hook.handler]] run` is an argv array, spawned
+/// with no shell. Source: this crate's own `[[hook.handler]]` schema.
+const BATTEN_HANDLER: Carrier = Carrier {
+    id: "batten-handler",
+    fields: &["run"],
+    text: None,
+    list: Some(Form::Exec),
+    structured: None,
+};
+
+/// batten bench: each `baseline` / `batten` workload step is one argv, run
+/// through `exec::piped_argv` with no shell (CLOUD-2635; the row's earlier
+/// `sh -c` per element is gone from the tree). Source: this crate's
+/// `tokens.rs`, the bench's runner (`run_arm`).
+const BATTEN_BENCH: Carrier = Carrier {
+    id: "batten-bench",
+    fields: &["baseline", "batten"],
+    text: None,
+    list: Some(Form::Exec),
+    structured: None,
+};
+
+/// nextest setup script: a `command` string is split "using Unix shell
+/// rules" into arguments, or given "as a list of arguments"; both run with no
+/// shell, which appears only when the program is one (`sh -c`).
+/// <https://nexte.st/docs/configuration/setup-scripts/> (fetched 2026-11-14)
+const NEXTEST_SETUP: Carrier = Carrier {
+    id: "nextest-setup",
+    fields: &["command"],
+    text: Some(TextForm::Is(Form::Exec)),
+    list: Some(Form::Exec),
+    structured: None,
+};
+
+/// mise template: `exec(command=…)` runs through "the default inline shell".
+/// <https://mise.jdx.dev/templates.html> (fetched 2026-11-14)
+const MISE_TEMPLATE: Carrier = Carrier {
+    id: "mise-template",
+    fields: &["exec"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: None,
+};
+
+/// Claude Code hook: `"command"` runs through `sh -c` when no `"args"` is
+/// set; with `"args"` it is spawned directly, and `"shell"` is ignored.
+/// <https://code.claude.com/docs/en/hooks> (fetched 2026-11-14)
+const CLAUDE_HOOK: Carrier = Carrier {
+    id: "claude-hook",
+    fields: &["command"],
+    text: Some(TextForm::Is(Form::Shell)),
+    list: None,
+    structured: Some(Form::Exec),
+};
+
+/// Every carrier, researched and cited row by row (CLOUD-2627). Make's recipe
+/// lines go through `$(SHELL)` too, but its defaults are uncited, so it ships
+/// no row.
+pub const CARRIERS: [Carrier; 13] = [
+    MISE_TASK,
+    HK_STEP,
+    GHA_RUN,
+    DOCKERFILE,
+    JUST,
+    NPM_SCRIPT,
+    DEVCONTAINER,
+    GIT_ALIAS,
+    BATTEN_HANDLER,
+    BATTEN_BENCH,
+    NEXTEST_SETUP,
+    MISE_TEMPLATE,
+    CLAUDE_HOOK,
+];
+
+/// The carrier a manifest row names by `id`.
+#[must_use]
+pub fn carrier(id: &str) -> Option<&'static Carrier> {
+    CARRIERS.iter().find(|row| row.id == id)
+}
+
+/// Whether `carrier` hands `spelling` to a shell.
+///
+/// The carrier mutation rows: the first reads every list as shell, the second
+/// reads a mise `run` array as argv.
+//MUTANT-SUITE crates/batten/src/shell.rs
+//MUTANT carrier-exec-form-read-as-shell|s@^        Spelling::List(_) => carrier.list.unwrap_or(Form::Shell),$@        Spelling::List(_) => Form::Shell,@|a_docker_exec_array_is_exec_and_its_shell_form_is_shell
+//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
+//MUTANT carrier-mise-array-read-as-argv|s@^    list: Some(Form::Shell), // a list of shell strings, never argv$@    list: Some(Form::Exec),@|the_census_counts_the_fixture_as_the_shapes_say
+#[must_use]
+pub fn form(carrier: &Carrier, spelling: &Spelling<'_>) -> Form {
+    match spelling {
+        Spelling::Text(text) => match carrier.text {
+            Some(TextForm::Is(form)) => form,
+            Some(TextForm::Bang) if !text.trim_start().starts_with('!') => Form::Exec,
+            Some(TextForm::Bang) | None => Form::Shell,
+        },
+        Spelling::List(_) => carrier.list.unwrap_or(Form::Shell),
+        Spelling::Structured(_) => carrier.structured.unwrap_or(Form::Shell),
+    }
+}
+
+/// The detector's answer for one carrier value. `None` is a manifest no
+/// carrier describes, whose every spelling is read as shell.
+///
+/// Shell form: a text is [`logic`]'s, and a list is shell when any of its
+/// strings is (each is its own script), else its first string's argv. Exec
+/// form: the argv, unless its program runs a script (rule 10).
+#[must_use]
+pub fn judge(carrier: Option<&Carrier>, spelling: &Spelling<'_>) -> Verdict {
+    let form = carrier.map_or(Form::Shell, |carrier| form(carrier, spelling));
+    match (form, spelling) {
+        (Form::Shell, Spelling::Text(text)) => {
+            let bang = carrier.is_some_and(|carrier| carrier.text == Some(TextForm::Bang));
+            let script = if bang {
+                text.trim_start().strip_prefix('!').unwrap_or(text)
+            } else {
+                text
+            };
+            logic(script)
+        }
+        (Form::Shell, Spelling::List(items) | Spelling::Structured(items)) => {
+            let verdicts: Vec<Verdict> = items.iter().copied().map(logic).collect();
+            verdicts
+                .iter()
+                .find(|verdict| matches!(verdict, Verdict::Shell(_)))
+                .or_else(|| verdicts.first())
+                .cloned()
+                .unwrap_or(Verdict::Argv(Vec::new()))
+        }
+        (Form::Exec, Spelling::Text(text)) => exec(&text.split_whitespace().collect::<Vec<_>>()),
+        (Form::Exec, Spelling::List(items) | Spelling::Structured(items)) => exec(items),
+    }
+}
+
+/// An exec-form argv: shell only when its program runs a script.
+fn exec(argv: &[&str]) -> Verdict {
+    if runs_script(argv) {
+        Verdict::Shell(INTERPRETER_SCRIPT)
+    } else {
+        Verdict::Argv(argv.iter().map(|word| (*word).to_owned()).collect())
+    }
+}
+
 /// A node kind's name, exactly as its variant is spelled.
 ///
 /// **EXHAUSTIVE, NO WILDCARD ARM.** `NodeKind` derives only `Debug`, so this is
@@ -940,6 +1245,135 @@ mod tests {
             assert!(shell_path(path), "{path}");
         }
         assert!(!shell_path("a/sh") && !shell_path("x.py"));
+    }
+
+    fn text(row: &Carrier, value: &str) -> Form {
+        form(row, &Spelling::Text(value))
+    }
+
+    fn list(row: &Carrier, values: &[&str]) -> Form {
+        form(row, &Spelling::List(values))
+    }
+
+    #[test]
+    fn a_docker_exec_array_is_exec_and_its_shell_form_is_shell() {
+        assert_eq!(list(&DOCKERFILE, &["a", "b"]), Form::Exec);
+        assert_eq!(text(&DOCKERFILE, "a b"), Form::Shell);
+        // An exec form that names a shell re-enters one.
+        assert_eq!(
+            judge(Some(&DOCKERFILE), &Spelling::List(&["sh", "-c", "x"])),
+            Verdict::Shell("interpreter-script")
+        );
+        assert_eq!(
+            judge(Some(&DOCKERFILE), &Spelling::List(&["a", "b|c"])),
+            Verdict::Argv(vec!["a".to_owned(), "b|c".to_owned()])
+        );
+    }
+
+    #[test]
+    fn every_carrier_reads_its_shell_form_as_shell_and_its_exec_form_as_exec() {
+        // One shell-form value per row that has one.
+        for row in [
+            MISE_TASK,
+            HK_STEP,
+            GHA_RUN,
+            DOCKERFILE,
+            JUST,
+            NPM_SCRIPT,
+            DEVCONTAINER,
+            MISE_TEMPLATE,
+            CLAUDE_HOOK,
+        ] {
+            assert_eq!(text(&row, "a | b"), Form::Shell, "{}", row.id);
+        }
+        assert_eq!(list(&MISE_TASK, &["a && b"]), Form::Shell);
+        assert_eq!(list(&BATTEN_BENCH, &["batten", "check"]), Form::Exec);
+        assert_eq!(list(&BATTEN_HANDLER, &["batten", "hook"]), Form::Exec);
+        // A spelling the row does not declare is never granted exec form.
+        assert_eq!(text(&BATTEN_HANDLER, "batten hook"), Form::Shell);
+        assert_eq!(list(&GHA_RUN, &["a"]), Form::Shell);
+        // devcontainer: an array is exec, a string is shell.
+        assert_eq!(list(&DEVCONTAINER, &["a", "b"]), Form::Exec);
+        assert_eq!(text(&DEVCONTAINER, "a b"), Form::Shell);
+        // git: `!` is shell, and the script is what follows it.
+        assert_eq!(text(&GIT_ALIAS, "!git log | head"), Form::Shell);
+        assert_eq!(text(&GIT_ALIAS, "log --oneline"), Form::Exec);
+        assert_eq!(
+            judge(Some(&GIT_ALIAS), &Spelling::Text("!git log | head")),
+            Verdict::Shell("Pipeline")
+        );
+        assert_eq!(
+            judge(Some(&GIT_ALIAS), &Spelling::Text("log --oneline")),
+            Verdict::Argv(vec!["log".to_owned(), "--oneline".to_owned()])
+        );
+        // Claude Code: with `args` exec, without shell.
+        assert_eq!(
+            form(&CLAUDE_HOOK, &Spelling::Structured(&["batten", "hook"])),
+            Form::Exec
+        );
+        assert_eq!(text(&CLAUDE_HOOK, "batten hook"), Form::Shell);
+        // nextest: a string and an array are both exec.
+        assert_eq!(text(&NEXTEST_SETUP, "cargo build"), Form::Exec);
+        assert_eq!(list(&NEXTEST_SETUP, &["cargo", "build"]), Form::Exec);
+        // ...and an exec `sh -c` is still a script.
+        assert_eq!(
+            judge(Some(&NEXTEST_SETUP), &Spelling::Text("sh -c x")),
+            Verdict::Shell("interpreter-script")
+        );
+        // hk: a string is shell; a structured command is exec.
+        assert_eq!(text(&HK_STEP, "cargo fmt"), Form::Shell);
+        assert_eq!(
+            form(&HK_STEP, &Spelling::Structured(&["cargo", "fmt"])),
+            Form::Exec
+        );
+        // No carrier: every spelling is shell.
+        assert_eq!(
+            judge(None, &Spelling::List(&["a", "b && c"])),
+            Verdict::Shell("List")
+        );
+    }
+
+    #[test]
+    fn every_carrier_row_carries_a_citation_and_a_listed_id() {
+        let source = include_str!("shell.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut rows = 0;
+        for (at, line) in lines.iter().enumerate() {
+            if !(line.contains("const ") && line.ends_with(": Carrier = Carrier {")) {
+                continue;
+            }
+            rows += 1;
+            let cited = lines[..at]
+                .iter()
+                .rev()
+                .take_while(|above| above.starts_with("///"))
+                .any(|above| above.contains("<https://") || above.contains("Source: "));
+            assert!(cited, "{line} has no citation doc comment");
+        }
+        assert_eq!(rows, CARRIERS.len());
+        let ids: Vec<&str> = CARRIERS.iter().map(|row| row.id).collect();
+        assert_eq!(
+            ids,
+            [
+                "mise-task",
+                "hk-step",
+                "gha-run",
+                "dockerfile",
+                "just",
+                "npm-script",
+                "devcontainer",
+                "git-alias",
+                "batten-handler",
+                "batten-bench",
+                "nextest-setup",
+                "mise-template",
+                "claude-hook",
+            ]
+        );
+        for id in ids {
+            assert_eq!(carrier(id).map(|row| row.id), Some(id));
+        }
+        assert!(carrier("make").is_none(), "Make's defaults are uncited");
     }
 
     fn node(kind: NodeKind) -> Node {
