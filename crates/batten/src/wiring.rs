@@ -806,31 +806,37 @@ impl Disarmed {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/wiring_disarm.rs
-//MUTANT disarm-ignores-marker|s@            Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,@            Ok(body) if body.is_empty() \&\& row.marker.is_empty() => DisarmState::Shimmed,@|an_already_shimmed_script_is_not_rewritten
+//MUTANT disarm-ignores-marker|s@            Ok(body) if body.contains(&row.marker) \&\& body.starts_with(SHIM_SHEBANG) => {@            Ok(body) if body.is_empty() \&\& row.marker.is_empty() => {@|an_already_shimmed_script_is_not_rewritten
+//MUTANT shim-body-reverts-to-shell|s@#!/usr/bin/env true\\n# {marker}\\n@#!/bin/sh\\nexit 0 # {marker}\\n@|an_armed_script_is_replaced_by_a_shim_that_exits_zero
 
-/// The body a disarmed script carries.
+/// The first line of a shim: `true`, found on `PATH` by `env`.
 ///
-/// Two lines, and the second is both the exit and the marker: a shim whose
-/// marker lived in a line the shell never reached would be a comment claiming
-/// something the file does not do.
+/// `env` is at `/usr/bin/env` on Linux, macOS and NixOS, where `/usr/bin/true`
+/// and `/bin/true` each go missing somewhere. `true` ignores its operands, the
+/// script path included, and exits 0 (CLOUD-2629).
+const SHIM_SHEBANG: &str = "#!/usr/bin/env true\n";
+
+/// The body a disarmed script carries, which is no shell at all (CLOUD-2629).
+///
+/// Line 1 is the whole behaviour: the kernel execs `true`, which exits 0. Line 2
+/// is only the marker that identifies the shim. It is a comment, so a harness
+/// that runs the script as `sh <path>` instead of exec'ing it still exits 0.
 fn shim(marker: &str) -> String {
-    format!("#!/bin/sh\nexit 0 # {marker}\n")
+    format!("#!/usr/bin/env true\n# {marker}\n")
 }
 
 /// Neutralise every declared script that is not already neutralised.
 ///
 /// Never creates, never deletes, and touches no path the config did not declare.
 ///
-/// **A TRUNCATING IN-PLACE WRITE, WHERE [`reclaim`] STAGES AND RENAMES**, and the
-/// difference is the subject rather than a lapse. `reclaim` rewrites a document
-/// carrying keys it never read — everything a consumer put in its host settings
-/// beside the hook map — so a kill mid-write would destroy configuration outside
-/// its own subject, and the rename is what makes that impossible. Here the body
-/// is exactly what is being discarded, so there is nothing to conserve; and a
-/// rename would actively break the repair, because the new file carries the
-/// creating process's mode and a hook script that is no longer executable does
-/// not exit 0 — it fails to run at all. Writing through the existing inode keeps
-/// the permission bits the launcher set, which is the property that matters.
+/// **THROUGH [`crate::durable::replace`], WHICH KEEPS THE MODE.** The body is
+/// exactly what is being discarded, so there is nothing to conserve; what
+/// matters is that the script stays executable, because a hook script that is
+/// not executable does not exit 0 — it fails to run at all. `replace` copies the
+/// permission bits onto the file it renames into place.
+///
+/// A script carrying the marker under an older body (the `#!/bin/sh` shim) is
+/// rewritten once to the current body, then left alone.
 ///
 /// # Errors
 ///
@@ -867,7 +873,9 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
             // one the declared mutation reddens: a disarm that rewrote
             // unconditionally would answer `shimmed` just the same while
             // churning the file on every session start.
-            Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,
+            Ok(body) if body.contains(&row.marker) && body.starts_with(SHIM_SHEBANG) => {
+                DisarmState::Shimmed
+            }
             Ok(_) if dry_run => DisarmState::Foreign,
             Ok(_) => {
                 crate::durable::replace(&path, shim(&row.marker))?;
