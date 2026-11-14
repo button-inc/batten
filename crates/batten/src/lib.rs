@@ -33456,6 +33456,11 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             )?;
         }
     }
+    // LAST, and only with the state repository variable set (CLOUD-2722):
+    // whether this checkout's state is leaving the machine. It changes no exit.
+    if let Some(offbox) = &report.offbox {
+        writeln!(out, "{}", offbox.line())?;
+    }
     Ok(session_code(&report))
 }
 
