@@ -75,7 +75,6 @@ fn tolerated() -> BTreeSet<Pair> {
         (".serena/memories/toolchain-and-hooks.md", &scripts),
         (".serena/memories/toolchain-and-hooks.md", &suites),
         (".serena/memories/core.md", &scripts),
-        (".serena/memories/core.md", &suites),
     ]
     .into_iter()
     .map(|(file, name)| (file.to_owned(), name.clone()))
