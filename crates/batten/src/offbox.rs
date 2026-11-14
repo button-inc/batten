@@ -1523,6 +1523,26 @@ impl Theirs<'_> {
         Ok(())
     }
 
+    /// Take a whole stream as this writer's own under `base`: every file is
+    /// written, over whatever is there.
+    ///
+    /// Only for a stream this writer has no cursor progress in. A file there
+    /// can then only be a file an earlier, killed adoption of this stream put
+    /// there, or bytes a killed first append left that no cursor covers and
+    /// the source hands back — and neither is content that would be lost.
+    fn adopt_all(&self, base: &Path, group: &Group) -> Result<()> {
+        let refused =
+            |err: std::io::Error| anyhow::anyhow!("offbox: an adopted file will not write: {err}");
+        for (relative, id) in group {
+            let target = under(base, relative);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(refused)?;
+            }
+            crate::durable::replace(&target, self.read(id)?).map_err(refused)?;
+        }
+        Ok(())
+    }
+
     /// Keep a whole group aside, at `root` under this snapshot's own entry.
     fn keep_aside(&mut self, root: &str, group: &Group) -> Result<()> {
         self.kept_aside = true;
@@ -1572,6 +1592,7 @@ impl Theirs<'_> {
 /// A tree path that is not an ordinary relative path, or a file that will not
 /// read or write.
 //MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT adoption-judged-by-the-files|s@^        if own \&\& !progressed("transcript/") {$@        if own \&\& files_under(\&local).is_empty() {@|a_kill_at_any_step_of_a_restore_into_a_new_container_loses_nothing
 //MUTANT absorb-overwrites-a-local-store|s@^        if here.is_empty() {$@        if true {@|a_rejected_push_fetches_absorbs_and_is_applied
 //MUTANT absorb-discards-their-differing-store|s@^            theirs.keep_aside(store, group)?; // a differing store$@@|a_rejected_push_fetches_absorbs_and_is_applied
 //MUTANT later-absorb-replaces-an-earlier-one|s@^        aside: dir.join(ABSORBED).join(commit),$@        aside: dir.join(ABSORBED).join("latest"),@|a_second_rejected_push_adds_a_second_entry
@@ -1626,11 +1647,24 @@ pub fn absorb(project_root: &Path, meta: &Meta, commit: &str, own: bool) -> Resu
         }
     }
 
+    // WHETHER A STREAM IS THIS WRITER'S IS READ FROM ITS CURSOR, NEVER FROM
+    // WHETHER FILES ARE THERE. An adoption writes the files and then the cursor
+    // entries; killed between the two, it leaves files and no entry. Judged by
+    // the files, the next start took them for a local stream, adopted no
+    // cursor, and the snapshot after it — whose own cursor started from
+    // nothing — removed them as leftovers and pushed over the only copy.
+    // Judged by the cursor, a stream with no progress is adopted again, whole,
+    // and the second adoption finishes what the first began.
+    let progressed = |root: &str| {
+        load_cursors(&dir).iter().any(|(prefix, position)| {
+            prefix.starts_with(root) && (!position.cursor.is_empty() || position.file.is_some())
+        })
+    };
     let mut adopted: Vec<String> = Vec::new();
     if !transcript.is_empty() {
         let local = dir.join("transcript");
-        if own && files_under(&local).is_empty() {
-            theirs.place_all(&local, &transcript)?;
+        if own && !progressed("transcript/") {
+            theirs.adopt_all(&local, &transcript)?;
             adopted.push(String::from("transcript/"));
         } else if !theirs.all_equal(&local, &transcript)? {
             theirs.keep_aside("transcript", &transcript)?;
@@ -1638,11 +1672,12 @@ pub fn absorb(project_root: &Path, meta: &Meta, commit: &str, own: bool) -> Resu
     }
     for (entry, group) in &history {
         let local = dir.join("history").join(entry);
-        if files_under(&local).is_empty() {
+        let root = format!("history/{entry}/");
+        if own && !progressed(&root) {
+            theirs.adopt_all(&local, group)?;
+            adopted.push(root);
+        } else if files_under(&local).is_empty() {
             theirs.place_all(&local, group)?;
-            if own {
-                adopted.push(format!("history/{entry}/"));
-            }
         } else if !theirs.all_equal(&local, group)? {
             theirs.keep_aside(&format!("history/{entry}"), group)?;
         }
@@ -4040,6 +4075,75 @@ mod push_tests {
                 .filter(|path| path.starts_with("absorbed/"))
                 .collect();
             assert!(aside.is_empty(), "kill at {kill_at}: kept aside: {aside:?}");
+            if !killed {
+                steps = Some(kill_at);
+                break;
+            }
+        }
+        let steps = steps.expect("a start finishes unkilled inside the bound");
+        assert!(steps > 8, "the premise: a start takes many steps: {steps}");
+    }
+
+    /// Fails by: ANY durable step of a start in a container that does not have
+    /// the session — the fetch, the files put in place one by one, the push
+    /// over it — at which a kill costs a record or a store of either side.
+    ///
+    /// The new container has records of its own, as one that began work before
+    /// its daemon did has. Whatever the kill left half-placed, the next start
+    /// must leave the remote holding every record the first container pushed
+    /// and every record this one wrote, and both of the stores, in place or
+    /// kept aside.
+    #[test]
+    fn a_kill_at_any_step_of_a_restore_into_a_new_container_loses_nothing() {
+        let mut steps = None;
+        for kill_at in 0..600_u64 {
+            let base = base(&format!("offbox-kill-restore-{kill_at}"));
+            let stand = standing(&[], Vec::new());
+            let _ = pushed_once(&base, &stand, "s");
+            let fresh = Writer::new(&base, "fresh", "s");
+            put(&fresh.transcript, "{\"n\":10}\n");
+
+            crate::testing::kill_after(Some(kill_at));
+            let _ = restore_once(&fresh.session(), None);
+            let _ = push_once(&fresh.session(), &[]);
+            let killed = crate::testing::killed();
+            crate::testing::kill_after(None);
+
+            add(&fresh.transcript, "{\"n\":11}\n");
+            fresh.restore(None);
+            let recovered = fresh.push().outcome;
+            assert!(
+                matches!(recovered, Pushed::Applied | Pushed::Unchanged),
+                "kill at {kill_at}: the next start {recovered:?}"
+            );
+            assert_eq!(
+                fresh.push().outcome,
+                Pushed::Unchanged,
+                "kill at {kill_at}: the two sides agree"
+            );
+            let tree = fresh.tree(&head(&stand, &fresh.meta));
+            let records: String = tree
+                .iter()
+                .filter(|(path, _)| path.contains("transcript/"))
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                .collect();
+            for record in FIRST.lines().chain(["{\"n\":10}", "{\"n\":11}"]) {
+                assert!(
+                    records.contains(record),
+                    "kill at {kill_at}: {record} is nowhere on the remote: {:?}",
+                    tree.keys().collect::<Vec<_>>()
+                );
+            }
+            for (ending, body) in [
+                ("git/batten-receipts/r.json", &b"receipt\n"[..]),
+                ("state/captures/a/one.txt", &b"captured\n"[..]),
+            ] {
+                assert!(
+                    tree.iter()
+                        .any(|(path, bytes)| path.ends_with(ending) && bytes == body),
+                    "kill at {kill_at}: {ending} is nowhere on the remote whole"
+                );
+            }
             if !killed {
                 steps = Some(kill_at);
                 break;
