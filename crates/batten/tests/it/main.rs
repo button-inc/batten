@@ -450,6 +450,7 @@ mod staged_facts;
 mod startup;
 mod startup_bootstrap;
 #[cfg(unix)]
+mod step_journal;
 mod step_receipt;
 mod stop_posture;
 mod stop_watchdog;

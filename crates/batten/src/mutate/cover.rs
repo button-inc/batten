@@ -184,6 +184,28 @@ pub fn test_name(args: &[String]) -> Option<&str> {
 ///
 /// The repository's nextest config does not parse.
 pub fn wrapped_config(root: &Path, recorder: &Path, arg: &str, store: &Path) -> Result<String> {
+    let mut config = wrapper_experimental(root)?;
+    let recorder = toml_edit::Value::from(recorder.to_string_lossy().into_owned());
+    // THE STORE IS NAMED, so the report is where the build reads it: left to
+    // nextest, it went under the checkout's `target/`, not the build's.
+    let store = toml_edit::Value::from(store.to_string_lossy().into_owned());
+    let _ = write!(
+        config,
+        "\n[store]\ndir = {store}\n\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{arg}\"]\n\n\
+         [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
+         [profile.batten-cover.junit]\npath = \"{JUNIT}\"\n\n\
+         [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
+    );
+    Ok(config)
+}
+
+/// The repository's nextest config with `wrapper-scripts` in its experimental
+/// list, ready for a run-wrapper to be appended as text.
+///
+/// # Errors
+///
+/// The repository's nextest config does not parse.
+pub fn wrapper_experimental(root: &Path) -> Result<String> {
     let path = root.join(".config").join("nextest.toml");
     let text = crate::fsio::read_to_string(&path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = text.parse().context("parse nextest.toml")?;
@@ -199,19 +221,7 @@ pub fn wrapped_config(root: &Path, recorder: &Path, arg: &str, store: &Path) -> 
         experimental.push("wrapper-scripts");
     }
     doc["experimental"] = toml_edit::value(experimental);
-    let recorder = toml_edit::Value::from(recorder.to_string_lossy().into_owned());
-    // THE STORE IS NAMED, so the report is where the build reads it: left to
-    // nextest, it went under the checkout's `target/`, not the build's.
-    let store = toml_edit::Value::from(store.to_string_lossy().into_owned());
-    let mut config = doc.to_string();
-    let _ = write!(
-        config,
-        "\n[store]\ndir = {store}\n\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{arg}\"]\n\n\
-         [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
-         [profile.batten-cover.junit]\npath = \"{JUNIT}\"\n\n\
-         [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
-    );
-    Ok(config)
+    Ok(doc.to_string())
 }
 
 /// The report the cover profile writes, under `<target>/nextest/batten-cover/`.
