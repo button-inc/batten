@@ -1225,16 +1225,27 @@ fn phases(
 /// The case a failed run names first, from nextest's `FAIL [ time] binary
 /// name` line (`--color never`).
 fn killer(output: &str) -> Option<Case> {
-    output.lines().find_map(|line| {
-        let rest = line.trim_start().strip_prefix("FAIL [")?;
-        let (_, rest) = rest.split_once("] ")?;
-        let (binary, name) = rest.trim().split_once(' ')?;
-        Some((name.trim().to_owned(), binary.to_owned()))
-    })
+    output.lines().find_map(|line| named(line, "FAIL ["))
 }
 
-/// Run `cases` once with mutant `id` switched on, and answer its verdict and
-/// the case that killed it. `cases` must not be empty.
+/// Every case a run names as passed, from its `PASS [ time] binary name`
+/// lines: what a run that killed, or timed out, still proved.
+fn passes(output: &str) -> Vec<Case> {
+    output
+        .lines()
+        .filter_map(|line| named(line, "PASS ["))
+        .collect()
+}
+
+fn named(line: &str, status: &str) -> Option<Case> {
+    let rest = line.trim_start().strip_prefix(status)?;
+    let (_, rest) = rest.split_once("] ")?;
+    let (binary, name) = rest.trim().split_once(' ')?;
+    Some((name.trim().to_owned(), binary.to_owned()))
+}
+
+/// Run `cases` once with mutant `id` switched on, and answer its verdict, the
+/// case that killed it, and every case that passed. `cases` must not be empty.
 ///
 /// # Errors
 ///
@@ -1244,7 +1255,7 @@ fn run_cases(
     id: u32,
     mutant: &Listed,
     cases: &BTreeSet<Case>,
-) -> anyhow::Result<(Verdict, Option<Case>)> {
+) -> anyhow::Result<(Verdict, Option<Case>, Vec<Case>)> {
     let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
     let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
     let mut args: Vec<String> = [
@@ -1313,17 +1324,20 @@ fn run_cases(
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
     let ran = ran?;
+    let passed = passes(&ran.output);
     Ok(match ran.outcome {
-        super::Outcome::Passed => (Verdict::Missed, None),
-        super::Outcome::TimedOut => (Verdict::Timeout, None),
-        super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => (Verdict::Timeout, None),
-        super::Outcome::Failed(Some(100)) => (Verdict::Caught, killer(&ran.output)),
+        super::Outcome::Passed => (Verdict::Missed, None, cases.iter().cloned().collect()),
+        super::Outcome::TimedOut => (Verdict::Timeout, None, passed),
+        super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => {
+            (Verdict::Timeout, None, passed)
+        }
+        super::Outcome::Failed(Some(100)) => (Verdict::Caught, killer(&ran.output), passed),
         super::Outcome::Failed(_) => {
             // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
             // case started and said nothing anywhere, so an error now leaves
             // its output beside the tree, where the summary points.
             keep_error(judging, id, &ran.output);
-            (Verdict::Error, None)
+            (Verdict::Error, None, Vec::new())
         }
     })
 }
@@ -1354,9 +1368,10 @@ fn judge(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
     hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
-) -> Verdict {
+    journal: &std::sync::Mutex<Option<std::fs::File>>,
+) -> (Verdict, usize) {
     if cases.is_empty() {
-        return Verdict::Uncovered;
+        return (Verdict::Uncovered, 0);
     }
     let sibling: Option<Sibling> = mutant.function.as_ref().map(|function| {
         (
@@ -1365,31 +1380,73 @@ fn judge(
             function.span.as_ref().map(|span| span.start.line),
         )
     });
+    // EACH CASE'S OWN RECORDED OUTCOME FIRST ([`pair_key`]): a kill under an
+    // unchanged pair decides the mutant with no run; a pass leaves that case
+    // out of every run, so only the cases an edit could change are run.
+    let pairs: std::collections::BTreeMap<&Case, String> = cases
+        .iter()
+        .filter_map(|case| Some((case, pair_key(judging.root, mutant, case, judging.digests)?)))
+        .collect();
+    let recorded = |case: &Case| {
+        pairs
+            .get(case)
+            .and_then(|key| judging.cache.get(key))
+            .map(String::as_str)
+    };
+    if cases.iter().any(|case| recorded(case) == Some("caught")) {
+        return (Verdict::Caught, cases.len());
+    }
+    let open: BTreeSet<Case> = cases
+        .iter()
+        .filter(|case| recorded(case) != Some(PASSED))
+        .cloned()
+        .collect();
+    let skipped = cases.len() - open.len();
+    if open.is_empty() {
+        return (Verdict::Missed, skipped);
+    }
+    let record = |case: &Case, verdict: &str| {
+        if let Some(key) = pairs.get(case) {
+            append(journal, &journal_line(Some(key), verdict, &mutant.name));
+        }
+    };
     let hinted = sibling
         .as_ref()
         .and_then(|key| hints.lock().ok()?.get(key).cloned())
         .unwrap_or_default();
-    let (first, second) = phases(cases, &hinted, judging.seconds);
+    let (first, second) = phases(&open, &hinted, judging.seconds);
     for phase in batches(&first).iter().chain(&batches(&second)) {
         match run_cases(judging, id, mutant, phase) {
-            Ok((Verdict::Missed, _)) => {}
-            Ok((verdict, killed_by)) => {
+            Ok((verdict, killed_by, passed)) => {
+                // EVERY CASE'S OUTCOME, AS IT LANDS: a run killed mid-sweep
+                // keeps each pass and kill it already proved.
+                for case in &passed {
+                    record(case, PASSED);
+                }
+                if verdict == Verdict::Missed {
+                    continue;
+                }
+                if let Some(case) = &killed_by
+                    && verdict == Verdict::Caught
+                {
+                    record(case, "caught");
+                }
                 if let (Some(key), Some(case)) = (sibling, killed_by)
                     && let Ok(mut hints) = hints.lock()
                 {
                     hints.entry(key).or_default().insert(case);
                 }
-                return verdict;
+                return (verdict, skipped);
             }
             Err(why) => {
                 // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
                 // failed: on #1276 six such errors left no log at all.
                 keep_error(judging, id, &format!("{why:#}\n"));
-                return Verdict::Error;
+                return (Verdict::Error, skipped);
             }
         }
     }
-    Verdict::Missed
+    (Verdict::Missed, skipped)
 }
 
 /// The longest filterset one run is handed, in bytes. The kernel caps ONE
@@ -1789,6 +1846,42 @@ pub fn verdict_key(
     Some(hasher.finalize().to_hex().to_string())
 }
 
+/// The key one case's outcome against one mutant is reused under: the
+/// mutant's [`site_key`] inputs and that case alone with its digest.
+///
+/// THE MUTANT-TEST PAIR IS THE UNIT (Regression Mutation Testing, Zhang,
+/// Marinov, Zhang & Khurshid, ISSTA 2012): a verdict keyed by EVERY reaching
+/// case moved whenever any one of them did, so a mutant reached by 2,000
+/// integration cases ran all 2,000 again for an edit that touched one. Keyed
+/// by the pair, an edit re-runs exactly the cases it can change.
+///
+/// Its limit is the verdict key's: a case's digest is what it executed
+/// unmutated, so code only a mutant steers it into is not in the key.
+#[must_use]
+pub fn pair_key(
+    root: &std::path::Path,
+    mutant: &Listed,
+    case: &Case,
+    digests: &std::collections::BTreeMap<Case, String>,
+) -> Option<String> {
+    let mut hasher = site_hasher(root, mutant)?;
+    let digest = digests.get(case).map_or("", String::as_str);
+    hasher.update(format!("\x1dpair\x1e{}\x1f{}\x1f{digest}", case.0, case.1).as_bytes());
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+/// The journal's verdict for one case that ran a mutant and passed.
+const PASSED: &str = "passed";
+
+/// Append `line` to the journal, one write so a crash tears at most it.
+fn append(journal: &std::sync::Mutex<Option<std::fs::File>>, line: &str) {
+    if let Ok(mut held) = journal.lock()
+        && let Some(file) = held.as_mut()
+    {
+        let _ = std::io::Write::write_all(file, line.as_bytes());
+    }
+}
+
 /// Each case's own text, digested once per sweep (read once per file): in
 /// each of its own module files, the test function it names and the helper
 /// functions beside it; the whole file where no such test is found; and the
@@ -1931,7 +2024,7 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
             let mut fields = line.split('\t');
             Some((fields.next()?, fields.next()?))
         })
-        .filter(|(key, verdict)| *key != "-" && reusable(verdict))
+        .filter(|(key, verdict)| *key != "-" && (reusable(verdict) || *verdict == PASSED))
         .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
         .collect()
 }
@@ -2029,13 +2122,20 @@ fn judge_all(
     );
     let next = std::sync::atomic::AtomicUsize::new(0);
     let reused_count = std::sync::atomic::AtomicUsize::new(0);
+    let skipped_runs = std::sync::atomic::AtomicUsize::new(0);
     let (sent, decided) = std::sync::mpsc::channel::<(u32, Verdict)>();
     let mut verdicts = Vec::with_capacity(todo.len());
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
             let sent = sent.clone();
-            let (next, hints, journal, nobody, reused_count) =
-                (&next, &hints, &journal, &nobody, &reused_count);
+            let (next, hints, journal, nobody, reused_count, skipped_runs) = (
+                &next,
+                &hints,
+                &journal,
+                &nobody,
+                &reused_count,
+                &skipped_runs,
+            );
             scope.spawn(move || {
                 loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2057,18 +2157,22 @@ fn judge_all(
                         Some("timeout") => Verdict::Timeout,
                         Some("missed") => Verdict::Missed,
                         Some("uncovered") => Verdict::Uncovered,
-                        _ => judge(judging, id, mutant, cases, hints),
+                        _ => {
+                            let (verdict, skipped) =
+                                judge(judging, id, mutant, cases, hints, journal);
+                            skipped_runs.fetch_add(skipped, std::sync::atomic::Ordering::Relaxed);
+                            verdict
+                        }
                     };
                     // EVERY VERDICT, SURVIVORS TOO, the moment it is decided:
                     // one write per line, so a crash tears at most the last.
                     // Only a kill is reused (`reusable`); a survivor's line is
                     // the record a stopped sweep keeps.
-                    if reused.is_none()
-                        && let Ok(mut held) = journal.lock()
-                        && let Some(file) = held.as_mut()
-                    {
-                        let line = journal_line(key.as_deref(), verdict.name(), &mutant.name);
-                        let _ = std::io::Write::write_all(file, line.as_bytes());
+                    if reused.is_none() {
+                        append(
+                            journal,
+                            &journal_line(key.as_deref(), verdict.name(), &mutant.name),
+                        );
                     }
                     if sent.send((id, verdict)).is_err() {
                         break;
@@ -2092,9 +2196,10 @@ fn judge_all(
     });
     let _ = writeln!(
         out,
-        "mutate schema: reused {} of {} verdict(s)",
+        "mutate schema: reused {} of {} verdict(s), and {} case run(s) a recorded outcome decided",
         reused_count.into_inner(),
-        todo.len()
+        todo.len(),
+        skipped_runs.into_inner()
     );
     verdicts
 }
@@ -3489,6 +3594,93 @@ mod tests {
         let mut out = Vec::new();
         let code = report(&mut out, &mutants, &verdicts[..1], (0, 0), &state, 7).unwrap();
         assert_eq!(code, 0);
+    }
+
+    /// Each case's own recorded outcome against a mutant decides it or narrows
+    /// its run: a recorded kill is a kill with no run, every case recorded
+    /// passing is a survivor with no run, and a case recorded passing is left
+    /// out of the run the rest still owe.
+    ///
+    /// Fails by: a recorded kill run again, a mutant whose every case passed
+    /// run again, or a recorded pass not narrowing the run.
+    #[test]
+    fn a_recorded_outcome_per_case_decides_or_narrows_a_mutant() {
+        let base = crate::scratch::scratch("schema-judge-pairs");
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(
+            base.join("src/lib.rs"),
+            "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+        )
+        .unwrap();
+        let mutant = in_function(
+            listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        let a: Case = (String::from("a"), String::from("batten"));
+        let b: Case = (String::from("b"), String::from("batten"));
+        let cases: BTreeSet<Case> = [a.clone(), b.clone()].into();
+        let digests = std::collections::BTreeMap::new();
+        let pair = |case: &Case| pair_key(&base, &mutant, case, &digests).unwrap();
+        let mutants = [mutant.clone()];
+        let judged = |cache: std::collections::BTreeMap<String, String>| {
+            let (reach, seconds) = Default::default();
+            let store = base.join("verdicts");
+            let judging = Judging {
+                work: &base,
+                target: &base,
+                scratch: &base,
+                root: &base,
+                mutants: &mutants,
+                reach: &reach,
+                seconds: &seconds,
+                cache: &cache,
+                digests: &digests,
+                store: &store,
+            };
+            let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
+            let journal = std::sync::Mutex::new(None);
+            judge(&judging, 0, &mutant, &cases, &hints, &journal)
+        };
+        let caught = String::from("caught");
+        let passed = String::from(PASSED);
+        assert_eq!(
+            judged([(pair(&b), caught)].into()),
+            (Verdict::Caught, 2),
+            "a recorded kill decides it"
+        );
+        assert_eq!(
+            judged([(pair(&a), passed.clone()), (pair(&b), passed.clone())].into()),
+            (Verdict::Missed, 2),
+            "every case recorded passing"
+        );
+        let (verdict, skipped) = judged([(pair(&a), passed)].into());
+        assert_eq!(skipped, 1, "the recorded pass is left out of the run");
+        assert!(
+            !matches!(verdict, Verdict::Caught | Verdict::Missed),
+            "the open case was run, and here no run can start: {verdict:?}"
+        );
+        assert_ne!(pair(&a), pair(&b), "each case is its own pair");
+    }
+
+    /// A run's `PASS` lines name every case it proved, beside the `FAIL` line
+    /// naming its killer.
+    ///
+    /// Fails by: a pass dropped, or a failure read as a pass.
+    #[test]
+    fn a_run_names_its_passes_and_its_killer() {
+        let output = "        PASS [   0.1s] batten tests::a\n        FAIL [   0.2s] batten::it m::b\n        PASS [   0.3s] batten tests::c\n";
+        assert_eq!(
+            passes(output),
+            [
+                (String::from("tests::a"), String::from("batten")),
+                (String::from("tests::c"), String::from("batten")),
+            ]
+        );
+        assert_eq!(
+            killer(output),
+            Some((String::from("m::b"), String::from("batten::it")))
+        );
     }
 
     /// A stored verdict, a kept survivor's too, is reused without a run and without a second
