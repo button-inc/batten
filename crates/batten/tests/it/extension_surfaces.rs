@@ -425,11 +425,16 @@ fn the_extension_headings_count_matches_the_enum() {
     );
 }
 
-/// Every shipped preset is named in the config a new repository starts from.
+/// Every SUGGESTED shipped preset is named in the config a new repository
+/// starts from, and no other is.
 ///
 /// CLOUD-836 vendored the presets so a consumer would not author every predicate
 /// from scratch. That argument was unrealised while the starter mentioned none of
 /// them: the feature shipped and the documented path did not reach it.
+///
+/// Narrowed by CLOUD-2628: an opinionated ban (`suggested: false`) is opted
+/// into knowingly, so the starter must NOT name it either — both directions,
+/// or a ban suggested by the starter would pass.
 #[test]
 fn the_starter_config_names_every_shipped_preset() {
     for file in ["crates/batten/src/starter.toml", "batten.example.toml"] {
@@ -437,6 +442,7 @@ fn the_starter_config_names_every_shipped_preset() {
             fs::read_to_string(at_root(file)).unwrap_or_else(|_| panic!("{file} is readable"));
         let missing: Vec<&str> = batten::preset_catalog::MANIFESTS
             .iter()
+            .filter(|manifest| manifest.suggested)
             .map(|manifest| manifest.name)
             .filter(|name| !text.contains(name))
             .collect();
@@ -444,6 +450,17 @@ fn the_starter_config_names_every_shipped_preset() {
             missing.is_empty(),
             "{file} names no {missing:?} — a preset the binary ships that the config a \
              consumer starts from does not mention"
+        );
+        let suggested: Vec<&str> = batten::preset::MANIFESTS
+            .iter()
+            .filter(|manifest| !manifest.suggested)
+            .map(|manifest| manifest.name)
+            .filter(|name| text.contains(name))
+            .collect();
+        assert!(
+            suggested.is_empty(),
+            "{file} names {suggested:?} — an opt-in ban the config a consumer starts from \
+             must never suggest"
         );
     }
 }

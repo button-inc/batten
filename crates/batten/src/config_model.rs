@@ -1911,8 +1911,49 @@ pub struct ShellCensus {
     pub workflows: Vec<String>,
     /// Paths that must stay shell because nothing else can run where they do, as
     /// globs. Still measured, reported apart, and never totalled.
+    ///
+    /// LEGACY (CLOUD-2628): a non-empty list with no `mode` reads as
+    /// `mode = "migrate"` with these paths exempt, exactly as before the ban
+    /// judged presence. Removing that reading is CLOUD-2745's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exempt: Vec<String>,
+    /// How the `shell-hygiene` ban judges this tree. Absent is presence: any
+    /// shell no `generated` entry covers is refused. `migrate` judges growth
+    /// only, while a repository ports what it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ShellMode>,
+    /// The only shell the presence ban admits: files a named generator writes
+    /// and a named test holds, one row per glob.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generated: Vec<Generated>,
+}
+
+/// `[census.shell] mode`: the one knob between presence and growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ShellMode {
+    /// Presence is not judged; the growth arms refuse new shell and shell that
+    /// grows, so the existing surface may only shrink.
+    Migrate,
+}
+
+/// One `[[census.shell.generated]]` row: shell a generator writes and a test
+/// holds.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Generated {
+    /// The generated files, as a glob over tracked paths (`*`, `?`, `**`).
+    pub path: String,
+    /// The command or function that writes them, as free text. Optional to the
+    /// parser so that the census's `validate` is what refuses its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<String>,
+    /// The test that holds their bytes, as `<test file>::<test name>`. Optional
+    /// to the parser so that the census's `validate` is what refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
 
 // ---- `budget` (CLOUD-2789: moved from `budget`, which re-exports it) ----

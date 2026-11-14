@@ -5248,6 +5248,7 @@ pub(crate) fn suite_input(
             plan: None,
             minted: None,
             captured: None,
+            shell: None,
         },
     ))
 }
@@ -5816,6 +5817,7 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
     const MIXED: crate::preset_catalog::Manifest = crate::preset_catalog::Manifest {
         name: "mixed",
         version: 1,
+        suggested: true,
         modules: &[
             crate::preset_catalog::PresetModule {
                 scope: crate::preset_catalog::RuleScope::Tree,

@@ -1072,9 +1072,17 @@ pub enum WeakeningKind {
     /// command key or unit header removed, or a whole manifest dropped is a home
     /// the ban no longer reads — and an exempt glob ADDED is a file it no longer
     /// refuses. The exempt half is the added direction because that list is
-    /// exemptions, `PerfExemptionAdded`'s reason one table over; it is compared
-    /// only where the base declared a census at all, because a census ARRIVING is
-    /// the ban starting to apply, which is a tightening.
+    /// exemptions, `PerfExemptionAdded`'s reason one table over; the homes and
+    /// the exempt list are compared only where the base declared a census.
+    ///
+    /// Two more widen what the ban admits (CLOUD-2628), and both are compared
+    /// against a base with no census too, since the ban judges presence there:
+    /// the EFFECTIVE mode moving from presence to migrate (`mode = "migrate"`
+    /// or a non-empty legacy `exempt`), keyed `census.shell.mode[migrate]`; and
+    /// a `[[census.shell.generated]]` entry whose `(path, check)` pair the base
+    /// did not carry, keyed `census.shell.generated[<path>]`. A legacy census
+    /// moving to a declared `mode = "migrate"` is migrate to migrate, no
+    /// weakening.
     ///
     /// Appended, for the `Ord` reason its neighbours give.
     ShellCensusNarrowed,
@@ -2592,7 +2600,8 @@ fn perf_exemption_weakenings(base: &Config, working: &Config) -> Vec<Weakening> 
 /// Every home is keyed so a removal names what stopped being read: a workflow
 /// glob by itself, a manifest's command key as `path:key`, its unit header as
 /// `path:header`. The exempt list is compared in the ADDED direction, and only
-/// where the base declared a census — see [`WeakeningKind::ShellCensusNarrowed`].
+/// where the base declared a census; the effective mode and the generated table
+/// are compared against any base — see [`WeakeningKind::ShellCensusNarrowed`].
 fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let kind = WeakeningKind::ShellCensusNarrowed;
     let shell = |config: &Config| {
@@ -2635,16 +2644,55 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             .map(|glob| format!("census.shell.exempt[{glob}]"))
             .collect()
     };
-    let Some(was) = shell(base) else {
-        return Vec::new();
+    // THE TWO ADMISSIONS, compared before the early return below: a base with
+    // no census is judged for presence, so a head that migrates or admits a
+    // generated file is the ban reaching less (CLOUD-2628).
+    let mut found = Vec::new();
+    let migrating = |census: Option<&crate::census::ShellCensus>| {
+        census.is_some_and(crate::census::ShellCensus::migrating)
     };
-    let now = shell(working).unwrap_or_default();
-    let mut found = removed_entries(
+    let (was_shell, now_shell) = (shell(base), shell(working));
+    if !migrating(was_shell.as_ref()) && migrating(now_shell.as_ref()) {
+        found.push(Weakening::new(
+            kind,
+            "census.shell.mode[migrate]",
+            "absent",
+            "present",
+        ));
+    }
+    let pairs =
+        |census: Option<&crate::census::ShellCensus>| -> BTreeSet<(String, Option<String>)> {
+            census
+                .map(|census| {
+                    census
+                        .generated
+                        .iter()
+                        .map(|entry| (entry.path.clone(), entry.check.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+    let was_pairs = pairs(was_shell.as_ref());
+    for (path, check) in pairs(now_shell.as_ref()) {
+        if !was_pairs.contains(&(path.clone(), check)) {
+            found.push(Weakening::new(
+                kind,
+                format!("census.shell.generated[{path}]"),
+                "absent",
+                "present",
+            ));
+        }
+    }
+    let Some(was) = was_shell else {
+        return found;
+    };
+    let now = now_shell.unwrap_or_default();
+    found.extend(removed_entries(
         kind,
         &was.workflows,
         &now.workflows,
         "census.shell.workflows",
-    );
+    ));
     found.extend(removed_entries(
         kind,
         &keys(&was),
@@ -5100,8 +5148,8 @@ mod tests {
         // And the census deleted outright is every home at once.
         assert_eq!(weakenings(&full, &config("")).len(), 3);
 
-        // THE OTHER DIRECTION. More homes, fewer exemptions, and a census
-        // arriving where there was none are all the ban reaching further.
+        // THE OTHER DIRECTION. More homes and fewer exemptions are the ban
+        // reaching further.
         assert!(weakenings(&census("", "\"boot.sh\"", manifest), &full).is_empty());
         assert!(
             weakenings(
@@ -5110,7 +5158,76 @@ mod tests {
             )
             .is_empty()
         );
-        assert!(weakenings(&config(""), &full).is_empty());
+        // A census arriving WITH an exempt list is not a tightening any more
+        // (CLOUD-2628): no census is presence, and `exempt` reads as migrate.
+        assert_eq!(
+            only(&config(""), &full),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.mode[migrate]",
+                "absent",
+                "present",
+            )
+        );
+    }
+
+    #[test]
+    fn moving_the_shell_ban_off_presence_is_a_weakening() {
+        // CLOUD-2628. The effective mode is migrate for `mode = "migrate"` or a
+        // non-empty legacy `exempt`, presence otherwise — a base with no census
+        // included, since the ban judges presence there.
+        let census = |body: &str| config(&format!("[census.shell]\n{body}"));
+        let migrate = Weakening::new(
+            WeakeningKind::ShellCensusNarrowed,
+            "census.shell.mode[migrate]",
+            "absent",
+            "present",
+        );
+        let presence = census("workflows = [\"ci/*.yml\"]\n");
+        let declared = census("workflows = [\"ci/*.yml\"]\nmode = \"migrate\"\n");
+        assert_eq!(only(&presence, &declared), migrate);
+        assert_eq!(only(&config(""), &census("exempt = [\"x\"]\n")), migrate);
+        // `exempt = []` is the same as absent: still presence.
+        assert!(
+            weakenings(
+                &presence,
+                &census("workflows = [\"ci/*.yml\"]\nexempt = []\n")
+            )
+            .is_empty()
+        );
+        // Legacy migrate to declared migrate is migrate to migrate.
+        let legacy = census("workflows = [\"ci/*.yml\"]\nexempt = [\"x\"]\n");
+        let both = census("workflows = [\"ci/*.yml\"]\nexempt = [\"x\"]\nmode = \"migrate\"\n");
+        assert!(weakenings(&legacy, &both).is_empty());
+        // And back to presence is the ban reaching further.
+        assert!(weakenings(&declared, &presence).is_empty());
+    }
+
+    #[test]
+    fn admitting_a_generated_file_is_a_weakening() {
+        // CLOUD-2628. A generated entry is the presence ban's only admission, so
+        // a `(path, check)` pair the base did not carry admits shell it refused.
+        let entry = |path: &str, check: &str| {
+            format!(
+                "[[census.shell.generated]]\npath = \"{path}\"\ngenerator = \"gen\"\n\
+                 check = \"{check}\"\n"
+            )
+        };
+        let census = |rows: &[String]| config(&format!("[census.shell]\n{}", rows.concat()));
+        let none = census(&[]);
+        let one = census(&[entry("gen/a.sh", "t.rs::a")]);
+        let added = Weakening::new(
+            WeakeningKind::ShellCensusNarrowed,
+            "census.shell.generated[gen/a.sh]",
+            "absent",
+            "present",
+        );
+        assert_eq!(only(&none, &one), added);
+        assert_eq!(only(&config(""), &one), added);
+        // The same glob held by another test is another admission.
+        assert_eq!(only(&one, &census(&[entry("gen/a.sh", "t.rs::b")])), added);
+        assert!(weakenings(&one, &one).is_empty());
+        assert!(weakenings(&one, &none).is_empty());
     }
 
     #[test]
