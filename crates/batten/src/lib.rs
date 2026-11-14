@@ -12519,6 +12519,28 @@ fn run_land_singleton(
 /// is a test that needs a wider margin than production.
 const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Put the committed release pin back over a local build's source pin before a
+/// lap judges anything ([`engine::local_source_pin`]). A lap judges with the
+/// release, an unreleased engine can never land, and the pin left in the tree
+/// fails every receipt the lap records; nothing else in the tree is touched.
+fn restore_release_pin(root: &Path, out: &mut dyn Write) -> Result<()> {
+    let path = root.join(config::CONFIG_FILE);
+    let (Ok(worktree), Ok(head)) = (
+        crate::fsio::read_to_string(&path),
+        git::show(root, "HEAD", config::CONFIG_FILE),
+    ) else {
+        return Ok(());
+    };
+    if engine::local_source_pin(&head, &worktree) {
+        crate::durable::replace(&path, head)?;
+        writeln!(
+            out,
+            "land: restored the committed release pin over a local build's source pin"
+        )?;
+    }
+    Ok(())
+}
+
 fn run_land_lap(
     root: &Path,
     url: &str,
@@ -12537,6 +12559,7 @@ fn run_land_lap(
         // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
         .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
+    restore_release_pin(root, out)?;
     // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
     // would ready and then abandon fails to LOAD rather than in production,
     // which is the whole difference between a schema and a convention.
@@ -25055,9 +25078,25 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     // canceled, a duplicate or completed is off the checklist. The store's
     // newest read answers it, so the Stop path never calls the tracker; a row
     // never read stays listed, the could-not-look direction.
+    // A ROW THIS BRANCH CLOSES IS ANSWERED: its commits name it in closing form,
+    // so the merge lands it and nothing is deferred. Listed anyway, the
+    // checklist asked every Stop for an answer the branch had already given,
+    // and only rows still open to the question belong on it. A log that cannot
+    // be read closes nothing, the could-not-look direction.
+    let closed_here: std::collections::BTreeSet<String> =
+        ready::Grammar::from_compiled(&crate::pattern::compiled(&config.patterns))
+            .ok()
+            .zip(
+                worktree::declared_trunk(root)
+                    .ok()
+                    .flatten()
+                    .and_then(|trunk| git::log_messages(root, &trunk.tracking).ok().flatten()),
+            )
+            .map(|(grammar, log)| race::closes(&log, &grammar).into_iter().collect())
+            .unwrap_or_default();
     let filed = filed
         .into_iter()
-        .filter(|id| !row_closed(root, id))
+        .filter(|id| !row_closed(root, id) && !closed_here.contains(id))
         .collect();
     Some((flagged, filed))
 }

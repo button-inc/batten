@@ -1764,6 +1764,84 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
     );
 }
 
+/// A row this branch's own commits close is answered: the merge lands it, so
+/// asking for it on every Stop asks a question the branch already settled.
+///
+/// Fails by: a row named in closing form still listed, or a row merely
+/// mentioned (not closed) dropped from the checklist.
+#[test]
+fn a_row_the_branch_closes_leaves_the_filed_checklist() {
+    let dir = scratch("filed-row-closed-here");
+    common::init_repo(&dir);
+    // THE CLOSING GRAMMAR AND THE TRUNK, from the committed authority: the
+    // closing read needs both, and the fixture carries neither.
+    let base = format!("{CONFIG}{FILED_ROWS}");
+    let committed: toml::Table = fs::read_to_string(common::at_root("batten.toml"))
+        .expect("read the committed authority")
+        .parse()
+        .expect("the committed authority parses");
+    let grammar: Vec<toml::Value> = committed["pattern"]
+        .as_array()
+        .expect("the authority declares patterns")
+        .iter()
+        .filter(|row| {
+            row["id"].as_str().is_some_and(|id| {
+                (id.starts_with("ready-") || id == "clause-label")
+                    && !base.contains(&format!("\"{id}\""))
+            })
+        })
+        .cloned()
+        .collect();
+    let mut patterns = toml::Table::new();
+    patterns.insert("pattern".to_owned(), toml::Value::Array(grammar));
+    fs::write(
+        dir.join("batten.toml"),
+        format!(
+            "must_land_on = \"origin/main\"\n{base}\n{}",
+            toml::to_string(&patterns).expect("the patterns serialize")
+        ),
+    )
+    .expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    install_modules(&dir);
+    fs::copy(
+        common::at_root("policy/filed-here.rego"),
+        dir.join("policy/filed-here.rego"),
+    )
+    .expect("install the filed-here module");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "base"]);
+    common::pin_origin_main(&dir);
+    common::write(&dir, "src/b.rs", "fn main() {}\n");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(
+        &dir,
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "fix: the thing\n\nCloses CLOUD-9\nSee CLOUD-7",
+        ],
+    );
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.main"),
+        "issue CLOUD-7 2099-01-01T00:00:00Z ready 0 - 0\n\
+         issue CLOUD-9 2099-01-01T00:00:00Z ready 0 - 0\n",
+    )
+    .expect("write the board record");
+    let stdout = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    assert!(
+        stdout.contains("CLOUD-7 filed"),
+        "a row only mentioned stays listed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("CLOUD-9 filed"),
+        "the row the branch closes is off the checklist: {stdout}"
+    );
+}
+
 /// The checklist re-evaluates OPEN rows: one the tracker last said was a
 /// duplicate is closed, and listing it asks for a groom it does not need.
 #[test]
