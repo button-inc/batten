@@ -1977,7 +1977,7 @@ mod tests {
                 &[("CHANGELOG.md", "## [1.0.0]\nnotes\n")],
                 &[
                     (crate::install::LOCK_FILE, &lock),
-                    (BOOTSTRAP_FILE, "#!/bin/sh\n"),
+                    (BOOTSTRAP_FILE, "the bootstrap's committed bytes\n"),
                 ],
             ],
             0,

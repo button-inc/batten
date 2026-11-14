@@ -33,19 +33,15 @@ use crate::common;
 ///
 /// Failing is the precondition every case here shares: this file is about which
 /// ADVICE a refusal earns, so a gate that passed would exercise nothing.
+///
+/// The stand-in (`examples/stub.rs`, CLOUD-2336): it prints `says` as one line
+/// and exits 1.
 fn failing_gate(dir: &std::path::Path, says: &str) -> String {
-    let gate = dir.join("gate.sh");
-    std::fs::write(
+    let gate = dir.join("gate");
+    common::stub_at(
         &gate,
-        format!("#!/usr/bin/env bash\nprintf '%s\\n' {says}\nexit 1\n"),
-    )
-    .expect("write the gate");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate runnable");
-    }
+        &serde_json::json!([{"steps": [{"stdout": format!("{says}\n")}, {"exit": 1}]}]),
+    );
     gate.to_string_lossy().into_owned()
 }
 
@@ -191,7 +187,7 @@ fn the_classifier_is_read_from_the_worktree_being_judged_not_the_main_checkout()
     let linked = repo_with_declaring_worktree("verify-advice-worktree");
     let gate = failing_gate(
         &linked,
-        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+        "rustc-LLVM ERROR: IO failure: No space left on device",
     );
     let (code, said) = verify(&linked, &gate);
 
@@ -246,7 +242,7 @@ fn a_worktree_declaring_nothing_is_not_handed_the_main_checkouts_classifier() {
 
     let gate = failing_gate(
         &linked,
-        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+        "rustc-LLVM ERROR: IO failure: No space left on device",
     );
     let (code, said) = verify(&linked, &gate);
 
@@ -276,7 +272,7 @@ fn a_refusal_the_declared_row_matches_is_named_as_the_environment() {
     let dir = repo("verify-advice-environment", true);
     let gate = failing_gate(
         &dir,
-        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+        "rustc-LLVM ERROR: IO failure: No space left on device",
     );
     let (code, said) = verify(&dir, &gate);
 
@@ -304,7 +300,7 @@ fn a_refusal_the_declared_row_matches_is_named_as_the_environment() {
 #[test]
 fn a_refusal_matching_no_declared_row_still_says_reproduce_it_locally() {
     let dir = repo("verify-advice-ordinary", true);
-    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let gate = failing_gate(&dir, "tests/primitives.rs:1171 a real finding");
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
@@ -328,7 +324,7 @@ fn a_consumer_declaring_no_rows_classifies_nothing_as_the_environment() {
     let dir = repo("verify-advice-undeclared", false);
     let gate = failing_gate(
         &dir,
-        "'rustc-LLVM ERROR: IO failure: No space left on device'",
+        "rustc-LLVM ERROR: IO failure: No space left on device",
     );
     let (code, said) = verify(&dir, &gate);
 
@@ -382,7 +378,7 @@ fn leave_a_bet(dir: &std::path::Path) -> String {
 fn a_refusal_over_a_borrowed_tree_names_the_base_and_offers_both_recoveries() {
     let dir = repo("verify-advice-speculative", true);
     let base = leave_a_bet(&dir);
-    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let gate = failing_gate(&dir, "tests/primitives.rs:1171 a real finding");
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
@@ -418,7 +414,7 @@ fn a_refusal_over_a_borrowed_tree_names_the_base_and_offers_both_recoveries() {
 #[test]
 fn a_refusal_with_no_bet_outstanding_gets_the_ordinary_advice() {
     let dir = repo("verify-advice-unspeculative", true);
-    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let gate = failing_gate(&dir, "tests/primitives.rs:1171 a real finding");
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
@@ -440,17 +436,14 @@ fn a_refusal_with_no_bet_outstanding_gets_the_ordinary_advice() {
 #[test]
 fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
     let dir = repo("verify-advice-unconfirmed-two", true);
-    let gate = dir.join("gate-two.sh");
-    std::fs::write(
+    let gate = dir.join("gate-two");
+    common::stub_at(
         &gate,
-        "#!/usr/bin/env bash\nprintf '%s\\n' 'policy/x.rego:1 a real verdict'\nexit 2\n",
-    )
-    .expect("write the gate");
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate runnable");
-    }
+        &serde_json::json!([{"steps": [
+            {"stdout": "policy/x.rego:1 a real verdict\n"},
+            {"exit": 2},
+        ]}]),
+    );
     let (code, said) = verify(&dir, &gate.to_string_lossy());
 
     assert_eq!(
@@ -471,7 +464,7 @@ fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
 #[test]
 fn a_refused_gate_renders_its_verdict_with_its_cause() {
     let dir = repo("verify-advice-verdict", true);
-    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let gate = failing_gate(&dir, "tests/primitives.rs:1171 a real finding");
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
@@ -498,7 +491,7 @@ fn a_refused_gate_renders_its_verdict_with_its_cause() {
 #[test]
 fn the_gate_that_refused_is_shown_saying_why() {
     let dir = repo("verify-advice-tee", true);
-    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let gate = failing_gate(&dir, "tests/primitives.rs:1171 a real finding");
     let (_, said) = verify(&dir, &gate);
     let handle = said
         .split("run batten capture show ")

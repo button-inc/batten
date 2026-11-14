@@ -117,6 +117,43 @@ fn collector_command() -> String {
         .to_owned()
 }
 
+/// `command` split into the argv nextest execs — nextest splits a script's
+/// command into words and runs no shell of its own, so neither does this file
+/// (CLOUD-2336).
+///
+/// The committed command quotes with single quotes only, so that is the whole
+/// grammar here; a double quote or backslash outside them panics rather than
+/// being split some second way.
+fn argv_of(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for ch in command.chars() {
+        match (quoted, ch) {
+            (false, '\'') => (quoted, started) = (true, true),
+            (true, '\'') => quoted = false,
+            (false, blank) if blank.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (false, '"' | '\\') => {
+                panic!("clear-scratch's command quotes outside single quotes: {command}")
+            }
+            (_, other) => {
+                word.push(other);
+                started = true;
+            }
+        }
+    }
+    assert!(!quoted, "clear-scratch's command leaves a quote open");
+    if started {
+        words.push(word);
+    }
+    words
+}
+
 /// Run the collector over a fixture target dir holding one sentinel entry, with
 /// a stub `pgrep` first on `PATH` that reports `others` as the live
 /// `cargo-nextest` pids. Returns whether the sentinel survived and the count line
@@ -145,19 +182,17 @@ fn line_of(published: &str, key: &str) -> String {
 /// survived, in order, and everything the collector published.
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
+    reason = "stays, and test-only: the subject is the committed command nextest runs, so asserting it means spawning its argv as nextest does"
 )]
 fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
     let root = crate::common::scratch(name);
     let bin = root.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let stub = bin.join("pgrep");
-    std::fs::write(&stub, format!("#!/bin/sh\nprintf '%s' '{others}'\n")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // The stand-in as `pgrep` (`examples/stub.rs`, CLOUD-2336): it prints
+    // `others`, unterminated, whatever it is asked.
+    crate::common::stub_at(
+        &bin.join("pgrep"),
+        &serde_json::json!([{"steps": [{"stdout": others}]}]),
+    );
     let sentinels: Vec<PathBuf> = seeds
         .iter()
         .map(|seed| root.join("target").join(seed).join("sentinel"))
@@ -168,12 +203,18 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
     }
     let published = root.join("nextest-env");
     let path = std::env::join_paths(
-        std::iter::once(bin).chain(std::env::split_paths(&crate::common::ambient_path())),
+        std::iter::once(bin.clone()).chain(std::env::split_paths(&crate::common::ambient_path())),
     )
     .unwrap();
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(collector_command())
+    let argv = argv_of(&collector_command());
+    let (program, args) = argv.split_first().expect("clear-scratch names a program");
+    let status = std::process::Command::new(program)
+        .args(args)
+        // Closed: the stand-in `pgrep` reads its stdin whole before answering.
+        .stdin(std::process::Stdio::null())
+        // Named: the shell runs `pgrep` by bare name, so the stand-in's argv[0]
+        // carries no directory to find its plan beside.
+        .env("BATTEN_STUB_PLAN", bin.join("pgrep.plan.json"))
         .env("CARGO_TARGET_DIR", root.join("target"))
         .env("NEXTEST_ENV", &published)
         .env("PATH", path)

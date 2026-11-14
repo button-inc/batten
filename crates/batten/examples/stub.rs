@@ -211,11 +211,24 @@ fn parent_id() -> String {
 }
 
 /// Where the plan is: the variable, else beside the invoked program.
+///
+/// A program run by bare NAME carries no directory in `argv[0]`, so the plan is
+/// looked for beside the first `PATH` entry that holds both the name and its
+/// plan — the entry the caller's lookup found.
 fn plan_path(invoked: &str) -> PathBuf {
-    std::env::var_os("BATTEN_STUB_PLAN").map_or_else(
-        || PathBuf::from(format!("{invoked}.plan.json")),
-        PathBuf::from,
-    )
+    if let Some(named) = std::env::var_os("BATTEN_STUB_PLAN") {
+        return PathBuf::from(named);
+    }
+    let beside = PathBuf::from(format!("{invoked}.plan.json"));
+    if invoked.contains(std::path::MAIN_SEPARATOR) || invoked.contains('/') {
+        return beside;
+    }
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join(format!("{invoked}.plan.json")))
+        .find(|plan| plan.is_file())
+        .unwrap_or(beside)
 }
 
 /// Run one step, returning the exit code it sets, if it sets one.

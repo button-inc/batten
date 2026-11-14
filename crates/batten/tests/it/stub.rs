@@ -36,6 +36,38 @@ fn run(path: &Path, args: &[&str], stdin: &str) -> Output {
     child.wait_with_output().expect("the stand-in exits")
 }
 
+/// Run by bare NAME through `PATH`, `argv[0]` has no directory, so the plan is
+/// found beside the `PATH` entry that holds the program.
+#[test]
+fn a_program_run_by_name_finds_its_plan_on_path() {
+    let dir = common::scratch("stub-by-name");
+    common::stub_at(
+        &dir.join("fake-tool"),
+        &serde_json::json!([{"steps": [{"stdout": "found"}, {"exit": 4}]}]),
+    );
+    let path = std::env::join_paths(std::iter::once(dir.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("a PATH");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the subject is the stand-in run by bare name, which only a PATH lookup does (CLOUD-2336)"
+    )]
+    let out = std::process::Command::new("fake-tool")
+        .env("PATH", path)
+        .env_remove("BATTEN_STUB_PLAN")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the stand-in runs by name");
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "found");
+}
+
 #[test]
 fn no_matching_rule_exits_127_naming_the_argv() {
     let dir = common::scratch("stub-unmatched");

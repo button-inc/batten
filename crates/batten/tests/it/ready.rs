@@ -339,8 +339,8 @@ fn dated_payload(created_at: Option<&str>, description: &str) -> String {
 /// a refusal, and the case that keeps this gate from being a verdict about the
 /// operator's machine.
 // UNIX-ONLY, AND ONLY THESE FIVE. The rest of this suite reads a Ready block and
-// needs no subprocess; these drive a `#!/bin/sh` stub whose `set_permissions`
-// call below is already `#[cfg(unix)]`. On Windows the spawn fails, the dispatch
+// needs no subprocess; these drive the stand-in, installed as a unix symlink
+// named without an executable suffix. On Windows the spawn fails, the dispatch
 // leaves no record, and absence is what this gate refuses — so the refusal cases
 // would pass FOR THE WRONG REASON while the clean one failed. `bot_lane.rs` and
 // `review_dispatched.rs` gate whole modules on this rung; here the module has
@@ -371,7 +371,7 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
     // A literal rather than hand-escaping the backslashes: an escaper written here
     // would be a second authority over TOML's own string grammar, and it would be
     // one this suite exercises on exactly one platform.
-    let runner = dir.join("runner.sh");
+    let runner = dir.join("runner");
     common::write(
         &dir,
         "batten.toml",
@@ -386,14 +386,10 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
         ),
     );
     if let Some(code) = runner_exits {
-        std::fs::write(&runner, format!("#!/bin/sh\ncat >/dev/null\nexit {code}\n"))
-            .expect("write the stub");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755))
-                .expect("make it executable");
-        }
+        // The stand-in (`examples/stub.rs`, CLOUD-2336): it swallows the
+        // payload, as a runner would, and exits `code` having printed nothing.
+        // Not the real `true`/`false`, which leave stdin unread.
+        common::stub_at(&runner, &serde_json::json!([{"steps": [{"exit": code}]}]));
     }
     dir
 }
