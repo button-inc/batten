@@ -2455,7 +2455,7 @@ impl Overlay {
     /// where any of the three variables is unset or blank.
     #[must_use]
     pub fn declared(root: &Path) -> Option<Self> {
-        Self::declared_by(root, |name| std::env::var(name).ok())
+        Self::declared_by(root, overlay_var)
     }
 
     /// [`Overlay::declared`] over the variables `var` answers: each trimmed of
@@ -2489,6 +2489,44 @@ impl Overlay {
             .filter(|rest| !rest.is_empty())
             .map(|rest| self.dir.join(rest))
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The variables [`with_overlay_vars`] scoped to this thread.
+    static OVERLAY_VARS: std::cell::RefCell<Option<Vec<(&'static str, &'static str)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with [`Overlay::declared`] answered from `vars` on this thread,
+/// as the environment would answer it: THE ENVIRONMENT'S OWN SEAM, REACHABLE
+/// IN PROCESS, because this crate forbids the `unsafe` `set_var` needs (the
+/// pattern of `rest::with_fixture`). The previous scope is restored on the way
+/// out, unwinding included.
+#[cfg(test)]
+fn with_overlay_vars<T>(vars: &[(&'static str, &'static str)], body: impl FnOnce() -> T) -> T {
+    /// Puts the scope it replaced back when dropped.
+    struct Restore(Option<Vec<(&'static str, &'static str)>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERLAY_VARS.with(|scoped| scoped.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(OVERLAY_VARS.with(|scoped| scoped.replace(Some(vars.to_vec()))));
+    body()
+}
+
+/// One overlay variable: the thread's scoped set where a test declared one,
+/// else the environment.
+fn overlay_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(vars) = OVERLAY_VARS.with(|scoped| scoped.borrow().clone()) {
+        return vars
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| (*value).to_owned());
+    }
+    std::env::var(name).ok()
 }
 
 /// The `--features` every cargo invocation of a sweep carries, so the build it
@@ -5163,6 +5201,74 @@ mod tests {
             "a blank one is unset"
         );
         assert!(Overlay::declared_by(root, |_| None).is_none());
+    }
+
+    /// The listing asks cargo-mutants for exactly the change's mutants as
+    /// JSON, reads what it prints, and refuses a runner that failed.
+    ///
+    /// Fails by: an empty listing, a refusal read as a listing, or an argv
+    /// other than `mutants --in-diff <diff> --list --json`.
+    #[test]
+    fn the_listing_asks_for_the_changes_mutants_and_refuses_a_failed_runner() {
+        // The stand-in runner is a `#!/bin/sh` script, which only a unix host
+        // executes; the case compiles everywhere and asserts there.
+        if !cfg!(unix) {
+            return;
+        }
+        let root = fixture("list-mutants");
+        let listed = "[{\"name\":\"m\",\"file\":\"src/lib.rs\",\"package\":\"p\",\
+                      \"genre\":\"FnValue\",\"replacement\":\"true\",\"span\":{\"start\":\
+                      {\"line\":1,\"column\":2},\"end\":{\"line\":3,\"column\":4}},\
+                      \"function\":null}]";
+        let runner = |name: &str, exit: u8| {
+            put(
+                &root,
+                name,
+                &format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\nprintf '%s' '{listed}'\nexit {exit}\n"
+                ),
+            );
+            let path = root.join(name);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+            }
+            path
+        };
+        let diff = root.join("change.diff");
+        let got = list_mutants(&root, &runner("lists", 0), &diff).expect("listed");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "m");
+        assert_eq!(
+            crate::fsio::read_to_string(root.join("args")).expect("args"),
+            format!("mutants\n--in-diff\n{}\n--list\n--json\n", diff.display())
+        );
+        assert!(list_mutants(&root, &runner("refuses", 1), &diff).is_err());
+    }
+
+    /// The overlay the environment declares reaches every sweep's cargo
+    /// invocation as its features, and an undeclared one adds none.
+    ///
+    /// Fails by: `Overlay::declared` answering `None` whatever is set, or
+    /// `overlay_features` answering empty or a blank feature.
+    #[test]
+    fn a_declared_overlay_names_its_features_to_every_invocation() {
+        let root = Path::new("/r");
+        let declared = [
+            ("MUTANT_PRESETS", "crates/x/presets"),
+            ("MUTANT_OVERLAY_ENV", "BATTEN_PRESET_OVERLAY"),
+            ("MUTANT_OVERLAY_FEATURES", "preset-overlay"),
+        ];
+        let (overlay, features) = with_overlay_vars(&declared, || {
+            (Overlay::declared(root), overlay_features(root))
+        });
+        assert_eq!(
+            overlay.map(|overlay| overlay.root),
+            Some(String::from("crates/x/presets"))
+        );
+        assert_eq!(features, ["--features", "preset-overlay"]);
+        assert!(with_overlay_vars(&[], || overlay_features(root)).is_empty());
     }
 
     /// Fails by: an inherited profile kept that the staged tree does not

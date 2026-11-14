@@ -1667,6 +1667,23 @@ mod tests {
         assert_eq!(kept.foreign, vec!["pre-commit".to_owned()]);
     }
 
+    /// `--check` writes nothing, not even the hooks directory, and the write
+    /// creates that directory when the clone has none.
+    ///
+    /// Fails by: the directory created under `--check` and not under the write.
+    #[test]
+    fn only_the_write_creates_a_missing_hooks_directory() {
+        let dir = scratch("link-gate-no-hooks");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let hooks = crate::doctor::hooks_dir(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&hooks);
+        let owed = link_git_hooks(&dir, true).unwrap();
+        assert!(owed.owed(), "{owed:?}");
+        assert!(!hooks.exists(), "--check created {}", hooks.display());
+        assert!(!link_git_hooks(&dir, false).unwrap().owed());
+        assert!(hooks.is_dir());
+    }
+
     #[test]
     fn a_sibling_directory_is_not_a_session_root_above() {
         let parent = scratch("register-sibling");

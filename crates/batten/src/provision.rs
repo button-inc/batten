@@ -2206,22 +2206,28 @@ fn place(
 }
 
 /// A symlink whose target stays inside the tree (CLOUD-2682): relative, and
-/// resolved lexically from its own directory.
-#[cfg(unix)]
+/// resolved lexically from its own directory. A host without symlinks refuses
+/// the entry.
+///
+/// ONE FUNCTION, BOTH HOSTS: two `#[cfg]` twins listed a mutant in the body no
+/// build on this host compiles, which no test here could ever kill.
 fn place_symlink(parent: &Path, target: &Path, link: &Path, raw: &Path) -> Result<()> {
-    let link_target = link.to_path_buf();
-    if !lexically_inside(parent, &link_target) {
-        return Err(climbs_out(raw));
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, target, link);
+        return Err(UsageError::raise(format!(
+            "the archive entry {} is a symlink, which this host's tree does not admit",
+            raw.display()
+        )));
     }
-    std::os::unix::fs::symlink(&link_target, target).context("write an archive link")
-}
-
-#[cfg(not(unix))]
-fn place_symlink(_parent: &Path, _target: &Path, _link: &Path, raw: &Path) -> Result<()> {
-    Err(UsageError::raise(format!(
-        "the archive entry {} is a symlink, which this host's tree does not admit",
-        raw.display()
-    )))
+    #[cfg(unix)]
+    {
+        let link_target = link.to_path_buf();
+        if !lexically_inside(parent, &link_target) {
+            return Err(climbs_out(raw));
+        }
+        std::os::unix::fs::symlink(&link_target, target).context("write an archive link")
+    }
 }
 
 #[cfg(unix)]
@@ -3805,6 +3811,32 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         fs::write(&receipt, "unusable\n").unwrap();
         assert!(!credential_usable(&value, probe));
         let _ = fs::remove_file(&receipt);
+    }
+
+    /// A receipt exactly [`CREDENTIAL_MAX_AGE`] old has aged out: the verdict is
+    /// re-proved, and a probe nobody can reach is not usable whatever the
+    /// receipt said.
+    ///
+    /// Fails by: the age compared with `<=`, so a `live` receipt is trusted for
+    /// one second past its bound.
+    #[test]
+    fn a_credential_receipt_at_its_age_bound_is_proved_again() {
+        let credential = format!("batten-provision-test-aged-{}", std::process::id());
+        let value = Secret::new(credential);
+        let receipt = credential_receipt_path(&value).expect("tests run inside a checkout");
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, "live\n").unwrap();
+        let aged =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(CREDENTIAL_MAX_AGE);
+        fs::File::options()
+            .write(true)
+            .open(&receipt)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        let usable = credential_usable(&value, "https://batten-provision-test.invalid/");
+        let _ = fs::remove_file(&receipt);
+        assert!(!usable, "an aged-out receipt is not believed");
     }
 
     #[test]
