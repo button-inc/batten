@@ -5620,30 +5620,31 @@ complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from help" -f -a "replay" -d 'Run each modified test\'s base form against HEAD; a changed expectation is admitted only by a recorded answer'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -f -a "status" -d 'Whether the state repository the environment names can be written from here'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -f -a "push" -d 'Snapshot one session and make it the value of its ref on the state repository'
-complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -f -a "status" -d 'Whether the state repository the environment names can be written from here'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -f -a "push" -d 'Snapshot one session and make it the value of its ref on the state repository'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -f -a "run" -d 'Run this session\'s off-box daemon until it is killed: push when there is something new, wait when the forge says to'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and not __fish_seen_subcommand_from status push run help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -5689,8 +5690,33 @@ complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from push" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from push" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from push" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l session -d 'The harness\'s own identifier for the session whose state is pushed' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l harness -d 'The harness the session belongs to; it selects where the session\'s records are read from' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l transcript -d 'The transcript path the harness named for this session, where it named one' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from run" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from help" -f -a "status" -d 'Whether the state repository the environment names can be written from here'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from help" -f -a "push" -d 'Snapshot one session and make it the value of its ref on the state repository'
+complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from help" -f -a "run" -d 'Run this session\'s off-box daemon until it is killed: push when there is something new, wait when the forge says to'
 complete -c batten -n "__fish_batten_using_subcommand offbox; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -5974,4 +6000,5 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from test" -f -a "replay" -d 'Run each modified test\'s base form against HEAD; a changed expectation is admitted only by a recorded answer'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from offbox" -f -a "status" -d 'Whether the state repository the environment names can be written from here'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from offbox" -f -a "push" -d 'Snapshot one session and make it the value of its ref on the state repository'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from offbox" -f -a "run" -d 'Run this session\'s off-box daemon until it is killed: push when there is something new, wait when the forge says to'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from artifacts" -f -a "write" -d 'Write completions, man pages, schemas or the CLI reference where the caller names'

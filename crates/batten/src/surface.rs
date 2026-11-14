@@ -8222,6 +8222,21 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
     },
+    // `write`: it holds a lock, writes its status file and pushes (CLOUD-2721).
+    // `EXITS_STANDARD`: it runs until it is killed, and the two ways it returns
+    // at all — the switch is off, or another daemon is running — are both 0.
+    // unreached: "offbox run" CLOUD-2736 the agent launches it through its
+    // harness's background facility, never anything in this tree; the hook row
+    // is what tells the agent to.
+    CommandDecl {
+        path: "offbox run",
+        id: "offbox.run",
+        about: "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
+    },
     CommandDecl {
         path: "artifacts",
         id: "artifacts",

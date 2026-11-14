@@ -521,6 +521,15 @@ pub enum OffboxCommand {
         /// The transcript path the harness named, where it named one.
         transcript: Option<String>,
     },
+    /// Run the session's off-box daemon until it is killed (CLOUD-2721).
+    Run {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name, which selects the session source.
+        harness: String,
+        /// The transcript path the harness named, where it named one.
+        transcript: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -4049,6 +4058,11 @@ fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
     match matches.subcommand()? {
         ("status", _) => Some(OffboxCommand::Status),
         ("push", matches) => Some(OffboxCommand::Push {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            transcript: matches.get_one::<String>("transcript").cloned(),
+        }),
+        ("run", matches) => Some(OffboxCommand::Run {
             session: matches.get_one::<String>("session").cloned()?,
             harness: matches.get_one::<String>("harness").cloned()?,
             transcript: matches.get_one::<String>("transcript").cloned(),

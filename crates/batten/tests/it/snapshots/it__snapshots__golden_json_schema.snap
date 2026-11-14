@@ -2653,6 +2653,40 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "offbox run",
+          "id": "offbox.run",
+          "about": "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness the session belongs to; it selects where the session's records are read from"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness's own identifier for the session whose state is pushed"
+            },
+            {
+              "name": "transcript",
+              "short": null,
+              "long": "transcript",
+              "takes_value": true,
+              "positional": false,
+              "help": "The transcript path the harness named for this session, where it named one"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "offbox status",
           "id": "offbox.status",
           "about": "Whether the state repository the environment names can be written from here",

@@ -680,8 +680,81 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 harness,
                 transcript,
             } => run_offbox_push(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Run {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_daemon(out, &session, &harness, transcript.as_deref()),
         },
     }
+}
+
+/// The daemon's real clock, pause and randomness (CLOUD-2721).
+struct DaemonWorld;
+
+impl offbox::World for DaemonWorld {
+    fn now(&mut self) -> i64 {
+        i64::try_from(now_unix()).unwrap_or(i64::MAX)
+    }
+
+    fn pause(&mut self, millis: u64) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a loop that has no end to wait for: the daemon runs until it is killed, and `millis` is the caller's own declared beat — `offbox::run`'s wake, or its bounded lock retry"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+
+    fn random(&mut self) -> u64 {
+        let mut bytes = [0_u8; 8];
+        // Jitter only spreads daemons apart; where the OS has no entropy to
+        // give, the process id still differs between two of them.
+        if getrandom::fill(&mut bytes).is_err() {
+            return u64::from(std::process::id());
+        }
+        u64::from_le_bytes(bytes)
+    }
+}
+
+/// `batten offbox run` (CLOUD-2721): the daemon, until it is killed.
+///
+/// What it reads from the world is read here: the switch, the origin, the
+/// scanner's rows. The clock is the daemon's to read — it decides no gate.
+fn run_offbox_daemon(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    if value.trim().is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let root = git::repo_root(Path::new("."))?;
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let transcript = transcript.map(PathBuf::from);
+    let launch = offbox::run(
+        &offbox::Launching {
+            project_root: &root,
+            provisions: &provisions,
+            harness,
+            session,
+            transcript: transcript.as_deref(),
+            value: &value,
+            origin: origin.as_deref(),
+            wakes: None,
+        },
+        &mut DaemonWorld,
+    )?;
+    writeln!(out, "{}", launch.token())?;
+    Ok(ExitCode::Success)
 }
 
 /// `batten offbox push` (CLOUD-2720): one snapshot, one swap, one token.

@@ -1673,6 +1673,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `off`, and it returns: with the variable removed the daemon never starts
+    // (CLOUD-2721).
+    Verb {
+        path: "offbox run",
+        args: &["--session", "s", "--harness", "exit-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-843, retiring `gh-preflight`. The corpus declares no
     // `[[forge.probe]]` row, so this exercises the refusal that names the
     // missing table — a usage answer, never a probe, and the forge fixture the
