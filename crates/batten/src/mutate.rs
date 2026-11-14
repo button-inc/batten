@@ -1891,13 +1891,19 @@ enum Program<'a> {
     /// ([`schema`]): the case under measurement, which no in-process route
     /// can run.
     Test(&'a str),
+    /// The syscall tracer a reach case runs under ([`schema`]), recording the
+    /// files it touches: nothing in-process sees a child process's reads.
+    Tracer(&'a str),
 }
 
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
             Program::Cargo => "cargo",
-            Program::Suite(program) | Program::Command(program) | Program::Test(program) => program,
+            Program::Suite(program)
+            | Program::Command(program)
+            | Program::Test(program)
+            | Program::Tracer(program) => program,
         }
     }
 }
