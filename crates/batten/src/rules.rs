@@ -7957,14 +7957,18 @@ pub(crate) struct RunTables<'a> {
     patterns: BTreeMap<String, regex::Regex>,
     /// Each declared traversal's answer, keyed id -> seed.
     traversals: serde_json::Value,
+    /// The working tree the shell fact reads past a row's `line_sources`
+    /// (CLOUD-2628), shared by every row so the tree is probed once. `None`
+    /// where no tree is under judgement.
+    shell: Option<crate::census::TreeReader<'a>>,
 }
 
 impl<'a> RunTables<'a> {
     /// Compile the patterns and walk every declared traversal.
     fn new(
         vocabulary: crate::policy::Vocabulary<'a>,
-        root: &Path,
-        files: &[String],
+        root: &'a Path,
+        files: &'a [String],
     ) -> anyhow::Result<Self> {
         let patterns = crate::pattern::compiled(vocabulary.patterns);
         let traversals = walk_traversals(vocabulary, root, files, &patterns)?;
@@ -7972,6 +7976,7 @@ impl<'a> RunTables<'a> {
             registers: vocabulary.registers,
             patterns,
             traversals,
+            shell: Some(crate::census::TreeReader::new(root, files)),
         })
     }
 }
@@ -9115,6 +9120,10 @@ pub(crate) struct Resolved<'a> {
     /// The declared reductions over the capture store (CLOUD-1188) — the answers
     /// a row asked for, never the responses they came from.
     pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
+    /// How far the shell fact reads past the row's `line_sources`
+    /// (CLOUD-2628). `None` reads the declared lines alone, which is what a
+    /// module's own suite and a fabricated tree want.
+    pub shell: Option<crate::census::Reach<'a, 'a>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -9928,6 +9937,8 @@ pub(crate) fn tree_document(
         &projected.parsed,
         &projected.read_lines,
         resolved.git.base_delta.as_ref(),
+        tracked,
+        resolved.shell,
     );
 
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
@@ -10204,8 +10215,22 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         plan: inputs.plan,
         minted: inputs.minted,
         captured: inputs.captured,
+        // Read past the line sources only where a `[census.shell]` table is
+        // handed over; `policy_rule` widens it for the preset's own row.
+        shell: inputs
+            .tables
+            .shell
+            .as_ref()
+            .map(|reader| crate::census::Reach {
+                reader,
+                always: false,
+            }),
     }
 }
+
+/// The preset whose ban judges shell's presence over the whole tree, a
+/// consumer declaring no `[census.shell]` included (CLOUD-2628).
+const SHELL_PRESET: &str = "shell-hygiene";
 
 /// The class a copy behind its preset raises (CLOUD-2290).
 pub const MODULE_PIN_STALE: &str = "module pin stale";
@@ -10365,6 +10390,13 @@ fn policy_rule(
     if selected_nothing && selectors_declared {
         return Some(NotObserved::RuleSkipped);
     }
+    let mut resolved = resolved_of(inputs);
+    if rule.preset.as_deref() == Some(SHELL_PRESET) {
+        resolved.shell = resolved.shell.map(|reach| crate::census::Reach {
+            always: true,
+            ..reach
+        });
+    }
     let (input, not_acquired) = tree_document(
         documents,
         &Declared {
@@ -10377,7 +10409,7 @@ fn policy_rule(
             external: &rule.external,
         },
         tracked,
-        &resolved_of(inputs),
+        &resolved,
     );
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
@@ -14675,6 +14707,7 @@ mod tests {
                 plan: None,
                 minted: None,
                 captured: None,
+                shell: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -15259,6 +15292,7 @@ mod tests {
                 plan: None,
                 minted: None,
                 captured: None,
+                shell: None,
             },
         );
         assert!(
@@ -15425,6 +15459,7 @@ mod tests {
         registers: &[],
         patterns: BTreeMap::new(),
         traversals: serde_json::Value::Null,
+        shell: None,
     };
 
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
@@ -21528,6 +21563,7 @@ violation contains {
             registers: &registers,
             patterns: BTreeMap::new(),
             traversals: serde_json::Value::Null,
+            shell: None,
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
@@ -21590,6 +21626,7 @@ violation contains {
             registers: &registers,
             patterns: BTreeMap::new(),
             traversals: serde_json::Value::Null,
+            shell: None,
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {

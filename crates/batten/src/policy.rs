@@ -5010,6 +5010,7 @@ rules contains not_quoted\n";
     const MIXED: crate::preset::Manifest = crate::preset::Manifest {
         name: "mixed",
         version: 1,
+        suggested: true,
         modules: &[
             crate::preset::PresetModule {
                 scope: crate::rules::RuleScope::Tree,

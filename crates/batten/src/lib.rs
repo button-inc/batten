@@ -9478,6 +9478,7 @@ fn suite_input(
             plan: None,
             minted: None,
             captured: None,
+            shell: None,
         },
     ))
 }
