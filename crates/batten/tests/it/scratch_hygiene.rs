@@ -207,14 +207,12 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
     )
     .unwrap();
     let argv = argv_of(&collector_command());
-    let (program, args) = argv.split_first().expect("clear-scratch names a program");
+    let (program, rest) = argv.split_first().expect("clear-scratch names a program");
     let status = std::process::Command::new(program)
-        .args(args)
+        .args(rest)
         // Closed: the stand-in `pgrep` reads its stdin whole before answering.
+        // It is run by bare name and finds its plan beside its PATH entry.
         .stdin(std::process::Stdio::null())
-        // Named: the shell runs `pgrep` by bare name, so the stand-in's argv[0]
-        // carries no directory to find its plan beside.
-        .env("BATTEN_STUB_PLAN", bin.join("pgrep.plan.json"))
         .env("CARGO_TARGET_DIR", root.join("target"))
         .env("NEXTEST_ENV", &published)
         .env("PATH", path)

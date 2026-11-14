@@ -4233,27 +4233,28 @@ mod tests {
             bail!("a binary that does not exist has no surface to read");
         };
         assert!(absent.to_string().contains("could not ask"), "{absent}");
-        // The stand-in binary is a shell script, which only unix runs: off unix
-        // only the refusal above is asserted, and the exit-status and verb
+        // The stand-in binary is installed by link, which only unix has: off
+        // unix only the refusal above is asserted, and the exit-status and verb
         // mutants go unjudged there.
         if cfg!(unix) {
-            use crate::engine::make_executable;
             let document = serde_json::json!({
                 "id": "root",
                 "subcommands": [{"id": crate::surface::MEDIATION_ID, "path": "adjudicate"}],
             });
             let answers = dir.join("answers");
-            std::fs::write(
+            crate::scratch::stub_at(
                 &answers,
-                format!(
-                    "#!/bin/sh\n[ \"$1 $2 $3\" = 'spec --format json' ] || exit 9\nprintf '%s' '{document}'\n"
-                ),
-            )?;
-            make_executable(&answers)?;
+                &serde_json::json!([
+                    {
+                        "argv_prefix": ["spec", "--format", "json"],
+                        "steps": [{ "stdout": document.to_string() }],
+                    },
+                    { "steps": [{ "exit": 9 }] },
+                ]),
+            );
             assert_eq!(mediation_verb(&answers)?, "adjudicate");
             let fails = dir.join("fails");
-            std::fs::write(&fails, "#!/bin/sh\nexit 3\n")?;
-            make_executable(&fails)?;
+            crate::scratch::stub_at(&fails, &serde_json::json!([{ "steps": [{ "exit": 3 }] }]));
             let Err(refused) = mediation_verb(&fails) else {
                 bail!("a binary that exits non-zero has no surface to read");
             };

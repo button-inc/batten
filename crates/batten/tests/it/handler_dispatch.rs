@@ -137,8 +137,6 @@ fn bench(name: &str, verdict: &str) -> Bench {
 
 /// [`bench`] over another `batten.toml`, whose row runs the same stub.
 fn bench_with(name: &str, config: &str, verdict: &str) -> Bench {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let dir = scratch(name);
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -147,17 +145,16 @@ fn bench_with(name: &str, config: &str, verdict: &str) -> Bench {
     common::init_repo(&repo);
 
     let ran = repo.join("handler-ran");
-    let body = if verdict.is_empty() {
-        format!("#!/bin/sh\ntouch {:?}\nexit 0\n", ran.to_str().unwrap())
+    let marks = serde_json::json!({ "write": [ran.to_str().unwrap(), ""] });
+    let steps = if verdict.is_empty() {
+        serde_json::json!([marks])
     } else {
-        format!(
-            "#!/bin/sh\ntouch {:?}\necho {verdict:?}\nexit 1\n",
-            ran.to_str().unwrap()
-        )
+        serde_json::json!([marks, { "stdout": format!("{verdict}\n") }, { "exit": 1 }])
     };
-    let script = repo.join("mediator-advise.sh");
-    std::fs::write(&script, body).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::stub_at(
+        &repo.join("mediator-advise.sh"),
+        &serde_json::json!([{ "steps": steps }]),
+    );
 
     Bench { repo, ran }
 }
@@ -277,7 +274,6 @@ fn a_current_mediator_produces_no_advisory_on_the_same_call() {
 #[test]
 fn a_handler_reads_the_payload_the_host_sent() {
     use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
 
     let repo = scratch("handler-host-bytes").join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -298,14 +294,13 @@ expires = "2027-03-31"
     );
     common::init_repo(&repo);
     let got = repo.join("got.json");
-    let script = repo.join("copy-stdin.sh");
-    std::fs::write(
-        &script,
-        format!("#!/bin/sh\ncat > {:?}\nexit 0\n", got.to_str().unwrap()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let payload = "{ \"tool_response\" : {\"file\":{\"content\":\"x\"}} ,\n  \"tool_name\":\"Read\", \"hook_event_name\" :\"PostToolUse\",\"tool_input\":{\"file_path\":\"a\"} }";
+    // The stand-in copies its stdin to `got.json` byte for byte, so the case
+    // below compares exactly what the handler was handed.
+    common::stub_at(
+        &repo.join("copy-stdin.sh"),
+        &serde_json::json!([{ "steps": [{ "save-stdin": got.to_str().unwrap() }] }]),
+    );
     let mut child = common::batten()
         .current_dir(&repo)
         .args(["adjudicate", "--harness", "claude-code"])
@@ -386,8 +381,6 @@ fn a_write_inside_the_tree_is_selected() {
 /// Fails by: the mediator's name resolved on `PATH` like any other program.
 #[test]
 fn a_row_naming_the_engine_runs_the_running_image() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let dir = scratch("handler-running-image");
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -410,13 +403,10 @@ expires = "2027-03-31"
     let stubs = dir.join("stubs");
     std::fs::create_dir_all(&stubs).unwrap();
     let ran = dir.join("stub-ran");
-    let stub = stubs.join("batten");
-    std::fs::write(
-        &stub,
-        format!("#!/bin/sh\ntouch {:?}\nexit 0\n", ran.to_str().unwrap()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::stub_at(
+        &stubs.join("batten"),
+        &serde_json::json!([{ "steps": [{ "write": [ran.to_str().unwrap(), ""] }] }]),
+    );
     let path = std::env::join_paths(
         std::iter::once(stubs).chain(std::env::split_paths(&common::ambient_path())),
     )

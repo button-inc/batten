@@ -5262,17 +5262,24 @@ mod tests {
     /// had served and stranded. Measured over one session: two lease acquisitions
     /// taken, spent on a 21–28 minute gate, and handed straight back.
     ///
-    /// The gate here is `sh -c` over the variable, so its verdict is a fact about
-    /// the CHILD's environment rather than about this process's — a case reading
-    /// `std::env::var` would pass against the defect it exists to catch.
+    /// The gate here is the stand-in reading the variable (`test -n`), so its
+    /// verdict is a fact about the CHILD's environment rather than about this
+    /// process's — a case reading `std::env::var` would pass against the defect
+    /// it exists to catch.
     #[test]
     fn a_body_gate_is_told_which_base_the_lap_borrowed() {
         let root = std::env::temp_dir();
-        let gate = vec![vec![
-            String::from("sh"),
-            String::from("-c"),
-            String::from("test -n \"$BATTEN_SPEC_BASE\""),
-        ]];
+        let program = crate::scratch::scratch("land-body-gate-bet").join("gate");
+        let base = crate::speculation::PUBLISHED_AS;
+        crate::scratch::stub_at(
+            &program,
+            &serde_json::json!([
+                { "env_eq": [base, ""], "steps": [{ "exit": 1 }] },
+                { "env": base, "steps": [] },
+                { "steps": [{ "exit": 1 }] },
+            ]),
+        );
+        let gate = vec![vec![program.display().to_string()]];
         let published = vec![(
             String::from(crate::speculation::PUBLISHED_AS),
             Some(String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),

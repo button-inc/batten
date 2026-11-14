@@ -362,17 +362,24 @@ mod tests {
     /// closing newline, or the refusal's own summary dropped.
     #[test]
     fn a_refusing_gates_report_is_forwarded_whole_and_summarised() {
+        let dir = crate::scratch::scratch("sweep-refusing-report");
+        let program = |name: &str, steps: serde_json::Value| -> Vec<String> {
+            let path = dir.join(name);
+            crate::scratch::stub_at(&path, &serde_json::json!([{ "steps": steps }]));
+            vec![path.display().to_string()]
+        };
         let refusing = SweepGate {
             name: "r".to_owned(),
-            run: ["sh", "-c", "printf 'bad row'; exit 2"]
-                .map(str::to_owned)
-                .to_vec(),
+            run: program(
+                "reports",
+                serde_json::json!([{ "stdout": "bad row" }, { "exit": 2 }]),
+            ),
             refuses: vec![2],
             abstains: vec![],
         };
         let quiet = SweepGate {
             name: "q".to_owned(),
-            run: ["sh", "-c", "exit 2"].map(str::to_owned).to_vec(),
+            run: program("quiet", serde_json::json!([{ "exit": 2 }])),
             refuses: vec![2],
             abstains: vec![],
         };

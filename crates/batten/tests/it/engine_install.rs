@@ -127,8 +127,8 @@ const REPO: &str = "example/pkg";
 /// The release a ref's `batten.toml` pins in the fixture, never this binary's own.
 const WANTED: &str = "v9.9.9";
 
-/// The bytes the fixture release ships as its binary.
-const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
+/// The bytes the fixture release ships as its binary: compared, never run.
+const SHIPPED: &[u8] = b"the fixture release\n";
 
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
@@ -1385,23 +1385,14 @@ mod repair {
 
     /// A `cargo` stub that records it ran and writes the "built" engine.
     fn stub_cargo(dir: &Path) {
-        let stub = dir.join("bin").join("cargo");
-        std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
-        common::write(
-            &dir.join("bin"),
-            "cargo",
-            "#!/bin/sh\n: > \"$STUB_RAN\"\nmkdir -p \"$CARGO_TARGET_DIR/release\"\nprintf 'the built engine\\n' > \"$CARGO_TARGET_DIR/release/batten\"\n",
+        common::stub_at(
+            &dir.join("bin").join("cargo"),
+            &serde_json::json!([{ "steps": [
+                { "write": ["{env:STUB_RAN}", ""] },
+                { "mkdir": "{env:CARGO_TARGET_DIR}/release" },
+                { "write": ["{env:CARGO_TARGET_DIR}/release/batten", "the built engine\n"] },
+            ] }]),
         );
-        make_executable(&stub);
-    }
-
-    fn make_executable(path: &Path) {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut mode = std::fs::metadata(path)
-            .expect("stat the stub")
-            .permissions();
-        mode.set_mode(0o755);
-        std::fs::set_permissions(path, mode).expect("chmod the stub");
     }
 
     fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
@@ -1652,12 +1643,10 @@ mod repair {
     fn checkout_build(dir: &Path, stamp: &str) {
         let release = dir.join("target").join("release");
         std::fs::create_dir_all(&release).unwrap();
-        common::write(
-            &release,
-            "batten",
-            "#!/bin/sh\necho \"checkout build ran $*\"\n",
+        common::stub_at(
+            &release.join("batten"),
+            &serde_json::json!([{ "steps": [{ "stdout": "checkout build ran {argv}\n" }] }]),
         );
-        make_executable(&release.join("batten"));
         common::write(&release, "batten.source", &format!("{stamp}\n"));
     }
 
@@ -1800,12 +1789,10 @@ mod repair {
             .join("engine")
             .join(tag);
         std::fs::create_dir_all(&cache).unwrap();
-        common::write(
-            &cache,
-            "batten",
-            &format!("#!/bin/sh\necho \"pinned {tag} ran $*\"\n"),
+        common::stub_at(
+            &cache.join("batten"),
+            &serde_json::json!([{ "steps": [{ "stdout": format!("pinned {tag} ran {{argv}}\n") }] }]),
         );
-        make_executable(&cache.join("batten"));
     }
 
     /// A RELEASE PIN IS FOLLOWED, ON THE HOOK PATH TOO (CLOUD-2059). The hook used
