@@ -4876,14 +4876,20 @@ depends = ["tree-clean"]
 # starts over a head something cheaper refused.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
 #      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
-#      budget and the policy modules' own tests.
+#      budget, the policy modules' own tests, and `batten-check` (the whole
+#      committed rule set): it ran only in tier 3, behind hk's `test` step, so on
+#      #1276 a held filed row, a seconds read, refused only after hours of mutants.
+#      The two records it reads (`signing-posture-record`, `record validate`, hk's
+#      edges for it) are written in sequence just above, so it never judges a stale one.
 #   2. minutes: semver, the test replay, the two cross builds, clippy.
 #   3. the suite: `ci` (hk's whole suite, mutants included).
 run = [
   "mise run tree-clean",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
-  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test",
+  "mise run signing-posture-record",
+  "cargo run --quiet -p batten -- record validate config-validator",
+  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check",
   "mise run --continue-on-error semver ::: verify:test-replay ::: cross-check ::: darwin-link ::: lint:clippy",
   "mise run ci",
   "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
