@@ -536,6 +536,14 @@ fn store_of(path: &str) -> Option<&str> {
     Some(second.map_or(path, |at| &path[..at]))
 }
 
+/// Whether a `batten-*` entry of the git directory is one of the few that are
+/// not stores.
+fn git_excluded(entry: &str) -> bool {
+    GIT_EXCLUDED
+        .iter()
+        .any(|name| entry == *name || (name.ends_with('-') && entry.starts_with(name)))
+}
+
 /// Every store file this checkout has, as its tree path and where it is.
 ///
 /// `state/<entry>/…` from the state directory, by allow-list; `git/<entry>/…`
@@ -555,6 +563,10 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
             if !STATE_STORES.contains(&entry.as_str()) {
                 continue;
             }
+            // A lock is never content, wherever it sits.
+            if relative.ends_with(".lock") {
+                continue;
+            }
             found.push((format!("state/{relative}"), path));
         }
     }
@@ -564,9 +576,7 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
             if !entry.starts_with(GIT_STORE_PREFIX) {
                 continue;
             }
-            let excluded = GIT_EXCLUDED
-                .iter()
-                .any(|name| entry == *name || (name.ends_with('-') && entry.starts_with(name)));
+            let excluded = git_excluded(entry);
             if excluded || relative.ends_with(".lock") {
                 continue;
             }
@@ -682,8 +692,9 @@ fn build(
     ),
 ) -> Result<Snapshot> {
     let dir = dir.to_path_buf();
-    let last: BTreeMap<String, String> = match crate::git::resolve_ref(repo, LAST)? {
-        Some(commit) => gitwrite::tree_index(repo, &commit)?.into_iter().collect(),
+    let last_commit = crate::git::resolve_ref(repo, LAST)?;
+    let last: BTreeMap<String, String> = match last_commit.as_deref() {
+        Some(commit) => gitwrite::tree_index(repo, commit)?.into_iter().collect(),
         None => BTreeMap::new(),
     };
     let mut entries: BTreeMap<String, Content> = BTreeMap::new();
@@ -828,7 +839,7 @@ fn build(
     // CARRIED FORWARD. Per file for the appended roots; per STORE for the rest,
     // and only for a store that is absent locally altogether.
     for (path, id) in &last {
-        if entries.contains_key(path) {
+        if entries.contains_key(path) || foreign(&dir, last_commit.as_deref(), path) {
             continue;
         }
         let appended = APPENDED
@@ -850,6 +861,604 @@ fn build(
         spans_redacted,
         ended,
     })
+}
+
+// --- the push (CLOUD-2720) -----------------------------------------------------
+
+/// The most new record bytes one push may add.
+pub const BYTE_CAP: u64 = 100 * MIB;
+
+/// The harness name whose source is the one file `--transcript` names.
+const NEUTRAL: &str = "exit-code";
+
+/// How many times one call tries the swap before it reports contention.
+const ATTEMPTS: usize = 3;
+
+/// The file recording how far this session's own ref has got: the
+/// `cursor.json` of the snapshot last applied.
+pub const PUSHED: &str = "pushed.json";
+
+/// The directory another writer's content is kept under, keyed by the commit it
+/// came from — locally and in the tree alike.
+const ABSORBED: &str = "absorbed";
+
+/// The path of an http(s) origin, `<owner>/<name>`: what a session's ref is
+/// keyed by. `None` for any other origin, [`remote_for`]'s way.
+#[must_use]
+pub fn origin_path(origin: &str) -> Option<String> {
+    let (scheme, rest) = origin.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    let (_, path) = rest.split_once('/')?;
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    (!path.is_empty()).then(|| path.to_owned())
+}
+
+/// The ref a session's snapshots are the value of:
+/// `refs/heads/session/<owner>/<name>/<harness>-<hash>`.
+///
+/// The session id never appears in it — [`leaf`] is a digest — so an id no ref
+/// name could carry still gives a valid one. The real id is in `meta.json`.
+#[must_use]
+pub fn reference(meta: &Meta) -> String {
+    format!(
+        "refs/heads/session/{}/{}",
+        meta.origin,
+        leaf(&meta.harness, &meta.session)
+    )
+}
+
+/// One session, as a push needs it.
+#[allow(missing_debug_implementations)]
+pub struct Session<'a> {
+    /// The project's root directory.
+    pub project_root: &'a Path,
+    /// The scanner's provision rows, loaded at the verb's entry.
+    pub provisions: &'a [crate::provision::Provision],
+    /// Whose snapshot it is.
+    pub meta: Meta,
+    /// The state repository's URL.
+    pub remote: String,
+    /// The transcript path the harness named, where it named one.
+    pub transcript: Option<PathBuf>,
+    /// The commit time, read at the caller's boundary.
+    pub time: i64,
+}
+
+/// What one push came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pushed {
+    /// The swap was applied: the session's ref now names this snapshot.
+    Applied,
+    /// The remote already holds this snapshot; nothing was sent.
+    Unchanged,
+    /// The swap was rejected on every attempt.
+    Contended,
+    /// The forge said to slow down. Nothing waits here: the caller owns the wait.
+    Throttled(lease::Throttled),
+    /// Discovery answered that this machine may not write the repository.
+    Unattached,
+    /// No snapshot was built, so nothing unredacted was sent.
+    Refused(Refusal),
+}
+
+impl Pushed {
+    /// The one stdout token.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Pushed::Applied => "pushed",
+            Pushed::Unchanged => "unchanged",
+            Pushed::Contended => "contended",
+            Pushed::Throttled(_) => "throttled",
+            Pushed::Unattached => Status::Unattached.token(),
+            Pushed::Refused(_) => "no-scanner",
+        }
+    }
+
+    /// The exit that goes with it. A lost race and a throttle are the one
+    /// verdict this verb has: the state is not off this machine yet.
+    #[must_use]
+    pub const fn code(self) -> ExitCode {
+        match self {
+            Pushed::Applied | Pushed::Unchanged => ExitCode::Success,
+            Pushed::Contended | Pushed::Throttled(_) => ExitCode::Violation,
+            Pushed::Unattached | Pushed::Refused(_) => ExitCode::Usage,
+        }
+    }
+}
+
+/// A push's outcome, with the feeds whose last read returned no further record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Push {
+    /// What happened.
+    pub outcome: Pushed,
+    /// The snapshot's `ended` list; empty where no snapshot was built.
+    pub ended: Vec<String>,
+}
+
+impl Push {
+    fn only(outcome: Pushed) -> Self {
+        Push {
+            outcome,
+            ended: Vec::new(),
+        }
+    }
+}
+
+/// `Ok(throttle)` where `err` is the forge saying slow down, `err` back
+/// otherwise: a throttle is an outcome here, never a failure.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT throttled-probe-reads-as-failure|s@^        Some(throttled) => Ok(Push::only(Pushed::Throttled(*throttled))),$@        Some(_) => Err(err),@|a_throttled_probe_is_throttled_and_sends_nothing
+fn throttled(err: anyhow::Error) -> Result<Push> {
+    match err.downcast_ref::<lease::Throttled>() {
+        Some(throttled) => Ok(Push::only(Pushed::Throttled(*throttled))),
+        None => Err(err),
+    }
+}
+
+/// A path segment for a subagent's sub-key: its own characters where a path and
+/// a ref can carry them, `_` where they cannot.
+fn segment(sub: &str) -> String {
+    let cleaned: String = sub
+        .chars()
+        .map(|each| {
+            if each.is_ascii_alphanumeric() || matches!(each, '-' | '_' | '.') {
+                each
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.trim_matches('.').is_empty() {
+        String::from("_")
+    } else {
+        cleaned
+    }
+}
+
+/// The feeds of one push: the session's own, from its harness's source, then
+/// `extra` in the order given.
+fn feeds_of<'a>(
+    session: &Session<'_>,
+    source: Option<&'a dyn SessionSource>,
+    extra: &[Feed<'a>],
+) -> Result<Vec<Feed<'a>>> {
+    let mut feeds: Vec<Feed<'_>> = Vec::new();
+    if let Some(source) = source {
+        let listed = match source.list() {
+            Ok(listed) => listed,
+            // A source that cannot be read gives no feed, and the stores still go.
+            Err(err) if err.downcast_ref::<crate::sessions::Unavailable>().is_some() => Vec::new(),
+            Err(err) => return Err(err),
+        };
+        // The neutral source is one file the caller named for THIS session, so
+        // whatever it lists is the session's; a harness's own source lists
+        // every session on the machine, and only this one's files are fed.
+        let named = session.meta.harness == NEUTRAL;
+        for found in listed {
+            if !named && found.id != session.meta.session {
+                continue;
+            }
+            let prefix = if found.sub.is_empty() {
+                String::from("transcript/main")
+            } else {
+                format!("transcript/{}", segment(&found.sub))
+            };
+            feeds.push(Feed {
+                prefix,
+                source,
+                session: found,
+            });
+        }
+    }
+    for feed in extra {
+        feeds.push(Feed {
+            prefix: feed.prefix.clone(),
+            source: feed.source,
+            session: feed.session.clone(),
+        });
+    }
+    Ok(feeds)
+}
+
+/// Build one snapshot of `session` and make it the value of the session's ref
+/// on the state repository (CLOUD-2720).
+///
+/// The session's own feeds come from its harness's source; `extra` are added
+/// after them, in the order given. The swap is receive-pack's compare-and-swap
+/// under a lease: it replaces the ref only while it reads what this repository
+/// last pushed or absorbed, or is absent. A rejected swap fetches the other
+/// writer's snapshot, [`absorb`]s it, and tries again — three attempts in all.
+///
+/// **A throttle returns at once** with the forge's two values. Nothing was
+/// lost: the local files are as the snapshot left them, and the next push
+/// carries them.
+///
+/// # Errors
+///
+/// A transport failure, a scanner that ran and failed, or a local file that
+/// will not read or write.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT admit-accepts-any-tip|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7c_: \&str\x7c true;@|a_rejected_push_fetches_absorbs_and_is_applied
+//MUTANT admit-refuses-an-absent-ref|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7cold: \&str\x7c last.as_deref() == Some(old);@|a_ref_rotated_away_is_recreated_on_the_first_attempt
+//MUTANT throttled-push-retried-at-once|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                let _ = throttle;@|a_throttled_push_returns_at_once_and_loses_nothing
+//MUTANT unchanged-snapshot-still-sent|s@^        if unchanged {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
+//MUTANT pushed-cursor-recorded-before-the-swap|s@^        let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;$@        record_pushed(\&dir, \&repo, \&commit)?; let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;@|a_throttled_push_returns_at_once_and_loses_nothing
+//MUTANT rejected-swap-retried-without-bound|s@^    for attempt in 1..=ATTEMPTS {$@    for attempt in 1..=ATTEMPTS + 2 {@|three_rejected_swaps_are_contended_after_three_posts
+pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
+    match lease::probe(&session.remote, Service::ReceivePack) {
+        Ok(200) => {}
+        Ok(401 | 403 | 404) => return Ok(Push::only(Pushed::Unattached)),
+        Ok(other) => {
+            return Err(anyhow::anyhow!(
+                "offbox: the state repository answered {other} to discovery"
+            ));
+        }
+        Err(err) => return throttled(err),
+    }
+    let dir = session_dir(session.project_root, &session.meta)?;
+    let repo = local_repo(&dir);
+    let name = reference(&session.meta);
+
+    let source =
+        crate::sessions::source_named(&session.meta.harness, session.transcript.as_deref());
+    let feeds = feeds_of(session, source.as_deref(), extra)?;
+
+    let mut ended = Vec::new();
+    for attempt in 1..=ATTEMPTS {
+        let built = snapshot(
+            session.project_root,
+            session.provisions,
+            &session.meta,
+            &feeds,
+            session.time,
+            BYTE_CAP,
+        )?;
+        let (commit, tree) = match built {
+            Snapshot::Built {
+                commit,
+                tree,
+                ended: now,
+                ..
+            } => {
+                ended = now;
+                (commit, tree)
+            }
+            Snapshot::Refused(refusal) => return Ok(Push::only(Pushed::Refused(refusal))),
+        };
+        let last = crate::git::resolve_ref(&repo, LAST)?;
+        let unchanged = match last.as_deref() {
+            Some(last) => gitwrite::tree_id(&repo, last)? == tree,
+            None => false,
+        };
+        if unchanged {
+            return Ok(Push {
+                outcome: Pushed::Unchanged,
+                ended,
+            });
+        }
+        // WHAT THIS PUSH MAY REPLACE: the value this repository last pushed or
+        // absorbed, or nothing at all. An absent ref has nothing to lose — it
+        // is a first push, or the branch was rotated away.
+        let admit = |old: &str| old == lease::ZERO || last.as_deref() == Some(old);
+        let outcome = lease::push(&session.remote, &repo, &name, &commit, &admit)?;
+        match outcome {
+            lease::Outcome::Applied => {
+                gitwrite::set_ref(&repo, LAST, &commit)?;
+                // AFTER THE REF, never before: a kill between the two leaves
+                // this file behind the ref, which only has another daemon
+                // import records the ref already holds.
+                record_pushed(&dir, &repo, &commit)?;
+                return Ok(Push {
+                    outcome: Pushed::Applied,
+                    ended,
+                });
+            }
+            lease::Outcome::Throttled {
+                retry_after,
+                reset_at,
+            } => {
+                let throttle = lease::Throttled {
+                    retry_after,
+                    reset_at,
+                };
+                return Ok(Push::only(Pushed::Throttled(throttle)));
+            }
+            lease::Outcome::Rejected { .. } => {}
+        }
+        if attempt == ATTEMPTS {
+            break;
+        }
+        // REJECTED: another writer holds the ref. Take what it wrote, keep all
+        // of it, and build again on top.
+        let theirs = match lease::advertise(&session.remote, Service::ReceivePack) {
+            Ok(advertisement) => advertisement.head_of(&name).to_owned(),
+            Err(err) => return throttled(err),
+        };
+        if theirs == lease::ZERO || last.as_deref() == Some(theirs.as_str()) {
+            continue;
+        }
+        if let Err(err) = lease::fetch_shallow(&session.remote, &repo, &theirs) {
+            return throttled(err);
+        }
+        absorb(session.project_root, &session.meta, &theirs, true)?;
+        gitwrite::set_ref(&repo, LAST, &theirs)?;
+    }
+    Ok(Push {
+        outcome: Pushed::Contended,
+        ended,
+    })
+}
+
+/// Replace `pushed.json` with the `cursor.json` the snapshot `commit` carried.
+fn record_pushed(dir: &Path, repo: &Path, commit: &str) -> Result<()> {
+    let index = gitwrite::tree_index(repo, commit)?;
+    let Some((_, id)) = index.iter().find(|(path, _)| path == CURSORS) else {
+        return Ok(());
+    };
+    crate::durable::replace(dir.join(PUSHED), gitwrite::read_blob(repo, id)?)
+        .map_err(|err| anyhow::anyhow!("offbox: the pushed cursor will not write: {err}"))
+}
+
+/// Whether every segment of a tree path is an ordinary name. A tree another
+/// writer built is data: a path that climbs out of its destination is refused.
+fn ordinary(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains('\\'))
+}
+
+/// `base` itself for an empty `relative`, the file under it otherwise.
+fn under(base: &Path, relative: &str) -> PathBuf {
+    if relative.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(relative)
+    }
+}
+
+/// The files a local destination holds: itself where it is a file, everything
+/// under it where it is a directory, nothing where it is absent.
+fn held(destination: &Path) -> Vec<(String, PathBuf)> {
+    if destination.is_file() {
+        return vec![(String::new(), destination.to_path_buf())];
+    }
+    files_under(destination)
+}
+
+/// Where a store of another writer's snapshot lives on this machine, or `None`
+/// for an entry this build does not know as a store — which is kept aside
+/// whole, and never written into the state or git directory on a tree's say-so.
+fn destination(project_root: &Path, store: &str) -> Option<PathBuf> {
+    let (root, entry) = store.split_once('/')?;
+    match root {
+        "state" if STATE_STORES.contains(&entry) => {
+            Some(crate::state::repo_state_dir(project_root).ok()?.join(entry))
+        }
+        "git" if entry.starts_with(GIT_STORE_PREFIX) && !git_excluded(entry) => {
+            Some(crate::git::git_dir(project_root).ok()?.join(entry))
+        }
+        _ => None,
+    }
+}
+
+/// One group of another writer's files: each as its path relative to the
+/// group's root, and its blob id.
+type Group = Vec<(String, String)>;
+
+/// Another writer's snapshot, read one file at a time.
+struct Theirs<'a> {
+    repo: &'a Path,
+    /// `absorbed/<commit>/`, where what cannot go in place is kept whole.
+    aside: PathBuf,
+    /// Whether anything was written under `aside`.
+    kept_aside: bool,
+}
+
+impl Theirs<'_> {
+    fn read(&self, id: &str) -> Result<Vec<u8>> {
+        gitwrite::read_blob(self.repo, id)
+    }
+
+    /// Write one file where no file is. **No existing local file is modified.**
+    fn place(&self, target: &Path, id: &str) -> Result<()> {
+        if target.exists() {
+            return Ok(());
+        }
+        let refused =
+            |err: std::io::Error| anyhow::anyhow!("offbox: an absorbed file will not write: {err}");
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(refused)?;
+        }
+        crate::durable::replace(target, self.read(id)?).map_err(refused)
+    }
+
+    /// Write a whole group under `base`.
+    fn place_all(&self, base: &Path, group: &Group) -> Result<()> {
+        for (relative, id) in group {
+            self.place(&under(base, relative), id)?;
+        }
+        Ok(())
+    }
+
+    /// Keep a whole group aside, at `root` under this snapshot's own entry.
+    fn keep_aside(&mut self, root: &str, group: &Group) -> Result<()> {
+        self.kept_aside = true;
+        self.place_all(&self.aside.join(root), group)
+    }
+
+    /// Whether every file of `group` equals the local file at the same place.
+    fn all_equal(&self, base: &Path, group: &Group) -> Result<bool> {
+        for (relative, id) in group {
+            let Ok(local) = std::fs::read(under(base, relative)) else {
+                return Ok(false);
+            };
+            if local != self.read(id)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Copy another writer's snapshot `commit` into local files (CLOUD-2720).
+///
+/// `own` says the commit was read from this session's own ref. The commit must
+/// already be in the session's local repository.
+///
+/// 1. **A store** whose local destination is absent or empty is written there,
+///    whole. One with equal bytes writes nothing. One that differs leaves the
+///    local store untouched and is written whole under
+///    `absorbed/<commit>/`. **Stores are never merged**: the findings journal is
+///    rewritten whole under a lock, and a line-wise union of two is neither.
+/// 2. **`transcript/`**: with `own` and no local transcript, the files and their
+///    cursor entries become the local ones, and the session continues the same
+///    record stream. Equal files write nothing. Otherwise all of it is kept
+///    aside. **Records are never merged between writers.**
+/// 3. **`history/<leaf>/`**: absent locally it is written in place — with its
+///    cursor entries, when `own`; different, it is kept aside.
+/// 4. **`absorbed/<X>/`** inside the commit is written to the local
+///    `absorbed/<X>/` where that is absent. An entry is keyed by the commit it
+///    came from, so one already here cannot differ, and nothing is ever nested
+///    inside another entry.
+///
+/// Whenever anything was kept aside, the commit's `meta.json` and `cursor.json`
+/// are written there too. A later absorb adds an entry and never replaces one.
+///
+/// # Errors
+///
+/// A tree path that is not an ordinary relative path, or a file that will not
+/// read or write.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT absorb-overwrites-a-local-store|s@^        if here.is_empty() {$@        if true {@|a_rejected_push_fetches_absorbs_and_is_applied
+//MUTANT absorb-discards-their-differing-store|s@^            theirs.keep_aside(store, group)?; // a differing store$@@|a_rejected_push_fetches_absorbs_and_is_applied
+//MUTANT later-absorb-replaces-an-earlier-one|s@^        aside: dir.join(ABSORBED).join(commit),$@        aside: dir.join(ABSORBED).join("latest"),@|a_second_rejected_push_adds_a_second_entry
+//MUTANT absorbed-entry-nested-in-another|s@^            theirs.place_all(\&dir.join(ABSORBED).join(entry), group)?;$@            theirs.place_all(\&theirs.aside.join(ABSORBED).join(entry), group)?;@|an_absorbed_entry_is_never_nested_in_another
+//MUTANT foreign-transcript-appended-to-the-local-one|s@^        } else if !theirs.all_equal(\&local, \&transcript)? {$@        } else if false {@|transcripts_are_never_merged_between_writers
+pub fn absorb(project_root: &Path, meta: &Meta, commit: &str, own: bool) -> Result<()> {
+    let dir = session_dir(project_root, meta)?;
+    let repo = local_repo(&dir);
+    let index = gitwrite::tree_index(&repo, commit)?;
+    if let Some((path, _)) = index.iter().find(|(path, _)| !ordinary(path)) {
+        return Err(anyhow::anyhow!(
+            "offbox: the snapshot {commit} names {} bytes of path that are not an ordinary relative path",
+            path.len()
+        ));
+    }
+    let mut theirs = Theirs {
+        repo: &repo,
+        aside: dir.join(ABSORBED).join(commit),
+        kept_aside: false,
+    };
+
+    let mut stores: BTreeMap<String, Group> = BTreeMap::new();
+    let mut transcript: Group = Vec::new();
+    let mut history: BTreeMap<String, Group> = BTreeMap::new();
+    let mut absorbed: BTreeMap<String, Group> = BTreeMap::new();
+    for (path, id) in &index {
+        if let Some(store) = store_of(path) {
+            let relative = path[store.len()..].trim_start_matches('/');
+            stores
+                .entry(store.to_owned())
+                .or_default()
+                .push((relative.to_owned(), id.clone()));
+        } else if let Some(rest) = path.strip_prefix("transcript/") {
+            transcript.push((rest.to_owned(), id.clone()));
+        } else if let Some((entry, rest)) = keyed(path, "history/") {
+            history.entry(entry).or_default().push((rest, id.clone()));
+        } else if let Some((entry, rest)) = keyed(path, "absorbed/") {
+            absorbed.entry(entry).or_default().push((rest, id.clone()));
+        }
+    }
+
+    for (store, group) in &stores {
+        let Some(local) = destination(project_root, store) else {
+            theirs.keep_aside(store, group)?;
+            continue;
+        };
+        let here = held(&local);
+        if here.is_empty() {
+            theirs.place_all(&local, group)?;
+        } else if here.len() != group.len() || !theirs.all_equal(&local, group)? {
+            theirs.keep_aside(store, group)?; // a differing store
+        }
+    }
+
+    let mut adopted: Vec<String> = Vec::new();
+    if !transcript.is_empty() {
+        let local = dir.join("transcript");
+        if own && files_under(&local).is_empty() {
+            theirs.place_all(&local, &transcript)?;
+            adopted.push(String::from("transcript/"));
+        } else if !theirs.all_equal(&local, &transcript)? {
+            theirs.keep_aside("transcript", &transcript)?;
+        }
+    }
+    for (entry, group) in &history {
+        let local = dir.join("history").join(entry);
+        if files_under(&local).is_empty() {
+            theirs.place_all(&local, group)?;
+            if own {
+                adopted.push(format!("history/{entry}/"));
+            }
+        } else if !theirs.all_equal(&local, group)? {
+            theirs.keep_aside(&format!("history/{entry}"), group)?;
+        }
+    }
+    for (entry, group) in &absorbed {
+        if !dir.join(ABSORBED).join(entry).exists() {
+            theirs.place_all(&dir.join(ABSORBED).join(entry), group)?;
+        }
+    }
+
+    let carried = |name: &str| index.iter().find(|(path, _)| path == name);
+    if theirs.kept_aside {
+        for name in ["meta.json", CURSORS] {
+            if let Some((_, id)) = carried(name) {
+                theirs.place(&theirs.aside.join(name), id)?;
+            }
+        }
+    }
+    // THE STREAMS TAKEN IN PLACE ARE CONTINUED, so their cursor entries come
+    // with them: where this writer's next read starts is where theirs stopped.
+    if !adopted.is_empty()
+        && let Some((_, id)) = carried(CURSORS)
+    {
+        let entries: Cursors = serde_json::from_slice(&theirs.read(id)?).unwrap_or_default();
+        let mut cursors = load_cursors(&dir);
+        for (prefix, position) in entries {
+            if adopted.iter().any(|root| prefix.starts_with(root.as_str())) {
+                cursors.insert(prefix, position);
+            }
+        }
+        persist(&dir, &cursors)?;
+    }
+    Ok(())
+}
+
+/// Split `path` under `root` into its first segment and the rest:
+/// `history/<leaf>/<rest>` gives `(<leaf>, <rest>)`.
+fn keyed(path: &str, root: &str) -> Option<(String, String)> {
+    let (entry, rest) = path.strip_prefix(root)?.split_once('/')?;
+    Some((entry.to_owned(), rest.to_owned()))
+}
+
+/// Whether the snapshot `last` held `path` as another writer's stream that the
+/// absorb kept aside — in which case it is carried from `absorbed/<last>/` and
+/// never mixed into this session's own files by path.
+fn foreign(dir: &Path, last: Option<&str>, path: &str) -> bool {
+    let Some(last) = last else {
+        return false;
+    };
+    let aside = dir.join(ABSORBED).join(last);
+    if path.starts_with("transcript/") {
+        return aside.join("transcript").exists();
+    }
+    keyed(path, "history/").is_some_and(|(entry, _)| aside.join("history").join(entry).exists())
 }
 
 #[cfg(test)]
@@ -969,5 +1578,563 @@ mod tests {
         assert!(note.contains("git credential"), "{note}");
         assert!(note.contains("misspelled"), "{note}");
         assert!(!note.contains('\n'), "one line: {note}");
+    }
+}
+
+/// The push and the absorb (CLOUD-2720), over the transport stand-in.
+///
+/// Each writer is a real project repository with its own state directory, its
+/// own stores and its own transcript file; the remote is `lease`'s stand-in,
+/// which keeps what a push sends and serves it back to a shallow fetch.
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod push_tests {
+    use super::*;
+    use crate::lease::testing::{Canned, Kind, Moved, REMOTE, Shared, standing};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const TIME: i64 = 1_700_000_000;
+
+    /// One checkout pushing a session.
+    struct Writer {
+        root: PathBuf,
+        provisions: Vec<crate::provision::Provision>,
+        meta: Meta,
+        transcript: PathBuf,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Rows {
+        provision: Vec<crate::provision::Provision>,
+    }
+
+    /// A scratch directory with the state root contained under it.
+    fn base(name: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        crate::testing::contain_state(&dir.join("state"));
+        dir
+    }
+
+    fn put(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn add(path: &Path, body: &str) {
+        let mut held = std::fs::read_to_string(path).unwrap_or_default();
+        held.push_str(body);
+        put(path, &held);
+    }
+
+    impl Writer {
+        /// A project under `base` named `name`, pushing `session`, with a clean
+        /// scanner installed where `provision` would have put it.
+        fn new(base: &Path, name: &str, session: &str) -> Self {
+            let root = base.join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            gitwrite::init_on_main(&root).unwrap();
+            let root = root.canonicalize().unwrap();
+            let rows: Rows = toml::from_str(
+                "[[provision]]\nname = \"ripsecrets\"\nversion = \"0.0.0-stub\"\n\
+                 url = 'file:///nonexistent/ripsecrets'\n\
+                 sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+                 binary = \"ripsecrets\"\n",
+            )
+            .unwrap();
+            let binary = crate::provision::binary_path(&root, &rows.provision[0]).unwrap();
+            put(&binary, "#!/bin/sh\nexit 0\n");
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let transcript = base.join(format!("{name}.jsonl"));
+            Writer {
+                root,
+                provisions: rows.provision,
+                meta: Meta {
+                    harness: String::from("exit-code"),
+                    session: session.to_owned(),
+                    origin: String::from("acme/widgets"),
+                },
+                transcript,
+            }
+        }
+
+        fn git_file(&self, path: &str, body: &str) {
+            put(&self.root.join(".git").join(path), body);
+        }
+
+        fn read_git(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(self.root.join(".git").join(path)).ok()
+        }
+
+        fn push(&self) -> Push {
+            push_once(
+                &Session {
+                    project_root: &self.root,
+                    provisions: &self.provisions,
+                    meta: self.meta.clone(),
+                    remote: REMOTE.to_owned(),
+                    transcript: Some(self.transcript.clone()),
+                    time: TIME,
+                },
+                &[],
+            )
+            .expect("the push runs")
+        }
+
+        fn dir(&self) -> PathBuf {
+            session_dir(&self.root, &self.meta).unwrap()
+        }
+
+        fn repo(&self) -> PathBuf {
+            local_repo(&self.dir())
+        }
+
+        fn last(&self) -> Option<String> {
+            crate::git::resolve_ref(&self.repo(), LAST).unwrap()
+        }
+
+        /// The tree of a commit this writer's repository holds, path to bytes.
+        fn tree(&self, commit: &str) -> BTreeMap<String, Vec<u8>> {
+            gitwrite::tree_index(&self.repo(), commit)
+                .unwrap()
+                .into_iter()
+                .map(|(path, id)| {
+                    let bytes = gitwrite::read_blob(&self.repo(), &id).unwrap();
+                    (path, bytes)
+                })
+                .collect()
+        }
+
+        /// Every file under the session directory's `root`, path to bytes.
+        fn local(&self, root: &str) -> BTreeMap<String, Vec<u8>> {
+            files_under(&self.dir().join(root))
+                .into_iter()
+                .map(|(path, at)| (path, std::fs::read(at).unwrap()))
+                .collect()
+        }
+    }
+
+    fn head(stand: &Shared, meta: &Meta) -> String {
+        stand.borrow().head_of(&reference(meta))
+    }
+
+    fn receives(stand: &Shared) -> usize {
+        stand.borrow().receives
+    }
+
+    /// Two writers of one session whose stores and transcripts differ: the
+    /// first has pushed, and the second — which has never seen the ref — has
+    /// pushed after it. Returns the first writer's commit too.
+    fn two_writers(name: &str) -> (Shared, Writer, Writer, String) {
+        let base = base(name);
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        one.git_file("batten-receipts/r.json", "one\n");
+        one.git_file("batten-receipts/s.json", "only one has this file\n");
+        one.git_file("batten-only/x.json", "only\n");
+        put(
+            &one.transcript,
+            "{\"from\":\"one\",\"n\":1}\n{\"from\":\"one\",\"n\":2}\n",
+        );
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let first = head(&stand, &one.meta);
+
+        let two = Writer::new(&base, "two", "s");
+        two.git_file("batten-receipts/r.json", "two\n");
+        put(&two.transcript, "{\"from\":\"two\",\"n\":1}\n");
+        assert_eq!(two.push().outcome, Pushed::Applied);
+        (stand, one, two, first)
+    }
+
+    /// Fails by: two sessions sharing a ref, a snapshot with a parent, or a
+    /// session id reaching the ref name.
+    #[test]
+    fn two_session_ids_give_two_orphan_refs() {
+        let base = base("offbox-push-two-refs");
+        let stand = standing(&[], Vec::new());
+        let plain = Writer::new(&base, "plain", "s");
+        let awkward = Writer::new(&base, "awkward", "a ../ b");
+        assert_eq!(plain.push().outcome, Pushed::Applied);
+        assert_eq!(awkward.push().outcome, Pushed::Applied);
+
+        let stand = stand.borrow();
+        assert_eq!(stand.refs.len(), 2, "{:?}", stand.refs);
+        for (name, id) in &stand.refs {
+            assert!(name.starts_with("refs/heads/session/acme/widgets/exit-code-"));
+            assert!(!name.contains("..") && !name.contains(' '), "{name}");
+            let commit = stand.objects.iter().find(|held| &held.id == id).unwrap();
+            let text = String::from_utf8_lossy(&commit.body);
+            assert!(!text.lines().any(|line| line.starts_with("parent ")));
+        }
+        assert_eq!(
+            origin_path("https://forge.invalid/acme/widgets.git").as_deref(),
+            Some("acme/widgets")
+        );
+        assert_eq!(origin_path("git@forge.invalid:acme/widgets.git"), None);
+    }
+
+    /// Fails by: a writer that never saw the ref overwriting it, a local store
+    /// changed by another writer's, or the other writer's store dropped.
+    #[test]
+    fn a_rejected_push_fetches_absorbs_and_is_applied() {
+        let (stand, _one, two, first) = two_writers("offbox-push-rejected");
+
+        // Rejected by `admit` before anything was sent, so one POST each.
+        assert_eq!(receives(&stand), 2);
+        assert_eq!(stand.borrow().uploads, 1, "one shallow fetch");
+        assert_eq!(
+            two.read_git("batten-receipts/r.json").as_deref(),
+            Some("two\n")
+        );
+        assert_eq!(
+            two.read_git("batten-receipts/s.json"),
+            None,
+            "not merged in"
+        );
+        let aside = two.local(&format!("absorbed/{first}"));
+        assert_eq!(aside["git/batten-receipts/r.json"], b"one\n");
+        assert!(aside.contains_key("git/batten-receipts/s.json"));
+        assert!(aside.contains_key("meta.json") && aside.contains_key("cursor.json"));
+        // A store only the first writer had is now where a store lives.
+        assert_eq!(
+            two.read_git("batten-only/x.json").as_deref(),
+            Some("only\n")
+        );
+
+        let now = head(&stand, &two.meta);
+        assert_ne!(now, first);
+        assert_eq!(two.last().as_deref(), Some(now.as_str()));
+        let tree = two.tree(&now);
+        assert_eq!(tree["git/batten-receipts/r.json"], b"two\n");
+        assert_eq!(
+            tree[&format!("absorbed/{first}/git/batten-receipts/r.json")],
+            b"one\n"
+        );
+    }
+
+    /// Fails by: one writer's records appearing in another's stream.
+    #[test]
+    fn transcripts_are_never_merged_between_writers() {
+        let (stand, one, two, first) = two_writers("offbox-push-transcripts");
+
+        let mine = std::fs::read(&two.transcript).unwrap();
+        let local = two.local("transcript");
+        assert_eq!(local.len(), 1);
+        assert_eq!(local["main/0/000000.jsonl"], mine);
+        let aside = two.local(&format!("absorbed/{first}"));
+        assert_eq!(
+            aside["transcript/main/0/000000.jsonl"],
+            std::fs::read(&one.transcript).unwrap()
+        );
+        assert!(aside.contains_key("cursor.json"));
+
+        let tree = two.tree(&head(&stand, &two.meta));
+        let stream: Vec<&String> = tree
+            .keys()
+            .filter(|path| path.starts_with("transcript/"))
+            .collect();
+        assert_eq!(stream, ["transcript/main/0/000000.jsonl"]);
+        assert_eq!(tree["transcript/main/0/000000.jsonl"], mine);
+    }
+
+    /// Fails by: a restored session starting a second stream beside its own, or
+    /// another session's records being taken as this one's.
+    #[test]
+    fn own_ref_with_no_local_transcript_continues_the_stream() {
+        let base = base("offbox-push-own");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n{\"n\":2}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let first = head(&stand, &one.meta);
+        let theirs = one.tree(&first);
+
+        for (name, own) in [("mine", true), ("other", false)] {
+            let fresh = Writer::new(&base, name, "s");
+            std::fs::create_dir_all(fresh.dir()).unwrap();
+            gitwrite::init_bare(&fresh.repo()).unwrap();
+            lease::fetch_shallow(REMOTE, &fresh.repo(), &first).unwrap();
+            absorb(&fresh.root, &fresh.meta, &first, own).unwrap();
+
+            let local = fresh.local("transcript");
+            let aside = fresh.local(&format!("absorbed/{first}"));
+            if own {
+                assert_eq!(
+                    local["main/0/000000.jsonl"],
+                    theirs["transcript/main/0/000000.jsonl"]
+                );
+                assert!(aside.is_empty(), "{:?}", aside.keys());
+                let taken = load_cursors(&fresh.dir());
+                let given: Cursors = serde_json::from_slice(&theirs["cursor.json"]).unwrap();
+                assert_eq!(taken["transcript/main"], given["transcript/main"]);
+            } else {
+                assert!(local.is_empty());
+                assert_eq!(
+                    aside["transcript/main/0/000000.jsonl"],
+                    theirs["transcript/main/0/000000.jsonl"]
+                );
+                assert!(load_cursors(&fresh.dir()).is_empty());
+            }
+        }
+    }
+
+    /// Fails by: a push after an absorb being rejected again, or dropping what
+    /// was absorbed.
+    #[test]
+    fn a_push_after_an_absorb_is_applied_first_time_and_keeps_what_it_absorbed() {
+        let (stand, _one, two, first) = two_writers("offbox-push-third");
+        let before = receives(&stand);
+        add(&two.transcript, "{\"from\":\"two\",\"n\":2}\n");
+
+        assert_eq!(two.push().outcome, Pushed::Applied);
+
+        assert_eq!(receives(&stand), before + 1);
+        let tree = two.tree(&head(&stand, &two.meta));
+        assert_eq!(
+            tree[&format!("absorbed/{first}/git/batten-receipts/r.json")],
+            b"one\n"
+        );
+        assert_eq!(
+            tree["transcript/main/0/000000.jsonl"],
+            std::fs::read(&two.transcript).unwrap()
+        );
+    }
+
+    /// Both writers, after each has absorbed the other once more.
+    fn crossed(name: &str) -> (Writer, Writer, String, BTreeMap<String, Vec<u8>>) {
+        let (stand, one, two, first) = two_writers(name);
+        let entry = two.local(&format!("absorbed/{first}"));
+        // The first writer pushes again: the ref now holds the second's value.
+        one.git_file("batten-receipts/r.json", "one again\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        // And the second once more.
+        two.git_file("batten-receipts/r.json", "two again\n");
+        assert_eq!(two.push().outcome, Pushed::Applied);
+        drop(stand);
+        (one, two, first, entry)
+    }
+
+    /// Fails by: a later absorb replacing or changing an earlier entry.
+    #[test]
+    fn a_second_rejected_push_adds_a_second_entry() {
+        let (_one, two, first, entry) = crossed("offbox-push-second-entry");
+
+        assert_eq!(two.local(&format!("absorbed/{first}")), entry);
+        let entries: BTreeSet<String> = two
+            .local("absorbed")
+            .keys()
+            .filter_map(|path| path.split('/').next().map(str::to_owned))
+            .collect();
+        assert!(entries.len() >= 2, "{entries:?}");
+        assert!(entries.contains(&first));
+    }
+
+    /// Fails by: another writer's absorbed entry stored inside this one's.
+    #[test]
+    fn an_absorbed_entry_is_never_nested_in_another() {
+        let (one, two, first, _) = crossed("offbox-push-nesting");
+
+        // The first writer absorbed a snapshot that itself held `absorbed/<first>/`.
+        assert!(one.dir().join(ABSORBED).join(&first).is_dir());
+        for writer in [&one, &two] {
+            for path in writer.local("absorbed").keys() {
+                assert!(!path.contains("/absorbed/"), "{path}");
+            }
+            let tree = writer.tree(&writer.last().unwrap());
+            for path in tree.keys() {
+                assert_eq!(
+                    path.matches("absorbed/").count().min(2),
+                    usize::from(path.starts_with("absorbed/")),
+                    "{path}"
+                );
+            }
+        }
+    }
+
+    /// Fails by: an absent ref refusing the push that would recreate it.
+    #[test]
+    fn a_ref_rotated_away_is_recreated_on_the_first_attempt() {
+        let base = base("offbox-push-rotated");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        // THE PREMISE: `last` is set, so only the zero-id arm can admit this.
+        assert!(one.last().is_some());
+        stand.borrow_mut().refs.clear();
+        add(&one.transcript, "{\"n\":2}\n");
+
+        assert_eq!(one.push().outcome, Pushed::Applied);
+
+        assert_eq!(receives(&stand), 2);
+        assert_eq!(Some(head(&stand, &one.meta)), one.last());
+    }
+
+    /// Fails by: a throttled push being retried here, moving `last` or the
+    /// pushed cursor, or a record being sent twice once the forge accepts.
+    #[test]
+    fn a_throttled_push_returns_at_once_and_loses_nothing() {
+        let base = base("offbox-push-throttled");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let (last, pushed) = (one.last(), std::fs::read(one.dir().join(PUSHED)).unwrap());
+        // After an applied push the file is that snapshot's `cursor.json`.
+        assert_eq!(pushed, one.tree(last.as_deref().unwrap())["cursor.json"]);
+        add(&one.transcript, "{\"n\":2}\n");
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Receive,
+            left: 1,
+            status: 429,
+            headers: vec![(String::from("retry-after"), String::from("120"))],
+        });
+
+        let outcome = one.push().outcome;
+
+        assert_eq!(
+            outcome,
+            Pushed::Throttled(lease::Throttled {
+                retry_after: Some(120),
+                reset_at: None,
+            })
+        );
+        assert_eq!(receives(&stand), 2, "exactly one POST was throttled");
+        assert_eq!(one.last(), last);
+        assert_eq!(std::fs::read(one.dir().join(PUSHED)).unwrap(), pushed);
+
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let tree = one.tree(&head(&stand, &one.meta));
+        assert_eq!(
+            tree["transcript/main/0/000000.jsonl"],
+            b"{\"n\":1}\n{\"n\":2}\n"
+        );
+        assert_eq!(
+            std::fs::read(one.dir().join(PUSHED)).unwrap(),
+            tree["cursor.json"]
+        );
+    }
+
+    /// Fails by: a snapshot the remote already holds being sent again.
+    #[test]
+    fn a_second_push_with_nothing_changed_sends_nothing() {
+        let base = base("offbox-push-unchanged");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        let first = one.push();
+        assert_eq!(first.outcome, Pushed::Applied);
+        assert_eq!(first.ended, ["transcript/main"]);
+
+        let second = one.push();
+
+        assert_eq!(second.outcome, Pushed::Unchanged);
+        assert_eq!(second.outcome.token(), "unchanged");
+        assert_eq!(second.ended, ["transcript/main"]);
+        assert_eq!(receives(&stand), 1);
+    }
+
+    /// Fails by: a throttle at discovery reading as a failure, or anything
+    /// being sent after it.
+    #[test]
+    fn a_throttled_probe_is_throttled_and_sends_nothing() {
+        let base = base("offbox-push-probe");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Discovery,
+            left: 1,
+            status: 429,
+            headers: Vec::new(),
+        });
+
+        let outcome = one.push().outcome;
+
+        assert!(matches!(outcome, Pushed::Throttled(_)), "{outcome:?}");
+        assert_eq!(outcome.code(), ExitCode::Violation);
+        assert_eq!(receives(&stand), 0);
+        assert!(!one.dir().exists(), "nothing was built");
+    }
+
+    /// Fails by: discovery's refusal reading as anything but unattached.
+    #[test]
+    fn a_refused_discovery_is_unattached_and_builds_nothing() {
+        let base = base("offbox-push-unattached");
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().status = 403;
+        let one = Writer::new(&base, "one", "s");
+
+        let outcome = one.push().outcome;
+
+        assert_eq!(outcome, Pushed::Unattached);
+        assert_eq!(outcome.code(), ExitCode::Usage);
+        assert_eq!(receives(&stand), 0);
+    }
+
+    /// Every object `commit` reaches in `repo`, as the stand-in holds objects.
+    fn objects_of(repo: &Path, commit: &str) -> Vec<lease::Object> {
+        let reader = crate::git::ObjectReader::open(repo).unwrap();
+        crate::git::object_ids_to_send(repo, None, commit)
+            .unwrap()
+            .iter()
+            .map(|id| {
+                let raw = reader.read(id).unwrap();
+                lease::Object {
+                    id: raw.id,
+                    kind: raw.kind,
+                    body: raw.body,
+                }
+            })
+            .collect()
+    }
+
+    /// Fails by: a swap that keeps losing being retried without bound, or a
+    /// lost race moving the pushed cursor.
+    #[test]
+    fn three_rejected_swaps_are_contended_after_three_posts() {
+        let base = base("offbox-push-contended");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        put(&one.transcript, "{\"n\":1}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let pushed = std::fs::read(one.dir().join(PUSHED)).unwrap();
+
+        // Three other writers' snapshots, each moved in ahead of one swap.
+        let elsewhere = base.join("elsewhere.git");
+        gitwrite::init_bare(&elsewhere).unwrap();
+        let mut others = Vec::new();
+        for index in 0..3 {
+            let entries = vec![(
+                String::from("git/batten-receipts/r.json"),
+                Content::Bytes(format!("other {index}\n").into_bytes()),
+            )];
+            let (commit, _) =
+                gitwrite::commit_tree(&elsewhere, &entries, &[], TIME, "snapshot").unwrap();
+            stand
+                .borrow_mut()
+                .objects
+                .extend(objects_of(&elsewhere, &commit));
+            others.push(commit);
+        }
+        stand.borrow_mut().moved = Some(Moved {
+            left: 3,
+            name: reference(&one.meta),
+            id: others[0].clone(),
+            then: others[1..].to_vec(),
+        });
+        add(&one.transcript, "{\"n\":2}\n");
+
+        let outcome = one.push().outcome;
+
+        assert_eq!(outcome, Pushed::Contended);
+        assert_eq!(outcome.code(), ExitCode::Violation);
+        assert_eq!(receives(&stand), 1 + 3);
+        assert_eq!(std::fs::read(one.dir().join(PUSHED)).unwrap(), pushed);
+        // What was absorbed on the way is kept for the next push: the
+        // first store went where a store lives, the second differed from it.
+        assert_eq!(
+            one.read_git("batten-receipts/r.json").as_deref(),
+            Some("other 0\n")
+        );
+        assert!(one.dir().join(ABSORBED).join(&others[1]).is_dir());
     }
 }
