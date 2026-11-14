@@ -23084,11 +23084,21 @@ fn stop_nudges(
     // declared handler was never spawned and whatever it does was dropped. The
     // run is unconditional; only WHICH ONE THING IS SAID stays the ladder's call.
     let handler_said = stop_handler_advice(overrides, raw);
-    if envelope.stop_active == Some(true) {
-        return Vec::new();
-    }
+    //MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+    //MUTANT bypass-ignored|s@^    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {$@    if false {@|the_bypass_and_plan_mode_silence_it
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
         return Vec::new();
+    }
+    // A CONTINUED STOP RETURNS BEFORE EVERY RUNG BUT THE HOLD (CLOUD-2761). The
+    // hold does not lapse after one refusal; its own appended count bounds it,
+    // so a session cannot be held by something it cannot fix.
+    if envelope.stop_active == Some(true) {
+        if !envelope.writes_available() {
+            return Vec::new();
+        }
+        let (refused, advised) = hold_stop(hook_authority_root());
+        *block = refused;
+        return advised.into_iter().collect();
     }
     // NO ADVISORY WHOSE REMEDY THIS TURN MAY NOT PERFORM (CLOUD-895).
     //
@@ -23187,6 +23197,15 @@ fn stop_nudges(
     // nothing: one refusal per Stop, and asking it spends its receipt.
     if block.is_none() {
         let (refused, advised) = watchdog_stop(root, landing);
+        *block = refused;
+        rungs.extend(advised);
+    }
+    // THE HOLD (CLOUD-2761), after the unlanded refusal and the watchdog and
+    // yielding to both: one Stop carries at most one refusal.
+    //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+    //MUTANT two-refusals-on-one-stop|s@^    if block.as_ref().is_none() {$@    if true {@|the_unlanded_refusal_goes_first
+    if block.as_ref().is_none() {
+        let (refused, advised) = hold_stop(root);
         *block = refused;
         rungs.extend(advised);
     }
@@ -23618,6 +23637,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 fn rearm_unlanded(envelope: &hook::Envelope) {
     if envelope.event == hook::Event::PostTool {
         note_land_dispatch(envelope);
+        note_hold_dispatch(envelope);
         return;
     }
     if envelope.event != hook::Event::UserPromptSubmit {
@@ -23655,6 +23675,8 @@ fn refused_stop(
     let Some(block) = block else {
         return Ok(false);
     };
+    //MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+    //MUTANT hold-blocks-every-host|s@^    if harness != hook::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
     if harness != hook::Harness::ClaudeCode {
         push_finding(advice, severity::AdvisoryTier::Caution, block);
         return Ok(false);
@@ -23709,6 +23731,146 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
         }
         let _ = crate::durable::append(&path, LAND_TASK);
     }
+}
+
+/// The appended count of consecutive refusals of one hold row (CLOUD-2761).
+const HOLD_REFUSED: &str = "stop-hold-refused";
+
+/// The note that a backgrounded call started a hold row's task (CLOUD-2761).
+const HOLD_DISPATCHED: &str = "stop-hold-dispatched";
+
+/// How many consecutive refusals a hold may make before it only advises.
+///
+/// Three, because the remedy is one command and an agent told three times is
+/// not going to be told into it.
+const HOLD_REFUSALS: usize = 3;
+
+/// The `[[stop.hold]]` rows the authority at `root` declares.
+fn hold_rows(root: &Path) -> Vec<crate::stop::Hold> {
+    resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.stop)
+        .map(|table| table.hold)
+        .unwrap_or_default()
+}
+
+/// Record a backgrounded call whose argv is a hold row's `start`, so the Stop
+/// that follows it is not refused before the task takes its lock (CLOUD-2761).
+///
+/// `note_land_dispatch`'s shape, generalised: written post-tool, once the host
+/// accepted the call; keyed by the row's id rather than a branch, because a hold
+/// is not about a branch; and under the AUTHORITY ROOT's git directory, where
+/// the receipts it is about live.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT foreground-start-excuses|s@^    if !backgrounded {$@    if false {@|starting_the_task_excuses_one_stop
+fn note_hold_dispatch(envelope: &hook::Envelope) {
+    let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+    if !backgrounded {
+        return;
+    }
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let words: Vec<&str> = envelope.command.split_whitespace().collect();
+    let rows = hold_rows(root);
+    for row in rows {
+        if row
+            .start
+            .iter()
+            .map(String::as_str)
+            .eq(words.iter().copied())
+        {
+            let note = git_dir
+                .join(RECEIPT_DIR)
+                .join(format!("{HOLD_DISPATCHED}-{}", row.id));
+            if let Some(parent) = note.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = crate::durable::append(&note, &row.id);
+        }
+    }
+}
+
+/// The hold rung (CLOUD-2761): for the first `[[stop.hold]]` row whose receipt
+/// exists while its singleton lock has no live holder, a refusal naming the
+/// row, the lock, how many receipts hold it, and the command that takes it.
+///
+/// Returns `(refusal, advice)`. A row's consecutive refusals are an appended
+/// count, removed on any Stop where its predicate is false; at
+/// [`HOLD_REFUSALS`] it advises instead. A dispatch note excuses one Stop and is
+/// used up. Fails open wherever a path it needs will not read, as every Stop
+/// rung does.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT hold-never-checked|s@^    for row in hold_rows(root) {$@    for row in Vec::<crate::stop::Hold>::new() {@|a_receipt_with_no_holder_refuses_the_stop
+//MUTANT holder-unread|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = false;@|a_live_holder_lets_the_stop_through
+//MUTANT corpse-counts-as-held|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = git_dir.join("batten-singleton").join(\&row.unless_singleton).exists();@|a_dead_holder_is_no_holder
+//MUTANT hold-without-receipt|s@^        if count == 0 \x7c\x7c held {$@        if held {@|no_receipt_no_hold
+//MUTANT count-never-resets|s@^            let _ = std::fs::remove_file(\&refused);$@@|a_false_predicate_resets_the_count
+//MUTANT dispatch-never-excuses|s@^        if std::fs::remove_file(\&dispatched).is_ok() {$@        if false {@|starting_the_task_excuses_one_stop
+//MUTANT hold-never-yields|s@^        if spoken >= HOLD_REFUSALS {$@        if false {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
+//MUTANT hold-lapses-after-one|s@^        if spoken >= HOLD_REFUSALS {$@        if spoken >= 1 {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
+//MUTANT subjects-printed|s@^                "hold {} needs lock {} while {count} {} receipt(s) exist",$@                "hold {} needs lock {} while {count} {} receipt(s) exist {names:?}",@|the_refusal_counts_and_does_not_name
+//MUTANT hold-reads-process-directory|s@^    let authority = git::git_dir(root);$@    let authority = git::git_dir(Path::new("."));@|the_hold_reads_the_authority_root
+fn hold_stop(root: &Path) -> (Option<refusal::Refusal>, Option<refusal::Refusal>) {
+    let authority = git::git_dir(root);
+    let Ok(git_dir) = authority else {
+        return (None, None);
+    };
+    let store = git_dir.join(RECEIPT_DIR);
+    let names: Vec<String> = match std::fs::read_dir(&store) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect(),
+        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        // An unreadable store fails open: a gate that cannot look decides nothing.
+        Err(_) => return (None, None),
+    };
+    for row in hold_rows(root) {
+        let prefix = format!("{}.", row.while_receipt);
+        let count = names
+            .iter()
+            .filter(|name| name.starts_with(&prefix))
+            .count();
+        let held = task::singleton_holder(&git_dir, &row.unless_singleton).is_some();
+        let refused = store.join(format!("{HOLD_REFUSED}-{}", row.id));
+        let dispatched = store.join(format!("{HOLD_DISPATCHED}-{}", row.id));
+        if count == 0 || held {
+            let _ = std::fs::remove_file(&refused);
+            if held {
+                let _ = std::fs::remove_file(&dispatched);
+            }
+            continue;
+        }
+        if std::fs::remove_file(&dispatched).is_ok() {
+            return (None, None);
+        }
+        let spoken = std::fs::read_to_string(&refused).map_or(0, |text| text.lines().count());
+        // A COUNT AND NAMES THE CONSUMER WROTE, never a receipt's suffix (rule 4).
+        let said = refusal::Refusal::engine(
+            verdict::Native::StopConditionUnmet,
+            &[verdict::artifact(&format!(
+                "hold {} needs lock {} while {count} {} receipt(s) exist",
+                row.id, row.unless_singleton, row.while_receipt
+            ))],
+            refusal::Fix::Run(format!(
+                "run `{}` in {}, backgrounded",
+                row.start.join(" "),
+                root.display()
+            )),
+        );
+        if spoken >= HOLD_REFUSALS {
+            return (None, Some(said));
+        }
+        if crate::durable::append(&refused, &row.id).is_err() {
+            // A count that cannot record itself does not refuse: unbounded, it
+            // would refuse every Stop.
+            return (None, Some(said));
+        }
+        return (Some(said), None);
+    }
+    (None, None)
 }
 
 /// The completion claim this branch holds unlanded, as the store recorded it.

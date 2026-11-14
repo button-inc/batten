@@ -1991,8 +1991,9 @@ rule is not wrong; the verb is.",
         gloss: "the end-of-turn facts do not permit stopping",
         class: "A stop is a completion signal, and this engine's whole subject is keeping \
 that signal aligned with landed-and-verified work. The facts the turn ended on say it is \
-not, and the refusal names which. Each has its own route; the shared one is to finish \
-the thing rather than to re-declare that it is finished.",
+not, and the refusal names which: unlanded work, a crashed task, or a required task \
+that is not running. Each refusal carries the command that answers it; the shared route \
+is to run that command rather than to re-declare that the work is finished.",
         routes: &[
             run("task run first", "mise run land"),
             read("config read first", "batten.toml"),

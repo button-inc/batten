@@ -1105,6 +1105,11 @@ pub enum WeakeningKind {
     /// [`WeakeningKind::TaskRelaunchRemoved`] instead, reported once. Appended,
     /// for the `Ord` reason its neighbours give.
     TaskLifetimeFloorRaised,
+    /// A `[[stop.hold]]` row the base ref declared is gone, or changed what it
+    /// guards, so a turn may end with a required task not running (CLOUD-2761).
+    /// The REMOVED direction only: an added hold is one more refusal. Appended,
+    /// for the `Ord` reason its neighbours give.
+    StopHoldRemoved,
 }
 
 impl WeakeningKind {
@@ -1193,6 +1198,7 @@ impl WeakeningKind {
         WeakeningKind::MutateGateRemoved,
         WeakeningKind::TaskRelaunchRemoved,
         WeakeningKind::TaskLifetimeFloorRaised,
+        WeakeningKind::StopHoldRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1262,6 +1268,7 @@ impl WeakeningKind {
             WeakeningKind::MutateGateRemoved => "mutate-gate-removed",
             WeakeningKind::TaskRelaunchRemoved => "task-relaunch-removed",
             WeakeningKind::TaskLifetimeFloorRaised => "task-lifetime-floor-raised",
+            WeakeningKind::StopHoldRemoved => "stop-hold-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1409,6 +1416,8 @@ impl WeakeningKind {
          refuses the Stop that would idle over the lost work.";
     const TASK_LIFETIME_FLOOR_RAISED: &'static str = "`[task].min_lifetime_secs` rose while both refs relaunch a task, so a crash must have \
          lived longer before it forces a relaunch.";
+    const STOP_HOLD_REMOVED: &'static str = "A `[[stop.hold]]` row the base ref declared is gone or guards something else, so a \
+         turn may end while a required task is not running.";
     const ADVISORY_CEILING_RAISED: &'static str =
         "The `[advisory]` channel ceiling rose, or stopped being declared.";
     const HOOK_OUTPUT_CEILING_RAISED: &'static str =
@@ -1511,6 +1520,7 @@ impl WeakeningKind {
             WeakeningKind::MutateGateRemoved => Self::MUTATE_GATE_REMOVED,
             WeakeningKind::TaskRelaunchRemoved => Self::TASK_RELAUNCH_REMOVED,
             WeakeningKind::TaskLifetimeFloorRaised => Self::TASK_LIFETIME_FLOOR_RAISED,
+            WeakeningKind::StopHoldRemoved => Self::STOP_HOLD_REMOVED,
             WeakeningKind::AdvisoryCeilingRaised => Self::ADVISORY_CEILING_RAISED,
             WeakeningKind::HookOutputCeilingRaised => Self::HOOK_OUTPUT_CEILING_RAISED,
             WeakeningKind::HookRepeatsRaised => Self::HOOK_REPEATS_RAISED,
@@ -1972,6 +1982,10 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::TaskRelaunchRemoved,
             WeakeningKind::TaskLifetimeFloorRaised,
         ]),
+    },
+    FieldCoverage {
+        field: "stop",
+        coverage: Coverage::Compared(&[WeakeningKind::StopHoldRemoved]),
     },
     FieldCoverage {
         field: "forge",
@@ -4010,7 +4024,27 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             Some(working),
         )
     }));
+    // The other end-of-turn bar (CLOUD-2761), compared beside the watchdog's.
+    found.extend(stop_hold_weakenings(base, working));
     found
+}
+
+/// A `[[stop.hold]]` row removed, or changed in what it guards (CLOUD-2761).
+/// Added rows are no weakening: each is one more refusal.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT hold-removal-unjudged|s@^        \&holds(working),$@        \&holds(base),@|removing_a_hold_row_is_a_weakening
+fn stop_hold_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    fn holds(config: &Config) -> Vec<String> {
+        config.stop.as_ref().map_or_else(Vec::new, |table| {
+            table.hold.iter().map(crate::stop::Hold::key).collect()
+        })
+    }
+    removed_entries(
+        WeakeningKind::StopHoldRemoved,
+        &holds(base),
+        &holds(working),
+        "stop.hold",
+    )
 }
 
 /// Entries present in `base` and absent from `working`, as weakenings of `key`.

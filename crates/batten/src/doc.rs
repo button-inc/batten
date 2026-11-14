@@ -220,7 +220,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         id: "turn finish unmet",
         why: Some("A stop is a completion claim, and the turn's facts say the work is not landed"),
         act: &[
-            "finish what the line names; for unlanded work run `mise run land`",
+            "finish what the line names: run the command it gives, backgrounded; for unlanded work that is `mise run land`",
             "or file what blocks it on its tracker row",
         ],
         dont: &[

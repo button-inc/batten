@@ -4865,7 +4865,7 @@ mod tests {
             &mut |_| Ok(status("A", 0)),
             &mut |_| {
                 seen.borrow_mut()
-                    .push(crate::task::singleton_holder(&dir, "w"))
+                    .push(crate::task::singleton_holder(&dir, "w"));
             },
         );
         assert_eq!(*seen.borrow(), vec![Some(own)], "held during the pause");

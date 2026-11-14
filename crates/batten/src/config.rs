@@ -652,6 +652,11 @@ pub struct Config {
     /// reap nothing and cannot look.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::task::TaskTable>,
+    /// What must be true at the end of a turn (CLOUD-2761): `[[stop.hold]]`
+    /// rows refusing a Stop while a receipt exists and a named singleton lock has
+    /// no live holder. Absent holds nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<crate::stop::StopTable>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -5052,6 +5057,7 @@ impl Config {
             // else's target directory.
             prune: None,
             task: None,
+            stop: None,
             defects: None,
             provisions: Vec::new(),
             // Declaring no container preconditions is the ordinary case: a

@@ -504,6 +504,17 @@
         "$ref": "#/$defs/Step"
       }
     },
+    "stop": {
+      "description": "What must be true at the end of a turn (CLOUD-2761): `[[stop.hold]]`\nrows refusing a Stop while a receipt exists and a named singleton lock has\nno live holder. Absent holds nothing.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StopTable"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "strictness": {
       "description": "How strictly the gates apply. Absent means \"this file does not speak to\nstrictness\", which is what lets [`crate::resolve`] attribute the\neffective value to the layer that actually set it. Policy-bearing, so an\noverride may only raise it (§8).",
       "anyOf": [
@@ -2981,6 +2992,42 @@
       "additionalProperties": false,
       "required": [
         "id"
+      ]
+    },
+    "Hold": {
+      "description": "One `[[stop.hold]]` row (CLOUD-2761): while a receipt of `while_receipt`\nexists, the clone's singleton lock `unless_singleton` must have a live holder\nat the end of a turn, and `start` is the command that takes it.\n\nNo name of a session, a waiter or a vendor: the row's three names are the\nconsumer's.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The row's id, named in the refusal and keying its counters.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "start": {
+          "description": "The argv that takes the lock, printed as the remedy and matched against a\nbackgrounded call to excuse the one Stop before it locks.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "unless_singleton": {
+          "description": "The singleton lock that must have a live holder.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "while_receipt": {
+          "description": "A `[[mint]]` row's `name`: the hold applies while any\n`batten-receipts/<name>.*` file exists.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "while_receipt",
+        "unless_singleton",
+        "start"
       ]
     },
     "HookConfig": {
@@ -6065,6 +6112,20 @@
         "inputs",
         "tools"
       ]
+    },
+    "StopTable": {
+      "description": "The `[stop]` table (CLOUD-2761): what must be true at the end of a turn.",
+      "type": "object",
+      "properties": {
+        "hold": {
+          "description": "`[[stop.hold]]` rows, each refusing a Stop while its receipt exists and\nits singleton lock has no live holder.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hold"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Strictness": {
       "description": "How strictly Batten applies its gates — the ordered, policy-bearing key the\n§8 raise-only rule is defined over.\n\nThe ordering **is** the policy semantics: `Permissive < Standard < Strict`,\nso \"tighten\" is the computable predicate `candidate >= current` rather than a\njudgement call. Derived `Ord` follows declaration order, which is why the\nvariants are declared weakest-first; [`tests::strictness_orders_weakest_first`]\npins that so a reordering cannot silently invert the clamp.\n\nResolution is this issue's deliverable (CLOUD-29); the verbs that *read* the\nresolved value attach as they land (`--fail-on-warning` is CLOUD-49).",
