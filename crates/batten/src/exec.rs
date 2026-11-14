@@ -4017,10 +4017,56 @@ mod tests {
         }
     }
 
+    /// How long [`reap`] waits for a group the case asked to leave.
+    #[cfg(unix)]
+    const REAP_GRACE: Duration = Duration::from_secs(5);
+
     /// Reap this process's child `group` leader, which the caller has made
-    /// sure is exiting.
+    /// sure is exiting — or KILL it and fail at [`REAP_GRACE`].
+    ///
+    /// BOUNDED, BECAUSE A MUTANT BREAKS THE PREMISE. A cancel mutated into a
+    /// no-op leaves the spinner running, and an unbounded wait then hangs the
+    /// case until the runner's timeout SIGKILLs it, which runs no `Drop`: the
+    /// TERM-ignoring group outlived its case and spun a core for fourteen hours
+    /// (#1276). Failing here kills the mutant and reaps the group.
+    #[cfg(unix)]
     fn reap(group: &mut Group) {
-        await_reaped(group.pid.parse().expect("a numeric pid"));
+        let pid = group
+            .pid
+            .parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .expect("a numeric pid");
+        let deadline = std::time::Instant::now() + REAP_GRACE;
+        loop {
+            match rustix::process::waitid(
+                rustix::process::WaitId::Pid(pid),
+                rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
+            ) {
+                Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => break,
+                Ok(None) | Err(rustix::io::Errno::INTR) => {}
+                Err(other) => panic!("waiting on the group failed: {other}"),
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = escalate_group(&group.pid);
+                await_reaped(group.pid.parse().expect("a numeric pid"));
+                group.reaped = true;
+                panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
+            }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the interval of the poll this loop is: it exits the moment the group \
+                          is reaped, and its outer bound is `REAP_GRACE`, past which the group \
+                          is killed and the case fails"
+            )]
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        group.reaped = true;
+    }
+
+    /// No process groups off unix.
+    #[cfg(not(unix))]
+    fn reap(group: &mut Group) {
         group.reaped = true;
     }
 
