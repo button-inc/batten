@@ -266,7 +266,24 @@ pub(crate) fn task_block(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
     let lines: Vec<String> = manifest.lines().map(str::to_owned).collect();
-    batten::mutate::task_block(&lines, name).map(|block| block.join("\n"))
+    batten::mutate::task_block(&lines, name).map(|block| rendered(&block.join("\n")))
+}
+
+/// `text` with `{{vars.batten}}` rendered as mise renders it with `BATTEN_BIN`
+/// unset: the `[vars] batten` default, read from the committed manifest (step
+/// 22). A task spells batten through that var, and a tier asserting what a task
+/// runs asserts the argv mise hands the shell, not the template.
+pub(crate) fn rendered(text: &str) -> String {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    let declared = parsed["vars"]["batten"]
+        .as_str()
+        .expect("[vars] declares batten");
+    let default = declared
+        .split_once("default='")
+        .and_then(|(_, rest)| rest.split_once('\''))
+        .map_or(declared, |(value, _)| value);
+    text.replace("{{vars.batten}}", default)
 }
 
 /// One declared key's value out of a task block: a string as its contents, any
@@ -1105,10 +1122,13 @@ pub(crate) fn task_body(name: &str) -> String {
             .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
             .to_owned(),
     };
-    body.lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    rendered(
+        &body
+            .lines()
+            .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// `[env].<name>` from the committed `mise.toml` — the one declaration a task

@@ -962,7 +962,7 @@ description = "Clippy with warnings denied"
 # line), so the variable rides the step's own argv rather than the task's `env`,
 # where it would also send the engine's `cargo run` into `target/clippy` and pay
 # a second full debug build of it there.
-run = "cargo run --quiet -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets --all-features -- -D warnings"
+run = "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets --all-features -- -D warnings"
 # ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
 # nextest lanes and the cross builds, all in `target/`, and clippy's
@@ -1009,8 +1009,8 @@ description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatti
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
 run = [
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo lint",
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo format --check --diff",
+  "{{vars.batten}} exec --tee --tracked '*.toml' -- taplo lint",
+  "{{vars.batten}} exec --tee --tracked '*.toml' -- taplo format --check --diff",
 ]
 
 [tasks."lint:deno"]
@@ -1056,7 +1056,7 @@ description = "deno fmt: JSON/JSONC and non-workflow YAML parse and are formatte
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --check --prose-wrap=preserve"
+run = "{{vars.batten}} exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --check --prose-wrap=preserve"
 
 [tasks."fmt:deno"]
 description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in canonical form"
@@ -1090,7 +1090,7 @@ description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --prose-wrap=preserve"
+run = "{{vars.batten}} exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --prose-wrap=preserve"
 
 [tasks."fix-selection-check"]
 description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps — no check-only step, no unrouted fixer"
@@ -1183,8 +1183,8 @@ description = "opa fmt: Rego formatting over the tracked module corpus"
 # then the same selection under `--fail` refuses. A reader sees every offender on
 # one run, and the gate still fails on any.
 run = [
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
+  "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
+  "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
   "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/",
 ]
 
@@ -1203,7 +1203,7 @@ description = "opa fmt -w: rewrite the tracked Rego corpus in canonical form"
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -w"
+run = "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -w"
 
 [tasks.coverage]
 description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"
@@ -1442,7 +1442,7 @@ description = "Run the Rust workspace test suite"
 # that tail, and `task_cargo` in `policy/ci-parity.rego` lifts it off the
 # `step run test:cargo -- ` wrapper. The fail-fast posture rides
 # `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
-run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"
+run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #
@@ -1476,17 +1476,17 @@ run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run -
 # to a profile of its own.
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
-run = "cargo run --quiet -p batten -- step run test:reference-coverage -- cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
+run = "{{vars.batten}} step run test:reference-coverage -- cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
-run = "cargo run --quiet -p batten -- step run test:skill-contract -- cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
+run = "{{vars.batten}} step run test:skill-contract -- cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
-run = "cargo run --quiet -p batten -- step run test:config-schema -- cargo nextest run -p batten --no-tests=fail --test it config_schema::"
+run = "{{vars.batten}} step run test:config-schema -- cargo nextest run -p batten --no-tests=fail --test it config_schema::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:hook-profile"]
@@ -1526,7 +1526,7 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 #
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
-run = "cargo run --quiet -p batten -- check --rule 'diff ship early'"
+run = "{{vars.batten}} check --rule 'diff ship early'"
 
 [tasks."ci-drift"]
 description = "Gate: the committed [ci] table still matches the host ruleset (CLOUD-54)"
@@ -1554,7 +1554,7 @@ description = "Gate: the committed [ci] table still matches the host ruleset (CL
 # named. It was the shell's `:?` until CLOUD-1991; mise's template refuses to
 # render a variable the environment does not carry, naming it, and the task fails
 # before the engine starts — the same refusal with no shell line behind it.
-run = 'cargo run --quiet -p batten -- config lint --host-rules "{{env.CI_DRIFT_RULES}}"'
+run = '{{vars.batten}} config lint --host-rules "{{env.CI_DRIFT_RULES}}"'
 
 [tasks."hooks-wiring-check"]
 description = "Gate: batten is registered exactly once on every hook surface (doctor hooks), and every other registration names the issue retiring it (harness-wiring)"
@@ -1578,8 +1578,8 @@ description = "Gate: batten is registered exactly once on every hook surface (do
 # verdict is never discarded — the property the `&&` was spelled for, without a
 # shell line to carry it. There is no decision here to hide: both are the engine's.
 run = [
-  "cargo run --quiet -p batten -- doctor hooks",
-  "cargo run --quiet -p batten -- check --rule 'hook wire missing'",
+  "{{vars.batten}} doctor hooks",
+  "{{vars.batten}} check --rule 'hook wire missing'",
 ]
 
 [tasks."config-lint"]
@@ -1621,7 +1621,7 @@ description = "Gate: batten.toml carries no policy smell, and no weakening the g
 # The `${VAR:+...}` was argv assembly and nothing else, and the template's `if`
 # is the same assembly — an unset or empty `CONFIG_LINT_BASE` adds no flag — with
 # no shell line left to carry it.
-run = 'cargo run --quiet -p batten -- config lint {% if env.CONFIG_LINT_BASE %}--config-from "{{env.CONFIG_LINT_BASE}}"{% endif %}'
+run = '{{vars.batten}} config lint {% if env.CONFIG_LINT_BASE %}--config-from "{{env.CONFIG_LINT_BASE}}"{% endif %}'
 
 [tasks.semver]
 description = "Gate: the API delta on this branch is compatible with the bump release-plz will infer, unless a commit declares the break"
@@ -1661,7 +1661,7 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # origin/main..HEAD` — which is exactly what a `[[step]]` row's `tools` column
 # keys a receipt on, so they belong on the `semver` row beside the crates it
 # already names as inputs. The task is the step and nothing else.
-run = "cargo run --quiet -p batten -- step run semver -- cargo run --quiet -p batten -- semver check"
+run = "{{vars.batten}} step run semver -- {{vars.batten}} semver check"
 
 [tasks."claim-check"]
 description = "Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
@@ -1691,7 +1691,7 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # already carried the whole decision. They are `--takeover` and
 # `--bypass-sequence`, which is also what a harness classifying `FOO=1 cmd` as a
 # bypass leaves reachable.
-run = "cargo run --quiet -p batten -- claim check"
+run = "{{vars.batten}} claim check"
 
 [tasks."perf-pair"]
 description = "Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
@@ -1717,7 +1717,7 @@ description = "Measure this branch and its merge base back to back on one machin
 # The defaults live in `crates/batten/src/perf.rs` beside the reasoning, not here:
 # `origin/main`, 100 runs, 10 warmups, and `target/perf`, each still overridable
 # through the `BENCH_*` variables CI already exports.
-run = "cargo run --quiet -p batten -- perf pair"
+run = "{{vars.batten}} perf pair"
 
 [tasks."perf-compare"]
 description = "Gate: this branch has not made an invocation path measurably slower than its merge base (reads a paired measurement on stdin)"
@@ -1737,7 +1737,7 @@ description = "Gate: this branch has not made an invocation path measurably slow
 # EXPERIMENT (the measured null spread, 0.966-1.102) and names no consumer, while
 # every accepted row this repository has written cites a tracker key, which may
 # not appear anywhere in `crates/batten`.
-run = "cargo run --quiet -p batten -- perf compare"
+run = "{{vars.batten}} perf compare"
 
 [tasks."perf-gate"]
 description = "Gate: measure this branch against its merge base and refuse a regression — the one call `verify` and CI make"
@@ -1760,7 +1760,7 @@ description = "Gate: measure this branch against its merge base and refuse a reg
 # there is no pipeline: `perf::gate` holds the outcome as a value and matches on
 # it, so a skip and a failed measurement are different variants rather than two
 # readings of one byte stream.
-run = "cargo run --quiet -p batten -- step run perf-gate -- cargo run --quiet -p batten -- perf gate"
+run = "{{vars.batten}} step run perf-gate -- {{vars.batten}} perf gate"
 
 [tasks."perf-seed"]
 description = "Effect: build the perf pair's arm profile and stage it under target/perf/base-seed, which perf.yml saves as every pull request's base-arm seed"
@@ -1860,7 +1860,7 @@ description = "Gate: every declared Rego, Pkl or manifest gate this branch touch
 # copy from `BATTEN_PRESET_OVERLAY` (`mutate::Overlay`, `PresetModule::text`);
 # the overlay's root is `[env]`'s `MUTANT_PRESETS`.
 env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay" }
-run = "cargo run --quiet -p batten -- mutate sweep"
+run = "{{vars.batten}} mutate sweep"
 
 [tasks."mutant:rust"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
@@ -1875,7 +1875,7 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000" }
 # The verb applies the pin and runs the cached binary, so nothing is linked onto
 # PATH and no task step precedes it.
-run = "cargo run --quiet -p batten -- mutate cargo"
+run = "{{vars.batten}} mutate cargo"
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"
@@ -1889,7 +1889,7 @@ description = "Gate: every gate in the tree is either mutation-enforced or carri
 # ships to every consumer and cannot read a `[[pattern]]` row one wrote, so it is
 # exactly where CLOUD-934's dead-predicate class lives — and a census blind to
 # that directory is blind to the class.
-run = "cargo run --quiet -p batten -- mutate census"
+run = "{{vars.batten}} mutate census"
 
 [tasks."target-prune"]
 description = "Collect superseded, then least recently used, build units until [prune] max_free_mb is free — pointer-only, no build, no network"
@@ -1965,7 +1965,7 @@ description = "Gate: every row this branch put on the board was refined at creat
 # `stop-guard`'s callers, and `stop-guard` is retired in this same change: those
 # questions are asked at `Stop` by the engine's own hook now, over the same
 # module, so there is still exactly one implementation of the intersection.
-run = "cargo run --quiet -p batten -- check --rule 'issue file other'"
+run = "{{vars.batten}} check --rule 'issue file other'"
 
 [tasks."filed-here:guard"]
 description = "The decision behind the filed-row-settled handler: refuse an edit while a row this branch filed is unrefined, over its diff, or left open"
@@ -1990,7 +1990,7 @@ description = "Gate: no other OPEN pull request already claims a key this branch
 #
 # Every other `command` row in `batten.toml` names a `mise run` task for the same
 # reason; this one being the exception was an oversight rather than a choice.
-run = "cargo run --quiet -p batten -- claim race"
+run = "{{vars.batten}} claim race"
 
 [tasks.policy-test]
 description = "Gate: run every registered policy module's and enabled preset's own `test_` rules"
@@ -2021,7 +2021,7 @@ description = "Gate: run every registered policy module's and enabled preset's o
 #
 # ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
 # whose exit code a one-command task already is.
-run = "cargo run --quiet -p batten -- step run policy-test -- cargo run --quiet -p batten -- policy test"
+run = "{{vars.batten}} step run policy-test -- {{vars.batten}} policy test"
 
 # The repository SBOM (CLOUD-262) and the binary SBOM (CLOUD-263), retired onto
 # `batten sbom` under CLOUD-843. The derivation — syft's scan, the identity
@@ -2036,7 +2036,7 @@ run = "cargo run --quiet -p batten -- step run policy-test -- cargo run --quiet 
 #   batten sbom --names        the asset names, without scanning
 [tasks.sbom]
 description = "Effect: derive the SPDX and CycloneDX inventories of this tree, under the names the release assets carry"
-run = "cargo run --quiet -p batten -- sbom"
+run = "{{vars.batten}} sbom"
 
 # Produce, and — as its OWN task — the one rule. The binary's inventory is
 # `batten sbom --binary`'s, its record the `supply-chain` preset's to decide
@@ -2056,7 +2056,7 @@ usage = """
 arg "<binary>" help="the built binary"
 arg "<target>" help="the target triple the binary was built for"
 """
-run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{usage.target}}"
+run = "{{vars.batten}} sbom --binary {{usage.binary}} --target {{usage.target}}"
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
@@ -2065,7 +2065,7 @@ description = "Gate: refuse a binary inventory that catalogs nothing, or crates 
 # leg-wide setting, which puts every task's tools through MSYS's PATH rewrite
 # (rust.yml's `windows` job measured that). The class fix is CLOUD-2557.
 shell = "bash -c"
-run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
+run = "{{vars.batten}} check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
@@ -2080,9 +2080,9 @@ run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 [tasks.timeout-drift-record]
 description = "Record each workflow's recent successful runs and their jobs' durations, for `bound grade other`"
 run = [
-  "cargo run --quiet -p batten -- record query drift-workflows",
-  "cargo run --quiet -p batten -- record query drift-runs",
-  "cargo run --quiet -p batten -- record query drift-jobs",
+  "{{vars.batten}} record query drift-workflows",
+  "{{vars.batten}} record query drift-runs",
+  "{{vars.batten}} record query drift-jobs",
 ]
 
 # The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
@@ -2091,7 +2091,7 @@ run = [
 [tasks.timeout-drift-check]
 description = "Gate: record each job's duration, then refuse a declared budget that no longer matches it"
 depends = ["timeout-drift-record"]
-run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on-warning"
+run = "{{vars.batten}} check --rule 'bound grade other' --fail-on-warning"
 
 # CLOUD-831's producer, ported off `mise-tasks/evaluator-closure-check.sh` under
 # CLOUD-1717. The two things that are not decisions: the `cargo metadata` spawn,
@@ -2200,8 +2200,8 @@ run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on
 [tasks.signing-posture-check]
 description = "Gate: this checkout's signer is verifiable and no commit in range carries a key nobody can check (CLOUD-669)"
 run = [
-  "cargo run --quiet -p batten -- record derive signing-posture",
-  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+  "{{vars.batten}} record derive signing-posture",
+  "{{vars.batten}} check --rule 'commit grade unsafe'",
 ]
 
 # THE PRODUCER HALF ALONE, under the name `hk.pkl`'s `signing-posture-record`
@@ -2211,25 +2211,25 @@ run = [
 # producer with its judge for the callers that want both.
 [tasks.signing-posture-record]
 description = "Effect: re-derive this checkout's signing-posture record for the range under judgement, which `commit grade unsafe` reads"
-run = "cargo run --quiet -p batten -- record derive signing-posture"
+run = "{{vars.batten}} record derive signing-posture"
 
 # THE SHELL CENSUS UNDER A NAME (CLOUD-843): every home shell lives in, counted in
 # code lines as pointers, read from `[census.shell]`. A report, never a gate — the
 # ban is the gate — so it is the number the retirement posts on its row.
 [tasks.census]
 description = "Report: every place this repository still writes shell, in code lines (CLOUD-843)"
-run = "cargo run --quiet -p batten -- census shell"
+run = "{{vars.batten}} census shell"
 
 # The board gates `[board] sweep` declares, run over one payload set on stdin
 # (CLOUD-825), under the name the retired body carried and the release summary
 # still gives a reader. A session that can read the tracker pipes the payloads in.
 [tasks.board-sweep]
 description = "Gate: every declared board gate over one tracker payload set on stdin (CLOUD-825)"
-run = "cargo run --quiet -p batten -- board sweep"
+run = "{{vars.batten}} board sweep"
 
 [tasks.evaluator-io-record]
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
-run = "cargo run --quiet -p batten -- record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
+run = "{{vars.batten}} record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
 
 [tasks.transcript-corpus-record]
 description = "Effect: count this host's independent session transcripts against a threshold, for `corpus count thin`"
@@ -2250,7 +2250,7 @@ description = "Effect: count this host's independent session transcripts against
 # `if` adds each flag only where the shell's test did. An EMPTY
 # `BATTEN_SESSION_ID` is falsy there exactly as `-n` read it.
 usage = 'arg "[threshold]" default="2" help="how many independent sessions make the corpus thick"'
-run = 'cargo run --quiet -p batten -- record derive transcript-corpus --input "root={% if env.BATTEN_TRANSCRIPT_ROOT %}{{env.BATTEN_TRANSCRIPT_ROOT}}{% else %}{{env.HOME}}/.claude/projects{% endif %}" --input "threshold={{usage.threshold}}"{% if env.BATTEN_SESSION_ID %} --input "exclude={{env.BATTEN_SESSION_ID}}"{% endif %}'
+run = '{{vars.batten}} record derive transcript-corpus --input "root={% if env.BATTEN_TRANSCRIPT_ROOT %}{{env.BATTEN_TRANSCRIPT_ROOT}}{% else %}{{env.HOME}}/.claude/projects{% endif %}" --input "threshold={{usage.threshold}}"{% if env.BATTEN_SESSION_ID %} --input "exclude={{env.BATTEN_SESSION_ID}}"{% endif %}'
 
 [tasks.macos-link-record]
 description = "Effect: record the built macOS graph's links-declaring and framework-linking crates, for `workspace carry unsafe`"
@@ -2264,7 +2264,7 @@ description = "Effect: record the built macOS graph's links-declaring and framew
 # repo-agnostic core (CLOUD-1717). The `BATTEN_LINK_CHECK_METADATA` fixture
 # switch is gone: a recorded graph reaches the same walk on stdin, with no
 # `resolve`, which is how `macos_link.rs` already drives it.
-run = "cargo run --quiet -p batten -- record derive macos-link --input framework=sdk-framework-crate --input vendored=vendored-links-crate --input resolve=aarch64-apple-darwin"
+run = "{{vars.batten}} record derive macos-link --input framework=sdk-framework-crate --input vendored=vendored-links-crate --input resolve=aarch64-apple-darwin"
 
 # The macOS link gate as hk's `macos-link-check` step runs it (CLOUD-1991). The
 # step's `check` was a `&&` pair — produce, then decide — which made it the one
@@ -2275,7 +2275,7 @@ run = "cargo run --quiet -p batten -- record derive macos-link --input framework
 [tasks.macos-link-check]
 description = "Gate: the macOS graph links no Apple SDK framework — record it, then decide `workspace carry unsafe`"
 depends = ["macos-link-record"]
-run = "cargo run --quiet -p batten -- check --rule 'workspace carry unsafe'"
+run = "{{vars.batten}} check --rule 'workspace carry unsafe'"
 
 [tasks.evaluator-closure-record]
 description = "Effect: record the evaluator's activated sub-closure and any IO-bearing crate in it, for `layer reach unsafe`"
@@ -2285,7 +2285,7 @@ description = "Effect: record the evaluator's activated sub-closure and any IO-b
 # IS NEVER 0 and records nothing — the verb's exit 3 where the body's was 2. The
 # `BATTEN_EVALUATOR_METADATA` switch is gone: a recorded graph reaches the same
 # walk on stdin, which is how `evaluator_closure.rs` shows the gate able to FAIL.
-run = "cargo run --quiet -p batten -- record derive evaluator-closure --input roots=evaluator-package --input bears=evaluator-io-crate --input resolve=any"
+run = "{{vars.batten}} record derive evaluator-closure --input roots=evaluator-package --input bears=evaluator-io-crate --input resolve=any"
 
 # CLOUD-349's reading half: three declared forge reads, in order, because the
 # tips fan out over the heads the first one recorded (CLOUD-843). The age in days
@@ -2311,9 +2311,9 @@ run = "cargo run --quiet -p batten -- record derive evaluator-closure --input ro
 [tasks.branch-age-record]
 description = "Effect: record every remote branch, each tip's age in days, and recently closed pull requests' heads (CLOUD-349)"
 run = [
-  "cargo run --quiet -p batten -- record query branch-heads",
-  "cargo run --quiet -p batten -- record query branch-tips",
-  "cargo run --quiet -p batten -- record query branch-merged",
+  "{{vars.batten}} record query branch-heads",
+  "{{vars.batten}} record query branch-tips",
+  "{{vars.batten}} record query branch-merged",
 ]
 
 # The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
@@ -2322,7 +2322,7 @@ run = [
 [tasks.branch-age-check]
 description = "Gate: record the branch heads, tips and merges, then refuse a branch left open past its watch window"
 depends = ["branch-age-record"]
-run = "cargo run --quiet -p batten -- check --rule 'branch watch loose'"
+run = "{{vars.batten}} check --rule 'branch watch loose'"
 
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
@@ -2348,7 +2348,7 @@ flag "--names" help="print the asset path and exit, with no build and no network
 # the path defaults `RENDER_CLI_OUT_DIR` to `reference` and names the asset from
 # `[env]`, and `--names` selects an `echo` of that path rather than the render,
 # so asking for the name still builds nothing.
-run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}cargo run --quiet -p batten -- artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
+run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}{{vars.batten}} artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
 
 # CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717 and
 # off this body onto `batten release sums` under CLOUD-843: download a release's
@@ -2358,7 +2358,7 @@ run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.R
 # manifest's name is `[env]`'s one declaration, rendered into the argv.
 [tasks.checksums]
 description = "Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
-run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
+run = "{{vars.batten}} release sums --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
 # CLOUD-518's gate and CLOUD-790's actor, retired onto `batten pr unsubscribed`
 # under CLOUD-843. The receipt store, the endpoint call and the reading are the
@@ -2374,7 +2374,7 @@ run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECK
 # the arm and the pull request appended to this argv.
 [tasks.pr-unsubscribed]
 description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
-run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"
+run = "{{vars.batten}} pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"
 
 # CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
 # under CLOUD-1717 and off this body onto `batten record release` under
@@ -2385,14 +2385,14 @@ run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_
 # the `release-hygiene` preset's. The tag is appended; empty is the latest.
 [tasks.release-assets-record]
 description = "Effect: record a release's assets, its checksum manifest's entries, and the entries whose bytes disagree (CLOUD-258)"
-run = "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
+run = "{{vars.batten}} record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
 # The name `release-assets.yml` runs on its clock, kept, and the DECISION only:
 # the record is written by `release-assets-record <tag>` first, because a task's
 # appended argument reaches its LAST command and the tag belongs to the record.
 [tasks.release-assets-check]
 description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
-run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'"
+run = "{{vars.batten}} check --rule 'release grade other' --rule 'release pin other'"
 
 # THE PAIR `release-assets.yml` RUNS AS ONE STEP (CLOUD-843, Phase 4): the record
 # and the decision over it, in order, so the check never judges a record that was
@@ -2403,8 +2403,8 @@ run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 
 [tasks.release-assets-audit]
 description = "Gate: record the release named by $TAG, then decide it carries one archive per target, every asset, and a covering checksum manifest"
 run = [
-  "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}} {{env.TAG}}",
-  "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'",
+  "{{vars.batten}} record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}} {{env.TAG}}",
+  "{{vars.batten}} check --rule 'release grade other' --rule 'release pin other'",
 ]
 
 # The provenance half of the same audit, on the same terms: `batten record
@@ -2413,8 +2413,8 @@ run = [
 [tasks.release-attestation-audit]
 description = "Gate: record each archive's attestation verdict for the release named by $TAG, then decide the release carries build provenance"
 run = [
-  "cargo run --quiet -p batten -- record attestation {{env.TAG}} --binary batten",
-  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+  "{{vars.batten}} record attestation {{env.TAG}} --binary batten",
+  "{{vars.batten}} check --rule 'commit grade unsafe'",
 ]
 
 # The name `auto-release-land.yml` runs, kept: exit 0 due, 2 holding.
@@ -2423,7 +2423,7 @@ run = [
 # two release workflows' lines by `batten check`.
 [tasks.release-tracking-check]
 description = "Gate: a shipped tag reaches Linear — both release-tracking invocations present, pinned, and bound to the tag, in the release's land job and on the backfill path alike"
-run = "cargo run --quiet -p batten -- check --rule 'release wire other'"
+run = "{{vars.batten}} check --rule 'release wire other'"
 
 # `ntia-check`'s name, kept for every hand that types it: record, then decide.
 # THE RECEIPT IS NOT A VERDICT (CLOUD-631): it caches an answer already given, so
@@ -2441,9 +2441,9 @@ description = "Gate: the SBOM this tree produces meets the NTIA minimum elements
 # transcript is not such a failure: `receipt record` reports it and records anyway
 # (CLOUD-819). `cargo run` resolves the tree's engine.
 run = [
-  "cargo run --quiet -p batten -- sbom --conformance",
-  "cargo run --quiet -p batten -- check --rule 'manifest cover other'",
-  "cargo run --quiet -p batten -- receipt record sbom-ntia",
+  "{{vars.batten}} sbom --conformance",
+  "{{vars.batten}} check --rule 'manifest cover other'",
+  "{{vars.batten}} receipt record sbom-ntia",
 ]
 
 # CLOUD-319's gate, whose reading half retired off `[tasks.release-due-record]`
@@ -2454,9 +2454,9 @@ run = [
 [tasks.release-due]
 description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"
 run = [
-  "cargo run --quiet -p batten -- record query release-due-activity",
-  "cargo run --quiet -p batten -- record query release-due-latest",
-  "cargo run --quiet -p batten -- check --rule 'release grade early'",
+  "{{vars.batten}} record query release-due-activity",
+  "{{vars.batten}} record query release-due-latest",
+  "{{vars.batten}} check --rule 'release grade early'",
 ]
 
 # CLOUD-618's sweep, ported off `mise-tasks/release-backfill.sh` under CLOUD-1717
@@ -2472,7 +2472,7 @@ run = [
 # pattern selects; `-- --dry-run` prints the plan.
 [tasks.release-backfill]
 description = "Effect: record historical tags in the Linear release pipeline: dispatch the backfill workflow once per tag, oldest first, stopping on the first failure"
-run = "cargo run --quiet -p batten -- release backfill --workflow linear-release-backfill.yml --ref main --pattern 'v[0-9]*'"
+run = "{{vars.batten}} release backfill --workflow linear-release-backfill.yml --ref main --pattern 'v[0-9]*'"
 
 # A turn that cites `path:line` evidence and gives it no OPEN row stranded a
 # finding (CLOUD-252, CLOUD-475, CLOUD-775) — retired onto `batten record decide`
@@ -2496,7 +2496,7 @@ run = "cargo run --quiet -p batten -- release backfill --workflow linear-release
 [tasks.finding-sink-check]
 description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
 dir = "{{cwd}}"
-run = "cargo run --quiet -p batten -- record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file missing'"
+run = "{{vars.batten}} record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file missing'"
 
 # An issue may become Done only if none of its own pull requests is still open
 # (CLOUD-468). CLOUD-843 retired the bash body: the reading is `batten record
@@ -2720,9 +2720,9 @@ depends = ["pkl-package"]
 # `verify` that runs it — fails on a checkout whose only credential is gh's own
 # keyring, where it used to pass. Export one of those names to run `verify`.
 run = [
-  "cargo run --quiet -p batten -- record validate config-validator",
-  "cargo run --quiet -p batten -- record validate renovate-config",
-  "cargo run --quiet -p batten -- record forge HEAD --fetch --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'",
+  "{{vars.batten}} record validate config-validator",
+  "{{vars.batten}} record validate renovate-config",
+  "{{vars.batten}} record forge HEAD --fetch --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'",
 ]
 
 # The perf producer and the perf gate (CLOUD-207, ported off
@@ -2752,7 +2752,7 @@ run = [
 # that needs one line must not spend a real body's budget.
 [tasks."perf"]
 description = "Measure batten's invocation cost on every path and print one byte-stable record per path"
-run = "cargo run --quiet -p batten -- perf measure"
+run = "{{vars.batten}} perf measure"
 
 # CLOUD-172's series, ported onto `perf record` under CLOUD-1753. Same reason the
 # task above is declared: `perf.yml` names it.
@@ -2763,7 +2763,7 @@ run = "cargo run --quiet -p batten -- perf measure"
 # process it otherwise does not need.
 [tasks."perf-record"]
 description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
-run = "cargo run --quiet -p batten -- perf record"
+run = "{{vars.batten}} perf record"
 
 # CLOUD-119's benchmark, ported onto `bench tokens` under CLOUD-1753. Declared
 # rather than auto-discovered, for the reason `perf` above records: the name is
@@ -2775,14 +2775,14 @@ run = "cargo run --quiet -p batten -- perf record"
 # rather than an empty shell variable that silently prices everything at zero.
 [tasks."token-bench"]
 description = "Measure the token economics of the Batten-wrapped path against the raw tool, from committed fixtures (CLOUD-119)"
-run = "cargo run --quiet -p batten -- bench tokens"
+run = "{{vars.batten}} bench tokens"
 
 # The gate over the published table: it reproduces, and every figure states its
 # method. Both halves are the verb's, because deciding the first requires running
 # the benchmark and the second reads the same bytes it already opens.
 [tasks."token-bench-check"]
 description = "Gate: the committed benchmark table is what a fresh run produces, and no figure in it lacks a method (CLOUD-119)"
-run = "cargo run --quiet -p batten -- bench tokens --check"
+run = "{{vars.batten}} bench tokens --check"
 
 [tasks.record-perf]
 description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
@@ -2795,7 +2795,7 @@ description = "Effect: reduce `perf` records to a p95 per path and record them w
 # finding whose cause is this task. The verb refuses it as could-not-look (exit
 # 3, where the body used 2) and writes nothing. stdin reaches the verb as it
 # reached the body: `perf.yml` redirects the measurement into `mise run`.
-run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95"
+run = "{{vars.batten}} record tool perf-p95 --pick path=p95"
 
 # The gate the producer above feeds, and the same wrapper shape `lock-complete`
 # takes: the task name and the rule id are one object, so the workflow step, this
@@ -2805,7 +2805,7 @@ run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95"
 # latency gate would report every other tree rule through it.
 [tasks.perf-assert]
 description = "Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces"
-run = "cargo run --quiet -p batten -- check --rule 'path measure wrong'"
+run = "{{vars.batten}} check --rule 'path measure wrong'"
 
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
 # `mise-tasks/msrv-pin-agreement.sh`.
@@ -2828,7 +2828,7 @@ description = "cargo-deny: licenses, advisories, sources"
 # The advisory DB is a property of the world, and worlds change on a clock, not
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
-run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
+run = "{{vars.batten}} step run deny -- cargo deny check"
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
@@ -2987,7 +2987,7 @@ description = "Price `config::load` over the committed batten.toml, with its own
 # figure — so it takes a third stamp, and `crates/batten/tests/acquisition_metric.rs`
 # asserts every bench task carries one and that no two of them collide.
 env = { BENCH_METRIC = "config-load-wall-clock" }
-run = "cargo run --quiet -p batten --example config-load-bench"
+run = "{{vars.batten}}example config-load-bench"
 
 [tasks.refusal-render-bench]
 description = "Price refusal rendering by strategy and explicit residency, writing bench/refusal-render/RESULTS.md (CLOUD-1606)"
@@ -3013,7 +3013,7 @@ description = "Price refusal rendering by strategy and explicit residency, writi
 # re-renders the six records in-process and diffs them against the committed
 # file, so the report cannot go stale without `test:cargo` reddening.
 env = { BENCH_METRIC = "refusal-render-characters" }
-run = "cargo run --quiet -p batten --example refusal-render-bench"
+run = "{{vars.batten}}example refusal-render-bench"
 
 [tasks."doctor:mediator"]
 description = "Report whether the engine adjudicating this tree was built from it"
@@ -3229,7 +3229,7 @@ description = "Gate: every mem: reference in tracked markdown resolves to a real
 # under the branch, the installed binary predated it, and BOTH wrappers refused
 # with a config parse error that named a section neither gate reads. Nothing in
 # CI installs `batten` either, so the bare form had never been CI-verified.
-run = "cargo run --quiet -p batten -- check --rule 'memory point missing'"
+run = "{{vars.batten}} check --rule 'memory point missing'"
 
 # CLOUD-843 / CLOUD-1150, and the same wrapper shape one member over: `hk.pkl`'s
 # `rules-drift` step runs `mise run rules-drift` and still does, so the caller
@@ -3246,7 +3246,7 @@ run = "cargo run --quiet -p batten -- check --rule 'memory point missing'"
 # together across two files, and there is one name here.
 [tasks.rules-drift]
 description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
-run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
+run = "{{vars.batten}} check --rule 'rule watch other'"
 # ---------------------------------------------------------------------------
 # The session-start provisioning steps, one task each (CLOUD-312 row 10).
 #
@@ -3626,7 +3626,7 @@ run = "batten engine outdated --notice --record engine-fresh --max-releases 3 --
 # predecessor's own scope stated as a flag.
 [tasks.lock-complete]
 description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
-run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
+run = "{{vars.batten}} check --rule 'lock cover partial'"
 
 # CLOUD-1833. The engine, with the arguments the caller gives — the half of
 # `batten-check` that is not the consumer-#1 gate.
@@ -3650,7 +3650,7 @@ run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
 # engine and config together, the pair that ships.
 [tasks.batten]
 description = "Run the working tree's engine with the given arguments, so a workflow step can select one rule"
-run = "cargo run --quiet -p batten --"
+run = "{{vars.batten}}"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
@@ -3717,9 +3717,9 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # the LAST entry, so a clean tree half leaves the task's code to it with nothing
 # after it to replace one. `provision apply` runs first.
 run = [
-  "cargo run --quiet -p batten -- provision apply",
-  "cargo run --quiet -p batten -- step run enforce-tree -- cargo run --quiet -p batten -- enforce --half tree --keyed-base origin/main",
-  "cargo run --quiet -p batten -- enforce --half live",
+  "{{vars.batten}} provision apply",
+  "{{vars.batten}} step run enforce-tree -- {{vars.batten}} enforce --half tree --keyed-base origin/main",
+  "{{vars.batten}} enforce --half live",
 ]
 
 [tasks.policy-budget]
@@ -3730,7 +3730,7 @@ description = "Gate: the always-loaded context (AGENTS.md + anything else declar
 # config a reviewer can read rather than arithmetic buried in a shell script.
 # `cargo run` for the same reason `batten-check` uses it: the gate judges the
 # working tree's engine and config together, the pair that ships.
-run = "cargo run --quiet -p batten -- policy budget"
+run = "{{vars.batten}} policy budget"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
@@ -3754,7 +3754,7 @@ description = "Gate: this session's hook output fits its per-session budget, and
 #
 # `cargo run` for `policy-budget`'s reason: the gate judges the working tree's
 # engine and config as the pair that ships.
-run = "cargo run --quiet -p batten -- policy hooks"
+run = "{{vars.batten}} policy hooks"
 
 [tasks.completions]
 description = "Regenerate the committed shell completions from the command surface"
@@ -3765,7 +3765,7 @@ description = "Regenerate the committed shell completions from the command surfa
 # THE REDIRECT IS THE ENGINE'S NOW (CLOUD-1991): `artifacts write` writes the
 # bytes `generate completions` emits, into the directory named here, and the
 # loop over three shells that was this body is the verb's.
-run = "cargo run --quiet -p batten -- artifacts write --completions completions"
+run = "{{vars.batten}} artifacts write --completions completions"
 
 [tasks.hk-contract]
 description = "Regenerate the committed plan projection from the pinned gate runner (CLOUD-947)"
@@ -3775,14 +3775,14 @@ description = "Regenerate the committed plan projection from the pinned gate run
 # `generate` family above, where the artifact IS the stream and the caller owns
 # the redirect. A stream could not tell a partial acquisition from a complete
 # one, and a partial contract commits clean for the surface it lost.
-run = "cargo run --quiet -p batten -- hk contract"
+run = "{{vars.batten}} hk contract"
 
 [tasks.hk-drift]
 description = "Gate: the committed plan projection still matches the pinned gate runner (CLOUD-947)"
 # `cargo run` rather than an installed binary, for `completions`' reason: the
 # artifact must track the WORKING TREE's projection, or the gate answers about a
 # canonicaliser nobody is landing.
-run = "cargo run --quiet -p batten -- step run hk-drift -- cargo run --quiet -p batten -- hk drift"
+run = "{{vars.batten}} step run hk-drift -- {{vars.batten}} hk drift"
 
 [tasks.man]
 description = "Regenerate the committed man pages from the command surface"
@@ -3812,7 +3812,7 @@ description = "Regenerate the committed man pages from the command surface"
 # `artifacts write --man` derives the pages from the same spec this body read
 # with `jq`, clears the directory's `*.1` first for the reason above, and writes
 # each page `generate man` emits under `render::page_name`'s spelling.
-run = "cargo run --quiet -p batten -- artifacts write --man man"
+run = "{{vars.batten}} artifacts write --man man"
 
 [tasks.schema]
 description = "Regenerate every committed JSON Schema — both config surfaces and both policy-input surfaces — from the types that define them"
@@ -3834,7 +3834,7 @@ description = "Regenerate every committed JSON Schema — both config surfaces a
 # build-time check answering about a document the engine no longer emits.
 # The four redirects are `artifacts write --schema`'s since CLOUD-1991: the same
 # four surfaces, written together into the directory named here.
-run = "cargo run --quiet -p batten -- artifacts write --schema schema"
+run = "{{vars.batten}} artifacts write --schema schema"
 
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
@@ -4012,7 +4012,7 @@ usage = '''
 arg "<base>" help="the revision the checkout is diffed against"
 arg "[head]" help="the revision whose tree the checkout must carry"
 '''
-run = 'cargo run --quiet -p batten -- ci slow-needed --base "{{usage.base}}"{% if usage.head %} --head "{{usage.head}}"{% endif %}'
+run = '{{vars.batten}} ci slow-needed --base "{{usage.base}}"{% if usage.head %} --head "{{usage.head}}"{% endif %}'
 
 # THE INSTALLED BINARY, NEVER A COMPILE (CLOUD-1753, CLOUD-1991). Session start
 # is the one path that may not assume a toolchain, and a bare `cargo run` there
@@ -4098,29 +4098,29 @@ run = "batten startup --repair"
 # rule ids are this branch's and a PATH-resolved release does not carry them.
 [tasks."ci-tools-check"]
 description = "Gate: every tool a workflow reaches for is pinned where this repository pins tools"
-run = "cargo run --quiet -p batten -- check --rule 'tool pin wrong'"
+run = "{{vars.batten}} check --rule 'tool pin wrong'"
 
 [tasks."rust-paths-check"]
 description = "Gate: the rust workflow's path filters name every path its jobs actually judge"
-run = "cargo run --quiet -p batten -- check --rule 'path list partial'"
+run = "{{vars.batten}} check --rule 'path list partial'"
 
 [tasks."report-only-check"]
 description = "Gate: a reporting workflow does not silently stand in for a gate that must decide"
-run = "cargo run --quiet -p batten -- check --rule 'gate report silent'"
+run = "{{vars.batten}} check --rule 'gate report silent'"
 
 [tasks."timeout-check"]
 description = "Gate: every job declares a timeout, and every declared timeout binds to a job"
-run = "cargo run --quiet -p batten -- check --rule 'job bind missing'"
+run = "{{vars.batten}} check --rule 'job bind missing'"
 
 [tasks."awk-regex-check"]
 description = "Gate: an awk program carries no pattern that is unsafe under the shell that invokes it"
-run = "cargo run --quiet -p batten -- check --rule 'pattern carry unsafe'"
+run = "{{vars.batten}} check --rule 'pattern carry unsafe'"
 [tasks."target-ensure"]
 description = "Effect: ensure one rustup target is installed, behind the per-toolchain lock so concurrent callers queue instead of colliding"
 # NO `"$1"`: mise appends a task's positional arguments to its `run` string, so
 # naming one here passes the triple TWICE and the verb refuses the second as an
 # unexpected argument. Measured on the first invocation of this task.
-run = "cargo run --quiet -p batten -- doctor target"
+run = "{{vars.batten}} doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
@@ -4142,7 +4142,7 @@ arg "[target]" default="aarch64-apple-darwin" help="the Darwin triple to link" {
 '''
 run = [
   "mise run target-ensure {{usage.target}}",
-  "cargo run --quiet -p batten -- step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
+  "{{vars.batten}} step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
 ]
 
 [tasks.cross-check]
@@ -4210,7 +4210,7 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",
-  "mise run -q batten -- step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
 ]
 
 [tasks."test:musl"]
@@ -4260,14 +4260,14 @@ description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl 
 # THE DECISION IS `policy/hk-pin-agreement.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'tool pin other'"
+run = "{{vars.batten}} check --rule 'tool pin other'"
 
 [tasks.no-docs-tree]
 description = "Gate: no committed docs/ tree. Research deliverables and evidence notes attach to the Linear issue, not a repo docs/ folder (see AGENTS.md)."
 # THE DECISION IS `policy/docs-tree-absent.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'prose place refused'"
+run = "{{vars.batten}} check --rule 'prose place refused'"
 
 [tasks.no-armed-ripcord]
 description = "Gate: the break-glass sentinel is never committed. An armed ripcord in the index hands every clone the bypass (CLOUD-1847)."
@@ -4286,7 +4286,7 @@ description = "Gate: the break-glass sentinel is never committed. An armed ripco
 # THE DECISION IS `policy/ripcord-untracked.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'path ship refused'"
+run = "{{vars.batten}} check --rule 'path ship refused'"
 
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
@@ -4372,7 +4372,7 @@ run = "hk check --all"
 # form, and a wrapper that needs one line must not spend a real body's budget.
 [tasks."install-check"]
 description = "Gate: the install path resolves the assets the release actually publishes, and no binary is committed"
-run = "cargo run --quiet -p batten -- release install"
+run = "{{vars.batten}} release install"
 
 # The release build and archive (CLOUD-843), ported off `mise-tasks/dist.sh` onto
 # `batten dist`. THE TASK SURVIVES THE PROGRAM for `install-check`'s reason:
@@ -4386,7 +4386,7 @@ run = "cargo run --quiet --locked -p batten -- dist"
 
 [tasks."tree-clean"]
 description = "Gate: the working tree is the bytes at HEAD, so a receipt keyed to HEAD names what was actually validated"
-run = "cargo run --quiet -p batten -- receipt clean"
+run = "{{vars.batten}} receipt clean"
 
 [tasks."verified"]
 description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
@@ -4398,7 +4398,7 @@ description = "Gate: is HEAD verified? Answers from the receipts, so no shell id
 # kept for callers that no longer exist is a second exit table with no reader, so
 # the name now answers on the one table every other verb answers on: `0`
 # verified, `2` not verified, `1`/`3` the question could not be asked.
-run = "cargo run --quiet -p batten -- receipt verified"
+run = "{{vars.batten}} receipt verified"
 
 # ─── `mise run land`, the name every caller still uses (CLOUD-1148) ──────────
 #
@@ -4431,7 +4431,7 @@ run = "cargo run --quiet -p batten -- receipt verified"
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
 usage = 'arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"'
-run = 'cargo run --quiet -p batten -- land lap "{{usage.reference}}"'
+run = '{{vars.batten}} land lap "{{usage.reference}}"'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
 # Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
@@ -4459,8 +4459,8 @@ description = "Gate: HEAD is linear on the current origin/main, so the PR can fa
 # will not write fails the task — the two properties the body's `set -uo
 # pipefail` and `|| { …; exit 1; }` were carrying.
 run = [
-  "cargo run --quiet -p batten -- land linear",
-  "cargo run --quiet -p batten -- receipt record linear-check",
+  "{{vars.batten}} land linear",
+  "{{vars.batten}} receipt record linear-check",
 ]
 
 # The external analyzer's verdict on one SHA (CLOUD-441), retired off
@@ -4487,8 +4487,8 @@ arg "<sha>" help="The commit whose analysis is read"
 flag "--check <name>" env="SONAR_CHECK_NAME" default="SonarCloud Code Analysis" help="The check-run name the analyzer posts under"
 '''
 run = [
-  "cargo run --quiet -p batten -- record query check-runs --input sha={{usage.sha}} --input 'check={{usage.check}}'",
-  "cargo run --quiet -p batten -- check --rule 'check grade other' --fail-on-warning",
+  "{{vars.batten}} record query check-runs --input sha={{usage.sha}} --input 'check={{usage.check}}'",
+  "{{vars.batten}} check --rule 'check grade other' --fail-on-warning",
 ]
 
 [tasks."checks-green"]
@@ -4673,7 +4673,7 @@ depends = ["hooks", "deny"]
 
 [tasks.verify]
 #MUTANT-SUITE crates/batten/tests/it/verify_unprovisioned.rs
-#MUTANT hook-repair-dropped|s@^  "cargo run --quiet -p batten -- wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
+#MUTANT hook-repair-dropped|s@^  "{{vars.batten}} wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
 description = "The full local gate each `land` lap runs — iterate a draft with it; on a pushed head run `mise run land`"
 # A SEQUENCE OF ARGV STEPS, AND NO LONGER A MAPPER (CLOUD-843, CLOUD-1990). mise
 # runs a `run` array in order, stops at the first step that fails, and exits with
@@ -4748,10 +4748,10 @@ description = "The full local gate each `land` lap runs — iterate a draft with
 run = [
   "batten receipt clean",
   "mise run toolchain-check",
-  "cargo run --quiet -p batten -- land placed",
-  "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
+  "{{vars.batten}} land placed",
+  "{{vars.batten}} receipt status claim --or bot --or carry --key branch",
   "mise run linear-check",
-  "cargo run --quiet -p batten -- wiring reclaim -y",
+  "{{vars.batten}} wiring reclaim -y",
   "mise run verify:gated",
 ]
 
@@ -4909,13 +4909,13 @@ run = [
   "mise run record-verdicts",
   "mise run evaluator-io-record",
   "mise run signing-posture-record",
-  "cargo run --quiet -p batten -- record validate config-validator",
+  "{{vars.batten}} record validate config-validator",
   "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check",
   "mise run --continue-on-error semver ::: verify:test-replay ::: cross-check ::: darwin-link ::: lint:clippy",
   "mise run ci",
-  "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
+  "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
   "mise run perf-gate",
-  "cargo run --quiet -p batten -- receipt record verify",
+  "{{vars.batten}} receipt record verify",
 ]
 
 # THE LAP'S COMMIT RANGE, AS DATA (CLOUD-1702). `commit-lint` reads
@@ -5026,7 +5026,7 @@ description = "Gate: no vendor authorship, branding or session links in BASE_SHA
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- step run commit-attribution -- cargo run --quiet -p batten -- attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "{{vars.batten}} step run commit-attribution -- {{vars.batten}} attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks."commit:precheck"]
 description = "Run both commit-msg gates over a drafted message file BEFORE `git commit`, so a subject or attribution refusal never costs the pre-commit suite"
@@ -5087,7 +5087,7 @@ description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the conv
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- step run commit-check -- cargo run --quiet -p batten -- commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "{{vars.batten}} step run commit-check -- {{vars.batten}} commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits and names the issue it serves"

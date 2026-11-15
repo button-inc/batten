@@ -12525,6 +12525,42 @@ fn run_land_singleton(
 /// is a test that needs a wider margin than production.
 const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// The engine this lap runs, and the engine-source digest it was built from:
+/// set once, when the lap starts (`run_land_lap`).
+static LAP_ENGINE: std::sync::OnceLock<Option<(PathBuf, String)>> = std::sync::OnceLock::new();
+
+/// The running binary and the engine digest of `root`, when `cargo run` just
+/// built this binary from `root`: cargo sets `CARGO_MANIFEST_DIR` for a binary
+/// it runs, and the lap's tree is clean at its start, so the binary is that
+/// tree's engine. `None` for an installed or hand-started binary.
+fn lap_engine_at_start(root: &Path) -> Option<(PathBuf, String)> {
+    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
+    if !manifest.starts_with(root) {
+        return None;
+    }
+    Some((std::env::current_exe().ok()?, engine::digest(root).ok()?))
+}
+
+/// The `BATTEN_BIN` a lap hands its gate: the lap's own engine, while the tree's
+/// engine sources are still the ones it was built from.
+///
+/// EVERY GATE STEP USED TO REBUILD-CHECK THE ENGINE. A step spells batten as
+/// `{{vars.batten}}`, `cargo run --quiet -p batten --` by default, so each of a
+/// lap's batten calls re-walked the build graph and took the target-dir lock to
+/// learn nothing had changed (#1276, step 22). The lap was itself started by
+/// `cargo run` over the clean tree, so its binary IS that engine. A replay that
+/// moves `crates/` moves the digest, and the gate falls back to `cargo run`.
+/// A path the shell would split is never handed over.
+fn engine_for_gate(exe: &Path, built_from: &str, now: &str) -> Option<String> {
+    let path = exe.to_str()?;
+    (built_from == now && !path.contains(char::is_whitespace)).then(|| path.to_owned())
+}
+
+fn lap_engine(root: &Path) -> Option<String> {
+    let (exe, built_from) = LAP_ENGINE.get()?.as_ref()?;
+    engine_for_gate(exe, built_from, &engine::digest(root).ok()?)
+}
+
 fn run_land_lap(
     root: &Path,
     url: &str,
@@ -12543,6 +12579,7 @@ fn run_land_lap(
         // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
         .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
+    let _ = LAP_ENGINE.set(lap_engine_at_start(root));
     // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
     // would ready and then abandon fails to LOAD rather than in production,
     // which is the whole difference between a schema and a convention.
@@ -14888,6 +14925,9 @@ fn run_land_verify_seen(
     // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
     // the gate's first step, reads this and lets the run through.
     published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
+    if let Some(engine) = lap_engine(root) {
+        published.push(("BATTEN_BIN".to_owned(), engine));
+    }
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
@@ -31853,6 +31893,20 @@ mod mutation_markers;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// Fails by: a lap's engine handed to its gate after its sources moved, a
+    /// path the shell would split handed over, or a current engine withheld.
+    #[test]
+    fn the_lap_hands_its_gate_its_own_engine_only_while_its_sources_stand() {
+        let exe = std::path::Path::new("/repo/target/debug/batten");
+        assert_eq!(
+            super::engine_for_gate(exe, "d1", "d1").as_deref(),
+            Some("/repo/target/debug/batten")
+        );
+        assert_eq!(super::engine_for_gate(exe, "d1", "d2"), None);
+        let spaced = std::path::Path::new("/my repo/target/debug/batten");
+        assert_eq!(super::engine_for_gate(spaced, "d1", "d1"), None);
+    }
     use super::*;
 
     /// A write's projection reads the file it replaces: a missing file is a
