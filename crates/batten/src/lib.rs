@@ -19684,7 +19684,9 @@ fn destructive_call_facts(
     // No list of guarded task names exists anywhere — the lock's own presence is
     // the answer, which is what keeps this consumer's task names out of the core
     // (non-negotiable rule 1).
-    let singleton = hook::singleton_task_started(envelope).and_then(|task| {
+    // EVERY task the call starts, not the first (step 14): `mise run a ::: land`
+    // collides with a running `land` exactly as `mise run land` does.
+    let singleton = hook::tasks_started(envelope).into_iter().find_map(|task| {
         git::git_dir(hook_authority_root())
             .ok()
             .and_then(|git_dir| task::singleton_holder(&git_dir, &task))
@@ -19884,8 +19886,9 @@ fn dispatch_envelope(
     // Failure is silent by design. A hook that cannot write a fact must not
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
-    if envelope.event == hook::Event::PostTool {
-        post_tool(harness, &envelope, spilled, overrides, out, &mut advice)?;
+    let call = (harness, &envelope, spilled, overrides);
+    if let Some(escaped) = post_tool(call, (out, err), &mut advice)? {
+        return Ok(escaped);
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -20062,7 +20065,7 @@ fn dispatch_envelope(
     // `tracked-artifacts` ceiling — which is every repository today — spawns no
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
-    let (tasks, extracted) = session_facts(&policy, &envelope);
+    let ((tasks, task_bodies), extracted) = session_facts(&policy, &envelope);
     let call = call_facts(&policy, &envelope);
     let facts = hook::Facts {
         singleton: &call.singleton,
@@ -20081,6 +20084,7 @@ fn dispatch_envelope(
         manifest,
         pinned: &call.pinned,
         tasks: &tasks,
+        task_bodies: &task_bodies,
         extracted: &extracted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
@@ -21369,7 +21373,152 @@ fn admitted(
     err: &mut dyn Write,
 ) -> Result<hook::Decision> {
     let decision = compose(handled, policy, envelope, facts);
-    pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
+    let decision = pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)?;
+    snapshot_protected(policy, envelope, &decision);
+    Ok(decision)
+}
+
+/// Where a shell call's protected-path snapshot lives, keyed by its call id.
+fn protected_snapshot_path(root: &Path, call: &str) -> Option<PathBuf> {
+    let safe: String = call
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    git::git_dir(root).ok().map(|dir| {
+        dir.join("batten-facts")
+            .join("protected-watch")
+            .join(format!("{safe}.json"))
+    })
+}
+
+/// The protected set's state before a shell call runs (step 14), keyed by the
+/// call id its `PostToolUse` carries, so [`protected_escape`] can compare.
+///
+/// Only an ALLOWED shell call is snapshotted: a refused one never runs. A
+/// failure to write is silent and costs only the comparison — the pre-call
+/// gate has already judged every path the command names.
+fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision: &hook::Decision) {
+    if envelope.event != hook::Event::PreTool
+        || envelope.operation != hook::Operation::Execute
+        || matches!(decision, hook::Decision::Deny(_))
+    {
+        return;
+    }
+    let Some(call) = envelope.call_id.as_deref() else {
+        return;
+    };
+    let Some((root, patterns, state)) = policy.protected_snapshot() else {
+        return;
+    };
+    let Some(path) = protected_snapshot_path(&root, call) else {
+        return;
+    };
+    let body = serde_json::json!({"root": root, "patterns": patterns, "state": state});
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let _written = crate::durable::replace(&path, body.to_string());
+}
+
+/// A protected path a shell call changed without naming it (step 14): its
+/// `PostToolUse` re-reads the set its `PreToolUse` snapshotted, and any path
+/// that moved with no spent `path write refused` admission naming it is a
+/// refusal after the fact. `None` for every call this does not apply to.
+///
+/// The write has happened, so this cannot stop it; what it stops is the write
+/// passing UNSEEN. The refusal reaches the agent on the host's post-call
+/// channel and names the override route, which is how a deliberate protected
+/// write is recorded rather than laundered through a script.
+fn protected_escape(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<HookDispatch>> {
+    if envelope.event != hook::Event::PostTool || envelope.operation != hook::Operation::Execute {
+        return Ok(None);
+    }
+    let Some(call) = envelope.call_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(path) = protected_snapshot_path(hook_authority_root(), call) else {
+        return Ok(None);
+    };
+    let Ok(text) = fsio::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let _removed = std::fs::remove_file(&path);
+    let Ok(snapshot) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(snapshot["root"].as_str().unwrap_or_default());
+    let patterns: Vec<String> =
+        serde_json::from_value(snapshot["patterns"].clone()).unwrap_or_default();
+    let before: std::collections::BTreeMap<String, String> =
+        serde_json::from_value(snapshot["state"].clone()).unwrap_or_default();
+    let Some(after) = hook::protected_state_of(&root, &patterns) else {
+        return Ok(None);
+    };
+    let changed = hook::protected_changes(&before, &after);
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    let situation = git::head_commit(&root)
+        .ok()
+        .zip(epoch::describe(&root, None).ok());
+    let mut unnamed = Vec::new();
+    for changed_path in changed {
+        let admitted = match &situation {
+            Some((head, (epoch, _))) => admission::admitted_path(
+                &root,
+                "protected-mutation",
+                "path write refused",
+                &changed_path,
+                &admission::Anchor::Call { head: head.clone() }.token(),
+                epoch,
+            )?
+            .is_some(),
+            None => false,
+        };
+        if !admitted {
+            unnamed.push(changed_path);
+        }
+    }
+    let Some(first) = unnamed.first() else {
+        return Ok(None);
+    };
+    let reason = format!(
+        concat!(
+            "batten deny path write refused at {paths}; run git restore {paths}; ",
+            "admit with batten override request --rule 'protected-mutation' ",
+            "--verdict 'path write refused' --subject '{first} shell' \u{2014} ",
+            "a shell call changed a protected path its command line did not name, ",
+            "so the pre-call gate never saw it. Don't: reach a protected path ",
+            "through a script, a redirect or another program."
+        ),
+        paths = unnamed.join(" "),
+        first = first,
+    );
+    if harness == hook::Harness::ClaudeCode {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({"decision": "block", "reason": reason})
+        )?;
+    }
+    writeln!(err, "{reason}")?;
+    Ok(Some(HookDispatch {
+        rendered: Ok(ExitCode::Violation),
+        deny: Some(reason),
+    }))
 }
 
 fn pull_ripcord(
@@ -22246,13 +22395,24 @@ fn rewrite_post_tool(
 /// spilled leaf is put back for them, up to the cap, while [`rewrite_post_tool`]
 /// still points the model at it.
 fn post_tool(
-    harness: hook::Harness,
-    envelope: &hook::Envelope,
-    spilled: &[stream_input::Spilled],
-    overrides: &Overrides,
-    out: &mut dyn Write,
+    (harness, envelope, spilled, overrides): (
+        hook::Harness,
+        &hook::Envelope,
+        &[stream_input::Spilled],
+        &Overrides,
+    ),
+    (out, err): (&mut dyn Write, &mut dyn Write),
     advice: &mut Vec<advisory::Advice>,
-) -> Result<()> {
+) -> Result<Option<HookDispatch>> {
+    if envelope.event != hook::Event::PostTool {
+        return Ok(None);
+    }
+    // A PROTECTED PATH THE CALL CHANGED WITHOUT NAMING IT (step 14) answers
+    // first: the write has landed, and what is owed is the refusal, not the
+    // ordinary post-call recording of a call that should not have passed.
+    if let Some(escaped) = protected_escape(harness, envelope, out, err)? {
+        return Ok(Some(escaped));
+    }
     if spilled.is_empty() {
         record_post_tool(overrides, envelope, harness, advice);
     } else {
@@ -22263,7 +22423,8 @@ fn post_tool(
     // RECORD BEFORE REWRITE: eviction runs in `record_post_tool`, so the
     // captures the rewrite stores and points at land after it and need no
     // `keep` of their own (CLOUD-2302). Evicting later would.
-    rewrite_post_tool(harness, envelope, spilled, out, advice)
+    rewrite_post_tool(harness, envelope, spilled, out, advice)?;
+    Ok(None)
 }
 
 /// Store each spilled leaf from its file and put a pointer in its place
@@ -23183,7 +23344,7 @@ fn session_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
 ) -> (
-    taskset::TaskFacts,
+    (taskset::TaskFacts, taskset::TaskBodies),
     facts::Look<std::collections::BTreeMap<String, usize>>,
 ) {
     (
@@ -23272,16 +23433,20 @@ fn extracted_facts(
 /// The read is behind the same narrowing `pinned` uses, one term tighter: only a
 /// row that NAMED a manifest reads it, so a repository with mediated modules and
 /// no `[[rule.tasks]]` opens nothing.
-fn task_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> taskset::TaskFacts {
+fn task_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> (taskset::TaskFacts, taskset::TaskBodies) {
     if envelope.event == hook::Event::SessionStart {
         // Returned rather than discarded: the session that mints it may as well
         // have it, and a caller that ignores it is not paying for the read twice.
-        return taskset::refresh(hook_authority_root(), &policy.declared_tasks());
+        let tasks = taskset::refresh(hook_authority_root(), &policy.declared_tasks());
+        return (tasks, taskset::cached_bodies(hook_authority_root()));
     }
     if !policy.reads_tasks(envelope) {
-        return facts::Look::CouldNotLook;
+        return (facts::Look::CouldNotLook, facts::Look::CouldNotLook);
     }
-    taskset::cached(hook_authority_root())
+    taskset::cached_with_bodies(hook_authority_root())
 }
 
 fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ManifestFacts {

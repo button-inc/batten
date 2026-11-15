@@ -1,0 +1,377 @@
+#MUTANT-SUITE crates/batten/tests/it/land_stage_direct.rs
+#MUTANT enforce-unread|s@^\tprogram.subcommand == "enforce"$@\tfalse@|every_spelling_of_enforce_is_refused
+#MUTANT task-reach-unread|s@^\tis_array(input.call\["task-programs"\])$@\tfalse@|every_spelling_of_a_stage_task_is_refused
+#MUTANT background-unread|s@^backgrounded if input.call\["run-in-background"\] == true$@backgrounded if false@|a_backgrounded_land_is_allowed
+#MUTANT filter-unread|s@^\tnot filtered(program)$@\ttrue@|the_development_forms_stay_allowed
+#MUTANT suite-unread|s@^\tsuite(program)$@\tfalse@|an_unfiltered_suite_is_refused
+# A land or verify stage, rerun by hand outside the lap that owns it.
+#
+# MEASURED 2026-11-15, and the incident is the whole reason this exists: an agent
+# ran `mise exec -- cargo run -p batten -- enforce --half live` by hand to see
+# whether admissions had cleared. `land` runs that exact stage on every lap, the
+# live half is unreceipted by design (perf(enforce), 0c026130), so the run kept
+# nothing — it duplicated a lap's work and left no record a lap could reuse.
+#
+# THE TWO KINDS OF RUN ARE TEST SELECTION AND TEST RE-EXECUTION, and the line
+# between them is the literature's rather than this repository's. A receipted
+# step is a regression-test-selection cache in Ekstazi's sense (Gligoric, Eloussi
+# and Marinov, ISSTA 2015): same inputs, same verdict, so a hit answers without
+# re-running. A stage run OUTSIDE the step that receipts it is re-execution the
+# cache never sees — its verdict is computed and thrown away, and the lap pays
+# again. A filtered run is selection by the developer and is the opposite case:
+# it answers a narrower question than the stage, so it duplicates nothing.
+#
+# WHAT A STAGE IS, AND WHY THERE IS NO LIST OF TASK NAMES HERE. A stage is named
+# by the PROGRAM it runs, never by the task that wraps it:
+#
+#   * `batten enforce`, any half — the policy stage `verify` and `land` run;
+#   * `batten land verify`, and `batten land lap` in the foreground — the lap
+#     itself, which is sanctioned only as the backgrounded `mise run land`;
+#   * an unfiltered workspace test run — `cargo test` / `cargo nextest run` with
+#     no filterset and no test-name operand, the body of the receipted
+#     `test:cargo` step run around its receipt.
+#
+# Which TASKS are stages is then derived, not declared: `input.call
+# ["task-programs"]` is every program the call's tasks reach, followed through
+# the task receipt's bodies — `mise run verify` reaches `verify:gated`, which
+# reaches `batten-check`, which runs `batten enforce` — so a stage task added or
+# renamed tomorrow is refused with no edit here, and a task that does not reach
+# a stage program is not refused for its name. A list of names was the
+# alternative, and it is wrong on the commit that adds the next stage.
+#
+# EVERY SPELLING IS THE ENGINE'S, NOT THIS MODULE'S. Shell command analysis
+# belongs on a parsed AST, never on a regex over the line — the position of
+# ShellCheck (Holen), of Smoosh's executable POSIX semantics (Greenberg and
+# Blatt, POPL 2020) and of NL2Bash's corpus work (Lin et al., LREC 2018), which
+# all start from the parse. `input.call.programs` is that parse read once
+# (CLOUD-1028, CLOUD-1382), and since step 14 it reaches through a shell's `-c`
+# script, `eval`, `exec`, the binary `cargo run -p X` starts and the argv
+# `batten step run` executes, recursively, for every module. This module reads
+# `name`, `subcommand` and `nested` and parses nothing: "which batten verb" and
+# "which mise task" are each answered once, in `hook.rs`.
+#
+# FAIL-CLOSED IN TWO PLACES. A shell script the parser refuses is still run by
+# the shell, so the engine reads it by whitespace (`unread`) and this module
+# judges that reading like any other. And a FOREGROUND mise task run while the
+# task receipt could not be read is refused: what it reaches is unknown, and a
+# foreground mise call is against the background-the-slow-path doctrine anyway.
+# A top-level line that does not parse at all is `input.call.segments == null`;
+# that one is refused when any word of the line names a stage verb, the one place
+# this module reads text, because there is no parse to read.
+#
+# WHAT THIS DOES NOT CLOSE, named. A backgrounded `mise run verify` while the
+# task receipt is unreadable reaches nothing this can see. The engine resolves a
+# `cargo run` naming no `-p`/`--bin` through the manifest's default-run and
+# members, and renders `{{vars.*}}` in task bodies when the receipt is minted;
+# a template naming an environment variable unset at session start keeps its
+# default, which is what the runner would run then too.
+# METADATA
+# description: |
+#   Bound to the mediated-call surface: this module is `scope = "mediated_call"`,
+#   so it reads `{call, facts}` and NOT the tree document.
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form is a parse error reported as `invalid schema reference`.
+# schemas:
+#   - input: schema["policy-call.schema"]
+package batten.land_stage_direct
+
+import rego.v1
+
+rules contains "gate run twice"
+
+violation contains {
+	"rule": "gate run twice",
+	"verdict": "gate run twice",
+	"subjects": [{"artifact": program.name}],
+} if {
+	some program in reached
+	stage(program)
+}
+
+# THE RECEIPT COULD NOT BE READ, and a foreground call starts a task anyway.
+violation contains {
+	"rule": "gate run twice",
+	"verdict": "gate run twice",
+	"subjects": [{"artifact": "mise"}],
+} if {
+	not is_array(input.call["task-programs"])
+	some program in input.call.programs
+	program.name == "mise"
+	is_array(program.tasks)
+	count(program.tasks) > 0
+	not backgrounded
+}
+
+# NO PARSE AT ALL: the one text read, and only for the stage verbs.
+violation contains {
+	"rule": "gate run twice",
+	"verdict": "gate run twice",
+	"subjects": [{"count": 1}],
+} if {
+	not is_array(input.call.segments)
+	some word in split(input.call.command, " ")
+	word in {"enforce", "nextest"}
+}
+
+# A call the host runs in the background. Absent, `null` and `false` are all
+# not backgrounded: only an explicit `true` is the sanctioned lap.
+backgrounded if input.call["run-in-background"] == true
+
+# What the call runs: what it wrote, and what the tasks it starts run.
+reached contains program if {
+	some program in input.call.programs
+}
+
+# `null` where the receipt could not be read, and a null collection RAISES in
+# `some … in`, so the type is checked first.
+reached contains program if {
+	is_array(input.call["task-programs"])
+	some program in input.call["task-programs"]
+}
+
+stage(program) if {
+	program.name == "batten"
+	program.subcommand == "enforce"
+}
+
+stage(program) if {
+	program.name == "batten"
+	program.subcommand == "land"
+	program.nested == "verify"
+}
+
+# The lap itself, which is sanctioned exactly once: backgrounded.
+stage(program) if {
+	program.name == "batten"
+	program.subcommand == "land"
+	program.nested == "lap"
+	not backgrounded
+}
+
+stage(program) if {
+	suite(program)
+	not filtered(program)
+}
+
+# A workspace test run: `cargo test`, `cargo nextest run`.
+suite(program) if {
+	program.name == "cargo"
+	program.subcommand in {"test", "t"}
+}
+
+suite(program) if {
+	program.name == "cargo"
+	program.subcommand == "nextest"
+	program.nested in {"run", "r"}
+}
+
+# What follows the verb: past `test`, or past `nextest … run`.
+tail(program) := rest if {
+	program.subcommand in {"test", "t"}
+	at := count(program["global-options"]) + 1
+	rest := array.slice(program.arguments, at, count(program.arguments))
+}
+
+tail(program) := rest if {
+	program.subcommand == "nextest"
+	after := array.slice(program.arguments, count(program["global-options"]) + 1, count(program.arguments))
+	some at, word in after
+	word == program.nested
+	not earlier_verb(after, at, program.nested)
+	rest := array.slice(after, at + 1, count(after))
+}
+
+earlier_verb(words, at, verb) if {
+	some before, word in words
+	before < at
+	word == verb
+}
+
+# ONE `--test <target>` names a single test target, which is selection rather
+# than the suite; two, or `--tests`, select every target again.
+filtered(program) if {
+	words := tail(program)
+	count([at | some at, _ in words; single_target(words, at)]) == 1
+	not "--tests" in words
+}
+
+single_target(words, at) if {
+	words[at] == "--test"
+	at + 1 < count(words)
+}
+
+single_target(words, at) if {
+	startswith(words[at], "--test=")
+}
+
+# A filterset, a test-name operand, or test-binary arguments after `--`: each
+# narrows the run below the stage, which is selection rather than a rerun.
+filtered(program) if {
+	some word in tail(program)
+	word in {"-E", "--filterset", "--filter-expr"}
+}
+
+filtered(program) if {
+	some word in tail(program)
+	some prefix in {"-E", "--filterset=", "--filter-expr="}
+	startswith(word, prefix)
+	word != prefix
+}
+
+filtered(program) if {
+	words := tail(program)
+	some at, word in words
+	not startswith(word, "-")
+	not valued(words, at)
+	not after_separator(words, at)
+}
+
+filtered(program) if {
+	words := tail(program)
+	some at, word in words
+	after_separator(words, at)
+	not startswith(word, "-")
+}
+
+after_separator(words, at) if {
+	some before, word in words
+	before < at
+	word == "--"
+}
+
+# The word at `at` is the value of the option before it.
+valued(words, at) if {
+	at > 0
+	words[at - 1] in value_options
+}
+
+# cargo's and nextest's options whose value is the next word. A word missing
+# here reads its value as a test-name operand, which ALLOWS — so the list leans
+# long, and the cost of a gap is one unrefused rerun, never a refused filter.
+value_options := {
+	"-p", "--package", "--exclude", "--bin", "--example", "--test", "--bench",
+	"-F", "--features", "--profile", "--cargo-profile", "-P", "--target",
+	"--target-dir", "--manifest-path", "-j", "--jobs", "--test-threads",
+	"--color", "--message-format", "--config", "-Z", "--partition", "--retries",
+	"--run-ignored", "--status-level", "--final-status-level", "--failure-output",
+	"--success-output", "--max-fail", "--tool-config-file", "--archive-file",
+	"--workspace-remap", "--lockfile-path", "--cargo-message-format",
+	"--cargo-quiet", "--show-progress", "--no-tests", "--hide-progress-bar",
+}
+
+# The load-time tier. These cases hand the predicate the resolution the ENGINE
+# produces, so they cannot say whether it does — `land_stage_direct.rs`, over
+# the compiled binary, drives every spelling through the engine and is the tier
+# `#MUTANT-SUITE` names. At least one case is compound (CLOUD-857).
+
+test_enforce_through_cargo_run_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "mise exec -- cargo run -p batten -- enforce --half live",
+		"segments": [],
+		"programs": [
+			{"program": "cargo", "name": "cargo", "arguments": ["run", "-p", "batten", "--", "enforce", "--half", "live"], "subcommand": "run", "global-options": [], "mediated": true},
+			{"program": "batten", "name": "batten", "arguments": ["enforce", "--half", "live"], "subcommand": "enforce", "global-options": [], "nested": null, "via": "cargo run", "mediated": true},
+		],
+		"task-programs": [],
+	}}
+}
+
+test_a_stage_reached_through_a_task_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "cd /tmp && mise run verify",
+		"segments": [],
+		"run-in-background": true,
+		"programs": [
+			{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false},
+			{"program": "mise", "name": "mise", "arguments": ["run", "verify"], "subcommand": "run", "tasks": ["verify"], "mediated": false},
+		],
+		"task-programs": [{"program": "batten", "name": "batten", "arguments": ["enforce"], "subcommand": "enforce", "task": "batten-check", "mediated": true}],
+	}}
+}
+
+test_a_backgrounded_lap_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "mise run land",
+		"segments": [],
+		"run-in-background": true,
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "land"], "subcommand": "run", "tasks": ["land"], "mediated": false}],
+		"task-programs": [{"program": "batten", "name": "batten", "arguments": ["land", "lap"], "subcommand": "land", "nested": "lap", "task": "land", "mediated": true}],
+	}}
+}
+
+test_a_foreground_lap_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "mise run land",
+		"segments": [],
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "land"], "subcommand": "run", "tasks": ["land"], "mediated": false}],
+		"task-programs": [{"program": "batten", "name": "batten", "arguments": ["land", "lap"], "subcommand": "land", "nested": "lap", "task": "land", "mediated": true}],
+	}}
+}
+
+test_an_unfiltered_suite_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "cargo nextest run --workspace",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "--workspace"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_filtered_suite_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cargo nextest run -p batten forced_push",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["nextest", "run", "-p", "batten", "forced_push"], "subcommand": "nextest", "nested": "run", "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_package_alone_is_not_a_filter if {
+	some _ in violation with input as {"call": {
+		"command": "cargo test -p batten",
+		"segments": [],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["test", "-p", "batten"], "subcommand": "test", "nested": null, "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_another_batten_verb_is_allowed if {
+	count(violation) == 0 with input as {"call": {
+		"command": "batten check --rule x",
+		"segments": [],
+		"programs": [{"program": "batten", "name": "batten", "arguments": ["check", "--rule", "x"], "subcommand": "check", "nested": null, "global-options": [], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_file_named_enforce_is_not_a_stage if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cat enforce",
+		"segments": [],
+		"programs": [{"program": "cat", "name": "cat", "arguments": ["enforce"], "mediated": false}],
+		"task-programs": [],
+	}}
+}
+
+test_a_foreground_task_run_with_no_receipt_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "mise run lint",
+		"segments": [],
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "lint"], "subcommand": "run", "tasks": ["lint"], "mediated": false}],
+		"task-programs": null,
+	}}
+}
+
+test_an_unparseable_line_naming_a_stage_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "batten enforce \"unterminated",
+		"segments": null,
+		"programs": [],
+		"task-programs": [],
+	}}
+}
+
+deny contains message if {
+	some v in violation
+	message := v.verdict
+}
