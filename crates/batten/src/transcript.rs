@@ -487,6 +487,8 @@ pub struct TokenUsage {
     pub output: usize,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT context-omits-cache-read|s@^        self.input + self.cache_read + self.cache_write$@        self.input + self.cache_write@|a_session_reads_its_exact_usage
 impl TokenUsage {
     /// Decode a host's `usage` object, or `None` where it is not one.
     ///
@@ -515,8 +517,6 @@ impl TokenUsage {
     }
 
     /// The context this message was sent with: everything on the input side.
-    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-    //MUTANT context-omits-cache-read|s@^        self.input + self.cache_read + self.cache_write$@        self.input + self.cache_write@|a_session_reads_its_exact_usage
     #[must_use]
     pub fn context(&self) -> usize {
         self.input + self.cache_read + self.cache_write
@@ -759,6 +759,8 @@ fn is_plan_exit(event: &Event) -> bool {
 /// split point of generated sessions, so the backward scans stay the
 /// specification and this is only a faster way to compute them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT usage-split-recounts-the-message|s@^    last_message: Option<u64>,$@    #[serde(skip)] last_message: Option<u64>,@|usage_sums_across_a_split_fold_as_the_whole_parse
 pub struct Tally {
     turns: usize,
     tool_calls: usize,
@@ -778,8 +780,6 @@ pub struct Tally {
     usage: SessionUsage,
     /// The key of the last message whose usage was folded. STORED, so a split
     /// that falls between two copies of one message does not count it twice.
-    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-    //MUTANT usage-split-recounts-the-message|s@^    last_message: Option<u64>,$@    #[serde(skip)] last_message: Option<u64>,@|usage_sums_across_a_split_fold_as_the_whole_parse
     last_message: Option<u64>,
 }
 

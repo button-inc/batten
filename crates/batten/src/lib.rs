@@ -4285,6 +4285,45 @@ fn wait_seconds(flag: &str, given: Option<&str>, default: u64) -> Result<std::ti
         })
 }
 
+/// What `mcp wait` reads each poll: the argument objects as given, or one per
+/// receipt of a mint. Exactly one of the two forms; malformed JSON is a usage
+/// error before any poll.
+///
+/// # Errors
+///
+/// A usage error for both forms, neither, or an unreadable argument object.
+fn wait_subjects(
+    git_dir: &Path,
+    params: &[String],
+    each_receipt: Option<&String>,
+    arg: Option<&String>,
+) -> Result<mcp::Subjects> {
+    match (each_receipt, arg) {
+        (Some(mint), Some(arg)) if params.is_empty() => Ok(mcp::Subjects::Receipts {
+            store: git_dir.join("batten-receipts"),
+            mint: mint.clone(),
+            arg: arg.clone(),
+        }),
+        (None, None) if !params.is_empty() => Ok(mcp::Subjects::Fixed(
+            params
+                .iter()
+                .map(|raw| {
+                    serde_json::from_str(raw).map_err(|failure| {
+                        UsageError::raise(format!(
+                            "mcp wait: an argument object is not readable JSON: {failure}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        _ => Err(UsageError::raise(
+            "mcp wait: give one or more argument objects, or --each-receipt with --arg, \
+             and not both"
+                .to_owned(),
+        )),
+    }
+}
+
 /// `batten mcp wait` (CLOUD-2759): the client `mcp call` uses, polled by
 /// [`mcp::wait_with`] with the crate's one sleep.
 ///
@@ -4348,32 +4387,7 @@ fn run_mcp_wait(
     if let Some(said) = said {
         writeln!(err, "{said}")?;
     }
-    let subjects = match (each_receipt, arg) {
-        (Some(mint), Some(arg)) if params.is_empty() => mcp::Subjects::Receipts {
-            store: git_dir.join("batten-receipts"),
-            mint: mint.clone(),
-            arg: arg.clone(),
-        },
-        (None, None) if !params.is_empty() => mcp::Subjects::Fixed(
-            params
-                .iter()
-                .map(|raw| {
-                    serde_json::from_str(raw).map_err(|failure| {
-                        UsageError::raise(format!(
-                            "mcp wait: an argument object is not readable JSON: {failure}"
-                        ))
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?,
-        ),
-        _ => {
-            return Err(UsageError::raise(
-                "mcp wait: give one or more argument objects, or --each-receipt with --arg, \
-                 and not both"
-                    .to_owned(),
-            ));
-        }
-    };
+    let subjects = wait_subjects(&git_dir, params, each_receipt.as_ref(), arg.as_ref())?;
     // REFUSED BEFORE THE SERVER IS RESOLVED, so a method with no row costs
     // nothing: `wait_with` answers it before any read.
     let wiring = match mcp::wiring(&config, &repo, server) {
@@ -19738,6 +19752,8 @@ fn push_repair_record(
 /// decision. A rewrite rides the grant and nothing else, and it is resolved at
 /// the boundary for `settle_repair`'s reason: the policy is still in hand there,
 /// and `render` cannot see it.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT corrected-drops-the-timeout|s@^    let rewritten = hook::policy_rewrite(policy, envelope, facts);$@    let rewritten = None::<serde_json::Value>;@|a_module_timeout_still_applies_to_a_corrected_call
 fn grant_rewrite(
     decision: &hook::Decision,
     policy: &hook::Policy,
@@ -19749,8 +19765,6 @@ fn grant_rewrite(
     }
     // A CORRECTED CALL ALWAYS CARRIES ITS INPUT (CLOUD-1939): the command is the
     // rewrite, and a module's `timeout` is applied on top of it.
-    //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-    //MUTANT corrected-drops-the-timeout|s@^    let rewritten = hook::policy_rewrite(policy, envelope, facts);$@    let rewritten = None::<serde_json::Value>;@|a_module_timeout_still_applies_to_a_corrected_call
     let rewritten = hook::policy_rewrite(policy, envelope, facts);
     if CORRECTED.get().is_some() {
         return rewritten.or_else(|| Some(envelope.input.clone()));
@@ -19761,6 +19775,8 @@ fn grant_rewrite(
 /// The advice a pre-approval carries in its own document (CLOUD-1949), taken
 /// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
 /// when the decision is not a pre-approval or there is nothing to carry.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() \&\& matches!(decision, hook::Decision::Preapproved(_)) {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
 fn preapproval_context(
     harness: hook::Harness,
     decision: &hook::Decision,
@@ -19770,8 +19786,6 @@ fn preapproval_context(
 ) -> Option<String> {
     // THE CORRECTION IS ANNOUNCED IN THIS ONE DOCUMENT (CLOUD-1939): which class
     // refused and that the filter went, never the command (rule 4).
-    //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-    //MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() \&\& matches!(decision, hook::Decision::Preapproved(_)) {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
     if CORRECTED.get().is_some() && matches!(decision, hook::Decision::Preapproved(_)) {
         push_finding(
             advice,
@@ -23178,6 +23192,10 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// end-of-turn check on the path that must stay free — committing and pushing to
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT bypass-ignored|s@^    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {$@    if false {@|the_bypass_and_plan_mode_silence_it
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT two-refusals-on-one-stop|s@^    if block.as_ref().is_none() {$@    if true {@|the_unlanded_refusal_goes_first
 fn stop_nudges(
     overrides: &Overrides,
     envelope: &hook::Envelope,
@@ -23195,8 +23213,6 @@ fn stop_nudges(
     // declared handler was never spawned and whatever it does was dropped. The
     // run is unconditional; only WHICH ONE THING IS SAID stays the ladder's call.
     let handler_said = stop_handler_advice(overrides, raw);
-    //MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-    //MUTANT bypass-ignored|s@^    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {$@    if false {@|the_bypass_and_plan_mode_silence_it
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
         return Vec::new();
     }
@@ -23313,8 +23329,6 @@ fn stop_nudges(
     }
     // THE HOLD (CLOUD-2761), after the unlanded refusal and the watchdog and
     // yielding to both: one Stop carries at most one refusal.
-    //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-    //MUTANT two-refusals-on-one-stop|s@^    if block.as_ref().is_none() {$@    if true {@|the_unlanded_refusal_goes_first
     if block.as_ref().is_none() {
         let (refused, advised) = hold_stop(root);
         *block = refused;
@@ -23777,6 +23791,8 @@ const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 /// Claude Code's `2` and the reason on stderr, which resumes the model with it.
 /// Other hosts read a Stop's exit differently, so there the refusal joins the
 /// advisory instead: every producer's block reaches a reader on every host.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT hold-blocks-every-host|s@^    if harness != hook::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
 fn refused_stop(
     harness: hook::Harness,
     block: Option<refusal::Refusal>,
@@ -23786,8 +23802,6 @@ fn refused_stop(
     let Some(block) = block else {
         return Ok(false);
     };
-    //MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-    //MUTANT hold-blocks-every-host|s@^    if harness != hook::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
     if harness != hook::Harness::ClaudeCode {
         push_finding(advice, severity::AdvisoryTier::Caution, block);
         return Ok(false);

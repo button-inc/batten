@@ -4254,7 +4254,7 @@ pub const SURFACE: &[CommandDecl] = &[
             },
             FlagDecl::valued("interval", "interval", "Seconds between polls (default 30)"),
             FlagDecl::valued(
-                "evict-after",
+                "evict_after",
                 "evict-after",
                 "The host's cache-eviction limit in seconds; absent, the wait ends only on a change",
             ),
@@ -4269,7 +4269,7 @@ pub const SURFACE: &[CommandDecl] = &[
                 "Hold the clone's singleton lock of this name while waiting",
             ),
             FlagDecl::valued(
-                "each-receipt",
+                "each_receipt",
                 "each-receipt",
                 "Read one subject per receipt minted under this name, listed again on every poll",
             ),

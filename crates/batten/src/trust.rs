@@ -6842,6 +6842,31 @@ mod tests {
         assert!(weakenings(&base, &base).is_empty());
     }
 
+    /// CLOUD-2761: a `[[stop.hold]]` row is one refusal at the end of a turn, so
+    /// deleting it, or repointing what it guards, is a weakening; adding one is
+    /// not.
+    #[test]
+    fn removing_or_repointing_a_stop_hold_is_a_weakening() {
+        let hold = |receipt: &str| {
+            config(&format!(
+                "[[stop.hold]]\nid = \"waiter\"\nwhile_receipt = \"{receipt}\"\n\
+                 unless_singleton = \"wait\"\nstart = [\"batten\", \"mcp\", \"wait\"]\n"
+            ))
+        };
+        let base = hold("pr-open");
+        let lost = Weakening::new(
+            WeakeningKind::StopHoldRemoved,
+            "stop.hold[waiter while pr-open unless wait]",
+            "present",
+            "absent",
+        );
+        assert_eq!(only(&base, &config("")), lost);
+        assert_eq!(only(&base, &hold("pr-merged")), lost);
+        // ANTI-VACUITY: adding the row is a tightening, and no change is silent.
+        assert!(weakenings(&config(""), &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
     #[test]
     fn the_pin_evidence_cannot_be_forged() {
         // THE GATE THAT SHIPS WITH THE CLAIM (non-negotiable rule 2, CLOUD-720).

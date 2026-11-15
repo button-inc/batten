@@ -1098,6 +1098,9 @@ mod tests {
             // name, so a second server meant a second copy of the script. Here it
             // is an argument.
             "mcp spawn".to_owned(),
+            // CLOUD-2759: a declared method polled until its answer changes, on
+            // `mcp call`'s client. Read-only, and an agent's own verb.
+            "mcp wait".to_owned(),
             // CLOUD-1267's noun and its two verbs, retired out of
             // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
             // Stated here rather than regenerated, on the terms `checks`

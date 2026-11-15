@@ -3953,6 +3953,8 @@ pub enum Extraction {
     OutputTokens,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT usage-facts-unreachable|s@^            Extraction::ContextTokens => recorded(Kind::Usage).then(\x7c\x7c stream.usage().context),$@            Extraction::ContextTokens => None,@|a_policy_row_reads_the_four_facts
 impl Extraction {
     /// This extraction's answer over a parsed stream, or `None` where this host
     /// records none of the events it reduces.
@@ -3976,8 +3978,6 @@ impl Extraction {
     ///
     /// Generic over [`crate::transcript::Summary`] so the hook's incremental
     /// [`crate::transcript::Tally`] is read by this same decision (CLOUD-2315).
-    //MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-    //MUTANT usage-facts-unreachable|s@^            Extraction::ContextTokens => recorded(Kind::Usage).then(\x7c\x7c stream.usage().context),$@            Extraction::ContextTokens => None,@|a_policy_row_reads_the_four_facts
     #[must_use]
     pub fn of(self, stream: &impl crate::transcript::Summary) -> Option<usize> {
         use crate::transcript::Kind;
