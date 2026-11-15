@@ -892,6 +892,24 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         .find(|admission| !claimed.contains(admission)))
 }
 
+/// Whether the store holds any admission record at all.
+///
+/// [`admitted`] answers `None` for a store with none, so a caller that must
+/// first resolve the HEAD and the epoch to ask it can ask this instead and skip
+/// both: the same answer, without the work, on every denied call of a session
+/// that has never recorded an admission (2026-11-15).
+#[must_use]
+pub fn holds_any(repo_root: &Path) -> bool {
+    let Ok(dir) = store_dir(repo_root) else {
+        return false;
+    };
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+    })
+}
+
 /// The SPENT admission covering one finding, if the store holds it (CLOUD-1120).
 ///
 /// # Why this exists at all
@@ -929,24 +947,6 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
 /// store, an unparseable record and an absent directory are all "no admission" —
 /// a store this cannot read must not be able to ADMIT anything, which is the
 /// fail-closed direction for a suppression.
-/// Whether the store holds any admission record at all.
-///
-/// [`admitted`] answers `None` for a store with none, so a caller that must
-/// first resolve the HEAD and the epoch to ask it can ask this instead and skip
-/// both: the same answer, without the work, on every denied call of a session
-/// that has never recorded an admission (2026-11-15).
-#[must_use]
-pub fn holds_any(repo_root: &Path) -> bool {
-    let Ok(dir) = store_dir(repo_root) else {
-        return false;
-    };
-    std::fs::read_dir(dir).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-    })
-}
-
 pub fn admitted(
     repo_root: &Path,
     rule: &str,
