@@ -480,8 +480,25 @@ fn a_call_with_no_session_id_at_a_registered_root_is_judged_and_grows_nothing() 
     );
 }
 
+/// A directory symlink, or `false` where making one needs a privilege the
+/// runner may lack (Windows) — the case below then has no subject.
+fn symlink_dir(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
 #[test]
-#[cfg(unix)]
 fn the_record_is_keyed_by_the_canonical_root() {
     // The hook stands at `.`, which is no key at all: only the canonical path
     // finds the record Setup wrote through a symlink.
@@ -489,7 +506,10 @@ fn the_record_is_keyed_by_the_canonical_root() {
     member(&root, "repo", ONE_DENY);
     let link = root.parent().expect("a parent").join("link");
     let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(&root, &link).expect("a symlink to the root");
+    if !symlink_dir(&root, &link) {
+        assert!(!cfg!(unix), "a unix runner can always make the symlink");
+        return;
+    }
     setup(&link);
     let output = adjudicate(&root, &merge_call(Some("cloud-2752-canonical")));
     assert!(

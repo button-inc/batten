@@ -41,27 +41,14 @@ const RECORD: &[&str] = &["S1 pending", "S2 pending"];
 
 /// A repository on `work` with `config` committed, `origin/main` at the base.
 fn repo(name: &str, config: &str) -> PathBuf {
-    let root = common::scratch(name);
-    common::git_in(&root, &["init", "--quiet", "--initial-branch", "work"]);
-    common::git_in(&root, &["config", "user.email", "t@example.com"]);
-    common::git_in(&root, &["config", "user.name", "t"]);
-    fs::write(root.join("seed.txt"), "seed\n").unwrap();
-    // The trunk is DECLARED, not merely pinned: with no `must_land_on` the
-    // branch-validity reader cannot look and allows, as `Fixture::base_commit`
-    // records (CLOUD-2188).
-    fs::write(
-        root.join("batten.toml"),
-        format!("must_land_on = \"origin/main\"\nversion = 1\n{config}"),
-    )
-    .unwrap();
-    common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
-    let base = common::git_in(&root, &["rev-parse", "HEAD"]);
-    common::git_in(
-        &root,
-        &["update-ref", "refs/remotes/origin/main", base.trim()],
-    );
-    common::git_in(&root, &["update-ref", "refs/heads/main", base.trim()]);
+    // `base_commit` DECLARES the pinned base the trunk: with no `must_land_on`
+    // the branch-validity reader cannot look and allows (CLOUD-2188).
+    let root = common::Fixture::new(name)
+        .config(&format!("version = 1\n{config}"))
+        .file("seed.txt", "seed\n")
+        .base_commit()
+        .build();
+    common::git_in(&root, &["checkout", "--quiet", "-b", "work"]);
     root
 }
 
