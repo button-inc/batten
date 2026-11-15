@@ -16,6 +16,7 @@ row here, so a new module lands with its line.
 - `board.rs` (crate `batten-base`) — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
 - `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
 - `carry.rs` (crate `batten-base`) — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
+- `plan.rs` — `batten plan lint` and `plan path` (CLOUD-2766): judges the branch's plan file against the `[plan]` table — sections, the steps `record plan` holds, requirement coverage, live pointers, the verdict line — and on zero findings appends `base`/`plan` to the `plan-check` receipt.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by CLOUD-1121).
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an exhaustive `match` rather than a lookup on strings.
 - `clock.rs` (crate `batten-base`) — the boundary's wall clock in epoch seconds: a leaf, so a module that only needs the time does not reach up into the crate root for it (CLOUD-2789).
