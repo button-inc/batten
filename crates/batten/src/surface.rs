@@ -1542,6 +1542,54 @@ const ENFORCE_RULE: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// `--half <tree|live>` on `enforce`: judge one half of the rows (step 13a).
+///
+/// The landing stage re-ran every row on every lap, so finished work was paid
+/// for again. Splitting the rows by what their verdict is a function of lets
+/// the tree half ride a `[[step]]` receipt keyed on the index while the live
+/// half — refs, stores, the forge, the clock, processes — runs unreceipted.
+/// `rules::Rule::half` is the classifier, and anything it cannot establish is
+/// live. Absent, `enforce` judges every row exactly as before.
+const ENFORCE_HALF: FlagDecl = FlagDecl::optional_enum(
+    "half",
+    "half",
+    "Judge only the tree half (receipt-keyed on the index) or the live half of the rows",
+    half_parser,
+);
+
+/// `--keyed-base <ref>` on `enforce`: a ref whose merge base the caller's
+/// receipt keys (step 13a), repeatable. A `ratchet` row counting against one is
+/// a function of the tree plus that key, so it joins the tree half; against
+/// any other ref it stays live.
+const ENFORCE_KEYED_BASE: FlagDecl = FlagDecl {
+    id: "keyed_base",
+    long: Some("keyed-base"),
+    short: None,
+    help: "A ref whose merge base the tree half's receipt keys, admitting ratchets against it (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--inputs-digest` on `enforce --half tree`: print one blake3 line over the
+/// out-of-tree state the tree half reads, and judge nothing (step 13a).
+///
+/// The tree half's `[[step]]` receipt keys index entries and tool answers, and
+/// the half still reads a store baseline, the admission store, the admission
+/// blocks of `HEAD` and `HEAD^2`, the secret-identity key, `batten.local.toml`
+/// and the settings' environment variables. Naming this verb as a `tools` line
+/// is what puts those in the key, so a moved one is a miss. Read-only, and
+/// refused without `--half tree`, the one half whose receipt it serves.
+const ENFORCE_INPUTS_DIGEST: FlagDecl = FlagDecl::switch(
+    "inputs_digest",
+    "inputs-digest",
+    "With --half tree: print a digest of the out-of-tree state that half reads, and judge nothing",
+);
+
 /// `--staged` on `check`: judge the index rather than the whole tree (CLOUD-519).
 ///
 /// A pre-commit hook, or an agent's mediated call, re-reads every file in the
@@ -3698,6 +3746,10 @@ fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
 }
 
+fn half_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::rules::Half>::new())
+}
+
 fn strictness_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::config::Strictness>::new())
 }
@@ -4013,7 +4065,13 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
-        flags: &[ENFORCE_RULE, JSON],
+        flags: &[
+            ENFORCE_RULE,
+            ENFORCE_HALF,
+            ENFORCE_KEYED_BASE,
+            ENFORCE_INPUTS_DIGEST,
+            JSON,
+        ],
     },
     // `exec` runs a command the caller names, so it is the second process-spawning
     // verb after `enforce` and takes the same conservative reading. It is a

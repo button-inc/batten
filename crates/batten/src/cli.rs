@@ -101,6 +101,18 @@ pub struct EnforceFlags {
     /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
     /// See `surface::ENFORCE_RULE`.
     pub rule: Vec<String>,
+    /// Judge only one half of the rows (step 13a): the tree half, receipted on
+    /// the index, or the live half, run every time. `None` judges every row.
+    /// See `surface::ENFORCE_HALF`.
+    pub half: Option<crate::rules::Half>,
+    /// The refs whose merge base the tree half's receipt keys, which admits a
+    /// `ratchet` row against one of them to the tree half (repeatable). See
+    /// `surface::ENFORCE_KEYED_BASE`.
+    pub keyed_base: Vec<String>,
+    /// Print the digest of the out-of-tree state the tree half reads, and judge
+    /// nothing (step 13a). Only under `--half tree`. See
+    /// `surface::ENFORCE_INPUTS_DIGEST`.
+    pub inputs_digest: bool,
 }
 
 /// The top-level subcommands.
@@ -3942,6 +3954,12 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 .get_many::<String>("rule")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
+            half: matches.get_one::<crate::rules::Half>("half").copied(),
+            keyed_base: matches
+                .get_many::<String>("keyed_base")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            inputs_digest: flag(matches, "inputs_digest"),
         })),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),

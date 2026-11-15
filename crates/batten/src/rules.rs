@@ -6259,6 +6259,74 @@ impl Rule {
             })
     }
 
+    /// Every fact this row declares, read off [`COLUMN_CENSUS`] (step 13a).
+    pub fn census_facts(&self) -> impl Iterator<Item = crate::facts::Fact> + '_ {
+        COLUMN_CENSUS
+            .iter()
+            .filter_map(|column| match column.declares {
+                Declares::Fact(fact, declared) if declared(self) => Some(fact),
+                Declares::Fact(..) | Declares::NotFactBearing(_) => None,
+            })
+    }
+
+    /// Which half of a split `enforce` judges this row (step 13a).
+    ///
+    /// [`Half::Tree`] only where the verdict is provably a function of the
+    /// indexed tree, so a receipt keyed on that tree may stand in for it; every
+    /// other answer — and every answer this cannot establish — is
+    /// [`Half::Live`], the half that always re-runs.
+    ///
+    /// * `forbid`, `document`, `secrets`, `reference`: tree when every fact the
+    ///   row declares is [`crate::facts::Subject::Tree`].
+    /// * `ratchet`: tree when its `base` is one of `keyed_bases` — the refs the
+    ///   caller's receipt keys the merge base of — and its facts are tree.
+    /// * `policy`: tree when its facts are tree and its bundle's
+    ///   [`crate::policy::Bundle::tree_reads`] names only tree keys. No bundle
+    ///   is live.
+    /// * every spawning, mediated or native kind, any `scope = "mediated_call"`
+    ///   row, and any row gated on `requires_path` (an existence test the tree
+    ///   key does not cover, since the path may be ignored): live.
+    #[must_use]
+    pub fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half {
+        use crate::facts::Subject;
+        if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
+            return Half::Live;
+        }
+        let facts_tree = self
+            .census_facts()
+            .all(|fact| fact.subject() == Subject::Tree);
+        let tree = match self.kind {
+            RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
+                facts_tree
+            }
+            RuleKind::Ratchet => {
+                facts_tree
+                    && self
+                        .base
+                        .as_ref()
+                        .is_some_and(|base| keyed_bases.contains(base))
+            }
+            RuleKind::Policy => {
+                facts_tree
+                    && bundle.is_some_and(|bundle| match bundle.tree_reads() {
+                        crate::policy::Reads::Known(keys) => keys.iter().all(|key| {
+                            key == TREE_MISSING_KEY
+                                || crate::facts::Fact::from_tree_key(key)
+                                    .is_some_and(|fact| fact.subject() == Subject::Tree)
+                        }),
+                        crate::policy::Reads::Opaque => false,
+                    })
+            }
+            RuleKind::Command
+            | RuleKind::Judge
+            | RuleKind::Receipt
+            | RuleKind::Shape
+            | RuleKind::Pipeline
+            | RuleKind::Native => false,
+        };
+        if tree { Half::Tree } else { Half::Live }
+    }
+
     /// The command shape this row keys on, for **any** kind that keys on one.
     ///
     /// Split out of [`Rule::shape`] because two kinds now match a command line
@@ -6843,6 +6911,10 @@ pub struct Scan {
     /// operator told only that a gate "errored" when the engine knows, and used
     /// to say, that a scanner and its own output disagreed.
     pub errored: BTreeMap<String, RuleFailure>,
+    /// The rows a split `enforce` left to the OTHER half (step 13a): neither
+    /// judged here nor withheld, so a baseline entry for one of them is the
+    /// other half's to apply and never stale in this one. Empty on an unsplit run.
+    pub other_half: BTreeSet<String>,
 }
 
 /// What a contained failure is reported as: its class, and the reason it gave.
@@ -7010,6 +7082,8 @@ pub fn run_static(
         vocabulary,
         root,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
             // The tree verbs, so the surface their `Cost::Effect` facts are
@@ -7107,7 +7181,48 @@ pub struct RunOptions<'a> {
     /// admits: the fail-closed direction for a bound whose job is to stop a
     /// stale answer being trusted.
     pub now: Option<u64>,
+    /// Which half of a split `enforce` this run judges (step 13a), or `None`
+    /// for every row — what `enforce` has always meant.
+    ///
+    /// Partitioned after the bundles load, because a policy row's half is read
+    /// off its compiled modules. Under [`Half::Tree`] the backstop also nulls
+    /// every live key of the tree document and skips acquiring the live
+    /// families, so a misclassified row reads `null` rather than a moved world.
+    pub half: Option<Half>,
+    /// The refs a tree-half receipt keys the merge base of (`--keyed-base`), which
+    /// is what admits a `ratchet` row to [`Half::Tree`].
+    pub keyed_bases: &'a [String],
 }
+
+/// One half of a split `enforce` (step 13a): see [`Rule::half`].
+///
+/// The split exists so the landing stage keeps finished work. The tree half is
+/// run under a `[[step]]` receipt keyed on the index, so an unchanged tree skips
+/// it; the live half — everything that reads a ref, a store, the forge, the
+/// clock or a process — runs every time, unreceipted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Half {
+    /// Rows whose verdict is a function of the indexed tree alone.
+    Tree,
+    /// Every other row, and any row whose half cannot be established.
+    Live,
+}
+
+impl Half {
+    /// The stable lowercase token (§6), the `--half` spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Half::Tree => "tree",
+            Half::Live => "live",
+        }
+    }
+}
+
+/// The one `input.tree` key no fact carries: the could-not-look causes of the
+/// per-path facts the row itself declared. Under a tree-half row every declared
+/// fact is tree, so its causes are too.
+const TREE_MISSING_KEY: &str = "missing";
 
 /// Which files a run selects rules against (CLOUD-519).
 ///
@@ -7304,6 +7419,8 @@ pub fn run_recorded(
         &bundles,
         vocabulary,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks,
             scope: &Scope::Tree,
             // The caller's surface: `Surface::Check` for the `state record`
@@ -7351,6 +7468,8 @@ pub fn run_all(
         vocabulary,
         root,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
             // The tree verbs, so the surface their `Cost::Effect` facts are
@@ -7399,7 +7518,91 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary, opts)
+    let Some(half) = opts.half else {
+        return run(rules, provisions, root, &bundles, vocabulary, opts);
+    };
+    let (kept, bundles) = partition_half(rules, bundles, half, opts.keyed_bases, checks)?;
+    let mut scan = run(&kept, provisions, root, &bundles, vocabulary, opts)?;
+    scan.other_half = rules
+        .iter()
+        .filter(|rule| !kept.iter().any(|judged| judged.id == rule.id))
+        .map(|rule| rule.id.clone())
+        .collect();
+    Ok(scan)
+}
+
+/// The rows of `rules` that `half` judges, and the bundles they own (step 13a).
+///
+/// After [`crate::policy::load`], because a policy row's half is read off its
+/// compiled modules. A row the caller SELECTED by `--rule` that belongs to the
+/// other half is refused rather than dropped: a narrowed run that silently
+/// judged nothing would report a pass from a gate that never ran, which is
+/// exactly what `--rule`'s own unknown-id refusal exists to prevent.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the first selected row of the other half.
+pub fn partition_half(
+    rules: &[Rule],
+    bundles: Vec<crate::policy::Bundle>,
+    half: Half,
+    keyed_bases: &[String],
+    checks: crate::policy::ModuleChecks,
+) -> anyhow::Result<(Vec<Rule>, Vec<crate::policy::Bundle>)> {
+    let (kept, other): (Vec<&Rule>, Vec<&Rule>) = rules.iter().partition(|rule| {
+        let bundle = bundles.iter().find(|bundle| bundle.id() == rule.id);
+        rule.half(bundle, keyed_bases) == half
+    });
+    if checks == crate::policy::ModuleChecks::RunOverSelection
+        && let Some(rule) = other.first()
+    {
+        return Err(UsageError::raise(format!(
+            "rule `{}` is judged by the other half of a split `enforce`, not `--half {}`; \
+             select it under `--half {}`, or drop `--half`",
+            rule.id,
+            half.as_str(),
+            match half {
+                Half::Tree => Half::Live.as_str(),
+                Half::Live => Half::Tree.as_str(),
+            }
+        )));
+    }
+    let kept: Vec<Rule> = kept.into_iter().cloned().collect();
+    let bundles = bundles
+        .into_iter()
+        .filter(|bundle| kept.iter().any(|rule| rule.id == bundle.id()))
+        .collect();
+    Ok((kept, bundles))
+}
+
+/// The tree half's backstop (step 13a): `document` with every live key of
+/// `input.tree` set to `null`.
+///
+/// [`Rule::half`] is what keeps a live read out of the tree half; this is what
+/// keeps a misclassification from reaching a module as a moved world. `null` is
+/// could-not-look on every tree key, so a module reading one stays silent
+/// rather than judging state the receipt does not key. A key no fact carries,
+/// bar `missing`, is nulled too — unknown is live. A document that will not
+/// parse is returned unchanged, since the engine refuses it as before.
+#[must_use]
+pub fn null_live_keys(document: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(document) else {
+        return document.to_owned();
+    };
+    if let Some(tree) = value
+        .get_mut("tree")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (key, slot) in tree.iter_mut() {
+            let tree_fact = key == TREE_MISSING_KEY
+                || crate::facts::Fact::from_tree_key(key)
+                    .is_some_and(|fact| fact.subject() == crate::facts::Subject::Tree);
+            if !tree_fact {
+                *slot = serde_json::Value::Null;
+            }
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| document.to_owned())
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -7436,7 +7639,12 @@ fn run(
         scope,
         surface,
         now,
+        half,
+        keyed_bases: _,
     } = opts;
+    // The tree half's backstop (step 13a): the families no tree row declares are
+    // not acquired at all, and `null_live_keys` nulls what remains.
+    let tree_half = half == Some(Half::Tree);
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
     // The narrowed selection, computed once beside the walk. Every acquisition
@@ -7471,7 +7679,7 @@ fn run(
     // 4.76ms -> 10.01ms (2.103x) against the merge base — `perf-compare` refused
     // the branch — for a question no rule in the set had asked. A run whose rules
     // declare no sink now does exactly what it did before this row landed.
-    let produced = if crate::sink::any_declared(rules) {
+    let produced = if !tree_half && crate::sink::any_declared(rules) {
         match crate::git::git_dir(root) {
             Err(_) => BTreeMap::new(),
             Ok(git_dir) => {
@@ -7550,7 +7758,7 @@ fn run(
     // reads and parses every response in the store, so a run whose rows ask for
     // none must not pay for one.
     let captured = captured_facts(rules, root);
-    let state = if declared_state.is_empty() {
+    let state = if tree_half || declared_state.is_empty() {
         None
     } else {
         crate::store::resolve(root)
@@ -7585,24 +7793,7 @@ fn run(
     // liveness depend on a table it has nothing to do with.
     // `record_key`, not `current_branch`: the key the producers wrote under, which
     // on a detached HEAD (every CI checkout) is the commit rather than nothing.
-    let records = match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) => recorder_records(
-            &git_dir,
-            &branch,
-            recorders,
-            vocabulary.records,
-            crate::record::VERB_WRITTEN,
-        ),
-        _ => BTreeMap::new(),
-    };
-    // CLOUD-1126, read UNCONDITIONALLY for `VERB_WRITTEN`'s reason: the engine
-    // owns both the writer and the reader of this store, so there is no
-    // declaration a consumer could forget and nothing to make the read
-    // conditional on.
-    let records_blocked = match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) => recorder_blocked(&git_dir, &branch),
-        _ => BTreeMap::new(),
-    };
+    let (records, records_blocked) = recorded_stores(root, recorders, vocabulary, tree_half);
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
     // `registry_for` is the one authority on it, and a vendored class replaces a
@@ -7634,6 +7825,7 @@ fn run(
         bundles,
         verdicts: &registry,
         tables: &tables,
+        half,
     };
 
     let mut scan = Scan::default();
@@ -8098,7 +8290,37 @@ fn recorder_records(
 /// the provisions and bundles the config carries. Grouped rather than passed
 /// one by one because it is exactly the set `run` hoists above its loop, and
 /// because it grows by a field every time an acquisition row lands.
+/// The record stores a run projects: the recorder and family lines, and the
+/// blocked rows (CLOUD-1126) — both read UNCONDITIONALLY for `VERB_WRITTEN`'s
+/// reason, since the engine owns both the writer and the reader, so there is no
+/// declaration a consumer could forget and nothing to make the read conditional
+/// on. Neither is read by the tree half (step 13a): both are live state no tree
+/// key covers.
+fn recorded_stores(
+    root: &Path,
+    recorders: &[crate::recorder::Declared],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    tree_half: bool,
+) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
+    match (crate::git::git_dir(root), crate::git::record_key(root)) {
+        (Ok(git_dir), Ok(branch)) if !tree_half => (
+            recorder_records(
+                &git_dir,
+                &branch,
+                recorders,
+                vocabulary.records,
+                crate::record::VERB_WRITTEN,
+            ),
+            recorder_blocked(&git_dir, &branch),
+        ),
+        _ => (BTreeMap::new(), BTreeMap::new()),
+    }
+}
+
 struct RunInputs<'a> {
+    /// Which half of a split `enforce` this run judges (step 13a); under
+    /// [`Half::Tree`] the tree document passes through [`null_live_keys`].
+    half: Option<Half>,
     provisions: &'a [crate::provision::Provision],
     files: &'a [String],
     /// The file set a rule is SELECTED against, which is `files` narrowed by the
@@ -10589,6 +10811,11 @@ fn policy_rule(
         tracked,
         &resolved_of(inputs),
     );
+    let input = if inputs.half == Some(Half::Tree) {
+        null_live_keys(&input)
+    } else {
+        input
+    };
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
     };
@@ -16279,6 +16506,7 @@ mod tests {
 
         fn inputs<'a>(&'a self, files: &'a [String]) -> RunInputs<'a> {
             RunInputs {
+                half: None,
                 provisions: &[],
                 files,
                 scoped: files,
@@ -20371,6 +20599,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
 
     fn tree_options(scope: &Scope) -> RunOptions<'_> {
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope,
             surface: crate::facts::Surface::Check,
@@ -20817,6 +21047,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         };
         let could_not_look = crate::facts::Look::CouldNotLook;
         let inputs = RunInputs {
+            half: None,
             review: &could_not_look,
             ..blind.inputs(&files)
         };
@@ -20936,6 +21167,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let facts = BareFacts::new();
         let owners = |surface| {
             let inputs = RunInputs {
+                half: None,
                 surface,
                 ..facts.inputs(&files)
             };
@@ -21484,6 +21716,7 @@ violation contains {
                     ..BareFacts::new()
                 };
                 let inputs = RunInputs {
+                    half: None,
                     bundles: bundle.map_or(&[][..], std::slice::from_ref),
                     ..facts.inputs(&files)
                 };
@@ -21614,6 +21847,8 @@ violation contains {
             crate::policy::Vocabulary::EMPTY,
             &dir,
             RunOptions {
+                half: None,
+                keyed_bases: &[],
                 checks: crate::policy::ModuleChecks::SkipOnHotPath,
                 ..tree_options(&tree)
             },
@@ -22526,6 +22761,7 @@ violation contains {
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             tables: &tables,
             ..facts.inputs(&files)
         };
@@ -22588,6 +22824,7 @@ violation contains {
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             tables: &tables,
             ..facts.inputs(&files)
         };
@@ -22776,6 +23013,7 @@ violation contains {
         let scoped = vec![String::from("a.rs")];
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             scoped: &scoped,
             ..facts.inputs(&files)
         };
@@ -22863,5 +23101,218 @@ violation contains {
         let refused = walk_traversals(vocabulary, &dir, &[], &BTreeMap::new())
             .expect_err("an undeclared register is refused");
         assert!(refused.to_string().contains("`missing`"), "{refused}");
+    }
+}
+
+/// Step 13a: the split `enforce`'s classifier, partition and backstop.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod half_tests {
+    use super::{Half, Rule, RuleKind, RuleScope, null_live_keys};
+    use crate::facts::{Fact, Subject};
+
+    /// A blank row of `kind` on its first permitted scope, plus `extra`.
+    fn row(kind: RuleKind, extra: &serde_json::Value) -> Rule {
+        let mut value = serde_json::json!({
+            "id": "r",
+            "kind": kind,
+            "scope": kind.scopes()[0],
+        });
+        if let (Some(object), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+            object.extend(more.clone());
+        }
+        serde_json::from_value(value).expect("a blank row deserialises")
+    }
+
+    const KEYED: &[String] = &[];
+
+    #[test]
+    fn the_tree_subjects_are_exactly_the_indexed_facts() {
+        let tree: Vec<Fact> = Fact::ALL
+            .iter()
+            .copied()
+            .filter(|fact| fact.subject() == Subject::Tree)
+            .collect();
+        assert_eq!(
+            tree,
+            vec![
+                Fact::Document,
+                Fact::Tracked,
+                Fact::Traversals,
+                Fact::Lines,
+                Fact::GitIndex,
+                Fact::Staged,
+                Fact::Invocations,
+                Fact::Uses,
+            ],
+            "a fact joins the tree half only by an edit here, never by default"
+        );
+        for fact in tree {
+            let key = fact
+                .tree_key()
+                .expect("a tree subject is projected on the tree surface");
+            assert_eq!(Fact::from_tree_key(key), Some(fact), "{key} round-trips");
+        }
+        assert_eq!(Fact::from_tree_key("missing"), None);
+    }
+
+    #[test]
+    fn each_kind_falls_on_its_half() {
+        for kind in RuleKind::ALL {
+            let blank = row(*kind, &serde_json::json!({}));
+            let expected = match kind {
+                RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
+                    Half::Tree
+                }
+                // A ratchet with no keyed base, and a policy row with no bundle,
+                // cannot be shown to be tree.
+                RuleKind::Ratchet
+                | RuleKind::Policy
+                | RuleKind::Command
+                | RuleKind::Judge
+                | RuleKind::Receipt
+                | RuleKind::Shape
+                | RuleKind::Pipeline
+                | RuleKind::Native => Half::Live,
+            };
+            let got = if blank.scope == RuleScope::MediatedCall {
+                Half::Live
+            } else {
+                expected
+            };
+            assert_eq!(blank.half(None, KEYED), got, "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn a_ratchet_is_tree_only_against_a_keyed_base() {
+        let ratchet = row(
+            RuleKind::Ratchet,
+            &serde_json::json!({"base": "origin/main"}),
+        );
+        assert_eq!(ratchet.half(None, &[]), Half::Live);
+        assert_eq!(ratchet.half(None, &["origin/other".to_owned()]), Half::Live);
+        assert_eq!(ratchet.half(None, &["origin/main".to_owned()]), Half::Tree);
+    }
+
+    #[test]
+    fn a_live_fact_or_an_existence_test_moves_a_tree_kind_live() {
+        let forbid = row(RuleKind::Forbid, &serde_json::json!({}));
+        assert_eq!(forbid.half(None, KEYED), Half::Tree, "the premise");
+        let required = Rule {
+            requires_path: vec!["target/x".to_owned()],
+            ..forbid.clone()
+        };
+        assert_eq!(required.half(None, KEYED), Half::Live);
+        let mediated = Rule {
+            scope: RuleScope::MediatedCall,
+            ..forbid
+        };
+        assert_eq!(mediated.half(None, KEYED), Half::Live);
+    }
+
+    #[test]
+    fn a_policy_row_is_tree_only_when_its_bundle_reads_tree_keys() {
+        let policy = row(RuleKind::Policy, &serde_json::json!({"scope": "tree"}));
+        let module = |body: &str| {
+            format!(
+                "package batten.r\n\nimport rego.v1\n\nrules contains \"x probe probex\"\n\n\
+                 violation contains {{\"rule\": \"x probe probex\", \"verdict\": \"x probe probex\", \
+                 \"subjects\": []}} if {{\n{body}\n}}\n"
+            )
+        };
+        let bundle = |body: &str| {
+            crate::policy::compile(
+                "r",
+                &[("policy/r.rego".to_owned(), module(body))],
+                &serde_json::json!({}),
+            )
+            .expect("the fixture compiles")
+        };
+        let tree = bundle("\tinput.tree.documents.x != null\n\tinput.tree.missing != null");
+        assert_eq!(policy.half(Some(&tree), KEYED), Half::Tree);
+        let records = bundle("\tinput.tree.records.x != null");
+        assert_eq!(policy.half(Some(&records), KEYED), Half::Live);
+        let aliased = bundle("\tt := input.tree\n\tt.documents != null");
+        assert_eq!(policy.half(Some(&aliased), KEYED), Half::Live);
+    }
+
+    #[test]
+    fn the_backstop_nulls_every_live_key_and_keeps_the_tree() {
+        let document = serde_json::json!({"tree": {
+            "documents": {"a": 1},
+            "staged": {"b": 2},
+            "missing": {"c": "unparsed"},
+            "records": {"runs": ["row\tx"]},
+            "git-head": "abc",
+            "forge": {},
+            "unheard-of": 1,
+        }});
+        let nulled: serde_json::Value =
+            serde_json::from_str(&null_live_keys(&document.to_string())).expect("json");
+        let tree = &nulled["tree"];
+        assert_eq!(tree["documents"], serde_json::json!({"a": 1}));
+        assert_eq!(tree["staged"], serde_json::json!({"b": 2}));
+        assert_eq!(tree["missing"], serde_json::json!({"c": "unparsed"}));
+        for live in ["records", "git-head", "forge", "unheard-of"] {
+            assert!(tree[live].is_null(), "{live} is nulled");
+        }
+    }
+
+    #[test]
+    fn the_committed_rules_partition_by_what_they_read() {
+        // THE PROPERTY OVER THE ROWS THAT SHIP. Every committed row lands on one
+        // half; a tree row declares only tree facts and is a kind that cannot
+        // spawn; and the split buys something — some rows are tree.
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
+        )
+        .expect("the committed authority reads");
+        let table: toml::Table = toml::from_str(&text).expect("the committed authority parses");
+        let rows: Vec<Rule> = table
+            .get("rule")
+            .and_then(toml::Value::as_array)
+            .expect("the authority declares rows")
+            .iter()
+            .map(|value| {
+                value
+                    .clone()
+                    .try_into()
+                    .expect("a committed row deserialises")
+            })
+            .collect();
+        let keyed = ["origin/main".to_owned()];
+        let mut tree = 0;
+        for rule in &rows {
+            match rule.half(None, &keyed) {
+                Half::Tree => {
+                    tree += 1;
+                    // The one spawning kind a tree row may be: the secrets
+                    // scanner, pinned by a checksum the authority itself keys.
+                    assert!(
+                        !rule.kind.carries_ambient_authority() || rule.kind == RuleKind::Secrets,
+                        "{}",
+                        rule.id
+                    );
+                    assert_ne!(
+                        rule.kind,
+                        RuleKind::Policy,
+                        "{}: no bundle is live",
+                        rule.id
+                    );
+                    assert!(
+                        rule.census_facts()
+                            .all(|fact| fact.subject() == Subject::Tree),
+                        "{}",
+                        rule.id
+                    );
+                }
+                Half::Live => {}
+            }
+        }
+        assert!(
+            tree > 0,
+            "no committed row is tree, so the split would buy nothing"
+        );
     }
 }
