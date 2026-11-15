@@ -1000,6 +1000,60 @@ pub fn admitted(
 /// ISSUED record still binds the same terms, which is the economy [`admitted`]
 /// enforces with `State::Spent`. That gap is closed one field over: the address
 /// binds `answers`, so a block with no articulation cannot recompute at all.
+/// A spent admission for `rule`/`verdict` over a subject that NAMES `path` —
+/// its first word, before the program it was refused under — in this
+/// situation (step 14).
+///
+/// The post-call protected-write comparison knows the path that changed and
+/// not the program that changed it: the program is what escaped the pre-call
+/// gate. So the subject's path half is what binds, and the other four fields
+/// bind exactly as [`admitted`]'s do.
+///
+/// # Errors
+///
+/// Propagates only a store-resolution failure, as [`admitted`] does.
+pub fn admitted_path(
+    repo_root: &Path,
+    rule: &str,
+    verdict: &str,
+    path: &str,
+    anchor: &str,
+    epoch: &str,
+) -> Result<Option<String>> {
+    let dir = store_dir(repo_root)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(None);
+    };
+    for entry in entries.flatten() {
+        let file = entry.path();
+        if file.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(bytes) = crate::fsio::read(&file) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
+            continue;
+        };
+        let binding = &record.binding;
+        let named = binding
+            .subject
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .next()
+            .is_some_and(|first| first == path);
+        if record.state == State::Spent
+            && named
+            && binding.rule == rule
+            && binding.verdict == verdict
+            && binding.anchor.token() == anchor
+            && binding.epoch == epoch
+        {
+            return Ok(Some(record.admission));
+        }
+    }
+    Ok(None)
+}
+
 #[must_use]
 pub fn admitted_by_block(
     message: &str,

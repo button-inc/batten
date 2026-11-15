@@ -485,6 +485,7 @@ fn envelope(row: &CatalogRow, payload: &Value, repo: Option<String>) -> Envelope
         session: None,
         agent: None,
         start_source: None,
+        call_id: None,
         background_ceiling: None,
         stop_active: None,
         last_message: None,

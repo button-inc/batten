@@ -513,6 +513,22 @@ Never `"push" in program.arguments`: membership fires on `git commit -m push`.
 And never parse the global options in Rego: the engine's table is the one copy,
 and a module that needs to judge them reads `global-options`.
 
+**`programs` is RECURSIVE, and `batten` and `cargo` have tables too** (step 14).
+A program that runs other programs is followed into them by the engine, once,
+for every module: a shell's `-c` script, `eval`'s words, `exec`, the binary
+`cargo run` starts (named by `-p`/`--bin`, else the workspace's one binary),
+the argv after `--` in `batten step run`, `find -exec`, `watch` and `env -S`.
+Each inner entry carries `via` (`script`, `cargo run`, `step run`, `exec`;
+`null` where the call wrote it) and `unread` (`true` where its text would not parse and was read by
+whitespace, so an unparseable script is not a bypass). `batten`'s verb is its
+`subcommand` and the verb after it is `nested` (`batten land lap` is
+`land`/`lap`), and a `mise` entry's `tasks` is every task it starts by any run
+spelling. `input.call["task-programs"]` follows those tasks into their bodies
+from the task receipt (`null` where it could not be read), so a module classifies
+a `mise run` by what it reaches rather than by a list of task names. Never
+re-derive any of these in Rego: `policy/land-stage-direct.rego` reads them and
+parses nothing.
+
 Reach for `arguments` rather than the segment's words whenever a flag has to be
 the program's own: a `git status` beside an `hg push --force` is two facts, and
 reading the whole segment merges them into a refusal nobody can act on.

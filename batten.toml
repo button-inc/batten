@@ -581,6 +581,22 @@ scope = "mediated_call"
 module = "policy/leased-push.rego"
 severity = "deny"
 
+# Step 14 (2026-11-15). A land or verify stage rerun by hand outside the lap that
+# owns it: the run keeps nothing a lap can reuse, so it only duplicates the lap.
+# The task table is declared because the module classifies a `mise run` by what
+# its task REACHES (`input.call["task-programs"]`, followed through the task
+# receipt's bodies), never by the task's name.
+[[rule]]
+id = "gate run twice"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/land-stage-direct.rego"
+severity = "deny"
+[[rule.tasks]]
+manifest = "mise.toml"
+node = "tasks"
+
 # CLOUD-1340. The mediated half of a variable whose declared half `ci-suite-lane`
 # already gates over the workflow files; the two read different surfaces and do
 # not overlap.
@@ -14195,6 +14211,25 @@ id = "path admit first"
 kind = "override"
 precondition = "the history being replaced is this clone's own and no other clone has fetched it, so there is no expected value to name that a reader could check"
 
+[[verdict]]
+id = "gate run twice"
+gloss = "a land or verify stage run by hand, outside the lap that owns it"
+class = """
+`land` runs every stage of `verify` on every lap — `batten enforce`, the \
+workspace test suite, the lap itself. A stage run by hand duplicates that work, \
+and where the stage is unreceipted (the live half of `enforce`) or run around \
+its receipt (a bare `cargo nextest run` instead of the receipted `test:cargo` \
+step) its verdict is computed and thrown away: the next lap pays again. A \
+filtered run — a nextest filterset, a test-name operand — answers a narrower \
+question than the stage and is not this class. Tasks are judged by the programs \
+they reach, so a task that runs a stage is a stage whatever it is called.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land, backgrounded (run_in_background), and act on its exit"
+
 # CLOUD-1340, and it is a class for `branch write unsafe`'s reason exactly: a
 # consumer `[[rule]]` row carries no token an admission could bind, so a `shape`
 # row would leave `bypass_env` as the only way through, which is the password
@@ -14796,7 +14831,7 @@ are absent.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run verify"
+target = "mise run land, backgrounded (run_in_background) — its lap runs verify and keeps the verdict"
 
 [[verdict]]
 id = "task cover stale"
@@ -16774,7 +16809,7 @@ own conduct.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run verify"
+target = "mise run land, backgrounded (run_in_background) — its lap runs verify and keeps the verdict"
 
 [[verdict.route]]
 id = "task run other"
