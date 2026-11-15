@@ -314,6 +314,41 @@ fn a_receipted_steps_program_run_outside_it_is_refused() {
     ]);
 }
 
+/// A stage run from a script file, a shebang file or a sourced file is the
+/// stage (#1276, step 23): the reach reads the file the shell runs.
+#[test]
+fn a_stage_inside_a_script_file_is_refused() {
+    let dir = std::env::temp_dir().join(format!("batten-stage-script-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = dir.join("ship.sh");
+    std::fs::write(&plain, "set -e\nbatten enforce --half live\n").unwrap();
+    let banged = dir.join("ship-banged");
+    std::fs::write(&banged, "#!/usr/bin/env bash\nbatten enforce\n").unwrap();
+    let sourced = dir.join("lib.sh");
+    std::fs::write(&sourced, "batten enforce\n").unwrap();
+    let harmless = dir.join("echo.sh");
+    std::fs::write(&harmless, "echo 'batten enforce'\n").unwrap();
+    let (plain, banged, sourced, harmless) = (
+        plain.to_str().unwrap().to_owned(),
+        banged.to_str().unwrap().to_owned(),
+        sourced.to_str().unwrap().to_owned(),
+        harmless.to_str().unwrap().to_owned(),
+    );
+    // The incident: every landing of one session ran as `sh ship<N>.sh`.
+    all_refused(&[
+        (&format!("sh {plain}"), false),
+        (&format!("bash -e {plain}"), false),
+        (&format!("mise exec -- bash {plain}"), false),
+        (&banged, false),
+        (&format!("source {sourced}"), false),
+        (&format!(". {sourced}"), false),
+    ]);
+    // The mutation's target: a file that only names the stage runs nothing.
+    none_refused(&[(&format!("sh {harmless}"), false)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A landing is the one way a stage is meant to run.
 #[test]
 fn a_backgrounded_land_is_allowed() {
     none_refused(&[("mise run land", true)]);
