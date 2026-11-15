@@ -501,15 +501,20 @@ fn symlink_dir(target: &Path, link: &Path) -> bool {
 #[test]
 fn the_record_is_keyed_by_the_canonical_root() {
     // The hook stands at `.`, which is no key at all: only the canonical path
-    // finds the record Setup wrote through a symlink.
+    // finds the record Setup wrote through a symlink. Off unix a directory
+    // symlink needs a privilege the runner may not hold, so the subject is a
+    // platform's, decided at compile time.
+    if !cfg!(unix) {
+        return;
+    }
     let root = session_root("canonical");
     member(&root, "repo", ONE_DENY);
     let link = root.parent().expect("a parent").join("link");
     let _ = std::fs::remove_file(&link);
-    if !symlink_dir(&root, &link) {
-        assert!(!cfg!(unix), "a unix runner can always make the symlink");
-        return;
-    }
+    assert!(
+        symlink_dir(&root, &link),
+        "a unix runner can make the symlink"
+    );
     setup(&link);
     let output = adjudicate(&root, &merge_call(Some("cloud-2752-canonical")));
     assert!(

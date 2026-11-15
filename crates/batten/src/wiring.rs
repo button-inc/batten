@@ -1176,10 +1176,21 @@ mod tests {
         crate::scratch::scratch(&format!("wiring-{name}"))
     }
 
+    /// The surface [`register_root`] writes under `root`, as the harness
+    /// declares it rather than spelled here (non-negotiable rule 1).
+    fn root_surface(root: &Path) -> PathBuf {
+        let wiring = hook::Harness::ClaudeCode
+            .wiring()
+            .expect("claude-code wires");
+        match wiring.file {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => root.join(path),
+        }
+    }
+
     #[test]
     fn a_root_surface_that_is_no_object_is_left_alone() {
         let root = scratch("register-root-array");
-        let surface = root.join(".claude/settings.json");
+        let surface = root_surface(&root);
         std::fs::create_dir_all(surface.parent().unwrap()).unwrap();
         std::fs::write(&surface, "[]\n").unwrap();
         assert_eq!(register_root(&root, false).unwrap(), (Vec::new(), false));
@@ -1189,7 +1200,7 @@ mod tests {
     #[test]
     fn a_root_surface_object_keeps_its_keys_and_gains_batten() {
         let root = scratch("register-root-object");
-        let surface = root.join(".claude/settings.json");
+        let surface = root_surface(&root);
         std::fs::create_dir_all(surface.parent().unwrap()).unwrap();
         std::fs::write(&surface, "{\"theirs\": 1}\n").unwrap();
         let (events, written) = register_root(&root, false).unwrap();
