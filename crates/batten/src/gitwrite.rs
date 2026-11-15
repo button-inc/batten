@@ -1966,23 +1966,28 @@ pub fn blob_len(dir: &Path, id: &str) -> Option<u64> {
     (header.kind() == gix::object::Kind::Blob).then(|| header.size())
 }
 
-/// Delete one loose object file. Windows will not delete a file marked
-/// read-only, which is how a loose object is stored, so the mark is cleared
-/// where the first try is refused.
+/// Delete one loose object file.
+///
+/// Unix deletes a file whatever its own mode, so one try is the whole answer
+/// there. Windows will not delete a file marked read-only, which is how a loose
+/// object is stored, so there alone the mark is cleared where the first try is
+/// refused — and only there, since clearing it on Unix would make the file
+/// writable by everyone for the instant before it goes.
 fn remove_object(path: &Path) -> bool {
     if std::fs::remove_file(path).is_ok() {
         return true;
     }
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    let mut permissions = meta.permissions();
-    #[allow(
-        clippy::permissions_set_readonly_false,
-        reason = "the file is deleted on the next line; on Unix the first try already succeeded"
-    )]
-    permissions.set_readonly(false);
-    std::fs::set_permissions(path, permissions).is_ok() && std::fs::remove_file(path).is_ok()
+    #[cfg(windows)]
+    {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        let mut permissions = meta.permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).is_ok() && std::fs::remove_file(path).is_ok()
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// Delete every loose object in the bare repository `dir` that no commit in
