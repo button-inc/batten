@@ -440,6 +440,7 @@ mod spawn_widening;
 mod staged_facts;
 mod startup;
 mod startup_bootstrap;
+mod startup_unanchored;
 #[cfg(unix)]
 mod step_receipt;
 mod stop_hold;

@@ -272,6 +272,233 @@ fn a_session_that_never_stood_in_a_repository_stays_fail_open() {
     );
 }
 
+// --- a session root registered at build (CLOUD-2752) ---
+
+/// A config whose `[[verb]]`-free policy still adjudicates and refuses nothing
+/// this file sends.
+const ALLOWS: &str = "version = 1\nprotected = [\"elsewhere/**\"]\n";
+
+/// A session root outside this tree, and the case's base directory above it.
+fn session_root(name: &str) -> PathBuf {
+    let root = common::scratch_outside_tree("hook-root-registered", name).join("root");
+    std::fs::create_dir_all(&root).expect("the session root");
+    root
+}
+
+/// A checkout carrying `config` under `root`.
+fn member(root: &Path, name: &str, config: &str) -> PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).expect("the checkout");
+    common::init_repo(&repo);
+    common::write(&repo, "batten.toml", config);
+    repo
+}
+
+/// The unchanged Setup line, run from `dir`.
+fn setup(dir: &Path) {
+    let output = common::batten()
+        .current_dir(dir)
+        .args(["startup", "--repair"])
+        .env_remove("BATTEN_ENVIRONMENT")
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+}
+
+/// `payload`, adjudicated from `dir`.
+fn adjudicate(dir: &Path, payload: &serde_json::Value) -> Output {
+    let mut command = common::batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .env_remove("CLAUDE_PROJECT_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.to_string().as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// A `Write` of `path`, in `session` when one is named.
+fn write_call(session: Option<&str>, path: &Path) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": { "file_path": path.to_string_lossy(), "content": "x" }
+    });
+    if let Some(session) = session {
+        payload["session_id"] = serde_json::Value::from(session);
+    }
+    payload
+}
+
+/// The refused `gh pr merge`, in `session` when one is named.
+fn merge_call(session: Option<&str>) -> serde_json::Value {
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&banned_payload()).expect("the payload parses");
+    if let Some(session) = session {
+        payload["session_id"] = serde_json::Value::from(session);
+    }
+    payload
+}
+
+/// The refused `gh pr merge`, in `session`, carrying `path` as the raw absolute
+/// `file_path` the path rule reads off any tool's input.
+fn merge_naming(session: &str, path: &Path) -> serde_json::Value {
+    let mut payload = merge_call(Some(session));
+    payload["tool_input"]["file_path"] = serde_json::Value::from(path.to_string_lossy());
+    payload
+}
+
+fn recorded(root: &Path) -> Option<Vec<PathBuf>> {
+    batten::state::recorded_root_authorities(&batten::git::canonical(root), "batten.toml")
+}
+
+#[test]
+fn a_first_call_at_a_registered_root_is_judged_by_the_recorded_authority() {
+    // THE REGRESSION: a session never seen before, rooted above its one
+    // checkout, was judged by an empty policy until its first call from inside.
+    let root = session_root("first-call");
+    member(&root, "repo", ONE_DENY);
+    setup(&root);
+    let output = adjudicate(&root, &merge_call(Some("cloud-2752-first")));
+    assert!(
+        denied(&output),
+        "the first call at a registered root is judged by its recorded authority: {:?} {}",
+        output.status.code(),
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn with_two_authorities_the_first_by_name_judges_a_call_with_no_path() {
+    // `b` is created first, so directory order and name order differ.
+    for (deny, refused) in [("a", true), ("b", false)] {
+        let root = session_root(&format!("two-{deny}"));
+        member(&root, "b", if deny == "b" { ONE_DENY } else { ALLOWS });
+        member(&root, "a", if deny == "a" { ONE_DENY } else { ALLOWS });
+        setup(&root);
+        let output = adjudicate(&root, &merge_call(Some(&format!("cloud-2752-two-{deny}"))));
+        assert_eq!(
+            denied(&output),
+            refused,
+            "`a` is first by name and judges: {}",
+            common::stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_call_naming_a_path_in_one_checkout_is_judged_by_that_one() {
+    let root = session_root("by-path");
+    let a = member(&root, "a", ALLOWS);
+    let b = member(&root, "b", ONE_DENY);
+    setup(&root);
+    let session = "cloud-2752-by-path";
+    assert!(!denied(&adjudicate(&a, &merge_call(Some(session)))));
+    let output = adjudicate(&root, &merge_naming(session, &b.join("f")));
+    assert!(
+        denied(&output),
+        "a call naming a path in `b` is judged by `b`, not by the `a` the session \
+         last stood in: {}",
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn an_authority_cloned_after_setup_joins_the_set() {
+    let root = session_root("grows");
+    let a = member(&root, "a", ALLOWS);
+    let b = member(&root, "b", ALLOWS);
+    setup(&root);
+    let c = member(&root, "c", ONE_DENY);
+    let _ = adjudicate(&c, &merge_call(Some("cloud-2752-grows")));
+    let canonical = |path: &Path| batten::git::canonical(path);
+    assert_eq!(
+        recorded(&root),
+        Some(vec![canonical(&a), canonical(&b), canonical(&c)])
+    );
+    let output = adjudicate(&root, &merge_naming("cloud-2752-grows-later", &c.join("f")));
+    assert!(
+        denied(&output),
+        "a call naming a path in the late checkout is judged by it: {}",
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_checkout_under_an_unregistered_parent_writes_no_record() {
+    let root = session_root("unregistered");
+    let repo = member(&root, "repo", ALLOWS);
+    assert!(!denied(&adjudicate(
+        &repo,
+        &write_call(Some("cloud-2752-unregistered"), &repo.join("x"))
+    )));
+    assert_eq!(
+        recorded(&root),
+        None,
+        "no record is created for a parent nobody registered"
+    );
+}
+
+#[test]
+fn a_recorded_member_whose_config_is_gone_is_skipped() {
+    let root = session_root("ghost-member");
+    let a = member(&root, "a", ALLOWS);
+    member(&root, "b", ONE_DENY);
+    setup(&root);
+    std::fs::remove_file(a.join("batten.toml")).expect("remove the first authority");
+    let output = adjudicate(&root, &merge_call(Some("cloud-2752-ghost")));
+    assert!(
+        denied(&output),
+        "the ghost is skipped and the second member judges: {}",
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_call_with_no_session_id_at_a_registered_root_is_judged_and_grows_nothing() {
+    let root = session_root("no-session");
+    let a = member(&root, "a", ONE_DENY);
+    setup(&root);
+    assert!(
+        denied(&adjudicate(&root, &merge_call(None))),
+        "a call carrying no session id is still judged by the set"
+    );
+    let late = member(&root, "late", ALLOWS);
+    let _ = adjudicate(&late, &write_call(None, &late.join("x")));
+    assert_eq!(
+        recorded(&root),
+        Some(vec![batten::git::canonical(&a)]),
+        "an envelope without a session id grows nothing"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn the_record_is_keyed_by_the_canonical_root() {
+    // The hook stands at `.`, which is no key at all: only the canonical path
+    // finds the record Setup wrote through a symlink.
+    let root = session_root("canonical");
+    member(&root, "repo", ONE_DENY);
+    let link = root.parent().expect("a parent").join("link");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&root, &link).expect("a symlink to the root");
+    setup(&link);
+    let output = adjudicate(&root, &merge_call(Some("cloud-2752-canonical")));
+    assert!(
+        denied(&output),
+        "Setup run through a symlink is read from the real path: {}",
+        common::stderr(&output)
+    );
+}
+
 #[test]
 fn a_recorded_root_that_lost_its_authority_is_not_used() {
     // A deleted or moved checkout is never answered for by its ghost.

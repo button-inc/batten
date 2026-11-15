@@ -2747,31 +2747,17 @@ fn run_startup(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
     let here = Path::new(".");
+    if !here.join(config::CONFIG_FILE).is_file() && git::repo_root(here).is_err() {
+        return run_startup_unanchored(repair, json, out, err);
+    }
+    let config = resolve::resolve(here, overrides)?;
     let outcomes = if repair {
         startup::repair(here, &config.startup)
     } else {
         startup::evaluate(here, &config.startup)
     };
-    let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
-
-    if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&outcomes)?)?;
-    } else {
-        // EVERY ROW, not only the failing ones, and deliberately unlike
-        // `provision status`. A reader running this is asking whether the
-        // container is right, and a silent pass over a row whose check never ran
-        // is indistinguishable from a row that was never declared — which is the
-        // could-not-look-as-clean failure the whole table exists to refuse.
-        output::lines(out, &outcomes)?;
-        writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
-        let findings: Vec<refusal::Refusal> = outcomes
-            .iter()
-            .filter_map(startup::Outcome::finding)
-            .collect();
-        print_labelled(err, &findings)?;
-    }
+    let failed = report_startup(&outcomes, json, out, err)?;
     // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
     // harness reads `2` as a policy denial, and "this container is not what the
     // repository declares" is not one (§7).
@@ -2780,6 +2766,135 @@ fn run_startup(
     } else {
         ExitCode::Usage
     })
+}
+
+/// `startup` where `.` holds no `batten.toml` and is inside no repository: the
+/// directory a cloud container's Setup script runs in, above the checkouts
+/// (CLOUD-2752).
+///
+/// **THE ONLY DETERMINISTIC RECOVERY IS A FILE ALREADY IN THE SESSION ROOT.** A
+/// restart is a reboot with the disk kept, the Setup script does not run again,
+/// and the harness loads hooks only from files — so a registration nobody wrote
+/// at build can never repair itself. Running `startup --repair` here is the
+/// owner's consent to write it (ruling 1, 2026-11-14), so neither
+/// `wiring register`'s above-a-repository test nor its disposable test applies.
+/// The home directory and every ancestor of it stay refused: the surface there is
+/// the user-level one, which would fire batten twice in a session rooted at a
+/// repository.
+///
+/// **ORDER IS THE GUARANTEE.** The registration is written first, the authority
+/// set recorded second, each member's own rows run third — so a row that fails
+/// cannot undo either, and the exit code is then what `startup --repair` gives
+/// today. Bare `startup` writes nothing and exits `1` when a registration is
+/// owed. The registration and authority lines go to standard error so `--json`
+/// keeps the outcomes array alone on standard output.
+//MUTANT-SUITE crates/batten/tests/it/startup_unanchored.rs
+//MUTANT unanchored-inside-a-repository|s@^    if !here.join(config::CONFIG_FILE).is_file() \&\& git::repo_root(here).is_err() {$@    if !here.join(config::CONFIG_FILE).is_file() {@|startup_inside_a_repository_without_a_config_is_unchanged
+//MUTANT unanchored-admits-home|s@^    if home.as_deref().is_none_or(\x7chome\x7c home.starts_with(\&root)) {$@    if home.as_deref().is_none() {@|repair_at_home_writes_nothing
+//MUTANT unanchored-rows-run-first|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    if root_authorities(\&root).iter().any(\x7cmember\x7c !startup::delegate(member, repair).ok) { return Ok(ExitCode::Usage); } let (events, written) = wiring::register_root(\&root, !repair)?;@|a_failing_row_leaves_the_registration_and_the_record
+//MUTANT unanchored-bare-writes|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, false)?;@|bare_startup_above_a_checkout_writes_nothing
+//MUTANT unanchored-repair-writes-nothing|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, true)?;@|repair_above_one_checkout_registers_the_root_and_records_its_authority
+//MUTANT unanchored-lines-on-stdout|s@^        writeln!(err, "{registered}")?;$@        writeln!(out, "{registered}")?;@|json_keeps_the_outcomes_on_standard_output
+//MUTANT unanchored-rows-run-at-the-root|s@^        .map(\x7cmember\x7c startup::delegate(member, repair))$@        .map(\x7c_\x7c startup::delegate(\&root, repair))@|each_members_rows_run_in_that_member
+fn run_startup_unanchored(
+    repair: bool,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::canonical(&std::env::current_dir()?);
+    // No resolvable home is refused too: a write whose bound cannot be checked
+    // is the one this arm must never make.
+    let home = std::env::var_os("HOME").map(|home| git::canonical(Path::new(&home)));
+    if home.as_deref().is_none_or(|home| home.starts_with(&root)) {
+        writeln!(
+            err,
+            "startup: {} is the home directory or above it, so nothing is registered there",
+            root.display()
+        )?;
+        report_startup(&[], json, out, err)?;
+        return Ok(ExitCode::Success);
+    }
+    let (events, written) = wiring::register_root(&root, !repair)?;
+    let verb = if written { "registered" } else { "owed" };
+    for event in &events {
+        let registered = format!("startup: claude-code:{event} {verb} at {}", root.display());
+        writeln!(err, "{registered}")?;
+    }
+    let members = root_authorities(&root);
+    if repair && !members.is_empty() {
+        state::record_root_authorities(&root, &members)?;
+    }
+    writeln!(
+        err,
+        "startup: {} authority(ies) {} for {}",
+        members.len(),
+        if repair { "recorded" } else { "found" },
+        root.display()
+    )?;
+    let outcomes: Vec<startup::Outcome> = members
+        .iter()
+        .map(|member| startup::delegate(member, repair))
+        .collect();
+    let failed = report_startup(&outcomes, json, out, err)?;
+    Ok(if failed == 0 && (repair || events.is_empty()) {
+        ExitCode::Success
+    } else {
+        ExitCode::Usage
+    })
+}
+
+/// The authorities around the session root `root`, in the one fixed order: its
+/// immediate children holding a `batten.toml`, sorted by name, then its
+/// ancestors holding one, nearest first (CLOUD-2752).
+///
+/// Each is one known path read once. No subtree is searched: the one-level look
+/// is this verb's alone, by the owner's ruling, and a hook never searches.
+//MUTANT unanchored-picks-one-of-several|s@^    children.sort();$@    children.sort(); children.truncate(1);@|two_checkouts_are_both_recorded
+//MUTANT unanchored-skips-ancestors|s@^    children.extend(ancestors);$@    drop(ancestors);@|a_config_above_the_root_is_recorded
+fn root_authorities(root: &Path) -> Vec<PathBuf> {
+    let mut children: Vec<PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join(config::CONFIG_FILE).is_file())
+        .collect();
+    children.sort();
+    let ancestors = root
+        .ancestors()
+        .skip(1)
+        .filter(|ancestor| ancestor.join(config::CONFIG_FILE).is_file())
+        .map(Path::to_path_buf);
+    children.extend(ancestors);
+    children
+}
+
+/// Render `startup`'s outcomes and return how many failed.
+fn report_startup(
+    outcomes: &[startup::Outcome],
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<usize> {
+    let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&outcomes)?)?;
+    } else {
+        // EVERY ROW, not only the failing ones, and deliberately unlike
+        // `provision status`. A reader running this is asking whether the
+        // container is right, and a silent pass over a row whose check never ran
+        // is indistinguishable from a row that was never declared — which is the
+        // could-not-look-as-clean failure the whole table exists to refuse.
+        output::lines(out, outcomes)?;
+        writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
+        let findings: Vec<refusal::Refusal> = outcomes
+            .iter()
+            .filter_map(startup::Outcome::finding)
+            .collect();
+        print_labelled(err, &findings)?;
+    }
+    Ok(failed)
 }
 
 fn run_provision_status(
@@ -25541,24 +25656,85 @@ static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::
 /// call whose cwd resolves none is judged by the one its session last stood in.
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
+///
+/// **AT A REGISTERED ROOT THE SET `startup` RECORDED DECIDES TOO** (CLOUD-2752),
+/// so a session rooted above its checkouts is judged from its FIRST call, with or
+/// without a session id. One authority is still pinned per call, first match
+/// wins: the directory's own; the member containing the call's raw absolute
+/// `file_path` or `notebook_path`, read before [`settle_envelope`] relativises
+/// it; the authority the session last stood in; the first member. And a call
+/// standing in an authority directly under a registered root that the set does
+/// not yet name adds it — a repository cloned after Setup.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
+//MUTANT session-authority-ignored|s@^    let last_stood = last_stood_in(session);$@    let last_stood = None::<PathBuf>;@|a_call_outside_the_repository_is_judged_by_the_session_authority
+//MUTANT root-set-never-grows|s@^            let _ = state::grow_root_authorities(\&canonical);$@            let _ = \&canonical;@|an_authority_cloned_after_setup_joins_the_set
+//MUTANT root-set-needs-a-session|s@^    let members = state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE)$@    let members = session.and_then(\x7c_\x7c state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE))@|a_call_with_no_session_id_at_a_registered_root_is_judged_and_grows_nothing
+//MUTANT root-key-not-canonical|s@^    let members = state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE)$@    let members = state::recorded_root_authorities(\&here, config::CONFIG_FILE)@|the_record_is_keyed_by_the_canonical_root
+//MUTANT root-authority-ignored|s@^        .filter(\x7cmembers\x7c !members.is_empty());$@        .filter(\x7c_\x7c false);@|a_first_call_at_a_registered_root_is_judged_by_the_recorded_authority
+//MUTANT root-set-ignores-path|s@^    if let Some(member) = member_containing(\&members, envelope) {$@    if let Some(member) = None::<PathBuf> {@|a_call_naming_a_path_in_one_checkout_is_judged_by_that_one
+//MUTANT root-set-unsorted|s@^    if let Some(first) = members.first() {$@    if let Some(first) = members.last() {@|with_two_authorities_the_first_by_name_judges_a_call_with_no_path
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
-    let Some(session) = envelope.session.as_deref() else {
-        return hook_authority_root();
-    };
+    let session = envelope.session.as_deref();
     let here = anchor();
     if here.join(config::CONFIG_FILE).is_file() {
-        let _ = state::record_session_authority(session, &git::canonical(&here));
+        if let Some(session) = session {
+            let canonical = git::canonical(&here);
+            let _ = state::record_session_authority(session, &canonical);
+            let _ = state::grow_root_authorities(&canonical);
+        }
         // Pinned here too, so the readers below do not resolve `anchor` again:
         // a second git spawn on the hottest path for an answer already in hand.
         let _ = HOOK_AUTHORITY_ROOT.set(here);
         return hook_authority_root();
     }
-    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
+    let members = state::recorded_root_authorities(&git::canonical(&here), config::CONFIG_FILE)
+        .filter(|members| !members.is_empty());
+    let last_stood = last_stood_in(session);
+    let Some(members) = members else {
+        if let Some(root) = last_stood {
+            let _ = HOOK_AUTHORITY_ROOT.set(root);
+        }
+        return hook_authority_root();
+    };
+    if let Some(member) = member_containing(&members, envelope) {
+        let _ = HOOK_AUTHORITY_ROOT.set(member);
+        return hook_authority_root();
+    }
+    if let Some(root) = last_stood {
         let _ = HOOK_AUTHORITY_ROOT.set(root);
+        return hook_authority_root();
+    }
+    if let Some(first) = members.first() {
+        let _ = HOOK_AUTHORITY_ROOT.set(first.clone());
     }
     hook_authority_root()
+}
+
+/// The authority the session last stood in, still carrying its config.
+fn last_stood_in(session: Option<&str>) -> Option<PathBuf> {
+    session.and_then(|session| state::recorded_session_authority(session, config::CONFIG_FILE))
+}
+
+/// The member of a registered root's set that contains the call's raw target.
+fn member_containing(members: &[PathBuf], envelope: &hook::Envelope) -> Option<PathBuf> {
+    let target = raw_target(envelope)?;
+    members
+        .iter()
+        .find(|member| target.starts_with(member))
+        .cloned()
+}
+
+/// The call's write target as the host sent it — `file_path`, else
+/// `notebook_path` — when it is absolute, before [`settle_envelope`] makes it
+/// relative (CLOUD-2752).
+fn raw_target(envelope: &hook::Envelope) -> Option<PathBuf> {
+    let raw = envelope
+        .input
+        .get("file_path")
+        .or_else(|| envelope.input.get("notebook_path"))?
+        .as_str()?;
+    let path = Path::new(raw);
+    path.is_absolute().then(|| git::canonical(path))
 }
 
 fn load_policy(
