@@ -1541,18 +1541,37 @@ pub fn collect_toward_max(
 /// build, and is not waited on.
 #[must_use]
 pub fn await_builds(held: &[PathBuf], bound: std::time::Duration) -> bool {
-    let builds: Vec<PathBuf> = held
-        .iter()
-        .filter(|lock| lock.file_name().is_some_and(|name| name == ".cargo-lock"))
-        .cloned()
-        .collect();
-    if builds.is_empty() {
+    await_locks(held, bound, |lock| {
+        lock.file_name().is_some_and(|name| name == ".cargo-lock")
+    })
+}
+
+/// Block until every TREE in `held` is released by the collector holding it,
+/// for at most `bound`; `false` when none is held or the bound passes first.
+///
+/// A held tree is another collector's pass ([`lock_tree`]), never a build, so
+/// waiting is always right: that pass is freeing space. Measured on #1276:
+/// `land replay` refused at 3,864 MB free against 4,096 because the lap's own
+/// disk watcher held both trees, and that same pass then freed 4,746 MB.
+#[must_use]
+pub fn await_collectors(held: &[PathBuf], bound: std::time::Duration) -> bool {
+    await_locks(held, bound, Path::is_dir)
+}
+
+/// Block on the lock of each of `held` that `which` selects, for at most `bound`.
+fn await_locks(
+    held: &[PathBuf],
+    bound: std::time::Duration,
+    which: impl Fn(&Path) -> bool,
+) -> bool {
+    let locks: Vec<PathBuf> = held.iter().filter(|lock| which(lock)).cloned().collect();
+    if locks.is_empty() {
         return false;
     }
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for lock in &builds {
-            if let Ok(file) = std::fs::File::open(lock) {
+        for lock in &locks {
+            if let Ok(file) = crate::durable::open_handle(lock) {
                 let _ = file.lock();
             }
         }
@@ -2372,6 +2391,34 @@ mod tests {
         assert!(super::trees(&repo, &band(None)).is_empty());
         std::fs::create_dir_all(repo.join("target")).expect("mkdir");
         assert_eq!(super::trees(&repo, &band(None)), vec![repo.join("target")]);
+    }
+
+    /// Fails by: a tree another collector holds not waited for, a wait reported
+    /// with nothing held, or one past its bound reported as released.
+    #[test]
+    fn a_tree_another_collector_holds_is_waited_for_within_its_bound() {
+        let tree = scratch("await-collector");
+        std::fs::create_dir_all(&tree).expect("mkdir");
+        let build = tree.join(".cargo-lock");
+        std::fs::write(&build, "").expect("lock file");
+        assert!(!super::await_collectors(
+            &[build],
+            Duration::from_millis(50)
+        ));
+        assert!(!super::await_collectors(&[], Duration::from_millis(50)));
+        let held = super::lock_tree(&tree, false).expect("first holder");
+        let (taken, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _ = released.recv();
+            drop(held);
+        });
+        assert!(
+            !super::await_collectors(std::slice::from_ref(&tree), Duration::from_millis(100)),
+            "a tree still held past the bound"
+        );
+        taken.send(()).expect("release");
+        assert!(super::await_collectors(&[tree], Duration::from_secs(10)));
+        holder.join().expect("holder");
     }
 
     /// Fails by: the schema mirror's build left out of the ranking, so a lap's

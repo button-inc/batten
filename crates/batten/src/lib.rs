@@ -18129,16 +18129,27 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     // lock and the pass was passed over by a build lock, the step blocks on that
     // lock and collects again; past `SINGLETON_WAIT`, or with no such singleton,
     // it refuses as before.
+    //
+    // A TREE ANOTHER COLLECTOR HOLDS IS ALWAYS WAITED FOR: that pass is freeing
+    // space, so refusing beside it reads a collection in flight as a full disk.
+    // Measured on #1276: the lap's own disk watcher held both trees, this step
+    // refused at 3,864 MB against 4,096, and the watcher then freed 4,746 MB.
     let waiting_since = std::time::Instant::now();
     while after < min {
-        let Some(task) = foreign_singleton(root) else {
-            break;
-        };
         let left = SINGLETON_WAIT.saturating_sub(waiting_since.elapsed());
-        if left.is_zero() || !collect::await_builds(&held, left) {
+        if left.is_zero() {
             break;
         }
-        writeln!(err, "{step}: disk-waited {task}")?;
+        let waited = if collect::await_collectors(&held, left) {
+            "a collector".to_owned()
+        } else if let Some(task) = foreign_singleton(root)
+            && collect::await_builds(&held, left)
+        {
+            task
+        } else {
+            break;
+        };
+        writeln!(err, "{step}: disk-waited {waited}")?;
         let Ok(now) = free() else {
             break;
         };
