@@ -163,19 +163,22 @@ pub fn probe(dir: &Path, session: Option<&str>) -> Liveness {
 /// The daemon reads only the file's length, so the line is the session id for
 /// a reader's sake. This is the one call here that creates the directory.
 ///
+/// ONE `write(2)` ON AN `O_APPEND` HANDLE, through `durable`, so two hooks
+/// appending at once never splice their lines. `Atomic`, not `Synced`: this runs
+/// on every tool call, and a line lost to a power cut costs one missed wake-up of
+/// a daemon that also wakes on its own.
+///
 /// # Errors
 ///
 /// The directory or the file will not open or write.
 pub fn message(dir: &Path, session: &str) -> std::io::Result<()> {
-    use std::io::Write as _;
     std::fs::create_dir_all(dir)?;
-    let mut inbox = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(INBOX))?;
-    let mut line = session.replace(['\n', '\r'], " ");
-    line.push('\n');
-    inbox.write_all(line.as_bytes())
+    crate::durable::append_with_mode_as(
+        &dir.join(INBOX),
+        &session.replace(['\n', '\r'], " "),
+        0o600,
+        crate::durable::Persist::Atomic,
+    )
 }
 
 /// The hook's own two lines.

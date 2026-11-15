@@ -516,12 +516,8 @@ fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
 /// gone from under the cursor, which nothing here can put back, and it is
 /// refused aloud: appending would bury the hole under new records.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT closed-segment-rewritten|s@^            .filter(\x7cname\x7c name.ends_with(".jsonl") \&\& position.length < SEGMENT);$@            .filter(\x7cname\x7c name.ends_with(".jsonl"));@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT closed-segment-rewritten|s@^            .filter(\x7cname\x7c extension_is(name, "jsonl") \&\& position.length < SEGMENT);$@            .filter(\x7cname\x7c extension_is(name, "jsonl"));@|the_tree_holds_the_stores_and_the_transcript_in_segments
 //MUTANT oversized-record-replaced-by-a-digest|s@^            for (at, chunk) in piece.chunks(PART).enumerate() {$@            for (at, chunk) in piece.chunks(PART).take(1).enumerate() {@|an_oversized_record_is_cut_into_parts_and_never_replaced
-#[expect(
-    clippy::case_sensitive_file_extension_comparisons,
-    reason = "the names compared are this function's own, written three lines below in lower case"
-)]
 fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8]) -> Result<u64> {
     let generation = dir.join(prefix).join(position.generation.to_string());
     let refused = |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not write: {err}");
@@ -551,7 +547,7 @@ fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8
         let open = position
             .file
             .clone()
-            .filter(|name| name.ends_with(".jsonl") && position.length < SEGMENT);
+            .filter(|name| extension_is(name, "jsonl") && position.length < SEGMENT);
         match open {
             Some(name) if files.last().is_some_and(|(last, _)| *last == name) => {}
             Some(name) => {
@@ -638,11 +634,7 @@ fn git_excluded(entry: &str) -> bool {
 //MUTANT provision-dir-included|s@^            if !state_store(\&entry) \&\& !listed_file(\&relative) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 //MUTANT secret-key-shipped|s@^    "identity",$@    "identity-is-shipped",@|every_state_store_ships_and_the_secret_key_never_does
 //MUTANT state-stores-allow-listed|s@^        \&\& !STATE_EXCLUDED.contains(\&entry)$@        \&\& entry == "captures"@|every_state_store_ships_and_the_secret_key_never_does
-//MUTANT lock-entry-included|s@^            if excluded \x7c\x7c relative.ends_with(".lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
-#[expect(
-    clippy::case_sensitive_file_extension_comparisons,
-    reason = "a lock is named by the code that takes it, always `.lock` in lower case"
-)]
+//MUTANT lock-entry-included|s@^            if excluded \x7c\x7c extension_is(\&relative, "lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     if let Ok(state) = crate::state::repo_state_dir(project_root) {
@@ -652,7 +644,7 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
                 continue;
             }
             // A lock is never content, wherever it sits.
-            if relative.ends_with(".lock") {
+            if extension_is(&relative, "lock") {
                 continue;
             }
             found.push((format!("state/{relative}"), path));
@@ -665,7 +657,7 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
                 continue;
             }
             let excluded = git_excluded(entry);
-            if excluded || relative.ends_with(".lock") {
+            if excluded || extension_is(&relative, "lock") {
                 continue;
             }
             found.push((format!("git/{relative}"), path));
@@ -673,6 +665,13 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
     }
     found.sort();
     found
+}
+
+/// Whether the file `name` has the extension `extension`, in any case.
+fn extension_is(name: &str, extension: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
 }
 
 /// The size of every local segment file that is not in the last snapshot's
@@ -727,7 +726,7 @@ fn pending_bytes(dir: &Path, last: &BTreeMap<String, String>) -> u64 {
 //MUTANT cursor-entry-written-after-the-first-append|s@^    persist(\&dir, \&cursors)?; // every feed has its entry before any append$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
 //MUTANT unread-feed-has-no-cursor-entry|s@^        cursors.entry(feed.prefix.clone()).or_default();$@@|a_feed_the_cap_never_reached_still_has_a_cursor_entry
 //MUTANT cap-ignores-pending-bytes|s@^    let pending = pending_bytes(\&dir, \&last);$@    let pending = 0;@|the_byte_cap_counts_what_an_unapplied_push_left_waiting
-//MUTANT crash-tail-kept-and-reread|s@^        recover(\&dir, \&feed.prefix, \&position)?;$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
+//MUTANT crash-tail-kept-and-reread|s@^        recover(dir, \&feed.prefix, \&position)?;$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
 //MUTANT replaced-source-overwrites-its-generation|s@^                    position.generation += 1;$@@|a_replaced_source_starts_a_new_generation
 //MUTANT second-snapshot-drops-a-path|s@^        if appended \x7c\x7c absent_store {$@        if absent_store {@|a_second_snapshot_holds_everything_the_first_did
 //MUTANT locally-deleted-store-dropped|s@^        if appended \x7c\x7c absent_store {$@        if appended {@|a_store_deleted_locally_is_carried_forward_whole
@@ -823,7 +822,6 @@ fn heal(
 /// every path out — a refusal and an error as much as a build.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
 //MUTANT appended-file-named-by-the-last-tree|s@^            let id = gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)?;$@            let id = match last.get(\&format!("{root}/{relative}")) { Some(id) => id.clone(), None => gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)? };@|every_snapshot_holds_the_source_whole_whatever_closed_in_between
-#[allow(clippy::too_many_lines)]
 fn build(
     project_root: &Path,
     provisions: &[crate::provision::Provision],
@@ -891,68 +889,19 @@ fn build(
     heal(&dir, repo, &cursors, (last_commit.as_deref(), &last))?;
 
     let pending = pending_bytes(&dir, &last);
-    let mut added = 0_u64;
-    let mut ended = Vec::new();
-    for feed in feeds {
-        if pending + added >= byte_cap {
-            // The cap is spent: a feed not reached keeps the entry it was given.
-            break;
-        }
-        let mut position = cursors.get(&feed.prefix).cloned().unwrap_or_default();
-        recover(&dir, &feed.prefix, &position)?;
-        while pending + added < byte_cap {
-            let room = (byte_cap - pending - added).min(READ);
-            let batch = feed
-                .source
-                .read(&feed.session, &Cursor(unhex(&position.cursor)), room)?;
-            match batch.fidelity {
-                Fidelity::Unavailable(token) => {
-                    position.fidelity = Some(token.to_owned());
-                    break;
-                }
-                Fidelity::Partial(token) if token == REPLACED => {
-                    // A NEW DIRECTORY, AND THE OLD ONE STAYS: what was read
-                    // from the file that is gone is still the session's.
-                    position.generation += 1;
-                    position.cursor = hex(&batch.cursor.0);
-                    position.file = None;
-                    position.length = 0;
-                    position.fidelity = None;
-                    cursors.insert(feed.prefix.clone(), position.clone());
-                    persist(&dir, &cursors)?;
-                    continue;
-                }
-                Fidelity::Partial(token) => position.fidelity = Some(token.to_owned()),
-                Fidelity::Full => position.fidelity = None,
-            }
-            if batch.records.is_empty() {
-                if batch.fidelity == Fidelity::Full {
-                    ended.push(feed.prefix.clone());
-                }
-                break;
-            }
-            // REDACTED WHOLE, BEFORE IT IS CUT, so a span cannot straddle two
-            // files unseen.
-            let mut stream = Vec::new();
-            for record in &batch.records {
-                stream.extend_from_slice(&record.bytes);
-                stream.push(b'\n');
-            }
-            crate::durable::replace(staging.join(INCOMING), &stream).map_err(unwritten)?;
-            match scrub(provisions, project_root, staging, &[String::from(INCOMING)]) {
-                Ok(spans) => spans_redacted += spans,
-                Err(refusal) => return Ok(Snapshot::Refused(refusal)),
-            }
-            let redacted = std::fs::read(staging.join(INCOMING)).map_err(unread)?;
-            // APPENDED FIRST, THE CURSOR REPLACED AFTER: a kill between the two
-            // leaves bytes `recover` cuts, never a cursor past what is stored.
-            added += append_stream(&dir, &feed.prefix, &mut position, &redacted)?;
-            position.cursor = hex(&batch.cursor.0);
-            cursors.insert(feed.prefix.clone(), position.clone());
-            persist(&dir, &cursors)?;
-        }
-        cursors.insert(feed.prefix.clone(), position);
-    }
+    let read = read_feeds(
+        (project_root, provisions),
+        feeds,
+        (&dir, staging),
+        &mut cursors,
+        (pending, byte_cap),
+        (unwritten, unread),
+    )?;
+    let (added, ended, spans) = match read {
+        Ok(read) => read,
+        Err(refusal) => return Ok(Snapshot::Refused(refusal)),
+    };
+    spans_redacted += spans;
     persist(&dir, &cursors)?;
     entries.insert(
         String::from(CURSORS),
@@ -978,11 +927,119 @@ fn build(
             entries.insert(format!("{root}/{relative}"), Content::Blob(id));
         }
     }
+    carry_forward(
+        &mut entries,
+        &dir,
+        (last_commit.as_deref(), &last),
+        &local_stores,
+    );
 
-    // CARRIED FORWARD. Per file for the appended roots; per STORE for the rest,
-    // and only for a store that is absent locally altogether.
-    for (path, id) in &last {
-        if entries.contains_key(path) || foreign(&dir, last_commit.as_deref(), path) {
+    let listed: Vec<(String, Content)> = entries.into_iter().collect();
+    let (commit, tree) = gitwrite::commit_tree(repo, &listed, &[], time, "snapshot")?;
+    Ok(Snapshot::Built {
+        commit,
+        tree,
+        new_bytes: added,
+        spans_redacted,
+        ended,
+    })
+}
+
+/// What [`read_feeds`] came to: the record bytes it appended, the feeds whose
+/// last read returned no further record, and the spans the scanner redacted.
+type FeedsRead = (u64, Vec<String>, usize);
+
+/// Read each feed into its segment files until the push's byte cap is spent,
+/// redacting every batch before a byte of it is appended. The scanner's
+/// refusal comes back as the inner `Err`, with nothing past it appended.
+fn read_feeds(
+    (project_root, provisions): (&Path, &[crate::provision::Provision]),
+    feeds: &[Feed<'_>],
+    (dir, staging): (&Path, &Path),
+    cursors: &mut Cursors,
+    (pending, byte_cap): (u64, u64),
+    (unwritten, unread): (
+        &dyn Fn(std::io::Error) -> anyhow::Error,
+        &dyn Fn(std::io::Error) -> anyhow::Error,
+    ),
+) -> Result<std::result::Result<FeedsRead, Refusal>> {
+    let mut added = 0_u64;
+    let mut ended = Vec::new();
+    let mut spans_redacted = 0_usize;
+    for feed in feeds {
+        if pending + added >= byte_cap {
+            // The cap is spent: a feed not reached keeps the entry it was given.
+            break;
+        }
+        let mut position = cursors.get(&feed.prefix).cloned().unwrap_or_default();
+        recover(dir, &feed.prefix, &position)?;
+        while pending + added < byte_cap {
+            let room = (byte_cap - pending - added).min(READ);
+            let batch = feed
+                .source
+                .read(&feed.session, &Cursor(unhex(&position.cursor)), room)?;
+            match batch.fidelity {
+                Fidelity::Unavailable(token) => {
+                    position.fidelity = Some(token.to_owned());
+                    break;
+                }
+                Fidelity::Partial(token) if token == REPLACED => {
+                    // A NEW DIRECTORY, AND THE OLD ONE STAYS: what was read
+                    // from the file that is gone is still the session's.
+                    position.generation += 1;
+                    position.cursor = hex(&batch.cursor.0);
+                    position.file = None;
+                    position.length = 0;
+                    position.fidelity = None;
+                    cursors.insert(feed.prefix.clone(), position.clone());
+                    persist(dir, cursors)?;
+                    continue;
+                }
+                Fidelity::Partial(token) => position.fidelity = Some(token.to_owned()),
+                Fidelity::Full => position.fidelity = None,
+            }
+            if batch.records.is_empty() {
+                if batch.fidelity == Fidelity::Full {
+                    ended.push(feed.prefix.clone());
+                }
+                break;
+            }
+            // REDACTED WHOLE, BEFORE IT IS CUT, so a span cannot straddle two
+            // files unseen.
+            let mut stream = Vec::new();
+            for record in &batch.records {
+                stream.extend_from_slice(&record.bytes);
+                stream.push(b'\n');
+            }
+            crate::durable::replace(staging.join(INCOMING), &stream).map_err(unwritten)?;
+            match scrub(provisions, project_root, staging, &[String::from(INCOMING)]) {
+                Ok(spans) => spans_redacted += spans,
+                Err(refusal) => return Ok(Err(refusal)),
+            }
+            let redacted = std::fs::read(staging.join(INCOMING)).map_err(unread)?;
+            // APPENDED FIRST, THE CURSOR REPLACED AFTER: a kill between the two
+            // leaves bytes `recover` cuts, never a cursor past what is stored.
+            added += append_stream(dir, &feed.prefix, &mut position, &redacted)?;
+            position.cursor = hex(&batch.cursor.0);
+            cursors.insert(feed.prefix.clone(), position.clone());
+            persist(dir, cursors)?;
+        }
+        cursors.insert(feed.prefix.clone(), position);
+    }
+    Ok(Ok((added, ended, spans_redacted)))
+}
+
+/// CARRIED FORWARD into `entries` from the last snapshot's tree. Per file for
+/// the appended roots; per STORE for the rest, and only for a store that is
+/// absent locally altogether.
+fn carry_forward(
+    entries: &mut BTreeMap<String, Content>,
+    dir: &Path,
+    (last_commit, last): (Option<&str>, &BTreeMap<String, String>),
+    local_stores: &BTreeSet<String>,
+) {
+    for (path, id) in last {
+        if entries.contains_key(path) || foreign(dir, last_commit, path) {
             continue;
         }
         let appended = APPENDED
@@ -994,16 +1051,6 @@ fn build(
             entries.insert(path.clone(), Content::Blob(id.clone()));
         }
     }
-
-    let listed: Vec<(String, Content)> = entries.into_iter().collect();
-    let (commit, tree) = gitwrite::commit_tree(repo, &listed, &[], time, "snapshot")?;
-    Ok(Snapshot::Built {
-        commit,
-        tree,
-        new_bytes: added,
-        spans_redacted,
-        ended,
-    })
 }
 
 // --- the push (CLOUD-2720) -----------------------------------------------------
@@ -3481,7 +3528,8 @@ mod tests {
 /// Each writer is a real project repository with its own state directory, its
 /// own stores and its own transcript file; the remote is `lease`'s stand-in,
 /// which keeps what a push sends and serves it back to a shallow fetch.
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod push_tests {
     use super::*;

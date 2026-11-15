@@ -22,7 +22,7 @@ use batten::offbox::{self, Feed, Meta, Refusal, Snapshot};
 use batten::provision::digest;
 use batten::sessions::{Batch, Cursor, JsonlFile, SessionRef, SessionSource};
 
-use crate::common::{self, Fixture, batten, git_in, scratch};
+use crate::common::{self, Fixture, batten, scratch};
 
 const TOKEN_PARTS: [&str; 5] = ["AKIA", "7QF2", "NX8M", "3JD5", "W0PC"];
 const MIB: usize = 1024 * 1024;
@@ -75,10 +75,9 @@ impl Rig {
         let root = scratch(name);
         let repo = Fixture::at(root.join("repo"))
             .file("README.md", "base\n")
+            .git()
+            .base_commit()
             .build();
-        git_in(&repo, &["init", "-q"]);
-        git_in(&repo, &["add", "-A"]);
-        git_in(&repo, &["commit", "-q", "-m", "base"]);
         let repo = repo.canonicalize().unwrap();
         let state = batten::state::repo_state_dir(&repo).unwrap();
         let sources = root.join("sources");
