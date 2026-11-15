@@ -9138,6 +9138,22 @@ mod tests {
         assert!(!data_channel_for("no such path"));
     }
 
+    /// `mcp wait` takes one argument object per subject, so its `params`
+    /// positional repeats; a single `Str` would keep only the last subject.
+    #[test]
+    fn mcp_wait_takes_every_subject() {
+        let wait = SURFACE
+            .iter()
+            .find(|decl| decl.path == "mcp wait")
+            .expect("mcp wait is declared");
+        let params = wait
+            .flags
+            .iter()
+            .find(|flag| flag.id == "params")
+            .expect("params is declared");
+        assert!(matches!(params.value, ValueDecl::StrMany), "{params:?}");
+    }
+
     #[test]
     fn a_noun_has_children_and_no_answer_of_its_own() {
         let row = |path: &str| SURFACE.iter().find(|decl| decl.path == path).expect(path);

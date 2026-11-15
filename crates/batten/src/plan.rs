@@ -608,3 +608,202 @@ pub fn record_ids(text: &str) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    //! The grammar's boundaries, each decided here rather than through the
+    //! binary: the `plan_lint` suite reaches them only where a whole plan
+    //! happens to sit on one.
+    use super::*;
+
+    fn table(sections: &[&str]) -> PlanTable {
+        PlanTable {
+            sections: sections.iter().map(|name| (*name).to_owned()).collect(),
+            verdict: String::from("verdict: executable"),
+            requires: None,
+        }
+    }
+
+    /// A directory of its own under the temp dir, emptied first.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("batten-plan-tests-{}", std::process::id()))
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn clauses(text: &str, record: &[&str]) -> Vec<String> {
+        let root = scratch("clauses");
+        lint(
+            text,
+            &Inputs {
+                table: &table(&["Acceptance", "Steps", "Validation"]),
+                root: &root,
+                record: Some(record.iter().map(|id| (*id).to_owned()).collect()),
+                prerequisite: true,
+            },
+        )
+        .into_iter()
+        .map(|finding| finding.clause)
+        .collect()
+    }
+
+    #[test]
+    fn three_or_more_distinct_sections_are_a_table() {
+        assert!(partial(&table(&["A", "B"])));
+        assert!(!partial(&table(&["A", "B", "C"])));
+        assert!(!partial(&table(&["A", "B", "C", "D"])));
+        assert!(partial(&table(&["A", "C", "C"])));
+    }
+
+    #[test]
+    fn either_fence_spelling_hides_its_block() {
+        for fence in ["```", "~~~"] {
+            let text = format!("a\n{fence}\nb\n{fence}\nc");
+            assert_eq!(unfenced(&text), vec![(1, "a"), (5, "c")], "{fence}");
+        }
+    }
+
+    #[test]
+    fn a_heading_needs_its_space() {
+        assert_eq!(heading("## Steps"), Some((2, "Steps")));
+        assert_eq!(heading("#Steps"), None);
+        assert_eq!(heading("####### Steps"), None);
+    }
+
+    #[test]
+    fn a_numbered_list_line_needs_its_number() {
+        assert_eq!(list_text("1. a"), Some("a"));
+        assert_eq!(list_text("12) b"), Some("b"));
+        assert_eq!(list_text(". c"), None);
+        assert_eq!(list_text("- d"), Some("d"));
+    }
+
+    #[test]
+    fn an_id_is_its_prefix_and_digits_only() {
+        assert!(is_id("S1", 'S'));
+        assert!(!is_id("S", 'S'));
+        assert!(!is_id("S1a", 'S'));
+        assert!(!is_id("A1", 'S'));
+    }
+
+    #[test]
+    fn every_pointer_on_a_line_is_counted() {
+        let root = scratch("every-pointer");
+        assert_eq!(dead_pointers("see `a.rs:1` and `b.rs:2` too", &root), 2);
+        assert_eq!(dead_pointers("`a.rs:1`", &root), 1);
+    }
+
+    #[test]
+    fn only_a_path_and_a_line_is_a_pointer() {
+        let root = scratch("pointer-shape");
+        std::fs::write(root.join("here.rs"), "one\ntwo\n").unwrap();
+        assert!(!pointer_is_dead(":5", &root), "no path");
+        assert!(!pointer_is_dead("a b:5", &root), "a path with a space");
+        assert!(!pointer_is_dead("here.rs:", &root), "no line");
+        assert!(!pointer_is_dead("here.rs:2", &root));
+        assert!(pointer_is_dead("here.rs:3", &root), "past the end");
+        assert!(pointer_is_dead("here.rs:0", &root), "line zero");
+    }
+
+    #[test]
+    fn a_pointer_out_of_the_tree_is_dead_even_when_it_resolves() {
+        let root = scratch("escape");
+        let inner = root.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(root.join("outside.rs"), "one\n").unwrap();
+        assert!(pointer_is_dead("../outside.rs:1", &inner), "a parent hop");
+        let absolute = root.join("outside.rs");
+        assert!(
+            pointer_is_dead(&format!("{}:1", absolute.display()), &inner),
+            "an absolute path"
+        );
+    }
+
+    #[test]
+    fn none_is_the_single_line_none() {
+        let none = Section {
+            heading: 1,
+            body: vec![(2, ""), (3, "none"), (4, " ")],
+        };
+        let other = Section {
+            heading: 1,
+            body: vec![(2, "none"), (3, "more")],
+        };
+        assert!(none.is_none());
+        assert!(!other.is_none());
+    }
+
+    #[test]
+    fn a_section_ends_at_a_heading_no_deeper_than_its_own() {
+        let text = "## A\n- x\n### deeper\n## Extra\n- y\n## B\nb\n## C\nc\n";
+        let lines = unfenced(text);
+        let located = sections(&lines, &table(&["A", "B", "C"]).sections);
+        let Some(Ok(first)) = located.first() else {
+            panic!("A is found");
+        };
+        assert_eq!(first.body, vec![(2, "- x"), (3, "### deeper")]);
+    }
+
+    #[test]
+    fn a_heading_answers_one_declared_section() {
+        let text = "## X\nbody\n## V\nverdict: executable\n";
+        let lines = unfenced(text);
+        let located = sections(&lines, &table(&["X", "X", "V"]).sections);
+        assert!(located[0].is_ok());
+        assert!(
+            located[1].is_err(),
+            "the second X is not the first one again"
+        );
+    }
+
+    #[test]
+    fn a_section_found_out_of_order_is_missing() {
+        let text = "## B\nb\n## A\na\n## C\nc\n";
+        let lines = unfenced(text);
+        let located = sections(&lines, &table(&["A", "B", "C"]).sections);
+        assert!(located[0].is_ok());
+        assert!(located[1].is_err(), "B before A reads as missing");
+    }
+
+    #[test]
+    fn the_trivial_form_needs_both_sections_none() {
+        let text =
+            "## Acceptance\nnone\n## Steps\n- S1 do it (A1)\n## Validation\nverdict: executable\n";
+        assert!(clauses(text, &[]).contains(&String::from("step-unrecorded")));
+    }
+
+    #[test]
+    fn an_items_section_with_no_item_is_missing() {
+        let text =
+            "## Acceptance\n- no id here\n## Steps\nnone\n## Validation\nverdict: executable\n";
+        assert!(clauses(text, &[]).contains(&String::from("section-missing 1")));
+    }
+
+    #[test]
+    fn a_step_is_recorded_when_its_id_is_in_the_record() {
+        let text = "## Acceptance\n- A1 one\n## Steps\n- S1 do it (A1)\n## Validation\nverdict: executable\n";
+        assert_eq!(clauses(text, &["S1"]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_validation_heading_itself_is_not_judged() {
+        let root = scratch("validation-heading");
+        let named = "V `gone.rs:1`";
+        let text =
+            format!("## A\n- A1 one\n## S\n- S1 do it (A1)\n## {named}\nverdict: executable\n");
+        let findings = lint(
+            &text,
+            &Inputs {
+                table: &table(&["A", "S", named]),
+                root: &root,
+                record: Some(vec![String::from("S1")]),
+                prerequisite: true,
+            },
+        );
+        assert_eq!(findings, Vec::new());
+    }
+}

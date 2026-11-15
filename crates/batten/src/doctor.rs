@@ -3371,6 +3371,21 @@ mod tests {
 
     use super::*;
 
+    /// Only a STRICT ancestor's surface is read: the directory itself, or a root
+    /// beside it, owes nothing however bare its surface is.
+    #[test]
+    fn only_a_root_strictly_above_the_directory_is_read() {
+        let base = crate::scratch::scratch("doctor-root-unregistered");
+        let dir = base.join("clone");
+        let beside = base.join("beside");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&beside).unwrap();
+        assert!(!root_unregistered(Some(base.clone()), &dir).is_empty());
+        assert!(root_unregistered(Some(dir.clone()), &dir).is_empty());
+        assert!(root_unregistered(Some(beside), &dir).is_empty());
+        assert!(root_unregistered(None, &dir).is_empty());
+    }
+
     /// CLOUD-1728. `COMMIT_HOOKS` stays the runtime authority for which git
     /// hooks batten links; the declared git vocabulary must register exactly
     /// those, read through the public accessor every consumer reaches.
