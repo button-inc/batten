@@ -19981,10 +19981,7 @@ fn dispatch_envelope(
             Err(code) => return Ok(HookDispatch::undenied(code)),
         }
     } else {
-        (
-            (hook::Policy::declaring_nothing(harness), Vec::new(), None),
-            false,
-        )
+        (nothing_to_judge(harness), false)
     };
     // THE DISK COLLECTOR, BEFORE THE VERDICT (CLOUD-2197): one free-space read
     // above the declared minimum; below it, a bounded collection, then admit.
@@ -20114,15 +20111,7 @@ fn dispatch_envelope(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    //
-    // NOT ON THE FLOOR (#1276): see `hook_config_or_floor` for why a floored
-    // call's handlers are not consulted.
-    let handled = if floored {
-        None
-    } else {
-        config_write_breaks(&envelope, overrides, harness)
-            .or_else(|| dispatch_handlers(&envelope, raw, overrides, &mut advice))
-    };
+    let handled = handle_unless_floored(floored, harness, &envelope, raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -20781,6 +20770,31 @@ fn hook_config_or_floor(
             }
         }
     }
+}
+
+/// The config a call nothing could judge runs under: no rules, no waivers, no
+/// collector. Not the floor — nothing faulted, there was simply nothing to load.
+fn nothing_to_judge(harness: hook::Harness) -> HookConfig {
+    (hook::Policy::declaring_nothing(harness), Vec::new(), None)
+}
+
+/// The decision forced before `decide`, if any: the unloadable-write gate,
+/// then the declared handlers. **Neither on the floor** (#1276): see
+/// [`hook_config_or_floor`] for why a floored call consults no handler, and a
+/// floored call has no loaded config a next text could be judged against.
+fn handle_unless_floored(
+    floored: bool,
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    raw: &str,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) -> Option<hook::Decision> {
+    if floored {
+        return None;
+    }
+    config_write_breaks(envelope, overrides, harness)
+        .or_else(|| dispatch_handlers(envelope, raw, overrides, advice))
 }
 
 /// The id a write that would leave the config unloadable is refused under.
