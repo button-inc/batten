@@ -496,6 +496,13 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// The branch's plan, checked before the first edit (CLOUD-2766).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Plan {
+        /// The sub-verb selected.
+        command: PlanCommand,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -1107,6 +1114,16 @@ pub enum ReadyCommand {
         /// Emit the findings on the structured channel.
         json: bool,
     },
+}
+
+/// Subcommands of `plan` (CLOUD-2766).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlanCommand {
+    /// Judge the branch's plan and, on a pass, write its receipt.
+    Lint,
+    /// Print where the branch's plan file is.
+    Path,
 }
 
 /// Subcommands of `claim`.
@@ -3259,6 +3276,14 @@ fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
     }
 }
 
+fn plan_of(matches: &ArgMatches) -> Option<PlanCommand> {
+    match matches.subcommand()? {
+        ("lint", _) => Some(PlanCommand::Lint),
+        ("path", _) => Some(PlanCommand::Path),
+        _ => None,
+    }
+}
+
 fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(ClaimCommand::Check {
@@ -3993,6 +4018,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "mutate" => mutate_of(matches).map(|command| Command::Mutate { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
+        "plan" => plan_of(matches).map(|command| Command::Plan { command }),
         "landed" => landed_of(matches).map(|command| Command::Landed { command }),
         "hk" => hk_of(matches).map(|command| Command::Hk { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),

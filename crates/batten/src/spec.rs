@@ -672,6 +672,10 @@ mod tests {
                 // opens no file and spawns nothing — it reads records on stdin and
                 // decides a ratio.
                 "perf compare".to_owned(),
+                // CLOUD-2766: the path verb alone, never the noun or `lint`,
+                // which appends a receipt. It resolves a branch and prints a
+                // path, and creates nothing.
+                "plan path".to_owned(),
                 // The `policy` noun is on the list with its verbs, unlike
                 // `receipt`: every verb in its §2 subtree is read, so there is
                 // no write for the noun row to smuggle on (CLOUD-50).
@@ -1158,6 +1162,10 @@ mod tests {
             // The series, retired out of `mise-tasks/perf-record.sh`. Not
             // read-only either: it writes a note on `refs/notes/perf`.
             "perf record".to_owned(),
+            // CLOUD-2766: the plan checked before the first edit.
+            "plan".to_owned(),
+            "plan lint".to_owned(),
+            "plan path".to_owned(),
             "policy".to_owned(),
             "policy budget".to_owned(),
             "policy explain".to_owned(),

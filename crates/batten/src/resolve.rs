@@ -733,6 +733,10 @@ pub struct Resolved {
     /// states.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<crate::stop::StopTable>,
+    /// The `[plan]` table (CLOUD-2766), from the committed authority alone:
+    /// nothing in it is a threshold a local layer may raise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::plan::PlanTable>,
     /// Where a harness keeps its MCP wiring and what a method's reduction is
     /// (CLOUD-1260), as the authority states it.
     ///
@@ -1823,6 +1827,7 @@ fn assemble(
         prune: repo.prune.clone(),
         task: repo.task.clone(),
         stop: repo.stop.clone(),
+        plan: repo.plan.clone(),
         mcp: repo.mcp.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),

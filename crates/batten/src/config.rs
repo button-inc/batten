@@ -657,6 +657,11 @@ pub struct Config {
     /// no live holder. Absent holds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<crate::stop::StopTable>,
+    /// What a branch's plan must carry before `batten plan lint` writes its
+    /// receipt (CLOUD-2766). Absent, `plan lint` is a usage error: there is
+    /// nothing to judge a plan against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::plan::PlanTable>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -3042,6 +3047,12 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
         Native::StartupTableRefused,
         crate::startup::validate(&config.startup),
     )?;
+    // A `[plan]` table no plan could satisfy is a gate that never opens; it is
+    // refused here, where the key is named (CLOUD-2766).
+    under(
+        Native::PlanDeclarePartial,
+        crate::plan::validate(config.plan.as_ref()),
+    )?;
     // LAST, after every table validator, so a multi-fault config still reports
     // its table's class first. Working tree only: a config read from a git ref is
     // COMPARED, and a consumer shrinking an over-cap row compares against a base
@@ -4988,6 +4999,9 @@ impl Config {
             strictness: None,
             fail_on_warning: None,
             update_notice: None,
+            // Declaring nothing declares no plan shape, so `plan lint` has
+            // nothing to judge against and refuses as a usage error.
+            plan: None,
             rules: Vec::new(),
             patterns: Vec::new(),
             traversals: Vec::new(),
@@ -6390,6 +6404,9 @@ mod tests {
         ),
         // Not a table: a census over every table's prose, run last (CLOUD-1642).
         ("meter_text(config)", Native::ProseColumnRefused),
+        // A single table, not a `Vec`, so the per-field census above cannot
+        // reach it (CLOUD-2766).
+        ("crate::plan::validate(", Native::PlanDeclarePartial),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

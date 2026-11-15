@@ -35,6 +35,13 @@ use common::Fixture;
 /// design.
 const FAULTS: &[(&str, &str, &str)] = &[
     (
+        // CLOUD-2766. Two sections can never hold the items, the steps and the
+        // validation section, so no plan could ever pass the table.
+        "plan declare partial",
+        "plan",
+        "version = 1\n[plan]\nsections = [\"Acceptance\", \"Steps\"]\nverdict = \"v\"\n",
+    ),
+    (
         "verb declare refused",
         "verb",
         "version = 1\n\

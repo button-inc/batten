@@ -2897,6 +2897,34 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "plan",
+      "id": "plan",
+      "about": "Whether the branch's plan has the shape a checked plan has",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "plan lint",
+          "id": "plan.lint",
+          "about": "Refuse a branch plan that fails a checkable clause, or write its receipt",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "plan path",
+          "id": "plan.path",
+          "about": "Print where this branch's plan file is, creating nothing",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "policy",
       "id": "policy",
       "about": "Inspect the thresholds and path sets this repository holds itself to",
@@ -5650,6 +5678,10 @@ expression: stdout_of(&output)
     {
       "id": "perf.compare",
       "path": "perf compare"
+    },
+    {
+      "id": "plan.path",
+      "path": "plan path"
     },
     {
       "id": "policy",

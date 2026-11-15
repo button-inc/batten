@@ -362,6 +362,17 @@
         }
       ]
     },
+    "plan": {
+      "description": "What a branch's plan must carry before `batten plan lint` writes its\nreceipt (CLOUD-2766). Absent, `plan lint` is a usage error: there is\nnothing to judge a plan against.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanTable"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "program": {
       "description": "The programs a `[[recorder]]` may run, by id.\n\nNamed rather than inline so one program has one spelling, which is\n`[[pattern]]`'s rule one layer over — and so `validate` can refuse a\nrecorder naming a program nothing declares instead of leaving a column\nthat renders could-not-look forever.",
       "type": "object",
@@ -3779,6 +3790,38 @@
       "required": [
         "id",
         "hook"
+      ]
+    },
+    "PlanTable": {
+      "description": "The `[plan]` table: what a plan must carry. No defaults, and no heading text\nor skill name in the engine (rule 1).",
+      "type": "object",
+      "properties": {
+        "requires": {
+          "description": "A receipt that must exist for the branch before the lint can pass, and is\nconsumed by a pass.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "sections": {
+          "description": "The headings a plan must carry, in order. The first lists the acceptance\nitems, the second the steps, the last holds the validator's reply.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "verdict": {
+          "description": "The exact line the last section must contain.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sections",
+        "verdict"
       ]
     },
     "Probe": {
