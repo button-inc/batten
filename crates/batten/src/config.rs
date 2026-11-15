@@ -1856,6 +1856,12 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
         Native::StartupTableRefused,
         crate::config_check::startup::validate(&config.startup),
     )?;
+    // A `[plan]` table no plan could satisfy is a gate that never opens; it is
+    // refused here, where the key is named (CLOUD-2766).
+    under(
+        Native::PlanDeclarePartial,
+        crate::plan::validate(config.plan.as_ref()),
+    )?;
     // LAST, after every table validator, so a multi-fault config still reports
     // its table's class first. Working tree only: a config read from a git ref is
     // COMPARED, and a consumer shrinking an over-cap row compares against a base
@@ -4994,6 +5000,9 @@ mod tests {
         ),
         // Not a table: a census over every table's prose, run last (CLOUD-1642).
         ("meter_text(config)", Native::ProseColumnRefused),
+        // A single table, not a `Vec`, so the per-field census above cannot
+        // reach it (CLOUD-2766).
+        ("crate::plan::validate(", Native::PlanDeclarePartial),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

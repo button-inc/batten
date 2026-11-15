@@ -76,7 +76,7 @@ declared_modules := {
 	# (CLOUD-2790) resolves a path to its defining site for `test replay`.
 	"config_model", "preset_catalog", "surface_table", "config_check", "item_index",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
-	"output", "pattern", "policy", "prompt_cache", "provision", "receipt", "redirect", "refusal",
+	"output", "pattern", "plan", "policy", "prompt_cache", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
 	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",

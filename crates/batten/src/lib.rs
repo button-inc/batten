@@ -151,6 +151,7 @@ pub use batten_base::pattern;
 pub mod perf;
 pub mod pinned;
 pub mod pipeline;
+pub mod plan;
 pub mod policy;
 pub use batten_base::preflight;
 pub use batten_core::pr_watch;
@@ -510,6 +511,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the payload the caller supplies — or, under `--issue`, the one the
         // engine already captured, which is the whole point of the row.
         Some(Command::Ready { command }) => run_ready(command, mode, &overrides, out, err),
+        Some(Command::Plan { command }) => run_plan_verb(&command, mode, &overrides, out, err),
         // The board sweep (CLOUD-186, CLOUD-1127). Judges a payload rather than
         // a tree, so it takes no config chain and no root: the evidence is what
         // the caller supplies, and the verdict is the predicate's alone.
@@ -8628,6 +8630,58 @@ fn run_claim(
         ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Race => run_claim_race(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Carry { json } => run_claim_carry(Path::new("."), mode, json, out, err),
+    }
+}
+
+/// `batten plan lint` and `batten plan path` (CLOUD-2766).
+///
+/// `lint` prints each finding in the grammar `ready lint` uses — `plan grade
+/// refused at <plan>:<line> <clause>` — and nothing the plan says (rule 4). It
+/// exits 2 on findings and writes nothing; 0 when it appended the receipt; 1
+/// with no `[plan]` table or on a detached HEAD.
+///
+/// # Errors
+///
+/// [`UsageError`] when no `[plan]` table is declared, outside a repository or on
+/// a detached HEAD.
+fn run_plan_verb(
+    command: &cli::PlanCommand,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    match command {
+        cli::PlanCommand::Path => {
+            let (git_dir, branch) = plan::keyed(root)?;
+            let git_dir = git::canonical(&git_dir);
+            writeln!(out, "{}", plan::path(&git_dir, &branch).display())?;
+            Ok(ExitCode::Success)
+        }
+        cli::PlanCommand::Lint => {
+            let config = resolve::resolve(root, overrides)?;
+            let ran = plan::run_lint(root, config.plan.as_ref())?;
+            for finding in &ran.findings {
+                let refused = refusal::Refusal::engine(
+                    verdict::Native::PlanGradeRefused,
+                    &[verdict::artifact(&format!(
+                        "{}:{} {}",
+                        ran.plan.display(),
+                        finding.line,
+                        finding.clause
+                    ))],
+                    refusal::Fix::None,
+                );
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    &refused.render_finding(refusal::Arm::Full),
+                )?;
+            }
+            Ok(ExitCode::verdict(!ran.findings.is_empty()))
+        }
     }
 }
 

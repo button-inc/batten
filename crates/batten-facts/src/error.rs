@@ -498,6 +498,15 @@ pub enum Native by id {
     /// A call reached a repository other than its session's home, where the
     /// home arms the reach gate (CLOUD-2672). Appended last, as above.
     CallReachLoose => "call reach loose",
+    /// `plan lint` refused the branch's plan: a section, a step, an item, a
+    /// pointer, the verdict line or the prerequisite (CLOUD-2766).
+    ///
+    /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
+    PlanGradeRefused => "plan grade refused",
+    /// A `[plan]` table that cannot describe a plan: fewer than three sections,
+    /// or the validation section among the first two (CLOUD-2766). A config
+    /// fault, so it is in [`Native::CONFIG_FAULTS`].
+    PlanDeclarePartial => "plan declare partial",
 }
 }
 
@@ -537,5 +546,6 @@ impl Native {
         Native::StepTableRefused,
         Native::ProseColumnRefused,
         Native::RegisterTableRefused,
+        Native::PlanDeclarePartial,
     ];
 }

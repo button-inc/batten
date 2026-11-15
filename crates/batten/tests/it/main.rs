@@ -334,6 +334,7 @@ mod pinned_programs;
 mod pipefail_grep;
 mod pipeline_shapes;
 mod plan_complete;
+mod plan_lint;
 mod pointer_only;
 mod policy_cache;
 mod policy_engine_count;

@@ -635,6 +635,11 @@ pub struct Config {
     /// no live holder. Absent holds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<crate::stop::StopTable>,
+    /// What a branch's plan must carry before `batten plan lint` writes its
+    /// receipt (CLOUD-2766). Absent, `plan lint` is a usage error: there is
+    /// nothing to judge a plan against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::plan::PlanTable>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -812,6 +817,9 @@ impl Config {
             strictness: None,
             fail_on_warning: None,
             update_notice: None,
+            // Declaring nothing declares no plan shape, so `plan lint` has
+            // nothing to judge against and refuses as a usage error.
+            plan: None,
             rules: Vec::new(),
             patterns: Vec::new(),
             traversals: Vec::new(),

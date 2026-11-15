@@ -1215,6 +1215,26 @@ where the edit goes. Nothing the issue says is echoed.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "plan grade refused",
+        gloss: "the branch's plan fails a checkable clause, named in the subject beside its line",
+        class: "`plan lint` holds the branch's plan file to the `[plan]` table: every declared \
+section in order, steps that are exactly the recorded plan entries, items and steps that cover \
+each other, pointers that resolve, the verdict line, and the prerequisite receipt. Each subject \
+is the plan file, a line and the clause it fails; nothing the plan says is echoed. On a pass the \
+lint appends the branch's `plan-check` receipt.",
+        routes: &[run("plan lint first", "batten plan lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "plan declare partial",
+        gloss: "the [plan] table cannot describe a plan, so the config does not load",
+        class: "A `[plan]` table declares at least three sections — the items, the steps and \
+the validation section, which is last and neither of the first two. A table that breaks this \
+could never pass a plan, so it is refused at load where the key is named.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "issue grade partial",
         gloss: "the issue's relations were not in the fetch, so its citations could not be judged",
         class: "A citation is judged against the issue's relations. A payload fetched without \
