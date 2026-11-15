@@ -2988,6 +2988,13 @@ const NATIVE_RULES: &[(&str, &str)] = &[
          update` when the config pins a different engine.",
     ),
     (
+        "config-write-unloadable",
+        "This write would leave batten.toml unable to load, so every call after it would be \
+         refused under engine-cannot-adjudicate. The text it lands was loaded as the hook \
+         loads it and refused; write the module a row names before the row, use only declared \
+         vocabulary, and make the whole change in one write.",
+    ),
+    (
         "program-unknown",
         "The mediated-call boundary could not classify the program a shell call names, so \
          it refused rather than guess what the call changes; the class on the line carries \
