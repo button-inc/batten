@@ -124,15 +124,15 @@ pub struct Workload {
     /// How many times each arm runs.
     #[serde(default)]
     pub runs: usize,
-    /// The step sequence without Batten.
+    /// The step sequence without Batten, one argv per step.
     #[serde(default)]
-    pub baseline: Vec<String>,
+    pub baseline: Vec<Vec<String>>,
     /// What that sequence models.
     #[serde(default)]
     pub baseline_model: String,
-    /// The step sequence with Batten.
+    /// The step sequence with Batten, one argv per step.
     #[serde(default)]
-    pub batten: Vec<String>,
+    pub batten: Vec<Vec<String>>,
     /// What that models.
     #[serde(default)]
     pub batten_model: String,
@@ -168,17 +168,36 @@ pub fn method(root: &Path) -> Result<Method> {
     toml::from_str(&text).with_context(|| format!("token-bench: {METHOD} did not parse"))
 }
 
+/// A declared workload the bench will not run: a finding over the committed
+/// declaration, never a fault of the harness, so the verb exits 2 on it.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// Read the workloads.
 ///
 /// # Errors
 ///
-/// A file that is missing or will not parse.
+/// A file that is missing, or a [`Refused`] for one that will not parse — a
+/// step written as one string rather than an argv among them, since a string
+/// step is what a shell would have split.
 pub fn workloads(root: &Path) -> Result<Workloads> {
     let path = root.join(WORKLOADS);
     let text = std::fs::read_to_string(&path).with_context(|| {
         format!("token-bench: {WORKLOADS} is missing — the workloads are an input, not a default")
     })?;
-    toml::from_str(&text).with_context(|| format!("token-bench: {WORKLOADS} did not parse"))
+    toml::from_str(&text).map_err(|_| {
+        anyhow::Error::new(Refused(format!(
+            "{WORKLOADS} did not parse; every step is an argv array, `[\"cat\", \"x\"]`, never a string"
+        )))
+    })
 }
 
 /// Tokens from bytes, through the declared divisor, rounding up.
@@ -374,32 +393,91 @@ pub struct Measured {
 /// **A failing step is the normal case, not an error.** `check` exits 2 over
 /// findings and `exec` exits 1 over a promoted zero, and both codes are part of
 /// the answer rather than a harness problem.
-fn run_arm(dir: &Path, steps: &[String], binary: &Path) -> Result<(Vec<u8>, i32)> {
+///
+/// # EACH STEP IS AN ARGV, AND NO SHELL SPLITS IT (CLOUD-2635)
+///
+/// A step's elements reach the child as written, so an element holding a space
+/// stays one argument. Two elements are declared rather than spelled in shell:
+/// [`BATTEN`] is the binary under test, and a [`HANDLE`] element is the handle an
+/// earlier step's own `exec:` report printed for that stream. Reading that
+/// handle is not a step, so the arm's step count is what an agent runs.
+fn run_arm(dir: &Path, steps: &[Vec<String>], binary: &Path) -> Result<(Vec<u8>, i32)> {
     let mut output = Vec::new();
     let mut exit = 0;
+    let mut handles = BTreeMap::new();
     for step in steps {
-        let step = step.replace("$BATTEN", &binary.to_string_lossy());
+        let argv = step
+            .iter()
+            .map(|element| bind(element, binary, &handles))
+            .collect::<Result<Vec<_>>>()?;
         // THROUGH THE PLACED ADAPTER (review of #928). Running the step sequence
         // is this module's effect, but that is an argument for the spawn
         // EXISTING, never for it being written here: `exec` is the sanctioned
         // child-process boundary and `piped_argv` resolves a first word on
-        // `PATH`, which is what `sh` is. With this, `tokens` holds no spawn of
-        // its own and comes off `policy/spawn-adapters.rego`'s table.
+        // `PATH`. With this, `tokens` holds no spawn of its own and comes off
+        // `policy/spawn-adapters.rego`'s table.
         //
         // `Diagnostics::Keep` is the both-streams decision stated above, and the
         // one byte-level difference it makes is deterministic — the adapter
         // trims the diagnostic's trailing whitespace and separates the two
         // streams with a newline — so a stability comparison still decides
         // exactly what it decided before.
-        let argv = ["sh", "-c", step.as_str()].map(ToOwned::to_owned);
         let (code, text) =
             crate::exec::piped_argv(dir, &argv, "", crate::exec::Diagnostics::Keep, &[])
-                .with_context(|| format!("token-bench: could not run `{step}`"))?;
+                .with_context(|| format!("token-bench: could not run `{}`", argv.join(" ")))?;
+        remember(&text, &mut handles);
         output.extend_from_slice(text.as_bytes());
         exit = code;
     }
     Ok((output, exit))
 }
+
+/// The step element bound to the binary under test.
+pub const BATTEN: &str = "BATTEN";
+
+/// How a handle element opens; `{{handle:stdout}}` names the stdout capture.
+pub const HANDLE: &str = "{{handle:";
+
+/// One element as the child receives it.
+///
+/// # Errors
+///
+/// A [`Refused`] for a handle element no earlier step printed a handle for.
+fn bind(element: &str, binary: &Path, handles: &BTreeMap<String, String>) -> Result<String> {
+    if element == BATTEN {
+        return Ok(binary.to_string_lossy().into_owned());
+    }
+    let Some(stream) = element
+        .strip_prefix(HANDLE)
+        .and_then(|rest| rest.strip_suffix("}}"))
+    else {
+        return Ok(element.to_owned());
+    };
+    handles.get(stream).cloned().ok_or_else(|| {
+        anyhow::Error::new(Refused(format!(
+            "`{element}` is used before any step printed an `exec: {stream}` handle"
+        )))
+    })
+}
+
+/// Record each handle a step's `exec:` report printed, by stream.
+///
+/// The report line is `exec: <stream> <n> byte(s) <handle>`; a later line for
+/// the same stream replaces an earlier one.
+fn remember(text: &str, handles: &mut BTreeMap<String, String>) {
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("exec: ") else {
+            continue;
+        };
+        if let [stream, _, "byte(s)", handle] = rest.split_whitespace().collect::<Vec<_>>()[..] {
+            handles.insert(stream.to_owned(), handle.to_owned());
+        }
+    }
+}
+
+//MUTANT-SUITE crates/batten/tests/it/bench_tokens.rs
+//MUTANT bench-step-argv-joined|s@^            .collect::<Result<Vec<_>>>()?;$@            .collect::<Result<Vec<_>>>()?.join(" ").split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();@|an_argv_element_with_a_space_stays_one_argument
+//MUTANT bench-handle-element-unread|s@^        .strip_prefix(HANDLE)$@        .strip_prefix("{{unread:")@|a_handle_element_reads_step_one
 
 /// Measure every workload the consumer declares.
 ///
@@ -604,7 +682,18 @@ fn render_capability(
         return Some(Published::Reason);
     }
 
-    let joined = |steps: &[String]| steps.join("` then `");
+    let joined = |steps: &[Vec<String>]| {
+        steps
+            .iter()
+            .map(|step| {
+                step.iter()
+                    .map(|element| if element == BATTEN { "batten" } else { element })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join("` then `")
+    };
     line(
         out,
         &format!(
@@ -620,7 +709,7 @@ fn render_capability(
         &format!(
             "**Batten** ({} step(s), `{}`). {}",
             workload.batten.len(),
-            joined(&workload.batten).replace("$BATTEN", "batten"),
+            joined(&workload.batten),
             workload.batten_model.trim().replace('\n', " ")
         ),
     );
@@ -1150,20 +1239,49 @@ mod tests {
         );
     }
 
-    /// An arm's output is every step's, concatenated, with `$BATTEN` bound to
-    /// the binary, and its exit is the LAST step's.
+    /// Each step as an argv.
+    fn argv(steps: &[&[&str]]) -> Vec<Vec<String>> {
+        steps
+            .iter()
+            .map(|step| step.iter().map(|&element| element.to_owned()).collect())
+            .collect()
+    }
+
+    /// An arm's output is every step's, concatenated, with a `BATTEN` element
+    /// bound to the binary, and its exit is the LAST step's.
     ///
-    /// Fails by: `run_arm` answering a constant output or exit.
+    /// Fails by: `run_arm` answering a constant output or exit, or the first
+    /// step's exit.
     #[test]
     fn an_arm_is_every_steps_output_and_the_last_steps_exit() {
         let dir = crate::scratch::scratch("tokens-run-arm");
-        let steps = [
-            "printf ab; exit 5".to_owned(),
-            "printf '%s' \"$BATTEN\"; exit 3".to_owned(),
-        ];
+        let steps = argv(&[&["printf", "ab"], &["printf", "%s", "BATTEN"], &["false"]]);
         let (output, exit) = run_arm(&dir, &steps, Path::new("/opt/batten")).unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "ab/opt/batten");
-        assert_eq!(exit, 3);
+        assert_eq!(exit, 1);
+    }
+
+    /// A handle element binds to the last handle an earlier step reported for
+    /// its stream, and is refused before any step reported one.
+    ///
+    /// Fails by: `remember` recording nothing or the wrong field, or `bind`
+    /// passing the element through.
+    #[test]
+    fn a_handle_element_binds_what_an_earlier_step_reported() {
+        let mut handles = BTreeMap::new();
+        let binary = Path::new("/opt/batten");
+        let refused = bind("{{handle:stdout}}", binary, &handles).unwrap_err();
+        assert!(refused.downcast_ref::<Refused>().is_some(), "{refused}");
+        remember(
+            "exec: stdout 9 byte(s) stdout:aa\nexec: exit 0\nexec: stdout 3 byte(s) stdout:bb\n",
+            &mut handles,
+        );
+        assert_eq!(
+            bind("{{handle:stdout}}", binary, &handles).unwrap(),
+            "stdout:bb"
+        );
+        assert_eq!(bind("BATTEN", binary, &handles).unwrap(), "/opt/batten");
+        assert_eq!(bind("$BATTEN", binary, &handles).unwrap(), "$BATTEN");
     }
 
     /// Every declared workload is measured, a stated gap carries no arm, and
@@ -1182,8 +1300,8 @@ mod tests {
             "[[workload]]\nid = \"gap\"\ncapability = \"c\"\nquestion = \"q\"\n\
              not_measured = \"needs two sessions\"\n\n\
              [[workload]]\nid = \"measured\"\ncapability = \"c\"\nquestion = \"q\"\n\
-             fixture = \"f\"\nruns = 2\nbaseline = [\"printf abc\"]\n\
-             batten = [\"test -d .git && printf git\", \"printf x\"]\n",
+             fixture = \"f\"\nruns = 2\nbaseline = [[\"printf\", \"abc\"]]\n\
+             batten = [[\"ls\", \"-d\", \".git\"], [\"printf\", \"x\"]]\n",
         )
         .unwrap();
         let measured = measure(&root, Path::new("batten"), &scratch).unwrap();
@@ -1201,8 +1319,9 @@ mod tests {
             exit: 0,
             steps: 1,
         };
+        // `.git\n` and `x`: a fixture without a git dir makes `ls` fail.
         let mine = Arm::Stable {
-            bytes: 4,
+            bytes: 6,
             exit: 0,
             steps: 2,
         };
@@ -1237,10 +1356,10 @@ mod tests {
             "[[workload]]\nid = \"gap\"\ncapability = \"cache\"\nquestion = \"q0?\"\n\
              not_measured = \"two sessions\"\n\n\
              [[workload]]\nid = \"figure\"\ncapability = \"cap\"\nquestion = \"q?\"\n\
-             runs = 2\nbaseline = [\"printf abc\"]\nbaseline_model = \"greps everything\"\n\
-             batten = [\"$BATTEN check\", \"printf x\"]\nbatten_model = \"one pointer\"\n\n\
+             runs = 2\nbaseline = [[\"printf\", \"abc\"]]\nbaseline_model = \"greps everything\"\n\
+             batten = [[\"BATTEN\", \"check\"], [\"printf\", \"x\"]]\nbatten_model = \"one pointer\"\n\n\
              [[workload]]\nid = \"shaky\"\ncapability = \"s\"\nquestion = \"q2?\"\n\
-             runs = 3\nbaseline = [\"a\"]\nbatten = [\"b\"]\n\n\
+             runs = 3\nbaseline = [[\"a\"]]\nbatten = [[\"b\"]]\n\n\
              [[workload]]\nid = \"none\"\ncapability = \"n\"\nquestion = \"q3?\"\n",
         )
         .unwrap();

@@ -38,8 +38,8 @@
 //! for a read that never happened — the exact forgery class this module exists to
 //! remove. [`Declared::requires`] is what makes that impossible: the projection a
 //! receipt needs **is** its success predicate here. A payload missing any
-//! required path mints NOTHING, which is the posture `issue-read-check.sh` takes
-//! one layer over, where a body with no `updatedAt` is turned away by name rather
+//! required path mints NOTHING, which is the posture `issue-read-check.sh` took
+//! one layer over, where a body with no `updatedAt` was turned away by name rather
 //! than recorded with an invented value.
 //!
 //! # Rule 1 holds because the vocabulary is all config

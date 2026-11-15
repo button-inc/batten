@@ -2962,18 +2962,8 @@ const CENSUS: &[Verb] = &[
     // seven sit on `MAY_ANSWER_COULD_NOT_LOOK` because their subject is outside
     // this corpus; the assertions below still run over what they emit, which is
     // the half this file is about.
-    //
-    // `ci suites` needs no roster entry: a corpus with no base is an ANSWER for
-    // it rather than a failure — could-not-look widens, so it names every suite
-    // and exits `0`.
     Verb {
         path: "ci slow-needed",
-        args: &["--base", "HEAD"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    Verb {
-        path: "ci suites",
         args: &["--base", "HEAD"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

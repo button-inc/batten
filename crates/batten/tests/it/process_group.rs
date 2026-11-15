@@ -56,25 +56,38 @@ fn repo(name: &str, opt_in: bool) -> PathBuf {
         .build()
 }
 
-/// A `#!/bin/sh` fixture child, executable, that runs `body`.
-fn script(dir: &Path, body: &str) -> PathBuf {
-    script_named(dir, "child.sh", body)
+/// A fixture child: the stand-in (`examples/stub.rs`) under `plan`.
+fn script(dir: &Path, plan: &serde_json::Value) -> PathBuf {
+    script_named(dir, "child", plan)
 }
 
 /// The same, under a caller-chosen name.
 ///
-/// Needed the moment one case wants TWO scripts in one fixture directory: with a
-/// single hard-coded name the second write silently replaces the first, and a
-/// wrapper that ends up invoking itself is the shape that produced 69 iterations
-/// of a five-iteration loop here before this existed.
-fn script_named(dir: &Path, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
+/// Needed the moment one case wants TWO children in one fixture directory: with
+/// a single hard-coded name the second install silently replaces the first, and
+/// a wrapper that ends up invoking itself is the shape that produced 69
+/// iterations of a five-iteration loop here before this existed.
+fn script_named(dir: &Path, name: &str, plan: &serde_json::Value) -> PathBuf {
     let path = dir.join(name);
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write child");
-    let mut mode = fs::metadata(&path).expect("stat child").permissions();
-    mode.set_mode(0o755);
-    fs::set_permissions(&path, mode).expect("chmod child");
+    common::stub_at(&path, plan);
     path
+}
+
+/// How long a parked child sleeps: far past any case, so only a signal ends it.
+const PARKED_MS: u64 = 300_000;
+
+/// `pid`'s process group, as `ps` reports it.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: a process group is the kernel's answer about a live process, read the POSIX way as `alive` reads liveness"
+)]
+fn pgid(pid: &str) -> String {
+    let out = Command::new("ps")
+        .args(["-o", "pgid=", "-p", pid])
+        .stderr(Stdio::null())
+        .output()
+        .expect("run ps");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
 /// Whether `pid` still names a live process.
@@ -161,6 +174,8 @@ fn exec_command(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> 
     command
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(dir)
+        // The stand-in reads its stdin whole before it does anything.
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         // SCRUBBED, and this is the hermeticity that matters here: the whole
@@ -186,11 +201,11 @@ fn exec_command(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> 
 /// per crate.
 fn leaky_child(dir: &Path) -> (PathBuf, PathBuf) {
     let note = dir.join("grandchild.pid");
-    let body = format!(
-        "sleep 300 &\nprintf '%s' \"$!\" > {note}\nwait\n",
-        note = note.display()
-    );
-    (script(dir, &body), note)
+    let plan = serde_json::json!([{"steps": [
+        {"spawn": {"argv": ["sleep", "300"], "pid": note.display().to_string()}},
+        {"sleep": PARKED_MS},
+    ]}]);
+    (script(dir, &plan), note)
 }
 
 #[test]
@@ -303,13 +318,22 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     // at the group is observable. That is what lets the second signal be timed
     // against a real terminal state instead of a guessed delay.
     let trapped = dir.join("trapped");
+    // The grandchild is the stand-in again, run as `child grandchild`: an
+    // ignored TERM is a trap that never returns, since a trap does not survive
+    // an exec into `sleep`.
+    let itself = dir.join("child").display().to_string();
     let child = script(
         &dir,
-        &format!(
-            "trap ': > {trapped}' TERM\n(trap '' TERM; exec sleep 300) &\nprintf '%s' \"$!\" > {note}\nwhile :; do wait; done\n",
-            trapped = trapped.display(),
-            note = note.display()
-        ),
+        &serde_json::json!([
+            {"argv": ["grandchild"], "steps": [{"trap": "TERM"}, {"sleep": PARKED_MS}]},
+            {"steps": [
+                {"trap": "TERM"},
+                {"spawn": {"argv": [itself, "grandchild"], "pid": note.display().to_string()}},
+                {"await-signal": "TERM"},
+                {"write": [trapped.display().to_string(), ""]},
+                {"sleep": PARKED_MS},
+            ]},
+        ]),
     );
 
     let batten = exec_command(&dir, &home, &child, &[])
@@ -426,7 +450,15 @@ fn a_signalled_child_is_still_reported_as_a_code_rather_than_re_raised() {
     // `batten exec` wrapping a killed command kill its own caller too.
     let dir = repo("pgroup-child-signal", true);
     let home = scratch("pgroup-child-signal-home");
-    let child = script_named(&dir, "child.sh", "kill -TERM $$\n");
+    // The child signals itself; the park after it is never reached, so it can
+    // only end by the signal and never by running off its plan.
+    let child = script(
+        &dir,
+        &serde_json::json!([{"steps": [
+            {"run": ["kill", "-TERM", "{pid}"]},
+            {"sleep": PARKED_MS},
+        ]}]),
+    );
 
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
     let status = batten.wait().expect("batten exits");
@@ -489,13 +521,13 @@ fn the_capture_is_sealed_before_the_re_raise() {
     // timed by a guess, and a guess that fired early would measure a race rather
     // than the teardown ordering this case is about.
     let spoken = dir.join("spoken");
-    let child = script_named(
+    let child = script(
         &dir,
-        "child.sh",
-        &format!(
-            "printf '%s\\n' '{said}'\n: > {spoken}\nsleep 300\n",
-            spoken = spoken.display()
-        ),
+        &serde_json::json!([{"steps": [
+            {"stdout": format!("{said}\n")},
+            {"write": [spoken.display().to_string(), ""]},
+            {"sleep": PARKED_MS},
+        ]}]),
     );
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
     let deadline = Instant::now() + PATIENCE;
@@ -518,10 +550,9 @@ fn the_capture_is_sealed_before_the_re_raise() {
     // The same command, run to completion, is the comparand.
     let clean_dir = repo("pgroup-sealed-clean", true);
     let clean_home = scratch("pgroup-sealed-clean-home");
-    let clean_child = script_named(
+    let clean_child = script(
         &clean_dir,
-        "child.sh",
-        &format!("printf '%s\\n' '{said}'\n"),
+        &serde_json::json!([{"steps": [{"stdout": format!("{said}\n")}]}]),
     );
     let mut clean = spawn_exec(&clean_dir, &clean_home, &clean_child, &[]);
     let _ = clean.wait().expect("batten exits");
@@ -569,30 +600,50 @@ fn newest_capture(home: &Path) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-/// A child that writes its own pid and process-group id, and the marker it was
-/// handed, then exits.
-fn reporting_child(dir: &Path) -> (PathBuf, PathBuf) {
+/// A child that writes its own pid and the marker it was handed (`absent` when
+/// unset), then holds until `release` says `go` and exits. Returns the child,
+/// its note and its release.
+///
+/// It HOLDS so the case can read its process group while it is alive: a plan
+/// cannot ask `ps`, so the case does, by the pid the child recorded.
+fn reporting_child(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let note = dir.join("topology");
-    let body = format!(
-        "printf '%s %s %s' \"$$\" \"$(ps -o pgid= -p $$ | tr -d ' ')\" \
-         \"${{MISE_TASK_PGID_MANAGED:-absent}}\" > {note}\n",
-        note = note.display()
-    );
-    (script(dir, &body), note)
+    let release = dir.join("release");
+    let _ = fs::remove_file(&note);
+    let _ = fs::remove_file(&release);
+    let (note_at, release_at) = (note.display().to_string(), release.display().to_string());
+    let held = |marker: &str| {
+        serde_json::json!([
+            {"write": [note_at, format!("{{pid}} {marker}")]},
+            {"await-file": [release_at, "go"]},
+        ])
+    };
+    let plan = serde_json::json!([
+        {"env": "MISE_TASK_PGID_MANAGED", "steps": held("{env:MISE_TASK_PGID_MANAGED}")},
+        {"steps": held("absent")},
+    ]);
+    (script(dir, &plan), note, release)
+}
+
+/// The child's recorded pid and marker, and its live group, read while it holds;
+/// then released. `(pid, pgid, marker)`.
+fn read_held(note: &Path, release: &Path) -> (String, String, String) {
+    let seen = await_file(note);
+    let mut fields = seen.split_whitespace();
+    let pid = fields.next().expect("a pid").to_owned();
+    let marker = fields.next().expect("a marker").to_owned();
+    let group = pgid(&pid);
+    fs::write(release, "go").expect("release the child");
+    (pid, group, marker)
 }
 
 /// `(pid, pgid, marker)` as the wrapped child saw them.
 fn topology(dir: &Path, home: &Path, env: &[(&str, &str)]) -> (String, String, String) {
-    let (child, note) = reporting_child(dir);
+    let (child, note, release) = reporting_child(dir);
     let mut batten = spawn_exec(dir, home, &child, env);
+    let seen = read_held(&note, &release);
     let _ = batten.wait().expect("batten exits");
-    let seen = await_file(&note);
-    let mut fields = seen.split_whitespace();
-    (
-        fields.next().expect("a pid").to_owned(),
-        fields.next().expect("a pgid").to_owned(),
-        fields.next().expect("a marker").to_owned(),
-    )
+    seen
 }
 
 #[test]
@@ -638,15 +689,9 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     if !cfg!(target_os = "linux") {
         return;
     }
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: probing for `setsid` is asking the host a question about itself"
-    )]
-    let installed = Command::new("sh")
-        .args(["-c", "command -v setsid >/dev/null"])
-        .status()
-        .expect("probe for setsid")
-        .success();
+    // The lookup `Command::new("setsid")` below makes, asked of `PATH` directly.
+    let installed = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("setsid").is_file()));
     assert!(
         installed,
         "`setsid` is util-linux, installed on every Linux leg"
@@ -655,7 +700,7 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     let dir = repo("pgroup-session", true);
     let home = scratch("pgroup-session-home");
     fs::create_dir_all(&home).expect("create home");
-    let (child, note) = reporting_child(&dir);
+    let (child, note, release) = reporting_child(&dir);
 
     // Built by hand rather than through `common::batten()`, because the program
     // being run is `setsid` and Batten is its argument. `--wait` keeps the status
@@ -670,6 +715,7 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
         .arg(env!("CARGO_BIN_EXE_batten"))
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(&dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         // `common::batten()`'s CLOUD-1951 mask, applied by hand for the reason
@@ -680,13 +726,11 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
         // passing while measuring nothing it claims to.
         .env_remove("MISE_TASK_PGID_MANAGED");
     command.state_home(&home);
-    let status = command.status().expect("run batten under setsid");
+    let mut running = command.spawn().expect("run batten under setsid");
+    let (own, group, _) = read_held(&note, &release);
+    let status = running.wait().expect("batten under setsid exits");
     assert!(status.success(), "the wrapped child itself succeeds");
 
-    let seen = await_file(&note);
-    let mut fields = seen.split_whitespace();
-    let own = fields.next().expect("a pid");
-    let group = fields.next().expect("a pgid");
     assert_ne!(
         own, group,
         "a session leader declines, so the child keeps the inherited group"
@@ -701,7 +745,9 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
     // died holding one.
     let dir = repo("pgroup-record", true);
     let clean_home = scratch("pgroup-record-clean");
-    let (child, _) = reporting_child(&dir);
+    let (child, _, release) = reporting_child(&dir);
+    // Released before it runs: this case reads no topology.
+    fs::write(&release, "go").expect("release the child");
     let mut batten = spawn_exec(&dir, &clean_home, &child, &[]);
     let _ = batten.wait().expect("batten exits");
     assert!(
@@ -793,18 +839,19 @@ fn a_surviving_grandchild_cannot_hang_exec() {
     let dir = repo("pgroup-drain", false);
     let home = scratch("pgroup-drain-home");
     let note = dir.join("holder.pid");
+    // NOT `quiet`: the grandchild inheriting both pipes is the subject.
     let child = script(
         &dir,
-        &format!(
-            "sleep 300 &\nprintf '%s' \"$!\" > {note}\n",
-            note = note.display()
-        ),
+        &serde_json::json!([{"steps": [
+            {"spawn": {"argv": ["sleep", "300"], "pid": note.display().to_string()}},
+        ]}]),
     );
 
     fs::create_dir_all(&home).expect("create home");
     let batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(&dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .state_home(&home)
@@ -857,9 +904,18 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
 
     let dir = scratch("pgroup-orphaned");
     let note = dir.join("member.pid");
-    let mut leader = Command::new("sh")
-        .args(["-c", "sleep 600 & printf '%s' \"$!\" > \"$MEMBER_PID\""])
-        .env("MEMBER_PID", &note)
+    // The leader is the stand-in, which spawns its member and exits.
+    let plan = dir.join("leader.plan.json");
+    fs::write(
+        &plan,
+        serde_json::json!([{"steps": [
+            {"spawn": {"argv": ["sleep", "600"], "pid": note.display().to_string(), "quiet": true}},
+        ]}])
+        .to_string(),
+    )
+    .expect("write the leader's plan");
+    let mut leader = Command::new(common::stub())
+        .env("BATTEN_STUB_PLAN", &plan)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

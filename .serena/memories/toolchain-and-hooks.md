@@ -102,9 +102,9 @@ features (batching, caching, scheduling) when they'd tighten this.
 **A builtin's selector is a claim about coverage — measure it, never infer it.**
 Leaving the selector upstream is right, and it silently decides _which files the
 gate reads_. `Builtins.shellcheck` selects `(glob **/*.sh, **/*.bash) OR (types:
-sh, bash)`, and `#!/usr/bin/env bats` is neither — so `tests/*.bats` was never
+sh, bash)`, and `#!/usr/bin/env bats` is neither — so the bats suite was never
 linted at all. Measured with `hk check --all --step shellcheck -v`: 45 files
-batched (every `mise-tasks/*`, `session-start.sh`, two fixture `.in` files), none
+batched (every `mise-tasks/*`, the session hook, two fixture `.in` files), none
 of the 42 bats files. The step had looked like it covered the suite for its whole
 life, and `.shellcheckrc` carried an SC2030/SC2031 suppression reasoning about
 bats `run` subshells — **a suppression reads as evidence a file is being read, and
@@ -123,7 +123,7 @@ so the fix is a selector, never a `--shell` flag and never per-file directives.
 always-loaded set exceeds its budget. Since CLOUD-50 this is the engine, not a
 shell task: the counted set and both thresholds are `[budget.instructions]` in
 `batten.toml` (`paths`, `max_tokens`, optional `max_lines`), so a reviewer reads
-the gate as config rather than as arithmetic in bash. `mise-tasks/context-budget.sh`
+the gate as config rather than as arithmetic in bash. The context-budget script
 and its `BATTEN_CONTEXT_BUDGET`/`BATTEN_CONTEXT_LINE_TARGET` overrides are gone —
 a budget you can lower with an env var is not a budget.
 
@@ -539,9 +539,9 @@ precisely when an agent runs it. It reads as a rebase or a toolchain fault and
 costs turns before anyone looks at the symlink.
 
 The writer MOVED but the window did not (CLOUD-1051). It was
-`mise-tasks/stop-guard.sh`'s `ln -sfn` until that program retired; the engine's
+the stop-guard script's `ln -sfn` until that program retired; the engine's
 Stop routine does the same write for the same reason, and a `SessionStart` write
-beside the other things `session-start.sh` asserts is still the fix that would
+beside the other things session start asserts is still the fix that would
 close the window rather than relocate it.
 
 Remedy in the moment — session-local, gitignored, the same target the boundary
@@ -556,7 +556,7 @@ that cannot reach the tracker generates findings it cannot file, so this class i
 under-represented by construction rather than rare. Both filed from a session
 whose connector is bound.
 
-Its remedy line needs one correction: `session-start.sh` is **retired**
+Its remedy line needs one correction: that script is **retired**
 (CLOUD-312 row 10, #804), so the session-start write lands as a
 `[[hook.handler]] on = "session-start"` row rather than as another step inside
 that script. The row also carries the half this note left implicit — the engine
@@ -587,8 +587,8 @@ program and its suite with one `conserves` arm per path, and drop it from
 `$MUTANT_GATES`. Never a block, and never a filed-and-deferred note that leaves
 the bug standing.
 
-**Measured, three times in one session (PR #794).** `mise-tasks/replay.sh` and
-`mise-tasks/config-lint.sh` were each reported as carrying an unlandable fix,
+**Measured, three times in one session (PR #794).** The replay and
+config-lint scripts were each reported as carrying an unlandable fix,
 with "the file is governed" given as the reason — and in the `config-lint` case
 the defect was real, verified, and was the thing that had just admitted that
 same PR's own config smell. Each was a retirement whose §1 had been written in

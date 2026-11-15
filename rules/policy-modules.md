@@ -234,7 +234,8 @@ A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
 `input.tree.uses`, `input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
 `input.tree.produced`, `input.tree.records`, `input.tree["records-blocked"]`,
-`input.tree.landing`, and the git
+`input.tree.landing`, `input.tree.shell` (the shell detector's answer over the
+declared `[census.shell]` homes, both sides of the delta — CLOUD-2625), and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`,
@@ -400,6 +401,9 @@ receipt store could not be located.
 `input.facts["red-head"]` is the current branch's red-head record a red landing
 stop wrote — each failed run with whether its log was read, and each check still
 running — or `null` when the branch has none (CLOUD-2270).
+`input.facts["shell-introduced"]` is `{look, reason}` for a write: whether it
+authors shell (`is`, `is-not`, `could-not-look`) and, when `is`, by `shell-path`
+or `shebang` — decided in Rust by `shell.rs`, never the content (CLOUD-2335).
 `input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
 the task runner's own argv, read from a receipt minted at session start so the
 mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
@@ -775,7 +779,7 @@ the preset half alone.
 
 The module's own `test_` rules are the **load-time** tier. They pin the predicate.
 
-`tests/<gate>.bats` over the **compiled binary** is the tier that proves the
+`crates/batten/tests/*.rs` over the **compiled binary** is the tier that proves the
 ENGINE builds the input the predicate reads. A `with input as` case cannot do
 this: it fabricates the very shape the engine may be unable to produce, so it
 passes over a key nothing fills and over a channel nothing populates. Both live

@@ -79,6 +79,15 @@ Binaries are never committed to this repository; they come from a release, and
 `mise run install-check` is the gate that keeps every reader of an asset name
 agreeing with the one that writes it.
 
+### Cloud environment Setup field
+
+A cloud environment's Setup field holds this one line, and it is the whole
+field: the install line above, then the committed `[[startup]]` rows.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh && batten startup --repair
+```
+
 ## Why
 
 Repo-config-driven **conformance gates** that can judge an agent's tool call
@@ -119,9 +128,9 @@ of being invalidated by a reordered map or a timestamp.
 
 And a refusal **points at the fix — the class name IS the pointer.** A mediated
 deny emits one line: a declared three-word class and the pointers it applies to,
-as in `shell edit refused mise-tasks/land.sh:845`. The reason, the routes out
+as in `path write refused batten.toml:845`. The reason, the routes out
 (the escape hatch and the override alike) and the class's full definition are
-one hop away, at `batten policy explain "shell edit refused"`.
+one hop away, at `batten policy explain "path write refused"`.
 
 That is a decision rather than an omission, and it is the same argument as the
 three pains above turned on the tool's own output. The reason and the remedy do

@@ -59,21 +59,44 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-/// A tool whose answer the case controls or breaks.
-const TOOL: &str = "#!/bin/sh\nif [ -n \"${STUB_TOOL_FAIL:-}\" ]; then exit 9; fi\necho \"${STUB_TOOL:-tool-1.0}\"\n";
+/// A tool whose answer the case controls (`STUB_TOOL`) or breaks
+/// (`STUB_TOOL_FAIL`, exit 9).
+fn tool() -> serde_json::Value {
+    serde_json::json!([
+        {"env": "STUB_TOOL_FAIL", "steps": [{"exit": 9}]},
+        {"env": "STUB_TOOL", "steps": [{"stdout": "{env:STUB_TOOL}\n"}]},
+        {"steps": [{"stdout": "tool-1.0\n"}]},
+    ])
+}
 
 /// A tool printing a declaration file's bytes, as `mise tasks info` prints a task.
-const DECL: &str = "#!/bin/sh\ncat \"$1\"\n";
+fn decl() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"cat": "{argv:1}"}]}])
+}
 
 /// A step command that leaves a mark each time it RUNS, so a hit is observable.
-const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
+fn ok() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"append": ["bin/ran.log", "ran\n"]}]}])
+}
 
-/// A step command that fails with the code the case chooses.
-const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_CODE:-2}\"\n";
+/// A step command that fails with the code the case chooses (`STUB_CODE`, any
+/// exit code, else 2).
+fn fail() -> serde_json::Value {
+    let detail = serde_json::json!({"stderr": "stub failure detail\n"});
+    serde_json::json!([
+        {"env": "STUB_CODE", "steps": [detail, {"exit-with": "{env:STUB_CODE}"}]},
+        {"steps": [detail, {"exit": 2}]},
+    ])
+}
 
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
-const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
+fn breaks() -> serde_json::Value {
+    serde_json::json!([{"steps": [
+        {"append": ["bin/ran.log", "ran\n"]},
+        {"write": ["batten.toml", "version = [\n"]},
+    ]}])
+}
 
 /// A committed authority that will not parse.
 const UNLOADABLE: &str = "version = [\n";
@@ -112,20 +135,14 @@ struct Repo {
 impl Repo {
     fn new(name: &str) -> Self {
         let dir = common::scratch(&format!("step-receipt-{name}"));
-        for (file, body) in [
-            ("bin/toolv", TOOL),
-            ("bin/decl", DECL),
-            ("bin/ok", OK),
-            ("bin/fail", FAIL),
-            ("bin/break", BREAK),
+        for (file, plan) in [
+            ("bin/toolv", tool()),
+            ("bin/decl", decl()),
+            ("bin/ok", ok()),
+            ("bin/fail", fail()),
+            ("bin/break", breaks()),
         ] {
-            common::write(&dir, file, body);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(dir.join(file), std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod");
-            }
+            common::stub_at(&dir.join(file), &plan);
         }
         common::write(&dir, "bin/taskfile", "body bytes v1\n");
         common::write(&dir, "input.txt", "one\n");

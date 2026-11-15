@@ -28,10 +28,11 @@
 //! consumer depends on.
 
 //! **UNIX ONLY, and the gate is load-bearing rather than tidy.** Every case here
-//! dispatches a `#!/usr/bin/env bash` program as a `[[hook.handler]]` row. On a
-//! Windows runner the spawn ladder resolves the interpreter the shebang names
-//! and cannot start it, so the door reports a could-not-run and forwards
-//! nothing. The cases that assert an ABSENCE — an allowed command, a dropped
+//! dispatches a program at `mise-tasks/run-shape-guard.sh` as a `[[hook.handler]]`
+//! row — the test stand-in since CLOUD-2336, a `#!/usr/bin/env bash` script
+//! before it. On a Windows runner the spawn ladder resolved the interpreter that
+//! shebang named and could not start it, so the door reported a could-not-run and
+//! forwarded nothing. The cases that assert an ABSENCE — an allowed command, a dropped
 //! verdict — therefore passed there for the wrong reason, while the ones that
 //! assert a handler's refusal REACHING the host failed outright. Half a suite
 //! green over a mechanism that never ran is the vacuous-pass class this file was
@@ -65,7 +66,7 @@ use common::{run_with_stdin, scratch_repo, stderr, stdout, write};
 fn fixture(name: &str) -> PathBuf {
     let dir = scratch_repo(name);
     std::fs::create_dir_all(dir.join("mise-tasks")).expect("the fixture's task dir");
-    stub_guard(&dir, "exit 0");
+    stub_guard(&dir, &serde_json::json!([{ "steps": [] }]));
     // The guard resolves `mise.toml` beside itself for the cargo family. An
     // empty one keeps that arm defined and silent; the cargo family's own corpus
     // stays in the direct suite, where a fixture `mise.toml` is what it tests.
@@ -86,17 +87,6 @@ expires = "2027-02-28"
 "#,
     );
     dir
-}
-
-// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
-// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("the copy exists")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("the copy is runnable");
 }
 
 /// What the door said to the host, and what it said about the handler.
@@ -173,13 +163,11 @@ fn door_envelope(dir: &Path, payload: &str) -> Door {
 /// see `the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped`.
 /// Driven against it, every case below would fail for the guard's reason instead
 /// of for its own.
-fn stub_guard(dir: &Path, body: &str) {
-    write(
-        dir,
-        "mise-tasks/run-shape-guard.sh",
-        &format!("#!/usr/bin/env bash\n{body}\n"),
-    );
-    make_executable(&dir.join("mise-tasks/run-shape-guard.sh"));
+///
+/// The stub is the test stand-in driven by `rules`, never authored shell
+/// (CLOUD-2336).
+fn stub_guard(dir: &Path, rules: &serde_json::Value) {
+    common::stub_at(&dir.join("mise-tasks/run-shape-guard.sh"), rules);
 }
 
 // withdrawn: "the committed guard writes a host document so its verdict is dropped" the subject is `mise-tasks/run-shape-guard.sh`, retired by CLOUD-1163 unit 9, and the DOOR property it demonstrated is asserted by the positive control `the_impersonation_detector_is_live_behind_this_row`, which writes the host document itself rather than borrowing a program that happened to write one
@@ -193,7 +181,10 @@ fn a_handler_deny_reaches_the_host_with_its_reason_attributed() {
     let dir = fixture("door-handler-deny");
     stub_guard(
         &dir,
-        "printf 'a foreground sleep spends the turn\\n' >&2\nexit 2",
+        &serde_json::json!([{ "steps": [
+            { "stderr": "a foreground sleep spends the turn\n" },
+            { "exit": 2 },
+        ] }]),
     );
 
     let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
@@ -219,7 +210,13 @@ fn the_handler_receives_the_hosts_own_payload_including_the_calls_background_fla
     let dir = fixture("door-background-flag");
     stub_guard(
         &dir,
-        "raw=$(cat)\ncase \"$raw\" in\n*'\"run_in_background\":true'*)\n  printf 'the flag arrived\\n' >&2; exit 2 ;;\nesac\nexit 0",
+        &serde_json::json!([
+            {
+                "stdin_contains": "\"run_in_background\":true",
+                "steps": [{ "stderr": "the flag arrived\n" }, { "exit": 2 }],
+            },
+            { "steps": [] },
+        ]),
     );
 
     let backgrounded = door_bg(&dir, "sleep 590; tail -6 /tmp/land.log");
@@ -285,12 +282,12 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     // handler that never ran, so this one makes the guard write the host
     // document on purpose and requires the door to name it.
     let dir = fixture("door-impersonation");
-    write(
+    // The document's first `{` opens no placeholder the stand-in knows, so its
+    // text is written as given.
+    stub_guard(
         &dir,
-        "mise-tasks/run-shape-guard.sh",
-        "#!/usr/bin/env bash\nprintf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"x\"}}\\n'\n",
+        &serde_json::json!([{ "steps": [{ "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"x\"}}\n" }] }]),
     );
-    make_executable(&dir.join("mise-tasks/run-shape-guard.sh"));
     let answer = door(&dir, "ls -la");
     let reported = format!("{}{}", answer.out, answer.err);
     assert!(

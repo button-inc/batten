@@ -114,6 +114,14 @@ pub struct Manifest {
     /// "the binary changed", which the release tag already says. This moves when
     /// what the preset DECIDES changes.
     pub version: u32,
+    /// Whether the config a new repository starts from names this preset
+    /// (CLOUD-2628).
+    ///
+    /// `false` is an opinionated ban a consumer opts into knowingly: the starter,
+    /// the example config, `init` and `doctor` never suggest it, and
+    /// `the_starter_config_names_every_shipped_preset` holds the starter to naming
+    /// exactly the suggested ones.
+    pub suggested: bool,
     /// The modules, each declaring the surface IT decides.
     ///
     /// **The scope is per module rather than per manifest, and that is the whole
@@ -334,6 +342,12 @@ impl Manifest {
 /// presets' half of the vendored verdict registry are all read off this table —
 /// never a hand-maintained second list, which is `surface::SURFACE`'s discipline
 /// and the reason a preset cannot be enabled that does not exist.
+///
+/// An opt-in ban is never suggested by the config a repository starts from
+/// (CLOUD-2628); the row below suggests `shell-hygiene`, and the starter census
+/// case goes red.
+//MUTANT-SUITE crates/batten/tests/it/extension_surfaces.rs
+//MUTANT preset-suggested-by-init|s@^        suggested: false,$@        suggested: true,@|the_starter_config_names_every_shipped_preset
 pub const MANIFESTS: &[Manifest] = &[
     // CLOUD-843, carrying CLOUD-441's decision out of a consumer module. A
     // check's verdict on one commit is its latest run, absent is no veto and
@@ -350,6 +364,7 @@ pub const MANIFESTS: &[Manifest] = &[
     Manifest {
         name: "check-verdict",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record, not a workflow document, so no provider's
@@ -411,6 +426,7 @@ writing the family, and re-mint the record from the query.",
     Manifest {
         name: "ci-hygiene",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -610,6 +626,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
     Manifest {
         name: "ci-signal",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -848,6 +865,7 @@ than its producer, which writes whole or removes, and reads the same way.",
     Manifest {
         name: "claude-code-cloud",
         version: 3,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1005,6 +1023,7 @@ could-not-look arm exists to refuse.",
     Manifest {
         name: "commit-hygiene",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -1026,6 +1045,7 @@ the pipeline.",
     Manifest {
         name: "landing-loop",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1213,6 +1233,7 @@ abandon the other unread.",
     Manifest {
         name: "mise",
         version: 2,
+        suggested: true,
         // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
         // the per-module scope necessary, and the reason is that "mise" is a
         // subject rather than a surface. Whether an agent reproduces a task's
@@ -1308,6 +1329,7 @@ could not, which is a gate reporting on a surface it never saw.",
     Manifest {
         name: "pinned-toolchain",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
@@ -1376,6 +1398,7 @@ declares, and a probe inside the pin's environment is already correct",
     Manifest {
         name: "release-hygiene",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record `batten record release` writes; no CI provider's
@@ -1424,6 +1447,7 @@ the record rather than a verdict about the release. Record it again.",
     Manifest {
         name: "engine-hygiene",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::Tree,
             // Reads a record `batten engine outdated` writes; no CI provider's
@@ -1449,10 +1473,21 @@ step.",
     // module it was written as. Its facts — which manifests, keys, unit headers,
     // workflow globs and exempt files — are the consumer's `[census.shell]`
     // table, found by shape in the documents the row declares, so the preset
-    // names none and abstains for a consumer that declares none.
+    // names none.
+    //
+    // Version 3 (CLOUD-2335) adds the write-time arm: a mediated module refusing
+    // a write that authors shell, over the `shell-introduced` fact the hook
+    // decides with the same detector. A second row at `mediated_call` enables it.
+    // CLOUD-2628 rides the same version, since both ship in one release: the ban
+    // refuses shell's PRESENCE by default — a consumer declaring no
+    // `[census.shell]` included — admitting only a generated-table entry, and
+    // judges growth alone under `mode = "migrate"` or a legacy `exempt` list.
+    // It is an opinionated opt-in, so no starter suggests it
+    // (`preset-suggested-by-init`, above `MANIFESTS`).
     Manifest {
         name: "shell-hygiene",
-        version: 2,
+        version: 3,
+        suggested: false,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1478,6 +1513,12 @@ step.",
                 provider: None,
                 pointer: "<preset:shell-hygiene>/no-new-shell.rego",
                 source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:shell-hygiene>/no-shell-written.rego",
+                source: include_str!("policy/presets/shell-hygiene/no-shell-written.rego"),
             },
         ],
         verdicts: &[
@@ -1538,15 +1579,97 @@ syntax. Move the logic into a declared task or the engine and call it from the s
             },
             VendoredVerdict {
                 id: "shell place refused",
-                gloss: "a shell file was added outside the declared set of files that must be shell",
+                gloss: "a migrating repository added a shell file its census does not admit",
                 class: "A `.sh`, `.bash` or `.bats` path, or a file whose first line names a shell, \
-was added. The only files that must be shell are the ones that run where nothing else can — an \
-installer or bootstrap that brings the toolchain to a host, a hook launcher the toolchain cannot \
-reach — and the consumer names them in its census declaration, where widening the set is a \
-reviewed change to the committed config. Anything else is a verb, a module or a recorder.",
+was added while the census declares `mode = \"migrate\"` or still carries a legacy `exempt` list. \
+Migrating means existing shell may shrink and no new shell arrives: the files the census admits \
+are its legacy exempt globs and its generated table, and widening either is a reviewed change to \
+the committed config. Anything else is a verb, a module or a recorder.",
                 routes: &[read(
                     "source read first",
-                    "the census declaration's exempt set",
+                    "the census declaration's generated table",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell present refused",
+                gloss: "the tree carries shell that no generated-table entry admits",
+                class: "This repository enabled the shell ban without declaring that it is \
+migrating, so shell is refused wherever it is: a shell file, a declared manifest's shell command \
+lines, a declared workflow's shell steps. The only shell admitted is a file a \
+`[[census.shell.generated]]` entry covers, naming the generator that writes it and the test that \
+holds its bytes. Port the rest, or declare `mode = \"migrate\"` while it is ported.",
+                routes: &[read(
+                    "source read first",
+                    "the census declaration and the shell it points at",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "file write refused",
+                gloss: "an existing shell file's code lines rose against the base",
+                class: "Under migration, existing shell may shrink and may never grow: a shell \
+file edited on this branch carries more code lines than its base, or became shell by gaining a \
+shebang. Deleting shell is always free, and an edit that does not grow the file lands. Put the \
+new logic in a verb, a module or an argv task.",
+                routes: &[read("source read first", "the grown shell file")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell path missing",
+                gloss: "a generated-table entry's glob matches no tracked file",
+                class: "Each `[[census.shell.generated]]` entry admits shell a generator writes, \
+so an entry with nothing behind it is an admission waiting for a file nobody reviewed. The table \
+is held in both directions: shell outside it is refused, and an entry covering no tracked path is \
+refused too. Delete the entry, or correct its glob.",
+                routes: &[read("source read first", "the generated entry's glob")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell test missing",
+                gloss: "a generated-table entry's check names a test its file does not hold",
+                class: "A generated entry admits shell because a named test holds the generator's \
+bytes; `check = \"<test file>::<test name>\"` must point at a file one of whose lines carries the \
+test name. An absent file or a name no line holds is a check nothing runs, so the admission \
+stands on nothing. Point the entry at the test that pins the generated bytes.",
+                routes: &[read("source read first", "the generated entry's check")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell spawn refused",
+                gloss: "engine source spawns a shell no spawn-table row declares",
+                class: "A string-literal argv outside test code runs a shell: `Command::new(\"sh\")`, \
+an `(\"sh\", \"-c\")` pair, or an interpreter handed an inline script. The engine runs programs, not \
+shell, so the only spawn admitted is one a `[[census.shell.spawn]]` row declares, naming the file, \
+the function and the external format that forces a shell, with its citation. Spawn the program \
+directly with its argv instead.",
+                routes: &[read("source read first", "the spawn site")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell spawn missing",
+                gloss: "a spawn-table row names a function that spawns no shell",
+                class: "Each `[[census.shell.spawn]]` row admits one function's shell spawn, so a \
+row whose function spawns none is an admission waiting for a spawn nobody reviewed. The table is \
+held in both directions. Delete the row, or correct its path or function.",
+                routes: &[read(
+                    "source read first",
+                    "the census declaration's spawn table",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell write refused",
+                gloss: "a write would create a shell file or put a shell shebang on line 1",
+                class: "This repository has stopped writing shell, and the write is where that is \
+cheapest to hear: the tree arms would refuse the same file at verify, after the work around it was \
+built. A write that creates a shell-named file, or puts a shebang naming a shell on a file whose \
+first line named none, is refused; an edit to a file that already starts with one is the tree \
+arms' to judge. The agent's own commands are never judged here, only what the repository would \
+commit.",
+                routes: &[read(
+                    "source write first",
+                    "write it as Rust, a `batten` verb, or an argv task",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },
@@ -1577,6 +1700,7 @@ reviewed change to the committed config. Anything else is a verb, a module or a 
     Manifest {
         name: "tracker-hygiene",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1884,6 +2008,7 @@ one. Fetch the cited issue and pipe the set again.",
     Manifest {
         name: "supply-chain",
         version: 1,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -2005,6 +2130,7 @@ dependencies. A recovered crate outside it means the binary was not built from t
     Manifest {
         name: "trunk-based",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2037,6 +2163,7 @@ is the same operation with the one check that makes it safe.",
     Manifest {
         name: "linear-history",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2061,6 +2188,7 @@ fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git p
     Manifest {
         name: crate::land::RED_HEAD,
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2096,6 +2224,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     Manifest {
         name: "git",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2122,6 +2251,7 @@ look at again. Read each named failed job's log first; reading is what admits th
     Manifest {
         name: "claude-code-plan",
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -2474,6 +2604,7 @@ mod tests {
     const FIXTURE: Manifest = Manifest {
         name: "fixture",
         version: 3,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,

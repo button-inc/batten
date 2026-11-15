@@ -121,9 +121,13 @@ fn one_row(path: &str) -> String {
 /// **The platform split is `cfg!` INSIDE the case, never `#[cfg]` over it**
 /// (`rules/rust.md`). The rewrite is the subject and it is the same on every
 /// target, so the assertions about the bytes must compile and run everywhere;
-/// only EXECUTING a `#!/bin/sh` file is POSIX-shaped, and that is the one part
-/// the arm guards. An attribute here would delete the whole case on Windows and
-/// leave the next edit to it discovered by CI.
+/// only EXECUTING a file by its shebang is POSIX-shaped, and that is the one
+/// part the arm guards. An attribute here would delete the whole case on Windows
+/// and leave the next edit to it discovered by CI.
+///
+/// **THE BODY CARRIES NO SHELL (CLOUD-2629)**: line 1 execs `true` through
+/// `env`, and line 2 is the marker as a comment. Asserted byte for byte, before
+/// the platform arm, which is what kills `shim-body-reverts-to-shell`.
 #[test]
 fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     let bench = bench("disarm-armed", &one_row("stop.sh"), &[("stop.sh", ARMED)]);
@@ -134,7 +138,7 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     assert!(err.contains("stop.sh shimmed"), "{err}");
 
     let body = bench.body("stop.sh");
-    assert!(body.contains(MARKER), "{body}");
+    assert_eq!(body, format!("#!/usr/bin/env true\n# {MARKER}\n"));
     assert!(!body.contains("the launcher hook ran"), "{body}");
 
     // The hook's own contract: a Stop hook is handed JSON on stdin. The shim
@@ -207,7 +211,7 @@ fn the_shim_keeps_the_mode_the_launcher_set() {
 /// the bytes and the write COUNT, not the state token.
 #[test]
 fn an_already_shimmed_script_is_not_rewritten() {
-    let shim = format!("#!/bin/sh\nexit 0 # {MARKER}\n");
+    let shim = format!("#!/usr/bin/env true\n# {MARKER}\n");
     let bench = bench(
         "disarm-idempotent",
         &one_row("stop.sh"),
@@ -231,6 +235,30 @@ fn an_already_shimmed_script_is_not_rewritten() {
         after.modified().expect("mtime"),
         "the script was rewritten despite already carrying the marker"
     );
+}
+
+/// A shim written before CLOUD-2629 carries the marker under a `#!/bin/sh` body.
+/// It is rewritten once to the current body, which carries no shell, and the
+/// next disarm leaves it alone.
+///
+/// Fails by: reading the marker alone as `shimmed`, which would keep the old
+/// shell body on every host disarmed before the change.
+#[test]
+fn an_old_body_shim_is_rewritten_once() {
+    let old = format!("#!/bin/sh\nexit 0 # {MARKER}\n");
+    let bench = bench("disarm-old-body", &one_row("stop.sh"), &[("stop.sh", &old)]);
+
+    let (status, err) = bench.reclaim(&["-y"]);
+    assert_eq!(status, 0, "{err}");
+    assert!(err.contains("disarmed 1 of 1 declared script(s)"), "{err}");
+    assert_eq!(
+        bench.body("stop.sh"),
+        format!("#!/usr/bin/env true\n# {MARKER}\n")
+    );
+
+    let (status, err) = bench.reclaim(&["-y"]);
+    assert_eq!(status, 0, "{err}");
+    assert!(err.contains("disarmed 0 of 1 declared script(s)"), "{err}");
 }
 
 /// Case (c): a declared path that does not exist is reported and never created.

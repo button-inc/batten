@@ -1,8 +1,6 @@
 ---
 paths:
   - "crates/**/*.rs"
-  - "mise-tasks/*"
-  - "tests/*.bats"
   - "hk.pkl"
   - ".github/workflows/*.yml"
 ---

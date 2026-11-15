@@ -2,10 +2,10 @@
 //! passed, with an expiry condition that is a git fact.
 //!
 //! The behavioural spec is the bash receipt system this module ports —
-//! `mise.toml`'s `verify` body and `mise-tasks/linear-check.sh` write receipts
+//! `mise.toml`'s `verify` body and `mise-tasks/linear-check.sh` wrote receipts
 //! keyed to the exact HEAD they validated, and `mise-tasks/ready-guard.sh` /
-//! `mise-tasks/verified.sh` honour them only while HEAD and the recorded
-//! `origin/main` still match. An amend, a rebase, or a main that moved all
+//! `mise-tasks/verified.sh` honoured them only while HEAD and the recorded
+//! `origin/main` still matched. An amend, a rebase, or a main that moved all
 //! invalidate a receipt instead of letting it silently keep counting. Port,
 //! don't redesign: this module changes where a receipt lives and what shape it
 //! has, never when it is valid.
@@ -1075,7 +1075,7 @@ fn own_commit_count(main: &str) -> Option<usize> {
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
 /// path separator replaced.
 ///
-/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check.sh`
+/// **A writer↔reader contract, not an internal detail.** `batten claim`
 /// mints this file and this reads it, so the two spellings must agree exactly or
 /// the gate silently reports a missing receipt for one that exists — a deny on a
 /// claim that was made. A slash is the one character a filename cannot carry and
@@ -1258,14 +1258,14 @@ fn branch_validity_with(
 
 /// The `base <sha>` line a claim receipt carries, or `None` when it carries none.
 ///
-/// Matched by KEY rather than by line number: `mise-tasks/claim-check.sh` writes the
+/// Matched by KEY rather than by line number: `batten claim` writes the
 /// id list on line 1 and has already grown two more fields under it (CLOUD-431),
 /// so a positional reader would break on the next one. `-` is the task's own
 /// spelling for "origin/main did not resolve when I minted this" and reads as
 /// absent here, never as a base that happens to match nothing.
 ///
 /// **The LAST such line, not the first, because every writer APPENDS**
-/// (CLOUD-1057). `issue-search-check.sh` and `claim-check.sh` both open the
+/// (CLOUD-1057). `issue-search-check.sh` and `claim-check.sh` both opened the
 /// receipt with `>>`, so a branch that mints twice carries two `base` lines and
 /// the newer one describes the evidence just taken.
 ///
@@ -1279,7 +1279,7 @@ fn branch_validity_with(
 ///
 /// A remedy that cannot reach the state it prescribes is worse than no remedy,
 /// because the author reads the gate as broken rather than the receipt as stale;
-/// `mise-tasks/suite-bench.sh` records the same lesson for its own report.
+/// `mise-tasks/suite-bench.sh` recorded the same lesson for its own report.
 ///
 /// **The reader is the half that was wrong, not the writers.** A receipt is
 /// append-only on purpose — see the CLOUD-431 note above — so a truncating writer
@@ -1574,7 +1574,7 @@ pub fn run_clean(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
 ///
 /// [`crate::git::uncommitted`] counts staged, unstaged and untracked alike, and
 /// the third is the one a `diff HEAD` predicate misses. The gap is not
-/// theoretical: `cargo test` autodiscovers test targets and the bats suite globs
+/// theoretical: `cargo test` autodiscovers test targets and the bats suite globbed
 /// `tests/*.bats`, so a brand-new untracked file is compiled and run by `verify`
 /// with ZERO tracked-file change. A receipt written after that attests a pass over
 /// bytes no commit contains, which is the whole failure. Ignored paths are
@@ -1710,7 +1710,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
 ///
 /// It used to raise, and `run_record` calls this last — so the receipt reached
 /// disk and `batten receipt record` still exited 1. `mise-tasks/linear-check.sh`
-/// ends with that command under `set -e`, so `verify`, and therefore `land`,
+/// ended with that command under `set -e`, so `verify`, and therefore `land`,
 /// stopped on a gate that had already measured linearity correctly. The three
 /// states `batten.toml`'s `[transcript]` header calls ORDINARY — a fresh
 /// checkout, a non-Claude host, a gate run by hand outside a turn — are exactly
@@ -2245,9 +2245,9 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     }
     // POINTER-ONLY: the check's name and its verdict token, never a receipt's
     // contents. And "NOT verified" is the predecessor's own wording, kept rather
-    // than improved because a SURVIVING suite reads for it —
-    // `tests/tree-clean.bats` proves a dirty tree leaves HEAD unverified by
-    // looking for exactly this string, and that suite's subject does not retire
+    // than improved because a SURVIVING suite read for it —
+    // `tests/tree-clean.bats` proved a dirty tree leaves HEAD unverified by
+    // looking for exactly this string, and that suite's subject did not retire
     // here, so the string is part of the contract this port must conserve.
     for (check, verdict) in &unverified {
         writeln!(

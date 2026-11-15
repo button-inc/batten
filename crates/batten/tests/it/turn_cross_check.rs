@@ -96,30 +96,25 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
-/// An executable at `dir/name` running `body`.
-fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
-    common::write(dir, name, body);
-    let path = dir.join(name);
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
-}
-
 /// Five pointer lines, two carrying colour escapes, among noise, then a failure.
+///
+/// The stand-in (`examples/stub.rs`, CLOUD-2336), its lines on the same streams
+/// and in the same order the retired `#!/bin/sh` script wrote them.
 fn failing(dir: &Path) -> PathBuf {
-    script(
-        dir,
-        "failing.sh",
-        "#!/bin/sh\n\
-         echo 'Checking batten'\n\
-         printf 'src/a.rs:1:1: \\033[31merror\\033[0m: one\\n'\n\
-         printf 'src/b.rs:2:1: \\033[31merror\\033[0m: two\\n' >&2\n\
-         echo 'src/c.rs:3:1: error: three' >&2\n\
-         echo 'src/d.rs:4:1: error: four' >&2\n\
-         echo 'src/e.rs:5:1: error: five' >&2\n\
-         echo 'note: noise'\n\
-         exit 1\n",
-    )
+    let path = dir.join("failing");
+    common::stub_at(
+        &path,
+        &serde_json::json!([{"steps": [
+            {"stdout": "Checking batten\nsrc/a.rs:1:1: \u{1b}[31merror\u{1b}[0m: one\n"},
+            {"stderr": "src/b.rs:2:1: \u{1b}[31merror\u{1b}[0m: two\n\
+                        src/c.rs:3:1: error: three\n\
+                        src/d.rs:4:1: error: four\n\
+                        src/e.rs:5:1: error: five\n"},
+            {"stdout": "note: noise\n"},
+            {"exit": 1},
+        ]}]),
+    );
+    path
 }
 
 /// `singleton detach` over `command`, with `extra` flags before the `--`.

@@ -738,19 +738,19 @@ fn stub(dir: &Path, exit: i32, stdout: &str) {
 /// [`stub`], declared under the row id `id`, so one fixture can carry two rungs.
 #[cfg(unix)]
 fn stub_as(dir: &Path, id: &str, exit: i32, stdout: &str) {
-    let path = dir.join(format!("{id}-stub.sh"));
-    fs::write(
+    // The stand-in (`examples/stub.rs`, CLOUD-2336): a payload naming a
+    // transcript gets `stdout` and `exit`; any other abstains, exit 0 and silent.
+    let path = dir.join(format!("{id}-stub"));
+    common::stub_at(
         &path,
-        format!(
-            "#!/bin/sh\ngrep -q transcript_path || exit 0\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"
-        ),
-    )
-    .expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
-    }
+        &serde_json::json!([
+            {"stdin_contains": "transcript_path", "steps": [
+                {"stdout": format!("{stdout}\n")},
+                {"exit": exit},
+            ]},
+            {"steps": [{"exit": 0}]},
+        ]),
+    );
     let config = dir.join("batten.toml");
     let mut text = fs::read_to_string(&config).expect("read config");
     let _ = write!(
@@ -779,10 +779,10 @@ fn stop_with_transcript(dir: &Path, message: &str) -> String {
 /// RULE 2 — a finding stated in prose with nothing durable written. The pointer
 /// is the sibling's stdout and the advice says what to do with it, because a
 /// coordinate alone is not an instruction.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
@@ -809,10 +809,10 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
 /// now a finding: the first sighting in a window is full and every later one a
 /// pointer, which is what bounds the channel — not silence. `prose report
 /// duplicate` leads at 3/3 against `finding-sink`'s 1/1, so it still comes first.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn every_applicable_stop_rung_speaks_in_rank_order() {
@@ -838,10 +838,10 @@ fn every_applicable_stop_rung_speaks_in_rank_order() {
 }
 
 /// A sibling that found nothing says nothing, which is the common case.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn a_turn_that_strands_nothing_is_silent() {
@@ -875,10 +875,10 @@ fn a_turn_that_strands_nothing_is_silent() {
 /// COULD NOT LOOK MANUFACTURES NOTHING. A transcript the engine cannot read
 /// leaves the rule with no subject, and inventing an advisory over that would be
 /// a verdict about the environment wearing a verdict about the turn.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn an_unreadable_transcript_manufactures_no_advisory() {
@@ -894,10 +894,10 @@ fn an_unreadable_transcript_manufactures_no_advisory() {
 /// THE BYPASS IS ONE HATCH FOR THE SET, exactly as the retired hook had it:
 /// these are five readings of one question, and a per-rule switch would let the
 /// surface be dismantled a rule at a time with nothing reporting it.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn the_stop_guard_bypass_silences_the_whole_surface() {
@@ -1265,10 +1265,10 @@ fn landed_work_is_silent() {
 /// THE RECURSION BOUND HOLDS FOR EVERY RULE, not just the module: it is checked
 /// once, before any of them, so a second `Stop` in one turn spawns nothing at
 /// all rather than spawning and then discarding.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn the_recursion_bound_holds_for_every_rule() {
@@ -1291,10 +1291,10 @@ fn the_recursion_bound_holds_for_every_rule() {
 /// The one exception is CLOUD-2441's refusal of an ignored unlanded pointer,
 /// bounded by its own receipt and pinned by
 /// `an_ignored_unlanded_pointer_refuses_the_next_stop`.
-// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
-// Windows ladder's third rung resolves the interpreter a shebang names — which
-// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
-// exactly this reason. The rules above spawn nothing and stay cross-platform.
+// UNIX-ONLY, per CLOUD-113: this case spawns the stand-in through a symlink
+// named with no executable suffix, which a Windows runner cannot start.
+// `bundle.rs` gates its whole suite for the same reason. The rules above spawn
+// nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
 fn the_stop_surface_never_exits_non_zero() {

@@ -91,12 +91,13 @@
 //! # UNIX-ONLY, and the narrowing costs nothing this replaced
 //!
 //! Every case here drives a `[[recorder]]` whose interesting columns are
-//! PROGRAM-derived, and the fixtures are `#!/bin/sh` stubs. On a Windows runner
+//! PROGRAM-derived. The fixtures were `#!/bin/sh` stubs, and on a Windows runner
 //! the spawn ladder's third rung resolves the interpreter a shebang names, and
 //! `/bin/sh` is not a program a Windows runner can start — so every column came
 //! back could-not-look and the suite asserted the ladder rather than the
 //! recorder. `bundle.rs` gates its whole suite for exactly this reason and cites
-//! the same row (CLOUD-113).
+//! the same row (CLOUD-113). They are the stand-in now (CLOUD-2336), installed
+//! as a symlink, which keeps the suite on unix.
 //!
 //! The narrowing is smaller than it looks: `tests/board-write-record.bats`, the
 //! suite this replaces, never ran on Windows either. What would be lost by
@@ -122,8 +123,8 @@ use common::{run_with_stdin, scratch};
 /// declaration rather than of a grammar some other file owns.
 fn repo(name: &str, lint_exit: i32, lint_stdout: &str, paths_stdout: &str) -> PathBuf {
     let dir = scratch(name);
-    write_program(&dir, "lint.sh", lint_exit, lint_stdout);
-    write_program(&dir, "paths.sh", 0, paths_stdout);
+    write_program(&dir, "lint", lint_exit, lint_stdout);
+    write_program(&dir, "paths", 0, paths_stdout);
     fs::write(dir.join("batten.toml"), CONFIG).expect("write config");
     git(&dir, &["init", "--quiet", "--initial-branch", "work"]);
     git(&dir, &["config", "user.email", "t@example.com"]);
@@ -133,21 +134,13 @@ fn repo(name: &str, lint_exit: i32, lint_stdout: &str, paths_stdout: &str) -> Pa
     dir
 }
 
+/// The stand-in (`examples/stub.rs`, CLOUD-2336) at `dir/name`: it swallows its
+/// stdin, prints `stdout` and a newline, and exits `exit`.
 fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
-    let path = dir.join(name);
-    fs::write(
-        &path,
-        // `%s\n` with the newline OWNED HERE rather than embedded in the
-        // argument: a `\n` inside the Rust literal reaches bash escaped, so
-        // `printf '%s'` prints it verbatim and glues it to the last token.
-        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
-    )
-    .expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
-    }
+    common::stub_at(
+        &dir.join(name),
+        &serde_json::json!([{"steps": [{"stdout": format!("{stdout}\n")}, {"exit": exit}]}]),
+    );
 }
 
 /// Through [`common::git_in`], the hermetic fixture builder: a contributor's
@@ -214,10 +207,10 @@ const CONFIG: &str = r#"
 version = 1
 
 [program.lint]
-path = "lint.sh"
+path = "lint"
 
 [program.paths]
-path = "paths.sh"
+path = "paths"
 
 [[pattern]]
 id = "clause-label"

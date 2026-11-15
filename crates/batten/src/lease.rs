@@ -3489,8 +3489,8 @@ pub enum Guarded {
 ///
 /// # STALENESS FIRST, AND THE LEASE IS NOT CONSULTED WHEN IT STOPS
 ///
-/// The predecessor's ordering, conserved: `ci-lease-precondition.sh` sets `stop`
-/// from the staleness row and enters the lease table only `if [[ -z "$stop" ]]`.
+/// The predecessor's ordering, conserved: `ci-lease-precondition.sh` set `stop`
+/// from the staleness row and entered the lease table only `if [[ -z "$stop" ]]`.
 /// So `authority` is `None` where the caller never asked — one fewer forge read
 /// on a head that is doomed either way — and `None` is not a third verdict.
 ///
@@ -3783,7 +3783,7 @@ pub fn newest_landing_commit(
 ///
 /// # Server-side ancestry, and the reason is the predecessor's own
 ///
-/// `ci-lease-precondition.sh` already records why this is an API question rather
+/// `ci-lease-precondition.sh` already recorded why this is an API question rather
 /// than a `merge-base --is-ancestor`: that needs a deep fetch and "answers
 /// wrongly after a rebase or a cherry-pick, both of which are the normal shape
 /// of work here". The compare endpoint answers it in one request against no
@@ -4591,7 +4591,7 @@ mod tests {
     /// lease. Naming only the holder shows half the occupancy, so the one view
     /// meant to explain who is spending CI could not name the second spender.
     ///
-    /// Five cases in `tests/land-lock-check.bats` assert it, one per state.
+    /// Five cases in `tests/land-lock-check.bats` asserted it, one per state.
     #[test]
     fn every_health_state_names_the_admitted_successor() {
         let terms = Terms::default();

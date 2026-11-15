@@ -20,7 +20,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, StateHome, batten, scratch, stderr, stdout, write};
+use common::{Fixture, StateHome, batten, scratch, stderr, stdout};
 
 /// The rule id every fixture below declares, so assertions can name it.
 const RULE: &str = "reads-intentional";
@@ -58,31 +58,17 @@ fn fixture(name: &str, code: i32, extra_config: &str) -> (PathBuf, PathBuf) {
         .base_commit()
         .build();
     let home = Fixture::at(root.join("home")).build();
-    let bin = root.join("bin");
-    write(
-        &bin,
-        "judge-stub",
-        &format!(
-            "#!/bin/sh\ncat >/dev/null\necho '{JUDGE_CHATTER}'\necho '{JUDGE_CHATTER}' \
-             >&2\nexit {code}\n"
-        ),
+    // It swallows the payload, says its chatter on both streams, and exits `code`.
+    judge_stub(
+        &root,
+        &serde_json::json!([
+            {"stdout": format!("{JUDGE_CHATTER}\n")},
+            {"stderr": format!("{JUDGE_CHATTER}\n")},
+            {"exit": code},
+        ]),
     );
-    make_executable(&bin.join("judge-stub"));
     (repo, home)
 }
-
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("stat the stub")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("chmod the stub");
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}
 
 /// Run `batten` in `repo` with the fixture's own store and, when `with_stub`,
 /// its `bin/` on `PATH`.
@@ -103,6 +89,9 @@ fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output
     // fourteen, on CLOUD-113's twentieth Windows run, and the misattribution cost
     // a round trip: the engine's own PATH lookup was correct throughout, because
     // it has always used `split_paths`.
+    // The judge runs by bare name, so the stand-in's argv[0] carries no
+    // directory to find its plan beside: the variable names it.
+    let plan = bin.join(format!("{}.plan.json", judge_file()));
     let path = if with_stub {
         let mut entries = vec![bin.into_os_string()];
         entries.extend(std::env::split_paths(&inherited).map(PathBuf::into_os_string));
@@ -116,8 +105,25 @@ fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output
         .current_dir(repo)
         .env("PATH", path)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_STUB_PLAN", plan)
         .output()
         .expect("run batten")
+}
+
+/// The stand-in judge's file name: executable-suffixed, so a Windows PATH
+/// lookup of `judge-stub` finds it.
+fn judge_file() -> String {
+    format!("judge-stub{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Install the stand-in (`examples/stub.rs`, CLOUD-2336) as `judge-stub` in
+/// `root/bin` under `steps`; [`judge_cmd`] names its plan through
+/// `BATTEN_STUB_PLAN`.
+fn judge_stub(root: &Path, steps: &serde_json::Value) {
+    common::stub_at(
+        &root.join("bin").join(judge_file()),
+        &serde_json::json!([{ "steps": steps }]),
+    );
 }
 
 /// The store's records, as `state list -J` reports them.
@@ -449,9 +455,7 @@ fn a_row_whose_glob_matches_nothing_spends_no_model_call() {
         .base_commit()
         .build();
     let home = Fixture::at(root.join("home")).build();
-    let bin = root.join("bin");
-    write(&bin, "judge-stub", "#!/bin/sh\nexit 2\n");
-    make_executable(&bin.join("judge-stub"));
+    judge_stub(&root, &serde_json::json!([{"exit": 2}]));
 
     let output = judge_cmd(&repo, &home, &["enforce"], true);
     assert_eq!(output.status.code(), Some(0));

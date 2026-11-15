@@ -1065,11 +1065,59 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     },
     VendoredDoc {
         id: "shell place refused",
-        why: Some(
-            "Only files that must run where nothing else can are shell, and the census declaration names them",
-        ),
+        why: Some("A migrating repository's shell may shrink, and no new shell file may arrive"),
         act: &["write it as a verb, module or recorder"],
-        dont: &["add a `.sh`, `.bash` or `.bats` file outside the declared set"],
+        dont: &["add a `.sh`, `.bash` or `.bats` file the census does not admit"],
+    },
+    VendoredDoc {
+        id: "shell write refused",
+        why: Some(
+            "This repository stopped writing shell, and the write is the cheapest place to hear it",
+        ),
+        act: &["write it as Rust, a `batten` verb, or an argv task"],
+        dont: &["give the file a name that hides its language"],
+    },
+    VendoredDoc {
+        id: "shell present refused",
+        why: Some("The ban refuses shell wherever it is, unless a generated entry admits it"),
+        act: &[
+            "port it to a verb, module or argv task",
+            "or declare `mode = \"migrate\"` in `[census.shell]` while it is ported",
+        ],
+        dont: &["rename the file to hide its language"],
+    },
+    VendoredDoc {
+        id: "file write refused",
+        why: Some("A migrating repository's existing shell files may only lose code lines"),
+        act: &["put the new logic in a verb, module or argv task"],
+        dont: &["move the lines into another shell file"],
+    },
+    VendoredDoc {
+        id: "shell path missing",
+        why: Some("A generated entry covering no tracked file admits shell nobody reviewed"),
+        act: &["delete the entry, or correct its glob"],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "shell test missing",
+        why: Some("A generated entry stands on a test that holds the generator's bytes"),
+        act: &["point `check` at the test that pins the generated file"],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "shell spawn refused",
+        why: Some("The engine runs programs, and a shell spawn stands only on a declared contract"),
+        act: &[
+            "spawn the program directly with its argv",
+            "or declare a `[[census.shell.spawn]]` row citing the format that forces a shell",
+        ],
+        dont: &["build the argv from a computed program name to hide it"],
+    },
+    VendoredDoc {
+        id: "shell spawn missing",
+        why: Some("A spawn row whose function spawns no shell admits a spawn nobody reviewed"),
+        act: &["delete the row, or correct its path or function"],
+        dont: &[],
     },
     VendoredDoc {
         id: "diff key missing",

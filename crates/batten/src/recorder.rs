@@ -1524,13 +1524,19 @@ mod outcome_tests {
     #[test]
     fn a_declared_program_answers_with_its_own_status_and_stdout() {
         if !cfg!(unix) {
-            // Off unix there is no `sh` to run the declared program's script.
+            // Off unix the stand-in is a copy without the platform's executable
+            // suffix, so the case stays unix-only.
             return;
         }
         let dir = crate::scratch::scratch("recorder-run-program");
-        let script = dir.join("echo.sh");
-        std::fs::write(&script, "#!/bin/sh\ncat\nexit 3\n").expect("script");
-        crate::engine::make_executable(&script).expect("mode");
+        // Echoes its stdin (only a fed child matches) and exits 3.
+        crate::scratch::stub_at(
+            &dir.join("echo.sh"),
+            &serde_json::json!([{
+                "stdin_contains": "payload",
+                "steps": [{ "stdout": "payload" }, { "exit": 3 }],
+            }]),
+        );
         let program = Program {
             path: "echo.sh".to_owned(),
             args: Vec::new(),

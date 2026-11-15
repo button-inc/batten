@@ -1629,7 +1629,7 @@ impl Harness {
                     config_surface: Declaration::Partial,
                 },
                 // The one host with a measured capture row, and it is one cell
-                // of three. `tests/board-write-record.bats` reads this host's
+                // of three. `tests/board-write-record.bats` read this host's
                 // MCP content-block response shape, so the post-tool member is
                 // reachable — as DECODED content, because [`decode`] hands the
                 // engine an already-parsed value and the member's original
@@ -2089,6 +2089,9 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
         .collect()
 }
 
+// The suite these rows have always resolved to as the source's first declaration
+// (CLOUD-2193), stated here so a declaration added above them later cannot move it.
+//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
 //MUTANT source-unenumerated|s@^        HookSource::Git,$@@|every_hook_source_is_enumerated_with_a_nonempty_vocabulary
 //MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
 //MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
@@ -3111,8 +3114,8 @@ impl Field {
 /// entirely", and that is not expressible in this return type. Since CLOUD-824
 /// there is no launcher to report it: an absent binary is a command the host
 /// cannot run, which every supported host reports through its own channel, and
-/// this consumer's provisioning (`mise run install:local`, from
-/// `session-start.sh`) fails loudly at the moment it could still be fixed.
+/// this consumer's provisioning (`mise run install:local`, a
+/// `[[startup]]` repair) fails loudly at the moment it could still be fixed.
 #[must_use]
 pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
     field.read(&decode(harness, raw)?)
@@ -5196,6 +5199,11 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     let Some(spans) = edit_spans(&envelope.input) else {
         return crate::facts::Look::CouldNotLook;
     };
+    Look::Is(apply_spans(current, spans))
+}
+
+/// `current` with each old/new span applied in order, as the host would land it.
+fn apply_spans(current: String, spans: Vec<(String, String, bool)>) -> String {
     let mut landed = current;
     for (old, new, replace_all) in spans {
         // `replacen(.., 1)` rather than `replace`, and the default matters: the
@@ -5208,7 +5216,119 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
             landed.replacen(&old, &new, 1)
         };
     }
-    Look::Is(landed)
+    landed
+}
+
+/// Whether a write authors shell into the repository, and by which arm
+/// (CLOUD-2335): `shell-path` or `shebang`, the reason the policy input carries.
+///
+/// A REASON TOKEN, NEVER THE CONTENT. Rule 4 keeps the bytes a write would land
+/// out of the policy input (see [`ProspectiveFacts`]), and a custom Rego builtin
+/// is refused by the bytecode compiler, so the decision is made here, in Rust,
+/// with the one detector [`crate::shell`] owns, and the module reads its answer.
+pub type ShellIntroducedFacts = crate::facts::Look<&'static str>;
+
+/// The `shell-introduced` reason for a write that creates a shell-named file.
+pub const SHELL_PATH: &str = "shell-path";
+
+/// The `shell-introduced` reason for a write that puts a shell shebang on line 1.
+pub const SHEBANG: &str = "shebang";
+
+/// Decide whether `envelope`'s write introduces shell (CLOUD-2335).
+///
+/// Two arms, both decided by [`crate::shell`] and neither restated here:
+///
+/// * **`shell-path`** — the write CREATES a file absent on disk at a path
+///   [`crate::shell::shell_path`] accepts. An existing shell file is the tree
+///   arms' to judge, never a write's.
+/// * **`shebang`** — [`crate::shell::shebang`] names a shell for the first line
+///   the write would land and names none for the first line on disk. So an
+///   overwrite keeping an existing shebang introduces nothing.
+///
+/// Write shapes are [`prospective_facts`]'s, keyed by [`Operation`] and never by
+/// tool name: whole-file `/content`, one `/old_string`/`/new_string` span, or an
+/// `/edits` batch. It reads the target itself under the same 1 MiB bound, since
+/// the whole-file arm of [`prospective_facts`] never reads the file — the read
+/// that makes the fact `read`.
+///
+/// **Could-not-look** for a notebook write (a cell starting `#!` is not a file's
+/// first line), a file over the bound or unreadable, an edit whose spans or
+/// target cannot be read, and a host whose write keys left `writes` null. The
+/// module abstains on it.
+///
+/// **A target outside the repository is `is-not`.** The ban covers what the
+/// repository commits, never the agent's own scratch files (the operator's
+/// ruling the row records), and a path still rooted after
+/// [`Envelope::relativise_writes`] is not in the tree.
+//MUTANT-SUITE crates/batten/tests/it/shell_authored.rs
+//MUTANT write-suffix-unread|s@^    if absent && crate::shell::shell_path(target) {$@    if false {@|a_write_creating_a_shell_suffixed_file_is_refused
+//MUTANT write-shebang-unread|s@^    let introduces = crate::shell::shebang(&first_line(landed.as_bytes())).is_some();$@    let introduces = false;@|a_write_landing_a_shell_shebang_is_refused_and_another_language_is_not
+//MUTANT edit-replaced-unread|s@^    let before = current.as_deref().unwrap_or_default();$@    let before: \&[u8] = b"";@|an_overwrite_keeping_an_existing_shebang_is_not_refused
+//MUTANT projection-harness-specific|s@^        let Some(spans) = edit_spans(&envelope.input) else {$@        let Some(spans) = None::<Vec<(String, String, bool)>> else {@|an_edit_and_a_batch_putting_a_shebang_on_line_one_are_refused
+#[must_use]
+pub fn shell_introduced(root: &std::path::Path, envelope: &Envelope) -> ShellIntroducedFacts {
+    use crate::facts::Look;
+
+    if envelope.operation != Operation::Write {
+        return Look::CouldNotLook;
+    }
+    if envelope.input.pointer("/new_source").is_some()
+        || envelope.input.pointer("/notebook_path").is_some()
+    {
+        return Look::CouldNotLook;
+    }
+    let Some(target) = envelope.writes.as_deref() else {
+        return Look::CouldNotLook;
+    };
+    if std::path::Path::new(target).has_root() {
+        return Look::IsNot;
+    }
+    let on_disk = root.join(target);
+    let current = match std::fs::metadata(&on_disk) {
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_PROSPECTIVE_BYTES => {
+            let Ok(bytes) = std::fs::read(&on_disk) else {
+                return Look::CouldNotLook;
+            };
+            Some(bytes)
+        }
+        Ok(_) | Err(_) => return Look::CouldNotLook,
+    };
+    let absent = current.is_none();
+    if absent && crate::shell::shell_path(target) {
+        return Look::Is(SHELL_PATH);
+    }
+    let landed = if let Some(content) = envelope.input.pointer("/content").and_then(Value::as_str) {
+        content.to_owned()
+    } else {
+        let Some(spans) = edit_spans(&envelope.input) else {
+            return Look::CouldNotLook;
+        };
+        let Some(text) = current
+            .as_deref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        else {
+            return Look::CouldNotLook;
+        };
+        apply_spans(text.to_owned(), spans)
+    };
+    let before = current.as_deref().unwrap_or_default();
+    let introduces = crate::shell::shebang(&first_line(landed.as_bytes())).is_some();
+    if introduces && crate::shell::shebang(&first_line(before)).is_none() {
+        Look::Is(SHEBANG)
+    } else {
+        Look::IsNot
+    }
+}
+
+/// The first line of `bytes`, read lossily: a shebang is ASCII, so bytes that
+/// are not UTF-8 later in the file must not hide one.
+fn first_line(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 /// The largest file the prospective read will pull into memory.
@@ -5378,6 +5498,9 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Whether this call's write authors shell, and by which arm (CLOUD-2335):
+    /// [`shell_introduced`]'s answer, a reason token and never the content.
+    pub shell_introduced: &'a ShellIntroducedFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -5430,6 +5553,8 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "introduces nothing": nothing read the write.
+            shell_introduced: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -5522,6 +5647,7 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Could-not-look answers `true` — the row stays selected — for the reason
 /// [`marker_present`]'s unreadable arms give: an answer nobody could read must
 /// not switch a refusal off on exactly the checkouts least able to notice.
+//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
 //MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
 //MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
 fn head_unpushed() -> bool {
@@ -6362,6 +6488,17 @@ struct Grammar {
     /// fallback also reads every program no table classifies, where `-verbose`
     /// is one word and reading its `e` as inline would refuse a mention.
     bundles: bool,
+    /// The `inline` options that name a MODULE rather than carry program text
+    /// (`python -m`): no script file follows, and no script text either
+    /// (CLOUD-2626).
+    module: &'static str,
+    /// Short options whose value is a program FILE (`awk -f`, `sed -f`), which
+    /// stops the first operand being the program text (CLOUD-2626). Not in
+    /// `valued`, so [`script_operand`] steps over the letter alone and reads the
+    /// file it names as the operand, as the fallback always did.
+    program_file: &'static str,
+    /// Long options that do the same.
+    program_file_long: &'static [&'static str],
 }
 
 impl Grammar {
@@ -6391,16 +6528,30 @@ impl Grammar {
     }
 }
 
+/// The fields every family leaves empty unless it says otherwise: no option of
+/// any kind, and options that bundle. Each arm of [`grammar`] names only what it
+/// adds.
+const PLAIN: Grammar = Grammar {
+    inline: "",
+    inline_long: &[],
+    valued: "",
+    valued_long: &[],
+    bundles: true,
+    module: "",
+    program_file: "",
+    program_file_long: &[],
+};
+
 /// The grammar `program` is read through: its family's, or a conservative one
 /// for an interpreter a consumer declared that no family describes.
 fn grammar(program: &str) -> Grammar {
     match family(program) {
         "python" => Grammar {
             inline: "cm",
-            inline_long: &[],
             valued: "WX",
             valued_long: &["--check-hash-based-pycs"],
-            bundles: true,
+            module: "m",
+            ..PLAIN
         },
         "node" | "nodejs" => Grammar {
             inline: "ep",
@@ -6413,32 +6564,162 @@ fn grammar(program: &str) -> Grammar {
                 "--conditions",
                 "--input-type",
             ],
-            bundles: true,
+            ..PLAIN
         },
         "perl" => Grammar {
             inline: "eE",
-            inline_long: &[],
             valued: "IMm",
-            valued_long: &[],
-            bundles: true,
+            ..PLAIN
         },
         "ruby" => Grammar {
             inline: "e",
-            inline_long: &[],
             valued: "rIEC",
             valued_long: &["--encoding"],
-            bundles: true,
+            ..PLAIN
+        },
+        // The POSIX shell family and the shells `crate::shell::ShellKind`
+        // names (CLOUD-2626): `-c` makes the first operand the command string,
+        // options bundle (`-ec`), and `-o`/`-O` take an option name. Each
+        // program's citation is its row in `crate::shell`'s interpreter table.
+        "sh" | "dash" | "ksh" | "mksh" | "ash" | "yash" | "bash" | "zsh" | "csh" | "tcsh" => {
+            Grammar {
+                inline: "c",
+                valued: "oO",
+                valued_long: &["--rcfile", "--init-file"],
+                ..PLAIN
+            }
+        }
+        // fish: `-c`/`--command` and `-C`/`--init-command` both carry commands.
+        "fish" => Grammar {
+            inline: "cC",
+            inline_long: &["--command", "--init-command"],
+            valued: "dfo",
+            valued_long: &["--debug", "--features", "--debug-output"],
+            ..PLAIN
+        },
+        // POSIX awk and mawk: no inline option; the program is the first
+        // operand unless `-f progfile` names it.
+        "awk" | "mawk" => Grammar {
+            valued: "FvW",
+            program_file: "f",
+            ..PLAIN
+        },
+        // gawk adds `-e`/`--source` text and `-E`/`--exec` as a program file.
+        "gawk" => Grammar {
+            inline: "e",
+            inline_long: &["--source"],
+            valued: "FvilW",
+            valued_long: &["--assign", "--field-separator", "--include", "--load"],
+            program_file: "fE",
+            program_file_long: &["--file", "--exec"],
+            ..PLAIN
+        },
+        // sed: `-e script`; `-f file`; otherwise the first operand.
+        "sed" => Grammar {
+            inline: "e",
+            inline_long: &["--expression"],
+            valued: "l",
+            valued_long: &["--line-length"],
+            program_file: "f",
+            program_file_long: &["--file"],
+            ..PLAIN
         },
         // The fallback keeps CLOUD-2231's original reading: exact `-c`, `-e`,
         // `-E`, `--command`, `--eval`, never a bundle.
         _ => Grammar {
             inline: "ceE",
             inline_long: &["--command", "--eval"],
-            valued: "",
-            valued_long: &[],
             bundles: false,
+            ..PLAIN
         },
     }
+}
+
+/// Where an interpreter's argv carries its program, read through its family's
+/// [`grammar`] (CLOUD-2626). The detector's question, [`crate::shell::logic`]'s
+/// rule 10; [`script_operand`] asks the operand gate's narrower one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Carried {
+    /// An inline option carries program text (`-c`, `-e`, `--eval`), wherever
+    /// it stands among the options.
+    Inline,
+    /// A program-file option names it (`awk -f`), and no inline option
+    /// carries text.
+    File,
+    /// The first operand: a script file to most families, the program text
+    /// itself to awk's and sed's.
+    Operand,
+    /// None of those: a module, stdin, or nothing at all.
+    Elsewhere,
+}
+
+/// Read `arguments`, the words after `program`, for where they carry its
+/// program: the options up to the first operand, `--` or `-`, each through the
+/// family's [`grammar`].
+pub(crate) fn carried(program: &str, arguments: &[&str]) -> Carried {
+    // The answer where the options end: a program-file option outranks the
+    // operand it leaves behind.
+    fn stop(file: bool, operand: bool) -> Carried {
+        match (file, operand) {
+            (true, _) => Carried::File,
+            (false, true) => Carried::Operand,
+            (false, false) => Carried::Elsewhere,
+        }
+    }
+    let grammar = grammar(program);
+    let mut file = false;
+    let mut words = arguments.iter().copied();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            return stop(file, words.next().is_some());
+        }
+        if word == "-" {
+            return stop(file, false);
+        }
+        let (name, attached) = long_option(word);
+        if grammar.inline_long.contains(&name) {
+            return Carried::Inline;
+        }
+        let file_long = grammar.program_file_long.contains(&name);
+        if file_long || grammar.valued_long.contains(&name) {
+            file |= file_long;
+            if attached.is_none() {
+                words.next();
+            }
+            continue;
+        }
+        if word.starts_with("--") {
+            continue;
+        }
+        if !word.starts_with('-') {
+            return stop(file, true);
+        }
+        let Some(bundle) = grammar.shorts(word) else {
+            continue;
+        };
+        // The first letter that decides the bundle, a program-file option
+        // included: what follows it is that option's value.
+        let decisive = bundle
+            .char_indices()
+            .take_while(|(_, flag)| flag.is_ascii_alphanumeric())
+            .find(|(_, flag)| {
+                grammar.inline.contains(*flag)
+                    || grammar.valued.contains(*flag)
+                    || grammar.program_file.contains(*flag)
+            });
+        match decisive {
+            Some((_, flag)) if grammar.module.contains(flag) => return stop(file, false),
+            Some((_, flag)) if grammar.inline.contains(flag) => return Carried::Inline,
+            Some((at, flag)) => {
+                file |= grammar.program_file.contains(flag);
+                if at + flag.len_utf8() == bundle.len() {
+                    words.next();
+                }
+            }
+            None => {}
+        }
+    }
+    stop(file, false)
 }
 
 /// Does any first stage run a declared interpreter on a script FILE outside the
@@ -6528,7 +6809,7 @@ fn is_version_char(c: char) -> bool {
 /// The family `program` belongs to: its name with any version suffix removed,
 /// so `perl5.36` and `node22` read through `perl`'s and `node`'s grammar just
 /// as [`declares`] admits them.
-fn family(program: &str) -> &str {
+pub(crate) fn family(program: &str) -> &str {
     program.trim_end_matches(is_version_char)
 }
 
@@ -7795,6 +8076,19 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Null
                 }
             }),
+            // THE LOOK AND A REASON TOKEN, NEVER THE BYTES (CLOUD-2335). All
+            // three answers are spelled, because "could not look" and "looked,
+            // introduces nothing" are different for a module that abstains on
+            // the one and is silent on the other. `reason` is `null` unless `is`.
+            crate::facts::Fact::ShellIntroduced => Some(serde_json::json!({
+                "look": facts.shell_introduced.as_str(),
+                "reason": match facts.shell_introduced {
+                    crate::facts::Look::Is(reason) => serde_json::Value::from(*reason),
+                    crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                        serde_json::Value::Null
+                    }
+                },
+            })),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
                 |records| {
@@ -7883,6 +8177,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Derived from `Lines` and `Document` by parsing every declared
+            // body (CLOUD-2625), so unbounded in the input for both their
+            // reasons at once.
+            crate::facts::Fact::Shell => None,
             // Not resolvable on the mediated call, for `Document`'s reason plus
             // one this family adds (CLOUD-1167): it opens and parses a file of
             // unbounded size, AND the file lives outside the repository, so the
@@ -9969,7 +10267,10 @@ fn words_in(nodes: &[rable::Node]) -> usize {
 /// cost is stated rather than absorbed: an unbalanced quote in a command that
 /// ALSO opens a heredoc is not caught here. That is a miss, never a false
 /// refusal, and it is a strictly smaller hole than the one this closes.
-fn covered(nodes: &[rable::Node], command: &str) -> bool {
+///
+/// `pub(crate)` for [`crate::shell::logic`], which asks the same question of
+/// the same parser's output (CLOUD-2625) rather than growing a second guard.
+pub(crate) fn covered(nodes: &[rable::Node], command: &str) -> bool {
     let Some(end) = nodes.iter().map(|node| node.span.end).max() else {
         // No nodes at all: an empty or whitespace-only command reads clean, and
         // `segments("")` giving an empty list is relied on elsewhere.
@@ -11771,6 +12072,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                shell_introduced: &crate::facts::Look::CouldNotLook,
             },
         )
     }
@@ -19847,7 +20149,8 @@ deny contains "refused by themodule" if {
         assert_eq!(python.shorts("--x"), None);
         assert_eq!(python.shorts("-"), None);
         assert_eq!(python.shorts("-ce"), Some("ce"));
-        let fallback = grammar("bash");
+        // `bash` was the fallback until CLOUD-2626 gave the shells a family.
+        let fallback = grammar("frobnicate");
         assert_eq!(fallback.shorts("-c"), Some("c"));
         assert_eq!(fallback.shorts("-ab"), None);
         assert_eq!(grammar("ruby").valued, "rIEC");

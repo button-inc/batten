@@ -7957,14 +7957,18 @@ pub(crate) struct RunTables<'a> {
     patterns: BTreeMap<String, regex::Regex>,
     /// Each declared traversal's answer, keyed id -> seed.
     traversals: serde_json::Value,
+    /// The working tree the shell fact reads past a row's `line_sources`
+    /// (CLOUD-2628), shared by every row so the tree is probed once. `None`
+    /// where no tree is under judgement.
+    shell: Option<crate::census::TreeReader<'a>>,
 }
 
 impl<'a> RunTables<'a> {
     /// Compile the patterns and walk every declared traversal.
     fn new(
         vocabulary: crate::policy::Vocabulary<'a>,
-        root: &Path,
-        files: &[String],
+        root: &'a Path,
+        files: &'a [String],
     ) -> anyhow::Result<Self> {
         let patterns = crate::pattern::compiled(vocabulary.patterns);
         let traversals = walk_traversals(vocabulary, root, files, &patterns)?;
@@ -7972,6 +7976,7 @@ impl<'a> RunTables<'a> {
             registers: vocabulary.registers,
             patterns,
             traversals,
+            shell: Some(crate::census::TreeReader::new(root, files)),
         })
     }
 }
@@ -8508,7 +8513,7 @@ pub(crate) fn parse_node(
 /// The most documents one run may acquire before it refuses (CLOUD-850).
 ///
 /// **A backstop, not a tuned threshold, and the distinction is the whole
-/// justification.** `mise-tasks/perf-assert.sh` budgets four paths and deliberately
+/// justification.** `perf-assert` budgets four paths and deliberately
 /// budgets no `check` path, on a reason that is sound and stays: *"`check` is
 /// bounded by the repository it is pointed at — a tree walk over a large
 /// consumer repo is legitimately slower and no ceiling here could tell that
@@ -9115,6 +9120,10 @@ pub(crate) struct Resolved<'a> {
     /// The declared reductions over the capture store (CLOUD-1188) — the answers
     /// a row asked for, never the responses they came from.
     pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
+    /// How far the shell fact reads past the row's `line_sources`
+    /// (CLOUD-2628). `None` reads the declared lines alone, which is what a
+    /// module's own suite and a fabricated tree want.
+    pub shell: Option<crate::census::Reach<'a, 'a>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -9922,6 +9931,15 @@ pub(crate) fn tree_document(
     // more coming. The prelude grows per family; the projection loop below does
     // not.
     let mut projected = project_paths(cache, declared, resolved);
+    // `input.tree.shell` (CLOUD-2625): the detector over the declared homes,
+    // read off the two maps the loop below moves out.
+    let mut shell = crate::census::tree_fact(
+        &projected.parsed,
+        &projected.read_lines,
+        resolved.git.base_delta.as_ref(),
+        tracked,
+        resolved.shell,
+    );
 
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
     // `Fact::ALL` rather than writing keys means a fact the tree surface gains
@@ -10095,6 +10113,9 @@ pub(crate) fn tree_document(
             // changed nothing", which is the distinction the whole fact exists
             // to keep.
             crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
+            // CLOUD-2625. Computed before this loop takes `documents` and
+            // `lines`, because it is derived from both.
+            crate::facts::Fact::Shell => std::mem::take(&mut shell),
             crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
             | crate::facts::Fact::Stop
@@ -10107,7 +10128,9 @@ pub(crate) fn tree_document(
             // CLOUD-1978: hook-surface; its question is about a call's argument.
             | crate::facts::Fact::DispatchCleared
             // CLOUD-2270: hook-surface; its question is about a push.
-            | crate::facts::Fact::RedHead => continue,
+            | crate::facts::Fact::RedHead
+            // CLOUD-2335: hook-surface; its question is about a write.
+            | crate::facts::Fact::ShellIntroduced => continue,
         };
         tree.insert(key.to_owned(), value);
     }
@@ -10192,8 +10215,22 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         plan: inputs.plan,
         minted: inputs.minted,
         captured: inputs.captured,
+        // Read past the line sources only where a `[census.shell]` table is
+        // handed over; `policy_rule` widens it for the preset's own row.
+        shell: inputs
+            .tables
+            .shell
+            .as_ref()
+            .map(|reader| crate::census::Reach {
+                reader,
+                always: false,
+            }),
     }
 }
+
+/// The preset whose ban judges shell's presence over the whole tree, a
+/// consumer declaring no `[census.shell]` included (CLOUD-2628).
+const SHELL_PRESET: &str = "shell-hygiene";
 
 /// The class a copy behind its preset raises (CLOUD-2290).
 pub const MODULE_PIN_STALE: &str = "module pin stale";
@@ -10353,6 +10390,13 @@ fn policy_rule(
     if selected_nothing && selectors_declared {
         return Some(NotObserved::RuleSkipped);
     }
+    let mut resolved = resolved_of(inputs);
+    if rule.preset.as_deref() == Some(SHELL_PRESET) {
+        resolved.shell = resolved.shell.map(|reach| crate::census::Reach {
+            always: true,
+            ..reach
+        });
+    }
     let (input, not_acquired) = tree_document(
         documents,
         &Declared {
@@ -10365,7 +10409,7 @@ fn policy_rule(
             external: &rule.external,
         },
         tracked,
-        &resolved_of(inputs),
+        &resolved,
     );
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
@@ -11427,7 +11471,7 @@ fn unconserved_cases(
             continue;
         }
         // THE SUITE-QUALIFIED ARM IS TRIED FIRST, then the bare one — the same
-        // resolution order `mise-tasks/replay.sh` uses over the same arms, because
+        // resolution order `mise-tasks/replay.sh` used over the same arms, because
         // one ledger with two readers and two grammars is a ledger that reports
         // different things to different gates.
         //
@@ -14663,6 +14707,7 @@ mod tests {
                 plan: None,
                 minted: None,
                 captured: None,
+                shell: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -15247,6 +15292,7 @@ mod tests {
                 plan: None,
                 minted: None,
                 captured: None,
+                shell: None,
             },
         );
         assert!(
@@ -15413,6 +15459,7 @@ mod tests {
         registers: &[],
         patterns: BTreeMap::new(),
         traversals: serde_json::Value::Null,
+        shell: None,
     };
 
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
@@ -21516,6 +21563,7 @@ violation contains {
             registers: &registers,
             patterns: BTreeMap::new(),
             traversals: serde_json::Value::Null,
+            shell: None,
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
@@ -21578,6 +21626,7 @@ violation contains {
             registers: &registers,
             patterns: BTreeMap::new(),
             traversals: serde_json::Value::Null,
+            shell: None,
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
