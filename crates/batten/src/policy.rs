@@ -442,6 +442,15 @@ pub struct Bundle {
     described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
 }
 
+/// What a bundle reads off the tree input document: see [`Bundle::tree_reads`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reads {
+    /// Exactly these `input.tree` keys, and nothing else on the input.
+    Known(BTreeSet<String>),
+    /// A read this reader cannot name, so any key may be read.
+    Opaque,
+}
+
 impl Bundle {
     /// This bundle's [`describe`] reading, computed on first use.
     fn described(&self) -> Option<&[Described]> {
@@ -531,6 +540,45 @@ impl Bundle {
             }
         }
         found
+    }
+
+    /// Every `input.tree` key this bundle's modules read, or [`Reads::Opaque`]
+    /// when that cannot be established statically (step 13a).
+    ///
+    /// Derived from the same [`describe`] reading [`Self::session_start_facts`]
+    /// trusts, and conservative everywhere it cannot see: a bundle with no
+    /// reading, a bare `input` or `input.tree` (an alias such as
+    /// `t := input.tree`, or a variable index `input.tree[k]`, arrives as one of
+    /// these), any read of `input.facts`/`input.call` or of a top-level key the
+    /// tree document does not emit, and a bytecode entry written without the
+    /// read set are all `Opaque`. Opaque is what makes a policy row LIVE, which
+    /// is the side an undeterminable answer must fall on.
+    #[must_use]
+    pub fn tree_reads(&self) -> Reads {
+        if let Evaluator::Compiled(compiled) = &self.evaluator {
+            return compiled.reads.as_ref().map_or(Reads::Opaque, |keys| {
+                Reads::Known(keys.iter().cloned().collect())
+            });
+        }
+        let Some(described) = self.described() else {
+            return Reads::Opaque;
+        };
+        let mut keys = BTreeSet::new();
+        for module in described {
+            for rule in &module.rules {
+                for path in &rule.input_paths {
+                    let Some(rest) = path.strip_prefix("tree.") else {
+                        return Reads::Opaque;
+                    };
+                    let key = rest.split('.').next().unwrap_or(rest);
+                    if key.is_empty() {
+                        return Reads::Opaque;
+                    }
+                    keys.insert(key.to_owned());
+                }
+            }
+        }
+        Reads::Known(keys)
     }
 
     /// The pointer a bundle-level diagnostic is reported against: its first
@@ -2032,6 +2080,10 @@ pub(crate) struct Compiled {
     entries: BTreeSet<(Vec<String>, String)>,
     /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
     facts: Vec<String>,
+    /// The tree keys the bundle reads, from [`Bundle::tree_reads`]; `None` is
+    /// [`Reads::Opaque`] (step 13a). Bytecode carries no AST, so the reading is
+    /// taken when the entry is written, as `facts` is.
+    reads: Option<Vec<String>>,
     /// What a bytecode refusal is confirmed against, when the bundle's sources
     /// are at hand (CLOUD-2696).
     confirm: Option<Confirm>,
@@ -2130,14 +2182,18 @@ struct CacheHeader {
     packages: BTreeSet<Vec<String>>,
     entries: BTreeSet<(Vec<String>, String)>,
     facts: Vec<String>,
+    /// The tree read set (step 13a); absent reads as [`Reads::Opaque`].
+    #[serde(default)]
+    reads: Option<Vec<String>>,
 }
 
 /// The cache format; a change to [`CacheHeader`] or to how bytecode is written
 /// bumps it, which makes every older entry a miss. `2` since the entry moved
 /// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
 /// key line, and the binary is identified by its build ID. `3` keys the pattern
-/// table by its digest rather than its text.
-const CACHE_FORMAT: &str = "batten-policy-rvm-3";
+/// table by its digest rather than its text. `4` records the tree read set
+/// (step 13a), without which a bytecode bundle can only answer `Opaque`.
+const CACHE_FORMAT: &str = "batten-policy-rvm-4";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
@@ -2239,6 +2295,7 @@ fn read_cached(
         data: data_value(data)?,
         entries: header.entries,
         facts: header.facts,
+        reads: header.reads,
         confirm: Some(Confirm::new(
             id,
             sources,
@@ -2268,6 +2325,7 @@ fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
         packages: bundle.packages.clone(),
         entries: compiled.entries.clone(),
         facts: compiled.facts.clone(),
+        reads: compiled.reads.clone(),
     };
     let (Ok(mut bytes), Ok(program)) = (
         serde_json::to_vec(&header),
@@ -2338,6 +2396,10 @@ impl Compiled {
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            reads: match bundle.tree_reads() {
+                Reads::Known(keys) => Some(keys.into_iter().collect()),
+                Reads::Opaque => None,
+            },
             confirm: None,
         })
     }
@@ -4186,21 +4248,48 @@ fn reference_path(expr: &serde_json::Value) -> Option<String> {
 /// bracket index (`input.tree.documents["x"]`) simply stops the chain, which is
 /// what the caller wants: the KEY is the first segment and the rest is the
 /// module's business.
+///
+/// **The longest resolvable reference only** (step 13a): the head of a chain
+/// is not recorded beside it, so `input.tree.documents` yields `tree.documents`
+/// and never also `tree`. A chain whose outer link does not resolve — a
+/// variable index, `input.tree[k]` — records its longest resolvable head,
+/// `tree`. A bare `input` that is not the head of a chain (`x := input`) is
+/// recorded as the empty path, so a reader asking "which keys" can tell an
+/// unknowable read from none.
 fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
+    collect_input_paths_at(value, found, false);
+}
+
+/// [`collect_input_paths`], told whether `value` is the `refr` of a chain whose
+/// outer link already resolved — in which case `value` is a head, not a read.
+fn collect_input_paths_at(value: &serde_json::Value, found: &mut Vec<String>, head: bool) {
     match value {
         serde_json::Value::Object(object) => {
-            if let Some(path) = reference_path(value)
-                && let Some(rest) = path.strip_prefix("input.")
-            {
-                found.push(rest.to_owned());
+            let resolved = reference_path(value);
+            if !head && let Some(path) = resolved.as_deref() {
+                if path == "input" {
+                    found.push(String::new());
+                } else if let Some(rest) = path.strip_prefix("input.") {
+                    found.push(rest.to_owned());
+                }
             }
-            for child in object.values() {
-                collect_input_paths(child, found);
+            // A link that resolved makes its `refr` a head; one that did not
+            // (a variable index) leaves the `refr` as the longest read.
+            let chained = resolved.is_some() || head;
+            for (name, child) in object {
+                match name.as_str() {
+                    "RefDot" | "RefBrack" => {
+                        for (field, inner) in child.as_object().into_iter().flatten() {
+                            collect_input_paths_at(inner, found, field == "refr" && chained);
+                        }
+                    }
+                    _ => collect_input_paths_at(child, found, false),
+                }
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                collect_input_paths(item, found);
+                collect_input_paths_at(item, found, false);
             }
         }
         _ => {}
@@ -5526,5 +5615,94 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
                 gloss: "g".to_owned(),
             });
         assert!(Vocabulary::from(&config).words.is_some());
+    }
+
+    // ── step 13a: the tree read set ────────────────────────────────────────
+
+    /// A tree-scope module with `body` as its one rule body.
+    fn reading(body: &str) -> String {
+        format!(
+            "package batten.reads\n\nimport rego.v1\n\nrules contains \"x probe probex\"\n\n\
+             violation contains {{\"rule\": \"x probe probex\", \"verdict\": \"x probe probex\", \
+             \"subjects\": []}} if {{\n{body}\n}}\n"
+        )
+    }
+
+    fn reads_of(body: &str) -> Reads {
+        let module = reading(body);
+        bundle_of("row", &[("policy/r.rego", &module)]).tree_reads()
+    }
+
+    fn known(keys: &[&str]) -> Reads {
+        Reads::Known(keys.iter().map(|key| (*key).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_dotted_or_literal_index_read_names_its_key() {
+        assert_eq!(
+            reads_of("\tsome path, _ in input.tree.documents\n\tpath != \"\""),
+            known(&["documents"])
+        );
+        assert_eq!(
+            reads_of("\tinput.tree[\"git-index\"] != null"),
+            known(&["git-index"]),
+            "a string-literal index is the dotted read"
+        );
+    }
+
+    #[test]
+    fn a_read_this_reader_cannot_name_is_opaque() {
+        // An alias, a variable index, a bare `input`, and the other surface: each
+        // could read any key, so none may be read as a closed set.
+        for body in [
+            "\tt := input.tree\n\tt.documents != null",
+            "\tsome k\n\tinput.tree[k] != null",
+            "\tx := input\n\tx.tree.documents != null",
+            "\tinput.facts.receipts != null",
+            "\tinput.call.command != null",
+        ] {
+            assert_eq!(reads_of(body), Reads::Opaque, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_chain_records_its_longest_read_and_never_its_head() {
+        // THE FIX THE OPAQUE ARM DEPENDS ON: the walk used to record every link of
+        // a chain, so `input.tree.documents` also recorded `tree` and every module
+        // would have read as a bare `input.tree`.
+        let module = reading("\tinput.tree.documents.x != null");
+        let bundle = bundle_of("row", &[("policy/r.rego", &module)]);
+        let described = bundle.described().expect("the fixture describes");
+        let paths: Vec<&String> = described
+            .iter()
+            .flat_map(|module| module.rules.iter())
+            .flat_map(|rule| rule.input_paths.iter())
+            .collect();
+        assert_eq!(paths, vec!["tree.documents.x"]);
+    }
+
+    #[test]
+    fn bytecode_carries_the_read_set_and_an_entry_without_one_is_opaque() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let bundle = compile("row", &sources, &data).expect("the fixture compiles");
+        let compiled =
+            Compiled::from_bundle(&bundle, &data).expect("the fixture compiles to bytecode");
+        let carried = compiled.into_bundle(compile("row", &sources, &data).expect("compiles"));
+        assert!(carried.is_bytecode());
+        assert_eq!(carried.tree_reads(), known(&["lines"]));
+        // An entry written before the read set existed deserialises with none.
+        let header: CacheHeader =
+            serde_json::from_str(r#"{"declared":[],"packages":[],"entries":[],"facts":[]}"#)
+                .expect("an old header still parses");
+        assert!(header.reads.is_none(), "an old entry carries no read set");
+        let old = Compiled::from_bundle(&bundle, &data).expect("bytecode");
+        let old = Compiled {
+            reads: header.reads,
+            ..old
+        }
+        .into_bundle(bundle);
+        assert_eq!(old.tree_reads(), Reads::Opaque);
     }
 }

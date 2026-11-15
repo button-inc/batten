@@ -175,6 +175,7 @@ mod done_not_landed;
 mod durable_write;
 mod egress_fencing;
 mod emission_census;
+mod enforce_half;
 mod enforce_journal;
 mod engine_gates;
 mod engine_install;
