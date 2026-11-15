@@ -2845,19 +2845,25 @@ description = "Build the release binary the hook registrations execute"
 # the working tree, disqualifying on the hottest path in the binary. The gates
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 #
-# BUILT, STAMPED AND PINNED IN ONE TASK: building to test IS building to use.
-# The build alone left an unstamped binary first on `_.path` while
-# `batten.toml` kept naming the release, so a branch's hook and gates judged it
-# with an engine it had not built — measured on #1132, v0.0.214's floor model
-# refusing a lap while the branch carried the collector that retires it. The
-# stamp records this tree's digest beside the binary; the pin names it, so the
-# config, the binary on PATH and the tree agree. `engine-pin-check` refuses a
-# source pin at landing (CLOUD-2063): a branch flips back to a release pin
-# before it lands, and `main` never carries one.
+# BUILT AND STAMPED IN ONE TASK: building to test IS building to use. The
+# build alone left an unstamped binary first on `_.path` (measured on #1132).
+# The stamp records this tree's digest beside the binary, which is what
+# `doctor mediator` compares.
+#
+# IT WRITES NO TRACKED FILE. It used to end with `engine pin source`, which
+# wrote this machine's build digest into the committed `batten.toml`. Every
+# caller of this task then dirtied the tree, the `[[startup]]` repair
+# `mediator-matches-the-tree` included. Measured on #1276: a SessionStart fired
+# by a context compaction ran that repair under a live lap. The worktree pin
+# moved the admission epoch (`epoch::describe` reads the working tree), made
+# every receipted step miss its key as "dirty", and failed `engine-pin-check`:
+# 714 s of `verify` for nothing. The pin was never needed for the hook to run
+# this build. A release pin is satisfied by any engine of that version
+# (`engine::check`), and a branch's build carries the workspace version the pin
+# names. Which engine judges is the committed authority's word, never a build's.
 run = [
   "cargo build --quiet --release -p batten",
   "target/release/batten engine stamp",
-  "target/release/batten engine pin source",
 ]
 
 [tasks.acquisition-bench]
