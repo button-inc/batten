@@ -242,12 +242,16 @@ impl Seen {
     /// Replace the hook's file. **Without a lock**: parallel calls can lose an
     /// increment, which only lengthens the grace by a call.
     ///
+    /// `Atomic`, not `Synced`: it is written on the per-call hook path, and a
+    /// count lost to a power cut only restarts the grace — `durable::Persist`'s
+    /// own rule for that path.
+    ///
     /// # Errors
     ///
     /// The file will not write.
     pub fn write(self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        crate::durable::replace(
+        crate::durable::replace_as(
             dir.join(HOOK),
             format!(
                 "misses {}\nnoted {}\nowed {}\n",
@@ -255,6 +259,7 @@ impl Seen {
                 u8::from(self.noted),
                 u8::from(self.owed)
             ),
+            crate::durable::Persist::Atomic,
         )
     }
 }
