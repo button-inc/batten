@@ -760,7 +760,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     VendoredDoc {
         id: "lane grade red",
         why: Some("A red CI run means local verification was skipped or disagreed with CI"),
-        act: &["run `mise run verify` before readying, and fix where it disagrees with CI"],
+        act: &["verify through a backgrounded landing lap, and fix where it disagrees with CI"],
         dont: &["push to see if CI goes green"],
     },
     VendoredDoc {

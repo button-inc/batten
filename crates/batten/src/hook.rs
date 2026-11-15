@@ -3258,6 +3258,10 @@ pub struct Envelope {
     /// when the host says. `resume` and `fork` keep the sighting epoch; every
     /// other source closes it (CLOUD-2145).
     pub start_source: Option<String>,
+    /// The host's id for this tool call (`tool_use_id`), shared by its
+    /// `PreToolUse` and `PostToolUse`: what keys the protected-path snapshot one
+    /// takes and the other compares (step 14). `None` where the host sends none.
+    pub call_id: Option<String>,
     /// The longest background `timeout` this host honours, in milliseconds,
     /// where the host has one to report (CLOUD-2365). Claude Code's alone today,
     /// resolved by its adapter at decode from the variables it reads; `None` on
@@ -3925,6 +3929,16 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         .or_else(|| NAMED_EVENT.get().map(String::as_str))
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
+    // The call id is set here rather than in the field list below, which sits
+    // at the function-length ceiling.
+    Some(Envelope {
+        call_id: present_str(value, "tool_use_id"),
+        ..decode_fields(harness, value, raw_event)
+    })
+}
+
+/// [`decode_value`]'s field list, for an event already named.
+fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope {
     let event = normalize_event(harness, &raw_event);
 
     // Cursor's specialized events carry the operand at top level and no
@@ -3986,7 +4000,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
 
     let reads = read_target(&operation, &input);
 
-    Some(Envelope {
+    Envelope {
         event,
         raw_event,
         raw_tool: tool,
@@ -4054,9 +4068,10 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         // CLOUD-2075: the sightings context and the SessionStart source.
         agent: present_str(value, "agent_id"),
         start_source: present_str(value, "source"),
+        call_id: None,
         background_ceiling: background_ceiling(harness),
         forge: None,
-    })
+    }
 }
 
 /// The host's background ceiling, for the one host that reports one
@@ -6496,6 +6511,9 @@ pub struct Facts<'a> {
     /// comparing a call against an empty task table would refuse every command
     /// the project runs.
     pub tasks: &'a crate::taskset::TaskFacts,
+    /// Every task's body lines, from the same receipt (step 14): what
+    /// `input.call["task-programs"]` follows a `mise run` into.
+    pub task_bodies: &'a crate::taskset::TaskBodies,
     /// What a declared extractor counted in this session's transcript
     /// (CLOUD-1172).
     ///
@@ -6562,6 +6580,7 @@ impl<'a> Facts<'a> {
             // tasks" is a claim about a manifest, and a caller that resolved
             // nothing is not making it.
             tasks: &crate::facts::Look::CouldNotLook,
+            task_bodies: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never an empty count set: a caller that resolved
             // nothing has not established that this session did nothing.
             extracted: &crate::facts::Look::CouldNotLook,
@@ -7630,6 +7649,18 @@ impl Grammar {
 /// for an interpreter a consumer declared that no family describes.
 fn grammar(program: &str) -> Grammar {
     match family(program) {
+        // THE SHELLS (step 14). `-c` takes the script, bundled or alone
+        // (`bash -lc '…'`, `sh -ec '…'`), and `-o`/`-O` take an option name.
+        // Before this arm a shell read through the fallback, which never
+        // bundles — so `bash -lc 'git push --force'` handed no script to
+        // anything — and which read `-e` (errexit to a shell) as a program.
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash" => Grammar {
+            inline: "c",
+            inline_long: &[],
+            valued: "oO",
+            valued_long: &["--rcfile", "--init-file"],
+            bundles: true,
+        },
         "python" => Grammar {
             inline: "cm",
             inline_long: &[],
@@ -9869,8 +9900,136 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     .as_str()
             ),
         );
+        // WHAT THE CALL'S TASKS RUN (step 14), from the task receipt's bodies.
+        call.insert(
+            "task-programs".to_owned(),
+            task_programs(&envelope.command, facts.task_bodies),
+        );
     }
     serde_json::to_string(&document)
+}
+
+/// The subcommands `mise` itself answers, which therefore never name a task.
+/// mise resolves its own commands first and only then reads an unknown word as
+/// a task (`mise build` runs `[tasks.build]`), so a word on this list is a
+/// command even where a task of that name exists.
+const MISE_COMMANDS: [&str; 52] = [
+    "activate",
+    "alias",
+    "backends",
+    "bin-paths",
+    "cache",
+    "completion",
+    "config",
+    "deactivate",
+    "doctor",
+    "en",
+    "env",
+    "exec",
+    "x",
+    "fmt",
+    "generate",
+    "help",
+    "hook-env",
+    "hook-not-found",
+    "implode",
+    "install",
+    "i",
+    "install-into",
+    "latest",
+    "link",
+    "lock",
+    "ls",
+    "list",
+    "ls-remote",
+    "mcp",
+    "outdated",
+    "plugins",
+    "p",
+    "prune",
+    "registry",
+    "reshim",
+    "run",
+    "r",
+    "search",
+    "self-update",
+    "set",
+    "settings",
+    "shell",
+    "sync",
+    "tasks",
+    "task",
+    "test-tool",
+    "tool",
+    "trust",
+    "uninstall",
+    "unset",
+    "unuse",
+    "upgrade",
+];
+
+/// The tasks one `input.call.programs` entry starts: the `tasks` [`mise_tasks`]
+/// read, or — for `mise <word>` where the word is no mise command and IS a
+/// defined task — that task, which is how mise itself resolves it.
+fn entry_tasks(
+    entry: &Value,
+    defined: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    if entry.get("name").and_then(Value::as_str) != Some("mise") {
+        return Vec::new();
+    }
+    if let Some(tasks) = entry.get("tasks").and_then(Value::as_array) {
+        return tasks
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+    entry
+        .get("subcommand")
+        .and_then(Value::as_str)
+        .filter(|word| !MISE_COMMANDS.contains(word) && defined.contains_key(*word))
+        .map(|word| vec![word.to_owned()])
+        .unwrap_or_default()
+}
+
+/// Every program the tasks this call starts reach, each carrying the `task`
+/// whose body ran it; `null` where the task receipt could not be read (step 14).
+///
+/// THE TASK IS CLASSIFIED BY WHAT IT RUNS, NEVER BY ITS NAME. A module asking
+/// "does this call rerun a stage" otherwise needs a list of task names, and a
+/// list is wrong the day a task is added or renamed. Here `mise run x` is
+/// followed into `x`'s body lines from the receipt, each line read by the same
+/// [`reach_into`] every call is read by, and any task those lines start is
+/// followed in turn — once each, so a cycle in `depends` terminates.
+///
+/// A SEPARATE KEY, NOT MORE `programs`: a task's body is the sanctioned
+/// spelling of what it runs, so a module that refuses a bare `cargo clippy`
+/// must not refuse `mise run lint` for containing one.
+fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) -> Value {
+    let crate::facts::Look::Is(bodies) = bodies else {
+        return Value::Null;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found: Vec<Value> = Vec::new();
+    let mut pending = program_reach(command);
+    while let Some(entry) = pending.pop() {
+        for task in entry_tasks(&entry, bodies) {
+            if !seen.insert(task.clone()) {
+                continue;
+            }
+            for line in bodies.get(&task).into_iter().flatten() {
+                for mut inner in reach_into(line, true, Some("task"), REACH_DEPTH) {
+                    if let Some(object) = inner.as_object_mut() {
+                        object.insert("task".to_owned(), serde_json::json!(task));
+                    }
+                    pending.push(inner.clone());
+                    found.push(inner);
+                }
+            }
+        }
+    }
+    Value::Array(found)
 }
 
 /// The program a token names, with any path it was reached through dropped.
@@ -9994,8 +10153,46 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
-    let crate::facts::Look::Is(parsed) = segments(command) else {
-        return Vec::new();
+    reach_into(command, false, None, REACH_DEPTH)
+}
+
+/// How many constructs deep [`program_reach`] follows a program into the
+/// programs it runs. A bound and not a tuning knob: each level is one more
+/// `bash -c` or `cargo run` written around the last, no real call nests eight,
+/// and the bound is what keeps a self-quoting text from recursing forever. At
+/// the bound the outer entry is still projected; only its inner text is not.
+const REACH_DEPTH: usize = 8;
+
+/// [`program_reach`] over one shell text, its entries reached through `via`
+/// and under an outer mediator when `outer_mediated`.
+///
+/// RECURSIVE BY CONSTRUCTION (step 14). A program that runs other programs —
+/// a shell's `-c` script, `eval`'s words, the binary `cargo run` starts, the
+/// argv `batten step run` executes — is followed here, once, for every module,
+/// rather than each module learning each spelling. Measured before it:
+/// `bash -c 'git push --force-with-lease origin main'` reached no module at
+/// all, while the same push inside `$(…)` was refused, because the parser
+/// descends into a substitution and nothing descended into a script.
+///
+/// A TEXT THAT WILL NOT PARSE is read by whitespace when it was reached
+/// through a construct ([`unread_reach`]); at the top level it stays no
+/// entries, as before — `input.call.segments` is `null` there and that is a
+/// module's signal.
+fn reach_into(
+    command: &str,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    let parsed = match segments(command) {
+        crate::facts::Look::Is(parsed) => parsed,
+        crate::facts::Look::CouldNotLook | crate::facts::Look::IsNot => {
+            return if via.is_some() {
+                unread_reach(command, outer_mediated, via, depth)
+            } else {
+                Vec::new()
+            };
+        }
     };
     // PER LINE, never the fused words (CLOUD-1287). A segment may span a
     // newline, and `input.call.programs` is the anchor every module is told to
@@ -10005,7 +10202,7 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
     parsed
         .iter()
         .flat_map(|segment| segment.lines.iter())
-        .filter_map(|line| {
+        .flat_map(|line| {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             // A REDIRECTION IS NEVER HANDED TO THE PROGRAM (CLOUD-2670): the
             // line's redirect tokens are the suffix of its words, so the argv
@@ -10013,82 +10210,443 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
             // program and so yields no entry.
             let handed = tokens.len().saturating_sub(line.redirects.len());
             let argv = &tokens[..handed];
-            let index = effective_program(argv)?;
-            let program = program_token(argv[index]);
-            let arguments: Vec<&str> = argv[index + 1..]
-                .iter()
-                .map(|token| program_token(token))
-                .collect();
-            // THE SUBCOMMAND, PROJECTED ONCE (CLOUD-2354): the first bare word
-            // past the program's own value-taking options, by the resolver the
-            // verdict matcher uses. Four presets each carried a Rego copy of
-            // git's option table, and they disagreed with git: `git -C -c reset`
-            // read `-c` as an option. `null` for a program with no table.
-            let options = global_value_options(program_name(program));
-            let verb = subcommand_index(&arguments, options);
-            let (subcommand, global_options) = if options.is_empty() {
-                (serde_json::Value::Null, serde_json::Value::Null)
-            } else {
-                (
-                    serde_json::json!(verb.map(|at| arguments[at])),
-                    serde_json::json!(&arguments[..verb.unwrap_or(arguments.len())]),
-                )
-            };
-            Some(serde_json::json!({
-                "program": program,
-                // THE NAME AS WELL AS THE TOKEN, because they are different
-                // questions and a predicate about "which program is this" wants
-                // the second. `./tests/bats/bin/bats` and `bats` are one program
-                // reached two ways; a module comparing the token would answer no
-                // for the spelling that produced the incident this exists for.
-                //
-                // Resolved here rather than in Rego for the reason the whole
-                // projection exists: path splitting is argv reading, and a module
-                // doing it would be a second authority over it.
-                "name": program_name(program),
-                // WHAT THIS PROGRAM WAS HANDED, so a module can anchor on the
-                // program AND read its own argv without a join (CLOUD-1382).
-                //
-                // Without it a module correlating `programs` back to `segments`
-                // has nothing to correlate ON: the list above is `filter_map`ed,
-                // so a segment with no program yields no entry and the two
-                // indices stop agreeing. The alternative was for every module to
-                // re-find the program inside a segment's words, which is the
-                // second authority over one argv that CLOUD-857 measured and
-                // this whole projection exists to refuse.
-                // NORMALISED THE SAME WAY THE PROGRAM IS, and for the same
-                // measured reason: the closing paren of a grouped command lands
-                // on the LAST argument, which is exactly the token an exact-match
-                // predicate is decided on. `(git push origin main --force)` was
-                // allowed with `--force)` here while the same flag written
-                // earlier denied.
-                "arguments": arguments,
-                // The words before `subcommand`, verbatim, so a module can judge
-                // what they do (`-c core.pager=sh` runs a program) without
-                // parsing them. The whole argv where there is no subcommand.
-                "subcommand": subcommand,
-                "global-options": global_options,
-                "mediated": mediator_present(
-                    crate::rules::RequireVia::Mise,
-                    &argv[..index],
-                ),
-                // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
-                // say without running it (CLOUD-1949). Each is a table this
-                // engine already owns, so a module granting a call on them is
-                // not a second authority over what a program does:
-                // `READ_ONLY_PROGRAMS` for the floor and the surface's own
-                // declared effect for `batten`. The redirect that turns any
-                // reader into a writer is a SEGMENT key, because a bare `> f`
-                // runs no program and so has no entry here.
-                "reads-only": reads_its_operands(program_name(program)),
-                // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
-                // leading `{` the shell passes through literally, so
-                // `batten lease acquire {--help` would read as `--help` here
-                // while batten receives a positional and writes (CLOUD-2206).
-                "batten-effect": batten_effect(program_name(program), &argv[index + 1..]),
-            }))
+            let mut reached: Vec<serde_json::Value> = effective_program(argv)
+                .map(|index| reach_argv(argv, index, outer_mediated, via, false, depth))
+                .unwrap_or_default();
+            // `env -S '<words>'` SPLITS ITS VALUE INTO THE COMMAND, so the
+            // program is inside that one word, where the wrapper look-through
+            // steps past it as an option value.
+            if let Some(depth) = depth.checked_sub(1) {
+                for script in split_strings(argv) {
+                    reached.extend(reach_into(&script, outer_mediated, Some("script"), depth));
+                }
+            }
+            reached
         })
         .collect()
+}
+
+/// The values every `env -S`/`--split-string` in an argv's wrapper prefix
+/// carries: each is split by `env` into the command it runs.
+fn split_strings(argv: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut in_env = false;
+    let mut words = argv.iter().map(|word| program_token(word));
+    while let Some(word) = words.next() {
+        if word == "env" {
+            in_env = true;
+            continue;
+        }
+        if !in_env {
+            continue;
+        }
+        if word == "-S" || word == "--split-string" {
+            found.extend(words.next().map(str::to_owned));
+        } else if let Some(value) = word.strip_prefix("--split-string=") {
+            found.push(value.to_owned());
+        } else if let Some(value) = word.strip_prefix("-S").filter(|value| !value.is_empty()) {
+            found.push(value.to_owned());
+        } else if !word.starts_with('-') && !is_env_assignment(word) {
+            in_env = false;
+        }
+    }
+    found
+}
+
+/// A text a construct runs that [`segments`] will not parse, read the crude
+/// way: split at the shell's command separators, then at whitespace, with
+/// quote characters dropped. Every entry is flagged `unread`.
+///
+/// Over-reading is the safe direction here and under-reading is the bypass:
+/// the shell will still run whatever of this it can, so a stage named inside
+/// an unbalanced quote must still be seen.
+fn unread_reach(
+    command: &str,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    command
+        .split(['\n', ';', '&', '|', '(', ')', '`'])
+        .flat_map(|piece| {
+            let words: Vec<String> = piece
+                .split_whitespace()
+                .map(|word| word.replace(['\'', '"'], ""))
+                .filter(|word| !word.is_empty() && word != "$")
+                .collect();
+            let argv: Vec<&str> = words.iter().map(String::as_str).collect();
+            effective_program(&argv)
+                .map(|index| reach_argv(&argv, index, outer_mediated, via, true, depth))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The entry for the program at `argv[index]`, then every program it runs.
+fn reach_argv(
+    argv: &[&str],
+    index: usize,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    unread: bool,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    let program = program_token(argv[index]);
+    let name = program_name(program);
+    let arguments: Vec<&str> = argv[index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .collect();
+    // AN OUTER MEDIATOR COVERS WHAT IT RUNS: `mise exec -- bash -c 'cargo x'`
+    // runs that cargo under the pin, so the inner entry is mediated too.
+    let mediated =
+        outer_mediated || mediator_present(crate::rules::RequireVia::Mise, &argv[..index]);
+    let mut reached = vec![program_entry(
+        program,
+        &arguments,
+        &argv[index + 1..],
+        mediated,
+        via,
+        unread,
+    )];
+    let Some(depth) = depth.checked_sub(1) else {
+        return reached;
+    };
+    for script in inner_scripts(name, &arguments) {
+        reached.extend(reach_into(&script, mediated, Some("script"), depth));
+    }
+    for (inner, how) in inner_argv(name, &arguments).into_iter().chain(
+        find_execs(name, &arguments)
+            .into_iter()
+            .map(|inner| (inner, "exec")),
+    ) {
+        let inner: Vec<&str> = inner.iter().map(String::as_str).collect();
+        if let Some(at) = effective_program(&inner) {
+            reached.extend(reach_argv(&inner, at, mediated, Some(how), unread, depth));
+        }
+    }
+    reached
+}
+
+/// The shell texts a program runs from its own argv: a shell's `-c` script, by
+/// the interpreter [`grammar`] the protected-path scan reads (one grammar, so
+/// the two cannot disagree about what a shell's script is), and `eval`'s words
+/// joined as the shell joins them.
+fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
+    match name {
+        "eval" => vec![arguments.join(" ")],
+        // `watch` hands its operands to `sh -c` joined, past its own options.
+        "watch" => {
+            const VALUED: [&str; 4] = ["-n", "--interval", "-q", "--equexit"];
+            let mut at = 0;
+            while at < arguments.len() && arguments[at].starts_with('-') {
+                at += if VALUED.contains(&arguments[at]) {
+                    2
+                } else {
+                    1
+                };
+            }
+            arguments
+                .get(at..)
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| vec![rest.join(" ")])
+                .unwrap_or_default()
+        }
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash" => {
+            inline_values(&grammar(name), arguments)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The argv a program starts as a child, with how it was reached: the binary
+/// `cargo run` builds (named by `--bin`, `--example`, or the `-p` package, in
+/// cargo's own order of precedence) handed what follows `--`, and the command
+/// after `--` in `batten step run` and `batten ci step`. `None` for anything
+/// else, and for a `cargo run` naming no binary — which one runs is then the
+/// manifest's answer, not the argv's.
+fn inner_argv(name: &str, arguments: &[&str]) -> Option<(Vec<String>, &'static str)> {
+    let after_separator = |from: &[&str]| -> Vec<String> {
+        from.iter()
+            .position(|word| *word == "--")
+            .map(|at| {
+                from[at + 1..]
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let verb = subcommand_of(name, arguments)?;
+    let rest = &arguments[verb + 1..];
+    match (name, arguments[verb]) {
+        ("cargo", "run" | "r") => {
+            let own = rest
+                .iter()
+                .position(|word| *word == "--")
+                .map_or(rest, |at| &rest[..at]);
+            let named = |long: &str, short: Option<&str>| -> Option<String> {
+                own.iter().enumerate().find_map(|(at, word)| {
+                    if Some(*word) == short || *word == long {
+                        own.get(at + 1).map(|value| (*value).to_owned())
+                    } else {
+                        word.strip_prefix(long)
+                            .and_then(|tail| tail.strip_prefix('='))
+                            .map(ToOwned::to_owned)
+                    }
+                })
+            };
+            let binary = named("--bin", None)
+                .or_else(|| named("--example", None))
+                .or_else(|| named("--package", Some("-p")))
+                .or_else(|| default_binary(named("--manifest-path", None).as_deref()))?;
+            let mut inner = vec![binary];
+            inner.extend(after_separator(rest));
+            Some((inner, "cargo run"))
+        }
+        ("batten", "step" | "ci")
+            if subcommand_index(rest, &[]).is_some_and(|at| {
+                matches!(
+                    (arguments[verb], rest[at]),
+                    ("step", "run") | ("ci", "step")
+                )
+            }) =>
+        {
+            let inner = after_separator(rest);
+            (!inner.is_empty()).then_some((inner, "step run"))
+        }
+        _ => None,
+    }
+}
+
+/// Every argv `find` runs through `-exec`, `-execdir`, `-ok` or `-okdir`, each
+/// up to its `;` or `+` (step 14).
+fn find_execs(name: &str, arguments: &[&str]) -> Vec<Vec<String>> {
+    if name != "find" {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        if matches!(*word, "-exec" | "-execdir" | "-ok" | "-okdir") {
+            let inner: Vec<String> = words
+                .by_ref()
+                .take_while(|word| !matches!(**word, ";" | "\\;" | "+"))
+                .map(|word| (*word).to_owned())
+                .collect();
+            if !inner.is_empty() {
+                found.push(inner);
+            }
+        }
+    }
+    found
+}
+
+/// The binary a `cargo run` naming none starts, read from the manifest the way
+/// cargo reads it (step 14): the package's `default-run`, else its one binary;
+/// in a workspace, the `default-members` (else `members`) that resolve to one
+/// binary between them. `None` where that is not exactly one — cargo then
+/// refuses to guess too. Read from the working directory's manifest, or the
+/// `--manifest-path` the argv names, and cached per manifest for the process.
+fn default_binary(manifest: Option<&str>) -> Option<String> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<std::path::PathBuf, Option<String>>>,
+    > = std::sync::OnceLock::new();
+    let path = manifest.map_or_else(
+        || std::path::PathBuf::from("Cargo.toml"),
+        std::path::PathBuf::from,
+    );
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(known) = cache.lock().ok()?.get(&path) {
+        return known.clone();
+    }
+    let resolved = manifest_binary(&path);
+    cache.lock().ok()?.insert(path, resolved.clone());
+    resolved
+}
+
+/// [`default_binary`]'s reading of one manifest.
+fn manifest_binary(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: toml::Table = toml::from_str(&text).ok()?;
+    let dir = path.parent().unwrap_or_else(|| Path::new(""));
+    let mut binaries: Vec<String> = Vec::new();
+    if let Some(package) = doc.get("package").and_then(toml::Value::as_table) {
+        if let Some(run) = package.get("default-run").and_then(toml::Value::as_str) {
+            return Some(run.to_owned());
+        }
+        binaries.extend(package_binaries(&doc, package, dir));
+    } else if let Some(workspace) = doc.get("workspace").and_then(toml::Value::as_table) {
+        let members = workspace
+            .get("default-members")
+            .or_else(|| workspace.get("members"))
+            .and_then(toml::Value::as_array)?;
+        for member in members.iter().filter_map(toml::Value::as_str) {
+            for member_dir in expand_member(dir, member) {
+                if let Some(binary) = manifest_binary(&member_dir.join("Cargo.toml")) {
+                    binaries.push(binary);
+                }
+            }
+        }
+    }
+    binaries.sort();
+    binaries.dedup();
+    match binaries.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// A package's binaries: its `[[bin]]` names, else its own name when
+/// `src/main.rs` exists.
+fn package_binaries(doc: &toml::Table, package: &toml::Table, dir: &Path) -> Vec<String> {
+    let declared: Vec<String> = doc
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bin| {
+            bin.get("name")
+                .and_then(toml::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    if !declared.is_empty() {
+        return declared;
+    }
+    package
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .filter(|_| dir.join("src").join("main.rs").is_file())
+        .map(|name| vec![name.to_owned()])
+        .unwrap_or_default()
+}
+
+/// A workspace member entry as directories: a literal path, or a trailing `*`
+/// expanded one level, which is the glob cargo manifests use in practice.
+fn expand_member(dir: &Path, member: &str) -> Vec<std::path::PathBuf> {
+    let Some(parent) = member.strip_suffix("/*") else {
+        return vec![dir.join(member)];
+    };
+    std::fs::read_dir(dir.join(parent))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .collect()
+}
+
+/// One `input.call.programs` entry: the program, what it was handed, and every
+/// reading the boundary owns about it.
+fn program_entry(
+    program: &str,
+    arguments: &[&str],
+    raw: &[&str],
+    mediated: bool,
+    via: Option<&'static str>,
+    unread: bool,
+) -> serde_json::Value {
+    // THE SUBCOMMAND, PROJECTED ONCE (CLOUD-2354): the first bare word
+    // past the program's own value-taking options, by the resolver the
+    // verdict matcher uses. Four presets each carried a Rego copy of
+    // git's option table, and they disagreed with git: `git -C -c reset`
+    // read `-c` as an option. `null` for a program with no table.
+    let name = program_name(program);
+    let (subcommand, global_options, nested) = match subcommand_table(name) {
+        None => (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+        Some(options) => {
+            let verb = subcommand_of(name, arguments);
+            let nested = verb.and_then(|at| {
+                let rest = &arguments[at + 1..];
+                subcommand_index(rest, options).map(|next| rest[next])
+            });
+            (
+                serde_json::json!(verb.map(|at| arguments[at])),
+                serde_json::json!(&arguments[..verb.unwrap_or(arguments.len())]),
+                serde_json::json!(nested),
+            )
+        }
+    };
+    let tasks = if name == "mise" {
+        serde_json::json!(mise_tasks(arguments))
+    } else {
+        serde_json::Value::Null
+    };
+    serde_json::json!({
+        "program": program,
+        // THE NAME AS WELL AS THE TOKEN, because they are different
+        // questions and a predicate about "which program is this" wants
+        // the second. `./tests/bats/bin/bats` and `bats` are one program
+        // reached two ways; a module comparing the token would answer no
+        // for the spelling that produced the incident this exists for.
+        //
+        // Resolved here rather than in Rego for the reason the whole
+        // projection exists: path splitting is argv reading, and a module
+        // doing it would be a second authority over it.
+        "name": program_name(program),
+        // WHAT THIS PROGRAM WAS HANDED, so a module can anchor on the
+        // program AND read its own argv without a join (CLOUD-1382).
+        //
+        // Without it a module correlating `programs` back to `segments`
+        // has nothing to correlate ON: the list above is `filter_map`ed,
+        // so a segment with no program yields no entry and the two
+        // indices stop agreeing. The alternative was for every module to
+        // re-find the program inside a segment's words, which is the
+        // second authority over one argv that CLOUD-857 measured and
+        // this whole projection exists to refuse.
+        // NORMALISED THE SAME WAY THE PROGRAM IS, and for the same
+        // measured reason: the closing paren of a grouped command lands
+        // on the LAST argument, which is exactly the token an exact-match
+        // predicate is decided on. `(git push origin main --force)` was
+        // allowed with `--force)` here while the same flag written
+        // earlier denied.
+        "arguments": arguments,
+        // The words before `subcommand`, verbatim, so a module can judge
+        // what they do (`-c core.pager=sh` runs a program) without
+        // parsing them. The whole argv where there is no subcommand.
+        "subcommand": subcommand,
+        "global-options": global_options,
+        "mediated": mediated,
+        // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
+        // say without running it (CLOUD-1949). Each is a table this
+        // engine already owns, so a module granting a call on them is
+        // not a second authority over what a program does:
+        // `READ_ONLY_PROGRAMS` for the floor and the surface's own
+        // declared effect for `batten`. The redirect that turns any
+        // reader into a writer is a SEGMENT key, because a bare `> f`
+        // runs no program and so has no entry here.
+        "reads-only": reads_its_operands(program_name(program)),
+        // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
+        // leading `{` the shell passes through literally, so
+        // `batten lease acquire {--help` would read as `--help` here
+        // while batten receives a positional and writes (CLOUD-2206).
+        "batten-effect": batten_effect(program_name(program), raw),
+        // HOW THIS PROGRAM WAS REACHED (step 14): `null` where the call wrote
+        // it, otherwise the construct that runs it — `script` for a shell's
+        // `-c` text or `eval`'s words, `cargo run` for the binary cargo builds
+        // and starts, `step run` for the argv `batten step run` executes. A
+        // module judging what runs needs none of it; a reader auditing why an
+        // entry exists does.
+        "via": via,
+        // `true` only where the text this entry came from would NOT PARSE, so
+        // it was read by whitespace instead (step 14). A shell's `-c` script
+        // that `rable` refuses still runs; abstaining on it would make the
+        // unparseable spelling the bypass, so the entry is a best-effort
+        // reading flagged as one rather than no entry at all.
+        "unread": unread,
+        // THE VERB AFTER THE SUBCOMMAND (step 14): the next bare word past the
+        // same options, so `batten land lap` is `land`/`lap` and `cargo nextest
+        // run` is `nextest`/`run`. `null` where there is none or no table.
+        "nested": nested,
+        // THE TASKS A `mise` RUNS, by [`mise_tasks`] (step 14); `null` for any
+        // other program or a `mise` that runs no task.
+        "tasks": tasks,
+    })
 }
 
 /// Does this line send output into a file (CLOUD-1949)?
@@ -11237,6 +11795,161 @@ fn protects(policy: &Policy, path: &str) -> bool {
     policy.protected.encloses(normalise(&relative))
 }
 
+/// Every file `protected` covers under `root`, each with its stat fingerprint
+/// (step 14).
+///
+/// # The escape this closes
+///
+/// [`protected_mutation`] judges the operands a command NAMES, which is the
+/// right question before a call and the only one a pure gate can ask. A program
+/// that writes a path its command line never spells — `python3 x.py`, a
+/// script, `cp -r` of a parent, a redirect inside a `-c` text the parser
+/// refuses — passes it, and did: an agent session wrote registered modules
+/// through `python3 <script>` with nothing refusing. So the same protected set
+/// is also compared ACROSS the call: its `PreToolUse` records this state and
+/// its `PostToolUse` records it again, and any difference is a protected
+/// write the command did not name.
+///
+/// # Why a stat and not a hash
+///
+/// This runs on every shell call. A fingerprint of length, modification time
+/// and inode is a `stat` per covered file and reads no content, so the cost is
+/// bounded by the size of the protected set alone — the derived module paths
+/// and whatever the consumer declared, never the tree. Any write that changes
+/// a file's bytes moves its mtime; a rename over it moves its inode.
+///
+/// A glob is walked from its literal prefix, never from the root, and the walk
+/// is bounded: a protected set reaching past the bound is read as far as the
+/// bound, which can only miss a file, never invent a change.
+pub(crate) fn protected_state(
+    root: &Path,
+    protected: &crate::rules::PathSet,
+) -> std::collections::BTreeMap<String, String> {
+    const GLOB: [char; 4] = ['*', '?', '[', '{'];
+    let mut state = std::collections::BTreeMap::new();
+    for pattern in protected.include_patterns() {
+        let start = match pattern.find(GLOB) {
+            None => pattern,
+            Some(at) => pattern[..at].rsplit_once('/').map_or("", |(dir, _)| dir),
+        };
+        walk_protected(root, start, protected, &mut state);
+    }
+    state
+}
+
+/// The most entries [`protected_state`] visits per pattern.
+const PROTECTED_WALK_BOUND: usize = 20_000;
+
+/// Record `start` (a file, or every protected file under a directory).
+fn walk_protected(
+    root: &Path,
+    start: &str,
+    protected: &crate::rules::PathSet,
+    state: &mut std::collections::BTreeMap<String, String>,
+) {
+    let mut pending = vec![start.trim_end_matches('/').to_owned()];
+    let mut visited = 0;
+    while let Some(relative) = pending.pop() {
+        visited += 1;
+        if visited > PROTECTED_WALK_BOUND {
+            return;
+        }
+        let path = if relative.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&relative)
+        };
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            if relative == ".git" || relative.ends_with("/.git") {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                pending.push(if relative.is_empty() {
+                    name
+                } else {
+                    format!("{relative}/{name}")
+                });
+            }
+        } else if protected.contains(&relative) {
+            state.insert(relative, fingerprint(&meta));
+        }
+    }
+}
+
+/// A file's identity for [`protected_state`]: length, modification time and,
+/// on unix, inode.
+fn fingerprint(meta: &std::fs::Metadata) -> String {
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(meta);
+    #[cfg(not(unix))]
+    let inode = 0_u64;
+    format!("{}:{modified}:{inode}", meta.len())
+}
+
+/// The protected paths that differ between two [`protected_state`] readings:
+/// changed, created or removed, in path order.
+pub(crate) fn protected_changes(
+    before: &std::collections::BTreeMap<String, String>,
+    after: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+impl Policy {
+    /// The repository root, the protected patterns and their current
+    /// [`protected_state`], for a shell call's pre-call snapshot; `None` where
+    /// there is no root or nothing is protected.
+    pub(crate) fn protected_snapshot(
+        &self,
+    ) -> Option<(
+        std::path::PathBuf,
+        Vec<String>,
+        std::collections::BTreeMap<String, String>,
+    )> {
+        let root = self.root.clone()?;
+        if self.protected.is_empty() {
+            return None;
+        }
+        let patterns = self
+            .protected
+            .include_patterns()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        let state = protected_state(&root, &self.protected);
+        Some((root, patterns, state))
+    }
+}
+
+/// [`protected_state`] over patterns a snapshot carried, rebuilt into the set
+/// they came from; `None` when they no longer compile.
+pub(crate) fn protected_state_of(
+    root: &Path,
+    patterns: &[String],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let set = crate::rules::PathSet::includes("protected", patterns).ok()?;
+    Some(protected_state(root, &set))
+}
+
 /// Compose the protected-path refusal: what was aimed where, and what to run.
 ///
 /// The path is a *pointer* and rule 4 permits it — it is what the caller already
@@ -12058,7 +12771,15 @@ fn flatten_command(
             segment.cat_bodies.push((unquote(&word_text(word)), body));
         }
     }
-    let mut nested = nested_commands(words, redirects, source);
+    // AN ASSIGNMENT'S SUBSTITUTION RUNS TOO, and first (step 14): `out=$(git
+    // push)` is a command whose only words are an assignment, so descending the
+    // words alone left the push inside it unseen while `echo $(git push)` was
+    // judged.
+    let mut nested = Vec::new();
+    for assignment in assignments {
+        descend_word(assignment, source, &mut nested);
+    }
+    nested.append(&mut nested_commands(words, redirects, source));
     if segment.words.iter().any(String::is_empty) {
         segment.words.retain(|word| !word.is_empty());
     }
@@ -12462,8 +13183,8 @@ fn mediator_present(via: crate::rules::RequireVia, before_program: &[&str]) -> b
 /// `mise` is deliberately **not** here: only `mise exec`/`mise x` is looked
 /// through, so `mise run` is judged as `mise` and `pattern = "mise run"` is a
 /// row the matcher honours.
-const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
-    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup",
+const LOOKTHROUGH_WRAPPERS: [&str; 10] = [
+    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup", "exec",
 ];
 
 /// Is this token a program [`effective_program`] always looks through?
@@ -12475,7 +13196,8 @@ pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
 /// Each look-through wrapper's options whose VALUE is the next word, as each
 /// tool's own manual spells them (CLOUD-2687). An attached value (`-ux`,
 /// `--user=x`) is one word and needs no entry; only the separated form does.
-const WRAPPER_VALUE_OPTIONS: [(&str, &[&str]); 7] = [
+const WRAPPER_VALUE_OPTIONS: [(&str, &[&str]); 8] = [
+    ("exec", &["-a"]),
     (
         "sudo",
         &[
@@ -12733,6 +13455,120 @@ fn global_value_options(program: &str) -> &'static [&'static str] {
     }
 }
 
+/// `cargo`'s options that consume the next word ahead of its subcommand.
+const CARGO_VALUE_OPTIONS: [&str; 4] = ["-C", "--config", "-Z", "--color"];
+
+/// The programs whose `subcommand` [`program_reach`] projects, each with the
+/// value-taking options that may precede it; `None` for a program with no
+/// table, which projects `null` rather than a guess.
+///
+/// Wider than [`global_value_options`] by `batten` and `cargo` (step 14), and
+/// deliberately not merged into it: that table also feeds [`verdict_words`],
+/// whose `[[verb]]` matching for those two programs is not this change's to move.
+/// `batten` takes no option before its verb, so its table is empty and still a
+/// table: "which batten verb does this run" is answered here, once, instead of
+/// by every module that needs it.
+fn subcommand_table(program: &str) -> Option<&'static [&'static str]> {
+    match program {
+        "git" | "mise" | "gh" => Some(global_value_options(program)),
+        "batten" => Some(&[]),
+        "cargo" => Some(&CARGO_VALUE_OPTIONS),
+        _ => None,
+    }
+}
+
+/// The index of `name`'s subcommand in `arguments`, past its own options — and,
+/// for `cargo`, past a leading `+toolchain`, which is a bare word that is not
+/// the subcommand.
+fn subcommand_of(name: &str, arguments: &[&str]) -> Option<usize> {
+    let options = subcommand_table(name)?;
+    let skip =
+        usize::from(name == "cargo" && arguments.first().is_some_and(|w| w.starts_with('+')));
+    subcommand_index(&arguments[skip..], options).map(|at| at + skip)
+}
+
+/// The tasks a `mise watch` argv runs (step 14).
+fn watched_tasks(rest: &[&str]) -> Vec<String> {
+    const VALUED: [&str; 16] = [
+        "-t",
+        "--task",
+        "-w",
+        "--watch",
+        "-e",
+        "--exts",
+        "-f",
+        "--filter",
+        "-g",
+        "--glob",
+        "--debounce",
+        "--delay",
+        "-E",
+        "--env",
+        "-C",
+        "--cd",
+    ];
+    let mut tasks = Vec::new();
+    let mut at = 0;
+    let mut bare = false;
+    while at < rest.len() {
+        let word = rest[at];
+        if word == "-t" || word == "--task" {
+            tasks.extend(rest.get(at + 1).map(|task| (*task).to_owned()));
+            at += 2;
+        } else if let Some(task) = word.strip_prefix("--task=") {
+            tasks.push(task.to_owned());
+            at += 1;
+        } else if word == "--" {
+            break;
+        } else if word.starts_with('-') {
+            at += if VALUED.contains(&word) { 2 } else { 1 };
+        } else {
+            if !bare {
+                tasks.push(word.to_owned());
+                bare = true;
+            }
+            at += 1;
+        }
+    }
+    tasks
+}
+
+/// The tasks a `mise` argv runs: every task `mise run`, `mise r`, or `mise
+/// tasks run` names, one per `:::` group; `None` when the argv runs no task by
+/// any of those spellings (step 14).
+///
+/// ONE READING, shared by [`singleton_task_started`] and the `tasks` key every
+/// module reads, so "which mise task does this run" has one answer. A task's
+/// own arguments follow its name and are not tasks; `--` is an option to
+/// [`subcommand_index`], so `mise run -- verify` names `verify`. An argv naming
+/// no task (`mise run`) is an empty list: mise then picks one itself, which is
+/// not a task this can name.
+fn mise_tasks(arguments: &[&str]) -> Option<Vec<String>> {
+    let verb = subcommand_index(arguments, &MISE_VALUE_OPTIONS)?;
+    let rest = match arguments[verb] {
+        "run" | "r" => &arguments[verb + 1..],
+        // `mise watch` RUNS a task on every change: `-t`/`--task` names it, and
+        // so does the first bare word past watch's own options.
+        "watch" | "w" => return Some(watched_tasks(&arguments[verb + 1..])),
+        "tasks" | "task" => {
+            let after = &arguments[verb + 1..];
+            let nested = subcommand_index(after, &MISE_VALUE_OPTIONS)?;
+            if !matches!(after[nested], "run" | "r") {
+                return None;
+            }
+            &after[nested + 1..]
+        }
+        _ => return None,
+    };
+    Some(
+        rest.split(|word| *word == ":::")
+            .filter_map(|group| {
+                subcommand_index(group, &MISE_VALUE_OPTIONS).map(|at| group[at].to_owned())
+            })
+            .collect(),
+    )
+}
+
 /// The singleton task this call would start a second copy of (CLOUD-438).
 ///
 /// `mise run <task>` and nothing else. `effective_program` resolves `mise` for
@@ -12746,50 +13582,34 @@ fn global_value_options(program: &str) -> &'static [&'static str] {
 /// the first program, and moved every program anchor here. Same intent, one
 /// construct further along.
 pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
-    for entry in &program_reach(&envelope.command) {
-        if entry.get("name").and_then(serde_json::Value::as_str) != Some("mise") {
-            continue;
-        }
-        let arguments: Vec<&str> = entry
-            .get("arguments")
-            .and_then(serde_json::Value::as_array)
-            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
-            .unwrap_or_default();
-        // `mise`'S OWN OPTIONS COME BEFORE THE SUBCOMMAND, so `arguments[0]` is
-        // not the verb (CLOUD-1555). This read `arguments.first() != Some("run")`
-        // and so saw `mise run land` and nothing else: `mise -C /repo run land`
-        // and `mise -E dev run land` both START `land` and both put an option
-        // first, so the scan skipped the segment and a second `land` ran with no
-        // singleton — an under-deny on exactly the collision CLOUD-438 exists to
-        // stop. `destructive_reset_target` below was already fixed for the
-        // identical mistake; the two sat side by side taking opposite approaches
-        // to one question, which is why the resolver is now shared rather than
-        // copied.
-        let Some(verb) = subcommand_index(&arguments, &MISE_VALUE_OPTIONS) else {
-            continue;
-        };
-        if arguments[verb] != "run" {
-            continue;
-        }
-        // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1
-        // rather than economy: `land` is THIS consumer's task, and a constant
-        // naming it would put a consumer identifier in the core. The lock
-        // directory already answers which tasks are guarded — one exists only
-        // because something took it — so the boundary asks about the task this
-        // call names and lets the absence of a lock be the allow.
-        // THE TASK IS THE FIRST BARE WORD PAST `run`'S OWN OPTIONS, not the first
-        // bare word (review). `-E dev` puts `dev` where this scan looked, and the
-        // gate then asked about a task nothing holds.
-        //
-        // The SAME resolver as the verb above, one position along: the question
-        // "first bare word, skipping options and what they consume" is identical
-        // here, and answering it twice is how the two scans in this file drifted.
-        let rest = &arguments[verb + 1..];
-        if let Some(task) = subcommand_index(rest, &MISE_VALUE_OPTIONS) {
-            return Some(rest[task].to_owned());
-        }
-    }
-    None
+    // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1 rather
+    // than economy: `land` is THIS consumer's task, and a constant naming it
+    // would put a consumer identifier in the core. The lock directory already
+    // answers which tasks are guarded — one exists only because something took
+    // it — so the boundary asks about the task this call names and lets the
+    // absence of a lock be the allow.
+    //
+    // THE TASK IS READ BY [`mise_tasks`], the one reading the `tasks` key every
+    // module gets too (step 14). This scan carried its own copy — `run` and the
+    // first bare word past its options — which already took two fixes for
+    // `mise`'s own options (CLOUD-1555) and still missed `mise r land`, `mise
+    // tasks run land` and the second group of `mise run a ::: land`, each of
+    // which starts a second `land`.
+    tasks_started(envelope).into_iter().next()
+}
+
+/// Every task this call starts, in the order written: [`mise_tasks`] over each
+/// `mise` the call reaches. The singleton check asks about each of them, since
+/// `mise run a ::: land` starts a second `land` as surely as `mise run land`.
+pub(crate) fn tasks_started(envelope: &Envelope) -> Vec<String> {
+    program_reach(&envelope.command)
+        .iter()
+        .filter(|entry| entry.get("name").and_then(serde_json::Value::as_str) == Some("mise"))
+        .filter_map(|entry| entry.get("tasks").and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Whether any program this call reaches is `git push` (CLOUD-2270): the one
@@ -13843,6 +14663,7 @@ mod tests {
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
                 tasks: &crate::facts::Look::CouldNotLook,
+                task_bodies: &crate::facts::Look::CouldNotLook,
                 extracted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
@@ -14212,6 +15033,7 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             // The Stop-path fields (CLOUD-479) are absent on a PreTool envelope,
             // which is the honest shape rather than a filler value.
@@ -14259,6 +15081,7 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             stop_active: None,
             last_message: None,
@@ -19990,6 +20813,7 @@ deny contains "refused by themodule" if {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             stop_active: None,
             last_message: None,
@@ -21802,6 +22626,204 @@ deny contains "refused by themodule" if {
         assert_eq!(read["global-options"], serde_json::Value::Null);
     }
 
+    /// The names of every program a command reaches, in order.
+    fn reached(command: &str) -> Vec<String> {
+        program_reach(command)
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    /// Program extraction follows a program into the programs it runs, through
+    /// every construct, recursively (step 14) — tested once here, for every
+    /// module that reads `programs`.
+    ///
+    /// Fails by: any construct's arm removed (its row stops reaching `git`),
+    /// the recursion dropped (the nested row stops at the inner shell), or the
+    /// fallback for an unparseable script removed (that row reaches nothing).
+    #[test]
+    fn reach_follows_every_construct_that_runs_a_program() {
+        for command in [
+            "bash -c 'git push'",
+            "sh -c \"git push\"",
+            "bash -lc 'git push'",
+            "bash -o pipefail -c 'git push'",
+            "eval 'git push'",
+            "eval git push",
+            "exec git push",
+            "xargs git push",
+            "echo $(git push)",
+            "out=$(git push)",
+            "env -S 'git push'",
+            "watch -n 1 git push",
+            "find . -exec git push \\;",
+            "find . -okdir git push {} +",
+            "bash -c 'sh -c \"git push\"'",
+            "bash -c 'git push \"unterminated'",
+            "mise exec -- bash -c 'git push'",
+        ] {
+            assert!(
+                reached(command).iter().any(|name| name == "git"),
+                "{command} must reach git: {:?}",
+                reached(command)
+            );
+        }
+        let script = program_reach("bash -c 'git push \"unterminated'");
+        let git = script.iter().find(|entry| entry["name"] == "git").unwrap();
+        assert_eq!(git["unread"], true);
+        assert_eq!(git["via"], "script");
+        let mediated = program_reach("mise exec -- bash -c 'cargo build'");
+        let cargo = mediated
+            .iter()
+            .find(|entry| entry["name"] == "cargo")
+            .unwrap();
+        assert_eq!(
+            cargo["mediated"], true,
+            "an outer mediator covers what it runs"
+        );
+        assert_eq!(
+            reached("echo 'git push'"),
+            vec!["echo"],
+            "a mention runs nothing"
+        );
+        assert_eq!(
+            reached("bash script.sh"),
+            vec!["bash"],
+            "a script file is not a -c text"
+        );
+    }
+
+    /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
+    /// or `-p`, handed what follows `--`; `batten step run` reaches the argv
+    /// after its `--` (step 14).
+    ///
+    /// Fails by: the package, bin or separator reading dropped, or a binary
+    /// invented for a `cargo run` that names none.
+    #[test]
+    fn cargo_run_and_step_run_reach_the_program_they_start() {
+        for (command, binary, verb) in [
+            (
+                "cargo run -p batten -- enforce --half live",
+                "batten",
+                "enforce",
+            ),
+            (
+                "cargo run -q --package=batten -- enforce",
+                "batten",
+                "enforce",
+            ),
+            ("cargo +stable run --bin tool -p other -- go", "tool", "go"),
+            (
+                "mise exec -- cargo run -p batten -- check",
+                "batten",
+                "check",
+            ),
+        ] {
+            let reach = program_reach(command);
+            let inner = reach
+                .iter()
+                .find(|entry| entry["via"] == "cargo run")
+                .unwrap();
+            assert_eq!(inner["name"], binary, "{command}");
+            assert_eq!(inner["arguments"][0], verb, "{command}");
+        }
+        // NO BINARY NAMED: the manifest's one binary, as cargo resolves it, and
+        // nothing invented where no manifest answers.
+        assert_eq!(reached("cargo run -- enforce"), vec!["cargo", "batten"]);
+        assert_eq!(
+            reached("cargo run --manifest-path /no/such/Cargo.toml -- enforce"),
+            vec!["cargo"]
+        );
+        let step = program_reach("batten step run t -- cargo nextest run --workspace");
+        assert_eq!(step[1]["name"], "cargo");
+        assert_eq!(step[1]["via"], "step run");
+        assert_eq!(step[1]["subcommand"], "nextest");
+        assert_eq!(step[1]["nested"], "run");
+    }
+
+    /// `batten`'s verb and its nested verb are projected; a `mise` entry
+    /// carries the tasks it starts by every run spelling (step 14).
+    ///
+    /// Fails by: `batten` given no table (its subcommand is `null`), the
+    /// nested reading dropped, or any `mise_tasks` spelling missed.
+    #[test]
+    fn batten_verbs_and_mise_tasks_are_projected_once() {
+        let land = program_reach("batten land lap main").remove(0);
+        assert_eq!(land["subcommand"], "land");
+        assert_eq!(land["nested"], "lap");
+        for (command, tasks) in [
+            ("mise run verify", vec!["verify"]),
+            ("mise r verify", vec!["verify"]),
+            ("mise run -- verify", vec!["verify"]),
+            ("mise -C /repo run -E dev land", vec!["land"]),
+            ("mise tasks run verify", vec!["verify"]),
+            ("mise run --continue-on-error a x ::: b", vec!["a", "b"]),
+            ("mise watch verify", vec!["verify"]),
+            ("mise watch -w src -t verify", vec!["verify"]),
+        ] {
+            assert_eq!(
+                program_reach(command).remove(0)["tasks"],
+                serde_json::json!(tasks),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            program_reach("mise exec -- ls").remove(0)["tasks"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            program_reach("mise ls").remove(0)["tasks"],
+            serde_json::Value::Null
+        );
+    }
+
+    /// A task is followed into its body, and into every task that body starts,
+    /// once each (step 14).
+    ///
+    /// Fails by: the follow dropped, a cycle not terminated, or the shorthand
+    /// `mise <task>` either missed or read for a mise command.
+    #[test]
+    fn task_programs_follow_a_task_into_what_it_runs() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                ("outer", vec!["mise run inner", "echo done"]),
+                (
+                    "inner",
+                    vec!["cargo run -p batten -- enforce", "mise run outer"],
+                ),
+                ("install", vec!["git push"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let names = |command: &str| -> Vec<String> {
+            task_programs(command, &bodies)
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let reached = names("mise run outer");
+        assert!(reached.contains(&"batten".to_owned()), "{reached:?}");
+        assert!(reached.contains(&"echo".to_owned()), "{reached:?}");
+        assert!(names("mise outer").contains(&"batten".to_owned()));
+        assert!(
+            names("mise install").is_empty(),
+            "a mise command is not a task"
+        );
+        assert_eq!(
+            task_programs("ls", &crate::facts::Look::CouldNotLook),
+            serde_json::Value::Null
+        );
+    }
+
     /// A redirect into a file is a write; into a descriptor or `/dev/null`
     /// it is not.
     ///
@@ -22522,9 +23544,11 @@ deny contains "refused by themodule" if {
         assert_eq!(python.shorts("--x"), None);
         assert_eq!(python.shorts("-"), None);
         assert_eq!(python.shorts("-ce"), Some("ce"));
-        let fallback = grammar("bash");
+        let fallback = grammar("tclsh");
         assert_eq!(fallback.shorts("-c"), Some("c"));
         assert_eq!(fallback.shorts("-ab"), None);
+        // A shell has its own family since step 14, and it bundles: `-lc`.
+        assert_eq!(grammar("bash").shorts("-lc"), Some("lc"));
         assert_eq!(grammar("ruby").valued, "rIEC");
     }
 

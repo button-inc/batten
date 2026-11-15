@@ -130,6 +130,12 @@
               "name": {
                 "type": "string"
               },
+              "nested": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "program": {
                 "type": "string"
               },
@@ -137,6 +143,32 @@
                 "type": "boolean"
               },
               "subcommand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tasks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "unread": {
+                "type": "boolean"
+              },
+              "via": {
+                "enum": [
+                  null,
+                  "script",
+                  "cargo run",
+                  "step run",
+                  "exec",
+                  "task"
+                ],
                 "type": [
                   "string",
                   "null"
@@ -212,9 +244,98 @@
             },
             "type": "object"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "stop-repeat": {},
+        "task-programs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "batten-effect": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "global-options": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "mediated": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "nested": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "program": {
+                "type": "string"
+              },
+              "reads-only": {
+                "type": "boolean"
+              },
+              "subcommand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": "string"
+              },
+              "tasks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "unread": {
+                "type": "boolean"
+              },
+              "via": {
+                "enum": [
+                  null,
+                  "script",
+                  "cargo run",
+                  "step run",
+                  "exec",
+                  "task"
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "tool": {
           "type": "string"
         },
