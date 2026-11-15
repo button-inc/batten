@@ -866,9 +866,8 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
 
 // --- the rule-id grammar and the collapse predicate (CLOUD-1638) ------------
 //
-// Anchored in this suite because it is `//MUTANT identity-arm-dropped`'s
-// declared `//MUTANT-SUITE`, and because the question is the same one the rest
-// of the file asks: does a name in the tree agree with the mechanism that
+// Anchored in this suite because the question is the same one the rest of the
+// file asks: does a name in the tree agree with the mechanism that
 // judges it. These ask it of the two names a refusal line carries.
 //
 // They use their own runner rather than `judge`: that one names rule watch other's

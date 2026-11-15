@@ -12,8 +12,8 @@
 //!
 //! Neither shows on the platform a contributor runs, so the class is refused
 //! HERE, where it is free to catch. New code spells `git::canonical`, and a
-//! file's bare calls may only fall. Comment lines are not code, so a doc or a
-//! `//MUTANT` row naming the call does not count.
+//! file's bare calls may only fall. Comment lines are not code, so a doc
+//! naming the call does not count.
 
 use std::collections::BTreeMap;
 use std::path::Path;

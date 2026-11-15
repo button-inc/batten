@@ -940,7 +940,7 @@ mod tests {
         root
     }
 
-    /// `#MUTANT prune-table-alone-unread` reddens here. The config carries a key
+    /// A mutant that leaves the prune table unread reddens here. The config carries a key
     /// no build knows — the shape a release meets on every branch that adds one —
     /// and the collector still gets its band.
     #[test]
@@ -958,7 +958,7 @@ mod tests {
         assert_eq!(read.free_band(), Some((100, 200)));
     }
 
-    /// `#MUTANT prune-table-alone-unvalidated` reddens here: reading the table alone
+    /// A mutant skipping the table's validation reddens here: reading the table alone
     /// must not skip the check a whole-file load would have refused.
     #[test]
     fn a_prune_table_that_fails_validation_is_not_read_alone() {

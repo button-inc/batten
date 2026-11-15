@@ -120,7 +120,7 @@ fn a_list_both_sides_grew_is_proposed_in_trunk_order_and_nothing_moves() {
     assert!(file.starts_with(&into), "written under the directory given");
 }
 
-/// `#MUTANT undeclared-hunk-proposed` reddens here. A code line both sides
+/// A mutant proposing an undeclared hunk reddens here. A code line both sides
 /// changed matches no shape, so the path gets NO candidate — never a guess.
 #[test]
 fn an_unshaped_region_gets_no_candidate() {

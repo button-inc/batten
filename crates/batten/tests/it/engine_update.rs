@@ -307,10 +307,9 @@ fn bash_envelope(session: &str, command: &str) -> String {
 /// would spawn the crash twice to learn the same thing.
 ///
 /// The two arms are separate cases, and the split is about the mutation sweep
-/// rather than taste: `mutate` replays a Rust suite as `cargo test -- <case>`,
-/// so three `//MUTANT` rows naming ONE function each paid for the other arm's
-/// spawns and both floor invocations, none of which can redden the mutant
-/// under test.
+/// rather than taste: a mutant of one arm replaying ONE function would pay for
+/// the other arm's spawns and both floor invocations, none of which can redden
+/// it.
 #[test]
 fn a_crashing_followed_build_never_fails_the_hook_open() {
     // Through `follow_pin`: the installed engine stands IN the checkout.

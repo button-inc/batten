@@ -1086,7 +1086,7 @@ fn census_cap(path: &str) -> u64 {
     u64::try_from(cap).expect("a cap fits in u64")
 }
 
-/// `#MUTANT text-schema-uncapped` reddens here.
+/// A mutant leaving a text leaf uncapped reddens here.
 #[test]
 fn every_text_leaf_in_both_schemas_carries_its_census_cap() {
     let mut problems = Vec::new();

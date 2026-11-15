@@ -241,7 +241,7 @@ fn origin_head_names_the_trunk_when_nothing_is_declared() {
     assert_resolves_trunk(&repo("trunk-name-origin-head", Recorded::OriginHead));
 }
 
-/// Acceptance 2, and `#MUTANT must-land-on-ignored` reddens here: with origin's
+/// Acceptance 2, and a mutant ignoring `must_land_on` reddens here: with origin's
 /// HEAD unset, only the declaration can name the trunk — in every spelling.
 #[test]
 fn must_land_on_names_the_trunk_when_origin_head_is_unset() {
@@ -257,7 +257,7 @@ fn must_land_on_names_the_trunk_when_origin_head_is_unset() {
     }
 }
 
-/// Acceptance 3, and `#MUTANT trunk-name-falls-back-to-main` reddens here: no
+/// Acceptance 3, and a mutant falling back to `main` reddens here: no
 /// declaration, no recorded HEAD, and a REAL `origin/main` that a fallback would
 /// find. Each verb takes its could-not-look path and names the gap.
 #[test]

@@ -1083,7 +1083,7 @@ mod tests {
         assert_eq!(policy().judge(&subject).unwrap().len(), 4);
     }
 
-    /// `#MUTANT attribution-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// A mutant dropping a field's class reddens here (CLOUD-1960): every
     /// field this module raises leads its line with its own declared class.
     #[test]
     fn every_attribution_finding_names_its_vendored_class() {

@@ -333,8 +333,8 @@ fn the_followed_build_is_never_collected() {
 /// THE VERB IS ONE COLLECTION, and the spec's own case. Two live units of known
 /// size, free space one MiB short of `max_free_mb`: the older unit goes, the
 /// line is `disk-collected …`, and the exit is 0 — no floor, no basis, no
-/// escalation field. `#MUTANT prune-verb-skips-collect` returns before
-/// collecting, and the older unit survives.
+/// escalation field. A mutant that returns before collecting leaves the older
+/// unit standing.
 #[test]
 fn target_prune_collects_to_max_free_without_a_floor() {
     let repo = repo("target-prune-collects");
