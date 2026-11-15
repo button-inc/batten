@@ -626,9 +626,10 @@ pub fn register_root(root: &Path, check: bool) -> Result<(Vec<String>, bool)> {
     };
     let path = root.join(surface);
     let mut document = match crate::fsio::read_to_string(&path) {
+        // A surface that parses to no object is left alone by `add_missing`.
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(document) if document.is_object() => document,
-            _ => return Ok((Vec::new(), false)),
+            Ok(document) => document,
+            Err(_) => return Ok((Vec::new(), false)),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             serde_json::Value::Object(serde_json::Map::new())

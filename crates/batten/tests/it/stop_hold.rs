@@ -306,6 +306,36 @@ fn removing_a_hold_row_is_a_weakening() {
 }
 
 #[test]
+fn a_stop_records_the_cache_limit_in_force() {
+    // CLOUD-2763: the Stop path writes the limit its session's last cache write
+    // names; a post-tool call writes nothing.
+    let (repo, home) = repo("cache-limit-recorded", "version = 1\n");
+    let transcript = repo.join("..").join("session.jsonl");
+    let write = serde_json::json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "model": format!("{}fable-5-2", "claude-"),
+            "content": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_creation": {"ephemeral_1h_input_tokens": 500}},
+        },
+    });
+    std::fs::write(&transcript, format!("{write}\n")).expect("a transcript");
+    let receipt = repo.join(".git/batten-receipts/cache-evicts-after");
+    let mut payload = stop_payload(false);
+    payload["transcript_path"] = serde_json::json!(transcript.display().to_string());
+    let mut post_tool = payload.clone();
+    post_tool["hook_event_name"] = serde_json::json!("PostToolUse");
+    post_tool["tool_name"] = serde_json::json!("Bash");
+    post_tool["tool_input"] = serde_json::json!({"command": "true"});
+    hook_at(&repo, &home, &post_tool, "claude-code");
+    assert!(!receipt.exists(), "a post-tool call records nothing");
+    let output = hook_at(&repo, &home, &payload, "claude-code");
+    assert!(receipt.is_file(), "{}", stderr(&output));
+}
+
+#[test]
 fn the_refusal_counts_and_does_not_name() {
     let (repo, home) = repo("hold-count", HOLD);
     for suffix in ["SUFFIX-ONE", "SUFFIX-TWO", "SUFFIX-THREE"] {

@@ -2346,6 +2346,13 @@ pub fn warm_wakes(count: &Path, now: u64, lifetime: u64) -> u64 {
     u64::try_from(fresh).unwrap_or(u64::MAX)
 }
 
+/// Whether a wait settles the warm count: only one whose limit was taken from
+/// the receipt in force, never one given `--evict-after`.
+#[must_use]
+pub fn spends_warm(evict_after: Option<u64>, from_receipt: bool) -> bool {
+    evict_after.is_none() && from_receipt
+}
+
 /// Settle the warm count after a wait: a wake spent at the limit is appended
 /// with its time; a change clears the count.
 //MUTANT-SUITE crates/batten/src/mcp.rs
@@ -4285,7 +4292,10 @@ mod tests {
             pacing(None),
             None,
             &mut |_| Ok(status(if pauses.get() >= 10_000 { "B" } else { "A" }, 0)),
-            &mut |_| pauses.set(pauses.get() + 1),
+            &mut |_| {
+                pauses.set(pauses.get() + 1);
+                assert!(pauses.get() <= 10_000, "the wait did not end on the change");
+            },
         );
         assert_eq!(pauses.get(), 10_000, "{}", waited.line);
     }
@@ -4643,6 +4653,14 @@ mod tests {
             said.as_deref(),
             Some("mcp wait: past break-even after 39 wakes, waiting for a change only")
         );
+    }
+
+    #[test]
+    fn only_a_limit_from_the_receipt_spends_a_warm_wake() {
+        assert!(spends_warm(None, true));
+        assert!(!spends_warm(Some(300), true), "a limit the caller gave");
+        assert!(!spends_warm(None, false), "no receipt in force");
+        assert!(!spends_warm(Some(300), false));
     }
 
     #[test]

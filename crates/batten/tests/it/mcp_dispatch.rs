@@ -356,6 +356,33 @@ fn mcp_wait_over_a_method_with_no_result_row_exits_one_without_dispatching() {
 }
 
 #[test]
+fn mcp_wait_refuses_an_undeclared_server_only_for_a_rowed_method() {
+    // A rowed method over a server no declared source resolves is refused for
+    // that server before any poll — never a first read that could not be made;
+    // an unrowed one is refused for its missing row first, so the server is
+    // never resolved at all.
+    let repo = repo_with_credential("mcp-wait-undeclared", "");
+    let rowed = run(&repo, &["mcp", "wait", "absent", "get_thing", "{}"]);
+    assert_eq!(rowed.status.code(), Some(3), "got: {}", stderr(&rowed));
+    assert!(
+        stderr(&rowed).contains("absent cannot be dispatched"),
+        "got: {}",
+        stderr(&rowed)
+    );
+    let unrowed = run(&repo, &["mcp", "wait", "absent", "no_row_declared", "{}"]);
+    assert_eq!(unrowed.status.code(), Some(1), "got: {}", stderr(&unrowed));
+    assert!(
+        stderr(&unrowed).contains("declares no [[mcp.result]] row"),
+        "got: {}",
+        stderr(&unrowed)
+    );
+    assert!(
+        stdout(&unrowed).is_empty(),
+        "a refusal is never the product"
+    );
+}
+
+#[test]
 fn a_source_declaring_no_credential_behaves_exactly_as_before() {
     // The byte-identical arm (CLOUD-418's mirror, and CLOUD-1261's acceptance by
     // name). Adding this key must not change what a source that does not use it
