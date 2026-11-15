@@ -416,7 +416,7 @@ fn check_sequence() -> Vec<String> {
         .as_array()
         .expect("[tasks.ntia-check] is an argv sequence")
         .iter()
-        .map(|entry| entry.as_str().expect("a string entry").to_owned())
+        .map(|entry| crate::common::rendered(entry.as_str().expect("a string entry")))
         .collect()
 }
 
