@@ -10352,7 +10352,10 @@ fn reach_argv(
     let Some(depth) = depth.checked_sub(1) else {
         return reached;
     };
-    for script in inner_scripts(name, &arguments) {
+    for script in inner_scripts(name, &arguments)
+        .into_iter()
+        .chain(shebang_script(program))
+    {
         reached.extend(reach_into(&script, mediated, Some("script"), depth));
     }
     for (inner, how) in inner_argv(name, &arguments).into_iter().chain(
@@ -10404,10 +10407,70 @@ fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
                 .unwrap_or_default()
         }
         "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash" => {
-            inline_values(&grammar(name), arguments)
+            let grammar = grammar(name);
+            let inline = inline_values(&grammar, arguments);
+            if !inline.is_empty() {
+                return inline;
+            }
+            // THE SCRIPT FILE A SHELL RUNS IS ITS PROGRAM TOO (#1276, step 23),
+            // read through the same `script_operand` the protected-path scan
+            // stops at, so the two cannot disagree about which file it is.
+            script_operand(&grammar, arguments)
+                .and_then(script_file_text)
+                .into_iter()
+                .collect()
         }
+        // `source` and `.` run a file in the current shell.
+        "source" | "." => arguments
+            .first()
+            .copied()
+            .and_then(script_file_text)
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The largest script file the reach reads into memory. Past it the file is
+/// not followed, as a script nested past [`REACH_DEPTH`] is not.
+const SCRIPT_FILE_MAX: u64 = 1 << 16;
+
+/// The text of the script file `operand` names, resolved where the call runs.
+///
+/// MEASURED ON #1276: every commit, push and landing of one session ran as
+/// `sh ship<N>.sh`, so every module judged `sh <path>` and nothing the file
+/// ran. The reach followed `-c`, `eval`, `exec` and `cargo run`, and never a
+/// file. `None` for a file that is absent, unreadable, not UTF-8 or past
+/// [`SCRIPT_FILE_MAX`].
+fn script_file_text(operand: &str) -> Option<String> {
+    let path = std::path::Path::new(operand);
+    if std::fs::metadata(path).ok()?.len() > SCRIPT_FILE_MAX {
+        return None;
+    }
+    crate::fsio::read_to_string(path).ok()
+}
+
+/// The shell text a program file runs when its shebang names a shell: the
+/// file itself, read whole. `None` for a program spelled without a path, a
+/// file with no shebang, or a shebang naming anything but a shell.
+fn shebang_script(program: &str) -> Option<String> {
+    if !program.contains('/') {
+        return None;
+    }
+    let text = script_file_text(program)?;
+    let line = text.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    let mut interpreter = program_name(words.next()?);
+    if interpreter == "env" {
+        interpreter = words
+            .find(|word| !word.starts_with('-'))
+            .map(program_name)?;
+    }
+    matches!(
+        interpreter,
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
+    )
+    .then_some(text)
 }
 
 /// The argv a program starts as a child, with how it was reached: the binary
@@ -16759,6 +16822,48 @@ mod tests {
             project(&envelope("git status")).pointer("/call/forge"),
             Some(&serde_json::Value::Null)
         );
+    }
+
+    /// Fails by: a shebang naming another interpreter read as shell, a bare
+    /// program name read as a file, an oversized file read whole, or a shell
+    /// shebang through `env` not followed (#1276, step 23).
+    #[test]
+    fn only_a_shell_shebang_makes_a_program_file_a_script() {
+        let dir = std::env::temp_dir().join(format!("batten-shebang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let shell = file("shell", "#!/bin/sh\ngit push\n");
+        let through_env = file("env", "#!/usr/bin/env -S bash -e\ngit push\n");
+        let python = file("py", "#!/usr/bin/env python3\nprint(1)\n");
+        let plain = file("plain", "git push\n");
+        let big = file(
+            "big",
+            &format!("#!/bin/sh\n{}", "#".repeat(SCRIPT_FILE_MAX as usize)),
+        );
+        assert!(shebang_script(&shell).is_some_and(|text| text.contains("git push")));
+        assert!(shebang_script(&through_env).is_some());
+        assert_eq!(shebang_script(&python), None);
+        assert_eq!(shebang_script(&plain), None);
+        assert_eq!(shebang_script(&big), None);
+        assert_eq!(shebang_script("shell"), None);
+        assert_eq!(script_file_text(&big), None);
+        assert!(script_file_text(&plain).is_some());
+        assert_eq!(
+            script_file_text(&dir.join("absent").to_string_lossy()),
+            None
+        );
+        let reached = program_reach(&format!("sh {plain}"));
+        assert!(
+            reached
+                .iter()
+                .any(|entry| entry["name"] == "git" && entry["via"] == "script"),
+            "the file a shell runs is reached: {reached:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Fails by: a redirection handed to the program as an argument, or a
