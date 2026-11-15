@@ -5911,6 +5911,70 @@ mod push_tests {
         );
     }
 
+    /// Fails by: ANY durable step of a rotation pass at which a kill leaves the
+    /// next pass short of the one end state — the quiet session archived once
+    /// and only once, its ref removed, every blob of its snapshot still held —
+    /// or removes a ref the archive does not reach.
+    ///
+    /// The kill moves one step later each round until a pass finishes
+    /// unkilled, as the push's own kill case does.
+    #[test]
+    fn a_rotation_killed_at_any_step_is_finished_by_the_next_pass() {
+        let mut steps = None;
+        for kill_at in 0..200_u64 {
+            let base = base(&format!("offbox-rotate-kill-{kill_at}"));
+            let stand = standing(&[], Vec::new());
+            let quiet = session_pushed(&base, "a", "a");
+            let busy = session_pushed(&base, "b", "b");
+            let tip = head(&stand, &quiet.meta);
+            let name = reference(&quiet.meta);
+            for round in 1..=2 {
+                assert_eq!(pass(&base, 2), Rotated::Done(0), "round {round}");
+                push_again(&busy, round);
+            }
+
+            // THE PASS THAT IS KILLED.
+            crate::testing::kill_after(Some(kill_at));
+            let _ = rotate_once(REMOTE, &rotating(&base), 2, TIME);
+            let killed = crate::testing::killed();
+            crate::testing::kill_after(None);
+
+            // A ref the kill left in place is still there; one it did not is
+            // archived already. Either way, the next passes finish the work.
+            if head(&stand, &quiet.meta) != lease::ZERO {
+                assert!(
+                    matches!(pass(&base, 2), Rotated::Done(1)),
+                    "kill at {kill_at}: the next pass rotates what is left"
+                );
+            }
+            assert_eq!(
+                head(&stand, &quiet.meta),
+                lease::ZERO,
+                "kill at {kill_at}: its ref is gone"
+            );
+            let tree = archive_tree(&stand, &base);
+            assert_eq!(
+                tree[&archive_path(INDEX, &name)],
+                format!("{name}\n{tip}\n"),
+                "kill at {kill_at}: archived once"
+            );
+            for (path, blob) in &gitwrite::tree_index(&quiet.repo(), &tip).unwrap() {
+                let held = stand.borrow().objects.iter().any(|held| &held.id == blob);
+                assert!(held, "kill at {kill_at}: {path} is lost");
+            }
+            assert_ne!(head(&stand, &busy.meta), lease::ZERO, "kill at {kill_at}");
+            if !killed {
+                steps = Some(kill_at);
+                break;
+            }
+        }
+        let steps = steps.expect("a pass finishes unkilled inside the bound");
+        assert!(
+            steps >= 1,
+            "the premise: a pass takes a durable step: {steps}"
+        );
+    }
+
     /// Fails by: a path a reader cannot compute from the ref's name.
     #[test]
     fn the_index_path_is_two_levels_and_its_first_line_is_the_ref() {
