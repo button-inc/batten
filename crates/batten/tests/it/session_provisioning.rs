@@ -1016,13 +1016,13 @@ fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     );
 }
 
-/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, stamped with
-/// this tree's digest, and pinned by it, in that order, by the binary just
-/// built. A build that skipped either left an unstamped binary first on
-/// `_.path` while `batten.toml` named the release, so the branch was judged by
-/// an engine it had not built.
+/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, then stamped
+/// with this tree's digest by the binary just built. A build that skipped the
+/// stamp left an unstamped binary first on `_.path`. It never rewrites the
+/// committed pin: the build runs under session-start repairs, and a pin written
+/// mid-lap moved the admission epoch and every step key (#1276).
 #[test]
-fn a_local_release_build_is_stamped_and_pinned_by_itself() {
+fn a_local_release_build_is_stamped_and_leaves_the_pin_alone() {
     let build = task_surface("build:release").expect("the release build is a declared task");
     let at = |needle: &str| {
         build
@@ -1031,10 +1031,12 @@ fn a_local_release_build_is_stamped_and_pinned_by_itself() {
     };
     let compiled = at("cargo build --quiet --release -p batten");
     let stamped = at("target/release/batten engine stamp");
-    let pinned = at("target/release/batten engine pin source");
+    assert!(compiled < stamped, "built, then stamped: {build}");
+    // A build writes no tracked file: `engine pin` rewrites `batten.toml`, and a
+    // build runs under session-start repairs, mid-lap included (#1276).
     assert!(
-        compiled < stamped && stamped < pinned,
-        "built, then stamped, then pinned: {build}"
+        !build.contains("engine pin") && !build.contains("engine update"),
+        "build:release rewrites the committed pin: {build}"
     );
 }
 
