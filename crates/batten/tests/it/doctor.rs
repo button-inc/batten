@@ -1537,6 +1537,28 @@ fn a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_i
 }
 
 #[test]
+fn no_harness_root_is_no_root_finding() {
+    // The premise half: with no `CLAUDE_PID` there is no root to read, and the
+    // clone's own unregistered surface is not mistaken for one.
+    let root = common::scratch_outside_tree("batten-doctor-e2e", "root-absent");
+    let clone = root.join("clone");
+    std::fs::create_dir_all(&clone).expect("the clone");
+    common::init_repo(&clone);
+    common::write(&clone, "batten.toml", "version = 1\n");
+    let output = batten()
+        .current_dir(&clone)
+        .args(["doctor", "hooks", "-J"])
+        .env_remove("CLAUDE_PID")
+        .output()
+        .expect("run batten doctor hooks");
+    assert!(
+        !stdout(&output).contains("hook-wiring-root-unregistered"),
+        "no harness root owes nothing: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn a_registered_harness_root_clears_doctor_hooks_of_the_root_finding() {
     // The other side: the surface read is the ROOT's, so registering the root
     // clears the finding even though the clone's own surface stays empty.

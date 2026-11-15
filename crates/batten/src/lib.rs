@@ -4448,6 +4448,7 @@ fn wait_subjects(
 ///
 /// A usage error for malformed arguments or an undeclared server, before any
 /// poll; a failure to write the line.
+//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
 fn run_mcp_wait(
     command: &cli::McpCommand,
     overrides: &Overrides,
@@ -4537,7 +4538,7 @@ fn run_mcp_wait(
         &mut pr_watch::pause,
     );
     // Only a limit taken from the receipt spends a warm wake.
-    if evict_after.is_none() && in_force.is_some() {
+    if mcp::spends_warm(evict_after, in_force.is_some()) {
         mcp::settle_warm(&count, &waited, now);
     }
     // The change and the no-change line are the product, on stdout; a refusal
@@ -8304,6 +8305,7 @@ fn run_claim(
 ///
 /// [`UsageError`] when no `[plan]` table is declared, outside a repository or on
 /// a detached HEAD.
+//MUTANT-SUITE crates/batten/tests/it/plan_lint.rs
 fn run_plan_verb(
     command: &cli::PlanCommand,
     mode: Mode,
@@ -24054,6 +24056,7 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
 
 /// Write the session's prompt-cache limit in force to the authority's receipt
 /// store (CLOUD-2763). See [`record_cache_limit`].
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
 fn note_cache_limit(harness: hook::Harness, envelope: &hook::Envelope) {
     if envelope.event != hook::Event::Stop {
         return;
@@ -24185,8 +24188,8 @@ fn hold_stop(root: &Path) -> (Option<refusal::Refusal>, Option<refusal::Refusal>
             .flatten()
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect(),
-        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        // An unreadable store fails open: a gate that cannot look decides nothing.
+        // A missing store holds no receipt, and an unreadable one fails open: a
+        // gate that cannot look decides nothing. Either way no row holds.
         Err(_) => return (None, None),
     };
     for row in hold_rows(root) {
@@ -30840,6 +30843,39 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wait_duration_is_whole_seconds_with_or_without_its_unit() {
+        let secs = std::time::Duration::from_secs;
+        assert_eq!(wait_seconds("interval", None, 30).unwrap(), secs(30));
+        assert_eq!(wait_seconds("interval", Some("45"), 30).unwrap(), secs(45));
+        assert_eq!(wait_seconds("interval", Some("45s"), 30).unwrap(), secs(45));
+        assert!(wait_seconds("interval", Some("1m"), 30).is_err());
+    }
+
+    #[test]
+    fn a_wait_takes_argument_objects_or_receipts_and_not_both() {
+        let git_dir = Path::new("/nowhere/.git");
+        let (mint, arg) = ("child".to_owned(), "key".to_owned());
+        let objects = vec!["{\"n\": 1}".to_owned()];
+        assert!(matches!(
+            wait_subjects(git_dir, &[], Some(&mint), Some(&arg)),
+            Ok(mcp::Subjects::Receipts { .. })
+        ));
+        assert!(matches!(
+            wait_subjects(git_dir, &objects, None, None),
+            Ok(mcp::Subjects::Fixed(ref given)) if given.len() == 1
+        ));
+        assert!(
+            wait_subjects(git_dir, &objects, Some(&mint), Some(&arg)).is_err(),
+            "both forms"
+        );
+        assert!(wait_subjects(git_dir, &[], None, None).is_err(), "neither");
+        assert!(
+            wait_subjects(git_dir, &["{".to_owned()], None, None).is_err(),
+            "unreadable JSON"
+        );
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

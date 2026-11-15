@@ -358,6 +358,25 @@ fn the_correction_is_announced_once_and_quotes_nothing() {
 }
 
 #[test]
+fn an_uncorrected_preapproval_announces_no_correction() {
+    // The other side: the same pre-approved verdict with no filter to remove is
+    // not corrected, so nothing says a filter went.
+    let dir = correctable("pipe-uncorrected", "");
+    let (documents, outcome) = answered(&dir, "claude-code", "git fetch origin");
+    assert_eq!(
+        decision(&documents).as_deref(),
+        Some("allow"),
+        "the premise, a pre-approval: {documents:?} {}",
+        stderr(&outcome)
+    );
+    assert_eq!(corrected_command(&documents), None, "{documents:?}");
+    assert!(
+        !String::from_utf8_lossy(&outcome.stdout).contains("verdict read dropped"),
+        "{documents:?}"
+    );
+}
+
+#[test]
 fn a_verdict_piped_into_a_pager_or_filter_is_refused() {
     // The measured cases, each of which produced a confident "green" report over
     // a run that had failed.

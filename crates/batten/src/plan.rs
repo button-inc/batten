@@ -695,6 +695,9 @@ mod tests {
         let root = scratch("every-pointer");
         assert_eq!(dead_pointers("see `a.rs:1` and `b.rs:2` too", &root), 2);
         assert_eq!(dead_pointers("`a.rs:1`", &root), 1);
+        // A closing backtick is never the next opening one: the text between two
+        // pointers is prose, even when it has a pointer's shape.
+        assert_eq!(dead_pointers("`a.rs:1`b.rs:2`c.rs:3`", &root), 2);
     }
 
     #[test]
