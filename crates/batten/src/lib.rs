@@ -19494,9 +19494,9 @@ fn destructive_call_facts(
 /// load, one evaluation per bundle per input, and one open per repository
 /// (CLOUD-2433). The on-disk parse cache is switched on earlier, in [`run`],
 /// because the `[forge]` prologue reads it before this function is reached.
-fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
+fn hook_call_memos(harness: hook::Harness) -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
     (
-        HookLoads::scope(),
+        HookLoads::scope_for(harness),
         policy::answer_scope(),
         git::open_scope(),
     )
@@ -19515,7 +19515,7 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let _memos = hook_call_memos();
+    let _memos = hook_call_memos(harness);
     let Some(payload) = read_payload(mode, err)? else {
         return Ok(ExitCode::Success);
     };
@@ -25831,12 +25831,17 @@ fn load_policy(
 /// the call had loaded for its own harness, and the memo is keyed by harness,
 /// so every `PostToolUse` built the whole policy a second time — 19 modules
 /// and all — to read tables it already held.
+//MUTANT tables-reader-ignores-the-call-harness|s@^    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);$@    let harness = hook::Harness::ExitCode;@|a_tables_reader_first_in_a_call_loads_for_the_calls_harness
 //MUTANT tables-reader-loads-again|s@^    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {$@    if let Some(held) = None::<hook::Policy> {@|a_tables_reader_takes_the_load_the_call_already_made
 fn load_policy_tables(overrides: &Overrides) -> Result<hook::Policy> {
     if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {
         return Ok(held);
     }
-    load_policy(overrides, hook::Harness::ExitCode).map(|(policy, _)| policy)
+    // UNDER THE CALL'S OWN HARNESS where the scope knows it: the post-tool
+    // readers run before the call's own load, so loading for `ExitCode` here
+    // built one policy and the call then built a second for its harness.
+    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);
+    load_policy(overrides, harness).map(|(policy, _)| policy)
 }
 
 /// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
@@ -25909,6 +25914,9 @@ struct HookLoads {
     loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
     /// [`capture_budget`]'s answer, once it has been read in this scope.
     capture: CaptureRead,
+    /// The harness this call is for, where the scope was opened for one: what
+    /// [`load_policy_tables`] loads under, so its load is the call's own.
+    harness: Option<hook::Harness>,
 }
 
 /// Whether this hook call has read the capture bound yet, and what it read.
@@ -25936,16 +25944,33 @@ impl Drop for HookLoadScope {
 }
 
 impl HookLoads {
-    /// Open the memo for the life of the returned guard.
+    /// Open the memo for the life of the returned guard, for no harness in
+    /// particular: a case's scope. A hook call opens [`HookLoads::scope_for`].
+    #[cfg(test)]
     fn scope() -> HookLoadScope {
+        Self::open(None)
+    }
+
+    /// [`HookLoads::scope`] for a call made by `harness`.
+    fn scope_for(harness: hook::Harness) -> HookLoadScope {
+        Self::open(Some(harness))
+    }
+
+    fn open(harness: Option<hook::Harness>) -> HookLoadScope {
         HOOK_LOADS.with(|cell| {
             *cell.borrow_mut() = Some(Self {
                 resolved: Vec::new(),
                 loaded: Vec::new(),
                 capture: CaptureRead::Unread,
+                harness,
             });
         });
         HookLoadScope
+    }
+
+    /// The harness the open scope is for, if it was opened for one.
+    fn harness() -> Option<hook::Harness> {
+        HOOK_LOADS.with(|cell| cell.borrow().as_ref().and_then(|loads| loads.harness))
     }
 
     /// The capture bound as this scope holds it; [`CaptureRead::Unread`]
@@ -30910,6 +30935,24 @@ mod tests {
             tables.harness(),
             hook::Harness::ClaudeCode,
             "the call's own load, not a second one for exit-code"
+        );
+    }
+
+    /// Fails by: a tables reader that runs BEFORE the call's own load — as the
+    /// post-tool readers do — loading for exit-code, so the call then loads a
+    /// second policy for its own harness.
+    #[test]
+    fn a_tables_reader_first_in_a_call_loads_for_the_calls_harness() {
+        let _scope = HookLoads::scope_for(hook::Harness::ClaudeCode);
+        let overrides = Overrides::default();
+        let Ok(tables) = load_policy_tables(&overrides) else {
+            return; // no authority here to load
+        };
+        assert_eq!(tables.harness(), hook::Harness::ClaudeCode);
+        assert!(
+            HookLoads::recall(hook_authority_root(), &overrides, hook::Harness::ClaudeCode)
+                .is_some(),
+            "the call's own load is now a memo hit"
         );
     }
 
