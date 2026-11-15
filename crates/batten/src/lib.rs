@@ -24814,7 +24814,7 @@ fn drain_advisories(
 /// reason work stops: the next attempt denies again with the same `Fix::Run`,
 /// which is the safe direction and one the agent can see.
 fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
-    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     // EVERY MATCHING ROW, not the first (CLOUD-690). `find` was correct while a
@@ -26327,7 +26327,7 @@ fn write_records_for(
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
-    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     let recorders = policy.declared_recorders();
@@ -26854,7 +26854,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     let result = facts::payload_in(&envelope.result)
         .or_else(|| recover_spilled(&envelope.result))
         .unwrap_or(serde_json::Value::Null);
-    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     // A BACKGROUNDED CALL HAS NOT RUN YET (CLOUD-2677). Its result names a task,
@@ -27525,6 +27525,23 @@ fn load_policy(
     load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
 }
 
+/// The policy for a reader of its DECLARED TABLES alone — facts, mints,
+/// recorders, patterns, programs — which no harness changes: whatever load
+/// this call already made, for any harness, else one made for
+/// [`hook::Harness::ExitCode`] as these readers always asked.
+///
+/// WHY IT EXISTS (2026-11-15): the post-tool recorders asked for `ExitCode`,
+/// the call had loaded for its own harness, and the memo is keyed by harness,
+/// so every `PostToolUse` built the whole policy a second time — 19 modules
+/// and all — to read tables it already held.
+//MUTANT tables-reader-loads-again|s@^    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {$@    if let Some(held) = None::<hook::Policy> {@|a_tables_reader_takes_the_load_the_call_already_made
+fn load_policy_tables(overrides: &Overrides) -> Result<hook::Policy> {
+    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {
+        return Ok(held);
+    }
+    load_policy(overrides, hook::Harness::ExitCode).map(|(policy, _)| policy)
+}
+
 /// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
 /// collector's band costs the pre-tool path nothing beyond the load it already
 /// pays (CLOUD-2197).
@@ -27672,6 +27689,20 @@ impl HookLoads {
                         root == here && held == overrides && *host == harness
                     })
                     .map(|(_, loaded)| loaded.clone())
+            })
+        })
+    }
+
+    /// Any policy this scope loaded for `here` under `overrides`, whichever
+    /// harness it was loaded for: [`load_policy_tables`]'s reading.
+    fn recall_any(here: &Path, overrides: &Overrides) -> Option<hook::Policy> {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow().as_ref().and_then(|loads| {
+                loads
+                    .loaded
+                    .iter()
+                    .find(|((root, held, _), _)| root == here && held == overrides)
+                    .map(|(_, (policy, _, _))| policy.clone())
             })
         })
     }
@@ -33142,6 +33173,23 @@ mod tests {
         );
         let left = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(left, 0, "the probe is removed whatever it answered");
+    }
+
+    /// Fails by: a reader of the declared tables building the whole policy a
+    /// second time because the call loaded it for another harness.
+    #[test]
+    fn a_tables_reader_takes_the_load_the_call_already_made() {
+        let _scope = HookLoads::scope();
+        let overrides = Overrides::default();
+        let Ok(_) = load_hook_config(&overrides, hook::Harness::ClaudeCode) else {
+            return; // no authority here to load; nothing to share
+        };
+        let tables = load_policy_tables(&overrides).expect("the tables load");
+        assert_eq!(
+            tables.harness(),
+            hook::Harness::ClaudeCode,
+            "the call's own load, not a second one for exit-code"
+        );
     }
 
     /// Fails by: each of a post-tool call's three asks for the capture bound
