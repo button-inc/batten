@@ -440,6 +440,11 @@ pub struct Bundle {
     /// `Option` keeps could-not-look distinct from not-yet-read, and `Arc` keeps
     /// the live-path clone a refcount rather than a copy.
     described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
+    /// An interpreted bundle's [`Bundle::tree_reads`], taken once: seeded from
+    /// the cache entry under the bundle's key where one holds it
+    /// ([`remember_reads`]), so the two halves of a split `enforce` do not both
+    /// describe it from scratch. Bytecode reads its own header instead.
+    reads: std::sync::OnceLock<Reads>,
 }
 
 /// What a bundle reads off the tree input document: see [`Bundle::tree_reads`].
@@ -560,6 +565,11 @@ impl Bundle {
                 Reads::Known(keys.iter().cloned().collect())
             });
         }
+        self.reads.get_or_init(|| self.described_reads()).clone()
+    }
+
+    /// [`Self::tree_reads`] read off the [`describe`] reading.
+    fn described_reads(&self) -> Reads {
         let Some(described) = self.described() else {
             return Reads::Opaque;
         };
@@ -712,6 +722,7 @@ impl Clone for Bundle {
             predicate_severity: self.predicate_severity.clone(),
             evaluator: self.evaluator.clone(),
             described: self.described.clone(),
+            reads: self.reads.clone(),
         }
     }
 }
@@ -1593,6 +1604,7 @@ pub fn compile(
         predicate_severity: BTreeMap::new(),
         evaluator: Evaluator::Interpreted(Box::new(engine)),
         described: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
 }
 
@@ -2160,6 +2172,9 @@ fn compile_cached(
     }
     let bundle = compile(id, sources, data)?;
     let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
+        if let Some(path) = path.as_deref() {
+            remember_reads(path, &key, &bundle);
+        }
         return Ok(bundle);
     };
     let compiled = compiled.confirmed_by(id, sources, data);
@@ -2284,9 +2299,11 @@ fn read_cached(
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
     let (head, body) = bytes.split_at(split);
     let header: CacheHeader = serde_json::from_slice(head).ok()?;
-    // Only a whole program: a partial one is regorus asking to recompile.
+    // Only a whole program: a partial one is regorus asking to recompile, and
+    // none at all is an interpreted bundle's read set ([`remember_reads`]).
+    let program = body.get(1..).filter(|program| !program.is_empty())?;
     let regorus::rvm::program::DeserializationResult::Complete(program) =
-        regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
+        regorus::rvm::program::Program::deserialize_binary(program).ok()?
     else {
         return None;
     };
@@ -2314,7 +2331,46 @@ fn read_cached(
         predicate_severity: BTreeMap::new(),
         evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled)),
         described: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
+}
+
+/// Seed interpreted `bundle`'s read set from the entry at `path` under `key`,
+/// or describe it and write an entry holding it: the same [`CacheHeader`]
+/// with no program after it, which [`read_cached`] never reads as bytecode.
+///
+/// THE HALF A ROW IS JUDGED IN IS READ OFF THIS SET ([`Bundle::tree_reads`]),
+/// so a bundle the bytecode compiler cannot express, which every load
+/// compiles afresh, still classifies once per key rather than once per half.
+/// Best-effort like every entry: one that cannot be read or written costs a
+/// description, never an answer.
+fn remember_reads(path: &Path, key: &str, bundle: &Bundle) {
+    let held = crate::cache::read(path, key).and_then(|bytes| {
+        let head = bytes.split(|byte| *byte == b'\n').next()?;
+        serde_json::from_slice::<CacheHeader>(head).ok()
+    });
+    if let Some(header) = held {
+        let reads = header.reads.map_or(Reads::Opaque, |keys| {
+            Reads::Known(keys.into_iter().collect())
+        });
+        let _ = bundle.reads.set(reads);
+        return;
+    }
+    let header = CacheHeader {
+        declared: bundle.declared.clone(),
+        packages: bundle.packages.clone(),
+        entries: BTreeSet::new(),
+        facts: Vec::new(),
+        reads: match bundle.tree_reads() {
+            Reads::Known(keys) => Some(keys.into_iter().collect()),
+            Reads::Opaque => None,
+        },
+    };
+    let Ok(mut bytes) = serde_json::to_vec(&header) else {
+        return;
+    };
+    bytes.push(b'\n');
+    crate::cache::write(path, key, &bytes);
 }
 
 /// Write the entry for `bundle`, atomically; a failure leaves the next call a
@@ -5744,5 +5800,43 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         }
         .into_bundle(bundle);
         assert_eq!(old.tree_reads(), Reads::Opaque);
+    }
+
+    /// Fails by: an interpreted bundle describing its read set afresh where an
+    /// entry under its key holds one (both halves of a split `enforce`
+    /// classifying from scratch), the entry it writes read back as bytecode,
+    /// or the set it writes not the one it describes.
+    #[test]
+    fn an_interpreted_bundle_reads_its_read_set_off_the_entry_under_its_key() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let path = crate::scratch::scratch("policy-interpreted-reads").join("row.rvm");
+        let key = cache_key("row", &sources, &[0; 32]);
+        let first = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &first);
+        assert_eq!(first.tree_reads(), known(&["lines"]));
+        assert!(
+            read_cached(&path, &key, "row", &sources, "{}").is_none(),
+            "a read set alone is no bytecode"
+        );
+        let second = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &second);
+        assert_eq!(second.tree_reads(), known(&["lines"]), "read back");
+        // A SENTINEL THE MODULE NEVER READS proves the entry answered, not a
+        // fresh description.
+        let header = CacheHeader {
+            declared: BTreeSet::new(),
+            packages: BTreeSet::new(),
+            entries: BTreeSet::new(),
+            facts: Vec::new(),
+            reads: Some(vec![String::from("sentinel")]),
+        };
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        crate::cache::write(&path, &key, &bytes);
+        let third = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &third);
+        assert_eq!(third.tree_reads(), known(&["sentinel"]));
     }
 }
