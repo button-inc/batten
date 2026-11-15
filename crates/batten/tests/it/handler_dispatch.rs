@@ -379,6 +379,122 @@ fn a_write_inside_the_tree_is_selected() {
     );
 }
 
+/// [`TREE_CONFIG`] plus a policy row whose module does not exist: the handler
+/// table still resolves, but the policy it sits beside cannot be built, so the
+/// hook is on its load-fault floor.
+const UNBUILDABLE_CONFIG: &str = r#"version = 1
+
+[[hook.handler]]
+id = "tree-write-check"
+on = "pre-tool"
+run = ["./mediator-advise.sh"]
+matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+tree_only = true
+timeout_ms = 5000
+owner = "CLOUD-2390"
+expires = "2027-03-31"
+
+[[rule]]
+id = "gate run twice"
+no_fix_reason = "a fixture row"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/absent.rego"
+severity = "deny"
+"#;
+
+/// THE REPAIR WRITE IS THE ENGINE'S OWN FLOOR, AND NO HANDLER MAY REFUSE IT.
+///
+/// Measured on #1276: a row naming a missing module left the policy unbuildable,
+/// the floor admitted the `batten.toml` repair write, and `filed-row-settled`, a
+/// handler the half-loaded table still declared, refused that write. The one
+/// mutation that could end the fault was refused, and the session was locked out.
+///
+/// Fails by: handlers dispatched on the floor, so the stub runs.
+#[test]
+fn a_repair_write_on_the_load_fault_floor_runs_no_handler() {
+    let bench = bench_with("handler-floor-repair", UNBUILDABLE_CONFIG, "refused");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.write(target.to_str().unwrap());
+
+    assert!(
+        !bench.spawned(),
+        "the floor's repair write must not dispatch a handler: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// The mutation's target: off the floor the same row still selects the write.
+#[test]
+fn a_config_write_with_rules_loaded_still_runs_the_handler() {
+    let bench = bench_with("handler-loaded-repair", TREE_CONFIG, "");
+    let target = bench.repo.join("batten.toml");
+    // A loadable text, so the unloadable-write gate does not answer first.
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": { "file_path": target.to_str().unwrap(), "content": TREE_CONFIG },
+    }));
+
+    assert!(
+        bench.spawned(),
+        "with the rules loaded the handler still judges a config write: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// AN EDIT THAT WOULD LEAVE THE CONFIG UNLOADABLE IS REFUSED BEFORE IT LANDS.
+///
+/// Measured on #1276: rows naming modules not yet written made the config
+/// unloadable, and every later call was refused. The write is judged on the
+/// text it lands, loaded exactly as the hook would load it.
+///
+/// Fails by: the write admitted, so the next call is on the floor.
+#[test]
+fn a_config_write_that_would_not_load_is_refused() {
+    let bench = bench_with("config-write-unloadable", "version = 1\n", "");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": target.to_str().unwrap(),
+            "content": UNBUILDABLE_CONFIG,
+        },
+    }));
+
+    assert!(
+        door.out.contains("config-write-unloadable"),
+        "the write is refused under the engine's id: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// The mutation's target: a write that still loads is not refused.
+#[test]
+fn a_config_write_that_still_loads_is_admitted() {
+    let bench = bench_with("config-write-loads", "version = 1\n", "");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": target.to_str().unwrap(),
+            "content": TREE_CONFIG,
+        },
+    }));
+
+    assert!(
+        !door.out.contains("config-write-unloadable"),
+        "a loadable config write is admitted: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
 /// A ROW NAMING THE ENGINE RUNS THE RUNNING IMAGE (CLOUD-1326), never whatever
 /// `batten` a `PATH` lookup finds: here that lookup finds a stub, and the stub
 /// must not run.
