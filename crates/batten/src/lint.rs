@@ -220,6 +220,11 @@ pub enum SmellId {
     TestExpectationChanged,
     /// A base test that HEAD deleted (`batten test replay`).
     TestRemoved,
+    /// An `engine` pin some top-level key other than `version` precedes
+    /// ([`crate::engine::pin_out_of_order`]). The pin is still read and
+    /// followed; the file is invalid until the key is moved to its head, where
+    /// every load reads it in a few lines.
+    PinOutOfOrder,
     /// A base-ref comparison smell, delegating to the kind [`trust`] already
     /// enumerates.
     Weakening(trust::WeakeningKind),
@@ -249,6 +254,7 @@ const UNITS: &[SmellId] = &[
     SmellId::DeferralReversed,
     SmellId::TestExpectationChanged,
     SmellId::TestRemoved,
+    SmellId::PinOutOfOrder,
 ];
 
 impl SmellId {
@@ -275,6 +281,7 @@ impl SmellId {
             SmellId::DeferralReversed => "deferral-reversible",
             SmellId::TestExpectationChanged => "test-expectation-changed",
             SmellId::TestRemoved => "test-removed",
+            SmellId::PinOutOfOrder => "engine-pin-out-of-order",
             SmellId::Weakening(kind) => kind.as_str(),
             SmellId::Drift(drift) => drift.as_str(),
         }
@@ -334,6 +341,10 @@ impl SmellId {
                 "A base test that HEAD's code no longer satisfies, or that will not build there."
             }
             SmellId::TestRemoved => "A base test that HEAD deleted.",
+            SmellId::PinOutOfOrder => {
+                "The `engine` pin is not at the head of the config: a top-level key other than \
+                 `version` precedes it. Move the `engine` line to directly under `version`."
+            }
             SmellId::Weakening(kind) => kind.definition(),
             SmellId::Drift(drift) => drift.definition(),
         }
@@ -613,6 +624,18 @@ pub fn smells(
         toml::from_str(text).map_err(|err| config::config_error(source, text, &err))?;
 
     let mut found = Vec::new();
+
+    // THE PIN HEADS THE FILE, after only `version`. A buried pin still parses
+    // and is still followed — never a load error, or the engine that must read
+    // it to get out of the way could not — but the file is refused here until
+    // the key moves up, because its place is what keeps every load's read of it
+    // to a few lines.
+    if let Some(line) = crate::engine::pin_out_of_order(text) {
+        found.push(Smell {
+            at: Where::Line(line),
+            id: SmellId::PinOutOfOrder,
+        });
+    }
 
     // A DEFERRAL WHOSE CONDITION NOW HOLDS (CLOUD-759). Reported here rather than
     // as a rule of its own because the subject IS `batten.toml` — the row is the

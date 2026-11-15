@@ -10086,39 +10086,6 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the board, not in this tree: take the frontier from `batten board check`, and close the competing PR if it is stale rather than racing it"
 
-# The one legitimate reduction this ratchet has seen, taken through the hatch its
-# own `no_fix_reason` names — "restore the tests, or waive the reduction
-# deliberately; which of the two is the whole question." Restoring is not an
-# option here: CLOUD-515 deletes `plan-hold`, so `tests/plan-hold.bats`,
-# `plan-hold-check.bats` and `plan-hold-guard.bats` cover code that no longer
-# exists and there is nothing left for them to assert.
-#
-# UNNARROWED, and not for want of trying. A ratchet finding's `path` is the glob
-# PLUS THE COUNTS — `rules.rs` builds `"{glob} {base}->{working}"`, because the
-# finding is about the whole matched set rather than any one file. So there is no
-# per-file path a `path =` could select, and a waiver written against the literal
-# would embed `1600->1552` and lapse the moment either count moved. Whole-rule is
-# the honest scope, and the expiry is what bounds it.
-#
-# EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
-# floor becomes the new count on its own and this row suppresses nothing. It
-# exists to get one commit past the gate, not to stand.
-# The one residual false positive `no-secrets` finds on this tree, measured
-# before the rule landed rather than discovered by it: ripsecrets matches
-# `${GH_PAT}` in a `git config url."https://x-access-token:${GH_PAT}@…"` line as
-# a credential embedded in a URL. It is a shell expansion of an Actions secret
-# injected at runtime — the shape is real, the instance is not.
-#
-# A `[[waiver]]` and never `severity = "allow"`: switching the rule off would
-# suppress every future finding too, while this names one path, states why, and
-# LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
-# rather than inheriting a decision nobody remembers making.
-[[waiver]]
-rule = "source carry unsafe"
-path = ".github/workflows/release-plz.yml"
-reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
-expires = "2026-11-14"
-
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
@@ -18089,6 +18056,35 @@ tools = [
   ["cargo", "--version"],
   ["mise", "tasks", "info", "test:cargo", "--json"],
 ]
+
+# THE STEPS A LAP USED TO RE-RUN WHOLE (#1276): each judged the same bytes to the
+# same answer on every lap, measured on an idle machine at 16.5 s (policy-test),
+# 13 m 55 s (perf-gate) and 26.6 s (commit-lint's checks). Each is keyed on what
+# it reads; the commit range rides the command's own argv.
+[[step]]
+id = "policy-test"
+inputs = ["policy", "batten.toml", "crates", "Cargo.toml", "Cargo.lock", "schema"]
+tools = [["rustc", "--version"], ["cargo", "--version"]]
+
+[[step]]
+id = "perf-gate"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["hyperfine", "--version"],
+  ["git", "merge-base", "HEAD", "origin/main"],
+]
+
+[[step]]
+id = "commit-check"
+inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock"]
+tools = [["rustc", "--version"], ["cargo", "--version"]]
+
+[[step]]
+id = "commit-attribution"
+inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock"]
+tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "cross-check"

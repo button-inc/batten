@@ -727,7 +727,7 @@ fn a_receipt_for_an_earlier_head_runs_the_gate() {
 /// a two-lap budget, two passes lost to another branch's lease, every one green,
 /// and the landing ended telling the agent to run it again.
 ///
-/// MUTANT `lease-loss-charges-a-lap`: counting lease waits against the budget
+/// MUTANT: counting lease waits against the budget
 /// exhausts it after the second loss, so the first assertion goes red.
 #[test]
 fn a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged() {

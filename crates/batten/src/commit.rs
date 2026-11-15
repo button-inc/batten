@@ -821,7 +821,7 @@ mod tests {
         }
     }
 
-    /// `#MUTANT unclaimed-commit-passes` reddens here: a commit naming no row,
+    /// A mutant passing an unclaimed commit reddens here: a commit naming no row,
     /// touching code, by a person, is the finding — as a pointer.
     #[test]
     fn a_commit_naming_no_row_is_pointed_at_by_field() {
@@ -875,7 +875,7 @@ mod tests {
         assert!(found.is_empty(), "{found:?}");
     }
 
-    /// `#MUTANT exemption-ignores-paths` reddens here: the release row is a
+    /// A mutant exempting by author alone reddens here: the release row is a
     /// property of the file set, so a commit touching code is not exempt.
     #[test]
     fn a_release_row_does_not_exempt_a_commit_touching_code() {
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(report(&found), "commit name missing aaaaaaaa claim\n");
     }
 
-    /// `#MUTANT exemption-ignores-author` reddens here. The bot row is two
+    /// A mutant exempting by paths alone reddens here. The bot row is two
     /// conjuncts: a workflow-only diff is ordinary human work, so a person
     /// touching only workflows still owes a claim (CLOUD-431).
     #[test]
@@ -1006,7 +1006,7 @@ mod tests {
         assert_eq!(found.len(), 1);
     }
 
-    /// `#MUTANT subject-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// A mutant dropping a field's class reddens here (CLOUD-1960): every
     /// field this module raises leads its line with its own declared class.
     #[test]
     fn every_commit_finding_names_its_vendored_class() {

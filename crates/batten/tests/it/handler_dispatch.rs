@@ -273,7 +273,7 @@ fn a_current_mediator_produces_no_advisory_on_the_same_call() {
 /// A HANDLER READS THE HOST'S OWN BYTES (CLOUD-2224): the payload is spooled as
 /// read, and a handler is handed that spool, never a re-serialized document.
 /// The payload is written in a shape no serializer emits (spacing, key order),
-/// so a re-serialization cannot pass. `#MUTANT handler-bytes-reserialized`.
+/// so a re-serialization cannot pass.
 #[test]
 fn a_handler_reads_the_payload_the_host_sent() {
     use std::io::Write as _;

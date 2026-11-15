@@ -29,9 +29,8 @@
 // port it", and this is that retirement: nothing new is written, the shell's
 // nineteen cases are mapped onto the module's own and the program goes.
 //
-// The program's `#MUTANT hedged-framing-passes` row does not move: the module
-// carries `hedge-unread` over the same conjunct, so the sweep keeps a live
-// mutation on the surviving surface rather than gaining an orphan.
+// The module carries `hedge-unread` over the same conjunct the program's row
+// covered, so the sweep keeps a live mutation on the surviving surface.
 // carried: mise-tasks/stop-posture-check.sh policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
 // carried: tests/stop-posture-check.bats policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
 // carried: "the first tell AGENTS.md names fires" policy/stop-posture.rego kind:mechanism
