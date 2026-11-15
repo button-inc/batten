@@ -1016,6 +1016,38 @@ fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     );
 }
 
+/// EVERY TASK SPELLS BATTEN AS `{{vars.batten}}` (step 22), so the one place that
+/// says how batten runs is `[vars]`: `cargo run` by default, and the lap's own
+/// engine when `land` hands its gate `BATTEN_BIN`. A literal `cargo run -p
+/// batten` in a body is a step that rebuild-checks the engine on every lap
+/// whatever the lap hands it.
+#[test]
+fn every_task_reaches_batten_through_its_var() {
+    let manifest = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
+    let literal: Vec<String> = manifest
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with('#') && !line.starts_with("batten = "))
+        .filter(|(_, line)| {
+            [
+                "cargo run --quiet -p batten",
+                "cargo run -q -p batten",
+                "cargo run -p batten",
+            ]
+            .iter()
+            .any(|spelling| line.contains(spelling))
+                || line.contains("mise run -q batten --")
+                || line.contains("mise run batten --")
+        })
+        .map(|(at, line)| format!("mise.toml:{}: {line}", at + 1))
+        .collect();
+    assert!(
+        literal.is_empty(),
+        "spell batten `{{{{vars.batten}}}}`:\n{}",
+        literal.join("\n")
+    );
+}
+
 /// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, then stamped
 /// with this tree's digest by the binary just built. A build that skipped the
 /// stamp left an unstamped binary first on `_.path`. It never rewrites the
