@@ -225,17 +225,23 @@ fn program_name(path: &str) -> String {
 /// FFI that would read it `unsafe_code = "forbid"` puts out of reach. So a
 /// process here is its `p_comm`, which [`Kept::Named`] keeps wide.
 ///
-/// Windows asks PowerShell, which every supported Windows ships: `Get-Process`
-/// names each process's path and `StartTime`, printed as a UTC `FILETIME`. A
-/// spawn, a few hundred milliseconds, paid only when a collection runs, which
-/// is below `min_free_mb`; the Win32 calls themselves are FFI that
-/// `unsafe_code = "forbid"` puts out of reach, and the safe wrapper (`sysinfo`)
-/// adds eighteen crates to the lockfile for this one listing.
+/// Windows reads the table through `sysinfo`, the safe wrapper over the Win32
+/// calls that `unsafe_code = "forbid"` puts out of reach: each process's
+/// executable and its start in Unix seconds. It replaces a `powershell
+/// -Command` listing (CLOUD-2770): engine source spawning a shell is refused,
+/// and no external contract forced this one.
 ///
 /// Elsewhere no process table is read.
 ///
 /// Only each platform's read is under `cfg`; the layouts are [`darwin`]'s and
 /// [`windows_table`]'s pure parsers, which every leg tests (CLOUD-2509).
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the other platforms' tables can fail to read; Windows' cannot"
+    )
+)]
 fn processes() -> Option<Vec<Process>> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -266,23 +272,20 @@ fn processes() -> Option<Vec<Process>> {
     }
     #[cfg(windows)]
     {
-        let argv: Vec<String> = [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            WINDOWS_PROCESSES,
-        ]
-        .iter()
-        .map(|word| (*word).to_owned())
-        .collect();
-        let root = std::env::temp_dir();
-        let Some((0, listing)) =
-            crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &[])
-        else {
-            return None;
-        };
-        Some(windows_table::parse(&listing))
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+        );
+        Some(
+            system
+                .processes()
+                .values()
+                .filter_map(|process| windows_table::process(process.exe()?, process.start_time()))
+                .collect(),
+        )
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -536,44 +539,27 @@ mod darwin {
     }
 }
 
-/// The listing [`processes`] asks PowerShell for: `<path>\t<FILETIME>`, one
-/// process per line. A process whose start this user may not read throws, and
-/// is skipped.
-#[cfg(windows)]
-const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + \"`t\" + $_.StartTime.ToFileTimeUtc() } catch {} }";
-
-/// The listing's layout, as a pure function so every platform's suite checks it.
+/// One row of the Windows table, as a pure function so every platform's suite
+/// checks it: an executable with an empty path (a system process) is skipped,
+/// and the start is Unix seconds.
 //MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT filetime-epoch-ignored|s@^                    .checked_sub(FILETIME_TO_UNIX)?;$@                    ;@|a_powershell_listing_yields_each_process
+//MUTANT windows-start-ignored|s@^            started: SystemTime::UNIX_EPOCH + Duration::from_secs(started),$@            started: SystemTime::UNIX_EPOCH,@|a_windows_process_keeps_its_path_and_start
 #[cfg(any(windows, test))]
 mod windows_table {
     use super::Process;
-    use std::path::PathBuf;
+    use std::path::Path;
     use std::time::{Duration, SystemTime};
 
-    /// 100-nanosecond intervals from 1601-01-01 to the Unix epoch.
-    const FILETIME_TO_UNIX: u64 = 116_444_736_000_000_000;
-
-    pub(super) fn parse(listing: &str) -> Vec<Process> {
-        listing
-            .lines()
-            .filter_map(|line| {
-                let (path, filetime) = line.trim_end().rsplit_once('\t')?;
-                if path.is_empty() {
-                    return None;
-                }
-                let intervals = filetime
-                    .trim()
-                    .parse::<u64>()
-                    .ok()?
-                    .checked_sub(FILETIME_TO_UNIX)?;
-                Some(Process {
-                    exe: Some(PathBuf::from(path)),
-                    name: super::program_name(path),
-                    started: SystemTime::UNIX_EPOCH + Duration::from_nanos(intervals * 100),
-                })
-            })
-            .collect()
+    pub(super) fn process(exe: &Path, started: u64) -> Option<Process> {
+        let path = exe.to_string_lossy();
+        if path.is_empty() {
+            return None;
+        }
+        Some(Process {
+            exe: Some(exe.to_path_buf()),
+            name: super::program_name(&path),
+            started: SystemTime::UNIX_EPOCH + Duration::from_secs(started),
+        })
     }
 }
 
@@ -1609,18 +1595,20 @@ mod tests {
     }
 
     #[test]
-    fn a_powershell_listing_yields_each_process() {
-        // 2023-11-14T22:13:20Z as a FILETIME, then a pathless system process
-        // and a line with no start, both skipped.
-        let listing = "C:\\Users\\u\\.cargo\\bin\\cargo.exe\t133444736000000000\r\n\t133444736000000000\r\nC:\\x.exe\t\r\n";
+    fn a_windows_process_keeps_its_path_and_start() {
+        // 2023-11-14T22:13:20Z, then a pathless system process, skipped.
         assert_eq!(
-            super::windows_table::parse(listing),
-            vec![Process {
+            super::windows_table::process(
+                Path::new("C:\\Users\\u\\.cargo\\bin\\cargo.exe"),
+                1_700_000_000
+            ),
+            Some(Process {
                 exe: Some(PathBuf::from("C:\\Users\\u\\.cargo\\bin\\cargo.exe")),
                 name: "cargo.exe".to_owned(),
                 started: at(1_700_000_000),
-            }]
+            })
         );
+        assert_eq!(super::windows_table::process(Path::new(""), 1), None);
     }
 
     #[test]

@@ -91,7 +91,7 @@ fn stub_plan(program: &str, stubs: &Path, target: &Path) -> serde_json::Value {
 fn the_package_ships_exactly_one_binary() {
     #[expect(
         clippy::disallowed_types,
-        reason = "the subject is this repository's real `cargo metadata`, which only cargo answers (CLOUD-2336)"
+        reason = "stays: the subject is this repository's real `cargo metadata`, which only cargo answers (CLOUD-2336)"
     )]
     let output = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--no-deps", "--format-version", "1"])
