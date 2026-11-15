@@ -117,7 +117,9 @@ fn the_status_file_names_the_daemons_pid_and_session() {
     assert_eq!(status.session, offbox::leaf("exit-code", "a ../ session"));
     assert_eq!(status.attached, "no-origin");
     assert_eq!(status.source, "ok");
-    assert_eq!(status.restored, "none");
+    // No origin: the restore could not reach an answer, which is what lets
+    // the hook pay a held-back stamp (CLOUD-2723).
+    assert_eq!(status.restored, "unavailable");
     assert_eq!(status.pushed, "-");
     assert!(running(&mut child));
     kill(child);
@@ -132,11 +134,17 @@ fn a_second_daemon_in_one_checkout_says_running_and_exits() {
         status.pid == first.id()
     });
 
+    let launched = std::time::Instant::now();
     let second = checkout
         .launch("exit-code", "s")
         .wait_with_output()
         .expect("the second daemon returns");
 
+    assert!(
+        launched.elapsed() < std::time::Duration::from_secs(3),
+        "the second daemon says so within three seconds: {:?}",
+        launched.elapsed()
+    );
     assert_eq!(second.status.code(), Some(0));
     assert_eq!(stdout(&second), "running\n");
     assert!(running(&mut first), "the first is still running");
@@ -162,8 +170,10 @@ fn a_lock_probed_at_start_does_not_stop_the_daemon() {
     // every 10 ms, as a run of tool calls would.
     fs4::FileExt::lock(&lock).expect("take the lock");
     let mut child = checkout.launch("exit-code", "s");
+    let (freed_tx, freed) = std::sync::mpsc::channel();
     let prober = std::thread::spawn(move || {
         pause(300);
+        let _ = freed_tx.send(std::time::Instant::now());
         for _ in 0..40 {
             fs4::FileExt::unlock(&lock).expect("release");
             pause(9);
@@ -177,8 +187,17 @@ fn a_lock_probed_at_start_does_not_stop_the_daemon() {
     let status = checkout.status_when("the probed daemon's status", |status| {
         status.pid == child.id()
     });
+    let took = std::time::Instant::now();
     prober.join().expect("the prober finishes");
+    let first_free = freed.recv().expect("the prober freed the lock");
 
+    // Within a second of the lock first being free, give or take one 50 ms
+    // look by `status_when`.
+    assert!(
+        took.saturating_duration_since(first_free) < std::time::Duration::from_millis(1050),
+        "the daemon takes the lock within a second of it being free: {:?}",
+        took.saturating_duration_since(first_free)
+    );
     assert_eq!(status.pid, child.id());
     assert!(running(&mut child), "it took the lock and runs");
     kill(child);

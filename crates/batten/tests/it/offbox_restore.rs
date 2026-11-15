@@ -157,12 +157,24 @@ fn an_owed_stamp_is_paid_when_the_restore_is_unavailable() {
     assert_eq!(modified(&rig.stamp()), began);
 }
 
-/// Fails by: the stamp written while the restore may still put receipts back.
-/// With no stamp, `claim check` refuses `no-session-stamp`; `claim.rs` holds
-/// that half.
+/// Fails by: the stamp written while the restore may still put receipts back,
+/// or a claim taken in a session whose start is not yet dated.
 #[test]
 fn an_owed_stamp_is_not_paid_while_the_restore_is_pending() {
-    let rig = Rig::new("offbox-restore-pending");
+    let rig = Rig {
+        // THE BOARD AND THE GRAMMAR ARE THE CONSUMER'S, so the fixture declares
+        // them: without them `claim check` refuses the run before it reaches
+        // the stamp, which is not what this case is about.
+        repo: common::adjudicable_with(
+            "offbox-restore-pending",
+            &format!(
+                "{}\n{}",
+                common::declared_board(),
+                common::declared_patterns()
+            ),
+        ),
+        ..Rig::new("offbox-restore-pending-home")
+    };
     rig.start();
     rig.status("pending");
     for _ in 0..10 {
@@ -170,6 +182,17 @@ fn an_owed_stamp_is_not_paid_while_the_restore_is_pending() {
     }
     assert!(!rig.stamp().exists());
     assert!(rig.owed().exists());
+
+    let payload = serde_json::json!({
+        "id": "CLOUD-1",
+        "status": "Todo",
+        "description": "a body",
+        "updatedAt": "2026-08-01T00:00:00Z",
+    });
+    let checked = common::run_with_stdin(&rig.repo, &["claim", "check"], &payload.to_string());
+    let said = String::from_utf8_lossy(&checked.stderr);
+    assert_ne!(checked.status.code(), Some(0), "{said}");
+    assert!(said.contains("no-session-stamp"), "{said}");
 }
 
 /// Fails by: a container that already ran this session being made to wait.

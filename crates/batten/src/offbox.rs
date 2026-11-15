@@ -2326,7 +2326,7 @@ fn newest(
 //MUTANT archive-restore-sets-last|s@^        if found.live \&\& own {$@        if true {@|a_rotated_session_is_restored_from_the_archive_index
 //MUTANT predecessor-transcript-adopted-as-own|s@^        absorb(session.project_root, \&session.meta, \&found.commit, own)?;$@        absorb(session.project_root, \&session.meta, \&found.commit, true)?;@|a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside
 //MUTANT nothing-found-leaves-restored-unwritten|s@^    record_restored(\&dir, NOTHING_RESTORED)?;$@@|nothing_to_restore_from_is_recorded_as_none
-//MUTANT snapshot-already-here-restored-again|s@^        if here {$@        if false {@|a_daemon_that_finds_the_restore_record_does_not_restore_again
+//MUTANT relaunch-restores-again|s@^        if here {$@        if false {@|a_daemon_that_finds_the_restore_record_does_not_restore_again
 //MUTANT restore-ignores-the-push-lock|s@^    if restoring.is_none() {$@    if false {@|a_restore_waits_for_the_push_lock
 //MUTANT throttled-restore-recorded-as-none|s@^        Some(throttle) => Ok(Restored::Throttled(\*throttle)),$@        Some(_) => Ok(Restored::Nothing),@|a_throttled_restore_records_nothing
 pub fn restore_once(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
@@ -3359,10 +3359,18 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     // decided by `restore` from the local repository and the remote's refs,
     // so a start after a clean run, a kill or a reclaimed container takes the
     // one path, and a restore with nothing to do fetches nothing.
+    //
+    // NO ORIGIN IS AN ATTEMPT THAT COULD NOT REACH AN ANSWER, which is
+    // `unavailable`, never `none`: `none` is the answer "the remote holds no
+    // snapshot", and nothing here asked it. The hook pays a held-back session
+    // stamp on `unavailable`, so recording the honest word is also what keeps
+    // a session with no origin able to claim.
+    //MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
+    //MUTANT no-origin-reads-as-answered|s@^        String::from("unavailable")$@        String::from(NOTHING_RESTORED)@|the_status_file_names_the_daemons_pid_and_session
     status.restored = if meta.is_some() {
         String::from("pending")
     } else {
-        String::from(NOTHING_RESTORED)
+        String::from("unavailable")
     };
     if let Some(previous) = previous {
         status.throttles = previous.throttles;
