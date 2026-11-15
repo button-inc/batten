@@ -707,8 +707,42 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     }
 }
 
-/// The daemon's real clock, pause and randomness (CLOUD-2721).
-struct DaemonWorld;
+/// The daemon's real clock, wait and randomness (CLOUD-2721).
+///
+/// THE WAIT IS FOR AN EVENT, NOT A TIMER. The daemon holds a loopback datagram
+/// socket on a current-thread runtime, and each pause is a receive on it
+/// bounded by the schedule's deadline: a tool call's word from the hook ends
+/// it at once, and only an idle session waits the deadline out. Nothing
+/// sleeps, so no delay exemption is spent.
+struct DaemonWorld {
+    runtime: tokio::runtime::Runtime,
+    socket: tokio::net::UdpSocket,
+    port: u16,
+}
+
+impl DaemonWorld {
+    /// The world over a fresh loopback socket.
+    fn open() -> Result<Self> {
+        let refused = |err: std::io::Error| anyhow::anyhow!("offbox: the wake socket: {err}");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(refused)?;
+        let bound =
+            std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(refused)?;
+        bound.set_nonblocking(true).map_err(refused)?;
+        let port = bound.local_addr().map_err(refused)?.port();
+        let socket = {
+            let _entered = runtime.enter();
+            tokio::net::UdpSocket::from_std(bound).map_err(refused)?
+        };
+        Ok(DaemonWorld {
+            runtime,
+            socket,
+            port,
+        })
+    }
+}
 
 impl offbox::World for DaemonWorld {
     fn now(&mut self) -> i64 {
@@ -716,11 +750,24 @@ impl offbox::World for DaemonWorld {
     }
 
     fn pause(&mut self, millis: u64) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a loop that has no end to wait for: the daemon runs until it is killed, and `millis` is the caller's own declared beat — `offbox::run`'s wake, or its bounded lock retry"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(millis));
+        let socket = &self.socket;
+        self.runtime.block_on(async {
+            let mut word = [0_u8; 64];
+            let heard = tokio::time::timeout(
+                std::time::Duration::from_millis(millis),
+                socket.recv(&mut word),
+            )
+            .await;
+            // A burst of calls is one wake: what else is queued is read and
+            // dropped, since the inbox's length already says how many.
+            if heard.is_ok() {
+                while socket.try_recv(&mut word).is_ok() {}
+            }
+        });
+    }
+
+    fn wake_port(&self) -> u16 {
+        self.port
     }
 
     fn random(&mut self) -> u64 {
@@ -774,7 +821,7 @@ fn run_offbox_daemon(
             history: &history,
             byte_cap: offbox::BYTE_CAP,
         },
-        &mut DaemonWorld,
+        &mut DaemonWorld::open()?,
     )?;
     writeln!(out, "{}", launch.token())?;
     Ok(ExitCode::Success)

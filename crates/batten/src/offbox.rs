@@ -2833,6 +2833,8 @@ pub struct StatusFile {
     pub history_stored: u64,
     /// How many are not yet marked.
     pub history_remaining: u64,
+    /// The loopback port the daemon waits on for the hook's word; 0 for none.
+    pub wake: u16,
 }
 
 //MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
@@ -2859,6 +2861,7 @@ impl StatusFile {
         let _ = writeln!(text, "history_imported {}", self.history_imported);
         let _ = writeln!(text, "history_stored {}", self.history_stored);
         let _ = writeln!(text, "history_remaining {}", self.history_remaining);
+        let _ = writeln!(text, "{} {}", crate::offbox_watch::WAKE, self.wake);
         text
     }
 
@@ -2882,6 +2885,7 @@ impl StatusFile {
             history_imported: 0,
             history_stored: 0,
             history_remaining: 0,
+            wake: 0,
         };
         for line in text.lines() {
             let Some((key, value)) = line.split_once(' ') else {
@@ -2903,6 +2907,7 @@ impl StatusFile {
                 "history_imported" => read.history_imported = value.parse().unwrap_or(0),
                 "history_stored" => read.history_stored = value.parse().unwrap_or(0),
                 "history_remaining" => read.history_remaining = value.parse().unwrap_or(0),
+                crate::offbox_watch::WAKE => read.wake = value.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -2916,10 +2921,18 @@ impl StatusFile {
 pub trait World {
     /// The current epoch second.
     fn now(&mut self) -> i64;
-    /// Wait this many milliseconds.
+    /// Wait until the hook's word arrives or this many milliseconds pass,
+    /// whichever is first. The bound is the schedule's — the next wake, the
+    /// floor, a backoff — and the event is a tool call, so the daemon acts on
+    /// a call as it happens rather than at the next tick.
     fn pause(&mut self, millis: u64);
     /// Sixty-four random bits.
     fn random(&mut self) -> u64;
+    /// The loopback port [`pause`](World::pause) listens on for the hook's
+    /// word, published in the status file; 0 where there is none.
+    fn wake_port(&self) -> u16 {
+        0
+    }
 }
 
 /// How a launch ended, for the two cases in which it ends at all.
@@ -3307,7 +3320,7 @@ impl<'a> Daemon<'a> {
 /// `wait_until` whatever session wrote them — a wait the forge asked for binds
 /// the machine, not the session — and its `pushed` only when the session is its
 /// own. Then it writes its `pid` and `session`, empties the inbox, and begins
-/// to wake every five seconds.
+/// to wake on each word from the hook, and at most five seconds apart.
 ///
 /// # Errors
 ///
@@ -3348,6 +3361,7 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     let mut status = StatusFile::parse("");
     status.pid = std::process::id();
     status.session = leaf(launching.harness, launching.session);
+    status.wake = world.wake_port();
     if remote.is_none() {
         "no-origin".clone_into(&mut status.attached);
     }
