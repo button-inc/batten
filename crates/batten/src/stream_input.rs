@@ -128,6 +128,13 @@ struct Walk<'a, C: FnMut(&str) -> u64> {
     over: bool,
     count: C,
     spilled: Vec<Spilled>,
+    /// The pieces read while the result's BYTES were still within the bound,
+    /// not yet counted: see [`Walk::tally`].
+    deferred: Vec<String>,
+    /// Their byte total.
+    deferred_bytes: u64,
+    /// Whether counting has begun, after which every piece is counted at once.
+    counting: bool,
 }
 
 /// Read one hook payload from `input`, streaming.
@@ -176,6 +183,9 @@ pub fn read(
         over: false,
         count,
         spilled: Vec::new(),
+        deferred: Vec::new(),
+        deferred_bytes: 0,
+        counting: false,
     };
     let value = walk.document(&mut json)?;
     json.consume_trailing_whitespace()
@@ -276,6 +286,39 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
         })
     }
 
+    /// Add `piece` to the result's count, and mark the result over the bound
+    /// once the count passes it.
+    ///
+    /// COUNTING WAITS UNTIL THE BYTES COULD MATTER (2026-11-15). A piece never
+    /// counts more than its byte length — an `o200k` token is at least one
+    /// byte, and the tokenizer's own fallback counts bytes — so while the
+    /// result's bytes are within the bound its count is too, and nothing is
+    /// decided by counting it. The pieces wait, and the first one that takes
+    /// the bytes past the bound counts them all, each as it would have been
+    /// counted on arrival: the same total, the same piece at which the result
+    /// goes over. A result that never passes the bound in bytes — nearly every
+    /// tool result — never builds the tokenizer at all, which was a third of a
+    /// `PostToolUse`'s own work.
+    //MUTANT deferred-pieces-never-counted|s@^            for waiting in std::mem::take(\&mut self.deferred) {$@            for waiting in Vec::<String>::new() {@|a_result_over_the_bound_in_bytes_counts_every_piece_it_read
+    fn tally(&mut self, piece: &str) {
+        if !self.counting {
+            let bytes = self.deferred_bytes + piece.len() as u64;
+            if bytes <= self.bound {
+                self.deferred_bytes = bytes;
+                self.deferred.push(piece.to_owned());
+                return;
+            }
+            self.counting = true;
+            for waiting in std::mem::take(&mut self.deferred) {
+                self.counted += (self.count)(&waiting);
+            }
+        }
+        self.counted += (self.count)(piece);
+        if self.counted > self.bound {
+            self.over = true;
+        }
+    }
+
     /// One result string, read in chunks: kept while the result is within the
     /// bound, spilled to a file from the chunk that passes it.
     fn leaf<R: Read>(&mut self, json: &mut JsonStreamReader<R>, pointer: &str) -> Result<Value> {
@@ -306,10 +349,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                 .to_owned();
             carry.drain(..valid);
             if !self.over {
-                self.counted += (self.count)(&piece);
-                if self.counted > self.bound {
-                    self.over = true;
-                }
+                self.tally(&piece);
             }
             kept.push_str(&piece);
             if self.over && kept.len() > crate::capture::LEAF_KEEP_BYTES {
@@ -398,6 +438,35 @@ mod tests {
             kept.value["tool_response"]["file"]["content"],
             small.as_str()
         );
+    }
+
+    /// Fails by: the pieces read while the bytes were still within the bound
+    /// left out of the count once the bytes pass it, so a result over the bound
+    /// in TOKENS reads as under it and reaches the model whole.
+    #[test]
+    fn a_result_over_the_bound_in_bytes_counts_every_piece_it_read() {
+        let dir = scratch("deferred");
+        // 900 counted units first, within the bound in bytes and so deferred;
+        // then a leaf whose first 200 units carry the total past 1000.
+        let first = "q".repeat(900);
+        let second = format!("{}{}", "q".repeat(200), "x".repeat(50_000));
+        let sent = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "x"},
+            "tool_response": {"a": first, "b": second},
+        })
+        .to_string();
+        let read = super::read(sent.as_bytes(), &dir, 1000, q_count).expect("reads");
+        assert_eq!(
+            read.spilled
+                .iter()
+                .map(|s| s.pointer.as_str())
+                .collect::<Vec<_>>(),
+            ["/b"],
+            "1100 counted against a bound of 1000: over, so the long leaf spills"
+        );
+        assert_eq!(read.value["tool_response"]["a"], first.as_str());
     }
 
     #[test]
