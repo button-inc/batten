@@ -460,6 +460,7 @@ mod spawn_widening;
 mod staged_facts;
 mod startup;
 mod startup_bootstrap;
+mod startup_unanchored;
 mod step_cover;
 #[cfg(unix)]
 mod step_graph;
