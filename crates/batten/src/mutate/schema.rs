@@ -456,6 +456,11 @@ pub struct Rendered {
     pub mentions: Vec<(String, BTreeSet<String>)>,
     /// Each skeleton item's digest under every name it answers to.
     pub items: Vec<(String, String)>,
+    /// Each probed function's own name, in probe-id order: what a call by
+    /// that name may reach ([`test_digests`]'s same-name term).
+    pub fn_names: Vec<String>,
+    /// Each probed function's byte range in the source, in probe-id order.
+    pub fn_spans: Vec<Range<usize>>,
 }
 
 impl Rendered {
@@ -899,6 +904,8 @@ pub fn render(
         mutant_fns: innermost(&placed, &probed.functions),
         mentions: probed.mentions,
         skeleton: probed.skeleton,
+        fn_names: probed.fn_names,
+        fn_spans: probed.functions.into_iter().map(|(span, _)| span).collect(),
     }
 }
 
@@ -936,6 +943,8 @@ struct Probed {
     items: Vec<(String, String)>,
     /// The digest of the whole skeleton.
     skeleton: String,
+    /// Each probed function's own name, in probe-id order.
+    fn_names: Vec<String>,
 }
 
 /// One skeleton item as [`probe_sites`] gathers it: the names it answers
@@ -999,6 +1008,10 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
                     .to_string(),
             );
             probed.names.push(names_in(function.syntax()));
+            probed.fn_names.push(
+                ast::HasName::name(&function)
+                    .map_or_else(String::new, |name| name.text().to_string()),
+            );
             let item = function.syntax().text_range();
             cuts.push(usize::from(item.start())..usize::from(item.end()));
             probed.functions.push((
@@ -1032,7 +1045,7 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
         }
         skeleton.update(token.text().as_bytes());
         skeleton.update(b"\x1f");
-        let owner = token.parent_ancestors().find_map(ast::Item::cast);
+        let owner = owning_item(&token);
         let at = owner.as_ref().map_or(usize::MAX, |item| {
             usize::from(item.syntax().text_range().start())
         });
@@ -1060,6 +1073,22 @@ fn probe_sites(root: &SyntaxNode, probe_from: Option<usize>, sites: &mut Vec<Sit
     }
     probed.skeleton = skeleton.finalize().to_hex().to_string();
     probed
+}
+
+/// The skeleton item `token` belongs to: its innermost item, past a macro
+/// call in an expression, which is that item's own code. Grouped apart, a
+/// `const` whose value is a macro call kept the call out of its digest and its
+/// mentions, so an edit to the call moved no case that names the `const`.
+fn owning_item(token: &ra_ap_syntax::SyntaxToken) -> Option<ast::Item> {
+    token.parent_ancestors().find_map(|node| {
+        let item = ast::Item::cast(node)?;
+        let in_expression = matches!(&item, ast::Item::MacroCall(_))
+            && item
+                .syntax()
+                .parent()
+                .is_some_and(|parent| parent.kind() == SyntaxKind::MACRO_EXPR);
+        (!in_expression).then_some(item)
+    })
 }
 
 /// The names a skeleton item answers to: its own where it has one, and for an
@@ -1278,6 +1307,9 @@ pub struct Schema {
     pub mutant_fns: std::collections::BTreeMap<u32, String>,
     /// Every skeleton item's mentioned names, by each name it answers to.
     pub mentions: std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// The files rendered with a probe in every runtime function: what a
+    /// reach record's functions can come from ([`Format::probed`]).
+    pub probed: BTreeSet<String>,
 }
 
 impl Schema {
@@ -1366,6 +1398,9 @@ pub fn write_schema(
         let probe_from =
             (!unprobed.contains(&file) && !included.contains(&file)).then_some(schema.probes.len());
         let rendered = render(&source, listed, skip, probe_from);
+        if probe_from.is_some() {
+            schema.probed.insert(file.clone());
+        }
         schema.probes.extend(rendered.probes.iter().cloned());
         schema.names.extend(rendered.names.iter().cloned());
         schema
@@ -1547,6 +1582,7 @@ pub fn build(
                 unviable: skip.difference(&handed).copied().collect(),
                 handed,
                 schema,
+                unprobed,
             });
         }
         let refused = unviable(&schema, &ran.stdout);
@@ -1606,6 +1642,8 @@ pub struct Built {
     pub handed: BTreeSet<u32>,
     /// The renderings that built.
     pub schema: Schema,
+    /// The files built without probes ([`Known::unprobed`] and every round's).
+    pub unprobed: BTreeSet<String>,
 }
 
 /// What one mutant's covering cases said.
@@ -2075,6 +2113,9 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     crate::durable::replace(dir.join("case"), format!("{name}\t{binary}"))?;
+    if let Ok(over) = crate::fsio::read_to_string(base.join(TREE)) {
+        crate::durable::replace(dir.join(OVER), over)?;
+    }
     let cwd = std::env::current_dir()?;
     let env = [(String::from(RECORD), dir.to_string_lossy().into_owned())];
     // TRACED WHERE THE HOST CAN, so the case's key reads only the files it
@@ -2398,7 +2439,7 @@ fn collect_dirs(
             let path = file?.path();
             if path
                 .file_name()
-                .is_some_and(|f| f == "case" || f == DONE || f == TRACE || f == READ)
+                .is_some_and(|f| f == "case" || f == DONE || f == TRACE || f == READ || f == OVER)
             {
                 continue;
             }
@@ -2534,9 +2575,9 @@ fn seal_dir(
     crate::durable::replace(dir.join(DEPENDS), record)?;
     for file in std::fs::read_dir(dir)? {
         let path = file?.path();
-        let own = path
-            .file_name()
-            .is_some_and(|f| f == "case" || f == DONE || f == READ || f == DEPENDS);
+        let own = path.file_name().is_some_and(|f| {
+            f == "case" || f == DONE || f == READ || f == DEPENDS || f == OVER || f == TESTED
+        });
         if !own {
             let _ = std::fs::remove_file(&path);
         }
@@ -2571,6 +2612,11 @@ struct SealContext {
     sites: Vec<Option<String>>,
     mutant_fns: std::collections::BTreeMap<u32, String>,
     classic: BTreeSet<u32>,
+    /// What a case's selection digest is read in ([`seal_tested`]): the probed
+    /// and unprobed files, the features and the cargo arguments. A context
+    /// written before it existed takes no selection digest.
+    #[serde(default)]
+    format: Option<Format>,
 }
 
 impl SealContext {
@@ -2674,6 +2720,9 @@ fn seal_leftovers(base: &std::path::Path) -> anyhow::Result<usize> {
         if dir.join(DEPENDS).exists() {
             sealed += 1;
         }
+    }
+    if let Some(format) = &context.format {
+        seal_tested(base, &context.root, &context.resources, format)?;
     }
     Ok(sealed)
 }
@@ -3850,6 +3899,7 @@ pub fn sweep(
         unviable,
         handed,
         schema,
+        unprobed,
     } = build_journaled(
         (&root, &work, &target),
         mutants,
@@ -3867,11 +3917,12 @@ pub fn sweep(
     )?;
     let trees = (work.as_path(), target.as_path(), state.as_path());
     let ids = (&resource_ids, resources.as_str());
+    let format = sweep_format(live, mutants, &schema, unprobed);
     let (reach, digests, seconds) = reached(
         trees,
         &root,
         mutants,
-        (&schema, &site_keys, &classic),
+        (&schema, &site_keys, &classic, &format),
         ids,
         out,
     )?;
@@ -4017,7 +4068,7 @@ fn reached(
     (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
     root: &std::path::Path,
     mutants: &[Listed],
-    (schema, site_keys, classic): (&Schema, &[Option<String>], &BTreeSet<u32>),
+    (schema, site_keys, classic, format): (&Schema, &[Option<String>], &BTreeSet<u32>, &Format),
     ids: (&std::collections::BTreeMap<String, String>, &str),
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Reached> {
@@ -4051,6 +4102,7 @@ fn reached(
             sites: site_keys.to_vec(),
             mutant_fns: schema.mutant_fns.clone(),
             classic: classic.clone(),
+            format: Some(format.clone()),
         })?,
     )?;
     let (reach, passed) =
@@ -4073,6 +4125,15 @@ fn reached(
         &seconds,
         passed,
     )?;
+    // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
+    // record to the suite's binary key, and never fails the sweep.
+    match seal_tested(&base, root, ids.0, format) {
+        Ok(taken) => writeln!(
+            out,
+            "mutate schema: selection digest taken for {taken} case(s)"
+        )?,
+        Err(why) => writeln!(out, "mutate schema: no selection digest taken: {why:#}")?,
+    }
     anyhow::ensure!(
         passed,
         "the unmutated suite failed on the schema build, so no verdict would mean anything; \
@@ -4086,6 +4147,31 @@ fn reached(
         started.elapsed().as_secs()
     )?;
     Ok((reach, digests, seconds))
+}
+
+/// The [`Format`] a sweep of `mutants` from the checkout at `live` reads its
+/// records in: the schema's probed files, the unprobed ones, and the cargo
+/// arguments, features and flags the reach run builds its suite with
+/// ([`record_reach`]).
+fn sweep_format(
+    live: &std::path::Path,
+    mutants: &[Listed],
+    schema: &Schema,
+    unprobed: BTreeSet<String>,
+) -> Format {
+    let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
+    let mut cargo_args: Vec<String> = ["--cargo-profile", "mutants"].map(str::to_owned).to_vec();
+    for package in packages {
+        cargo_args.extend([String::from("-p"), package.to_owned()]);
+    }
+    Format {
+        dirs: package_dirs(mutants),
+        probed: schema.probed.clone(),
+        unprobed,
+        features: super::overlay_features(live),
+        cargo_args,
+        flags: build_flags(),
+    }
 }
 
 /// Each case's measured seconds from the reach run's junit report, or none
@@ -4102,10 +4188,902 @@ fn case_seconds(state: &std::path::Path) -> std::collections::BTreeMap<Case, f64
     )
 }
 
+// ---------------------------------------------------------------------------
+// Cross-head test selection: a case's pass stands while nothing it ran moved.
+// ---------------------------------------------------------------------------
+
+/// The file a sealed case record holds once its selection digest is taken
+/// ([`seal_tested`]): the [`Format`]'s key, a tab, and the digest
+/// [`test_digests`] gave over the tree the case was recorded on.
+const TESTED: &str = "tested";
+
+/// The file a case's record holds from its first moment: the reach
+/// directory's [`TREE`] as it read when the case was recorded, so a seal
+/// knows which records were made on the tree it seals over.
+const OVER: &str = "over";
+
+/// The words a feature gate is spelled with, as an attribute or as the macro
+/// that reads one.
+const GATES: [&str; 2] = ["cfg", "cfg_attr"];
+
+/// The macros that put another file's bytes into the item that calls them.
+const INCLUDES: [&str; 3] = ["include", "include_str", "include_bytes"];
+
+/// What a reach record's functions and keys were read in: the files the sweep
+/// probed, and how the suite it recorded was built.
+///
+/// PER RECORD, NOT PER SWEEP: a record carried across sweeps keeps the digest
+/// taken when it was recorded, which only an index read the same way can
+/// reproduce, so each record names its format by key.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Format {
+    /// Package name to directory ([`package_dirs`]).
+    pub dirs: std::collections::BTreeMap<String, String>,
+    /// The files rendered with probes ([`Schema::probed`]).
+    pub probed: BTreeSet<String>,
+    /// The files a build refused probes in ([`Built::unprobed`]).
+    pub unprobed: BTreeSet<String>,
+    /// The `--features` the sweep's suite carried.
+    pub features: Vec<String>,
+    /// The cargo arguments the reach run was built with.
+    pub cargo_args: Vec<String>,
+    /// The code-generation variables the reach run inherited ([`build_flags`]).
+    pub flags: std::collections::BTreeMap<String, String>,
+}
+
+impl Format {
+    /// The key a record names this format by: a digest of all of it.
+    #[must_use]
+    pub fn key(&self) -> String {
+        let text = serde_json::to_string(self).unwrap_or_default();
+        blake3::hash(text.as_bytes()).to_hex()[..16].to_owned()
+    }
+
+    /// The format a record under `base` names by `key`, or `None` when none
+    /// was written or it does not parse.
+    #[must_use]
+    pub fn load(base: &std::path::Path, key: &str) -> Option<Self> {
+        let text = crate::fsio::read_to_string(base.join(format!("format-{key}.json"))).ok()?;
+        let format: Self = serde_json::from_str(&text).ok()?;
+        (format.key() == key).then_some(format)
+    }
+
+    fn store(&self, base: &std::path::Path) -> anyhow::Result<String> {
+        let key = self.key();
+        let path = base.join(format!("format-{key}.json"));
+        if !path.is_file() {
+            crate::durable::replace(&path, serde_json::to_string(self)?)?;
+        }
+        Ok(key)
+    }
+}
+
+/// The variables of this process that change what a cargo build generates:
+/// the compiler, its flags and every profile override. A record made under
+/// other values ran other code.
+#[must_use]
+pub fn build_flags() -> std::collections::BTreeMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "RUSTC" | "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS"
+            ) || key.starts_with("CARGO_PROFILE_")
+        })
+        .collect()
+}
+
+/// What a case's selection digest reads in one tree: every function, probed
+/// as the sweep probed it, and every skeleton item, with what each names, the
+/// feature gates in each and the files each includes.
+#[derive(Debug, Default)]
+pub struct DependencyIndex {
+    probes: Vec<String>,
+    names: Vec<BTreeSet<String>>,
+    own_names: std::collections::BTreeMap<String, BTreeSet<usize>>,
+    items: std::collections::BTreeMap<String, BTreeSet<String>>,
+    mentions: std::collections::BTreeMap<String, BTreeSet<String>>,
+    gated_probes: BTreeSet<usize>,
+    gated_names: BTreeSet<String>,
+    probe_includes: std::collections::BTreeMap<usize, Option<BTreeSet<String>>>,
+    name_includes: std::collections::BTreeMap<String, Option<BTreeSet<String>>>,
+}
+
+impl DependencyIndex {
+    /// The source digests of every probed function named `name`.
+    #[must_use]
+    pub fn digests_of(&self, name: &str) -> Vec<String> {
+        self.own_names
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.probes.get(*id).cloned())
+            .collect()
+    }
+}
+
+/// Where one feature gate or include sits: the innermost probed function, or
+/// else the names of the innermost item ([`item_names`]), `""` for none.
+enum Owner {
+    Probe(usize),
+    Names(Vec<String>),
+}
+
+fn owner_of(token: &ra_ap_syntax::SyntaxToken, spans: &[(usize, Range<usize>)]) -> Owner {
+    let at = usize::from(token.text_range().start());
+    if let Some((id, _)) = spans
+        .iter()
+        .filter(|(_, span)| span.start <= at && at < span.end)
+        .min_by_key(|(_, span)| span.end - span.start)
+    {
+        return Owner::Probe(*id);
+    }
+    Owner::Names(owning_item(token).map_or_else(|| vec![String::new()], |item| item_names(&item)))
+}
+
+/// Whether the gate word at `token` names a feature: the attribute or macro
+/// call it heads, or failing one (a token in a macro's body) the token tree
+/// around it. A word that is only a variable's name heads neither.
+fn names_a_feature(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    token
+        .parent_ancestors()
+        .find(|node| {
+            ast::Meta::can_cast(node.kind())
+                || matches!(node.kind(), SyntaxKind::MACRO_CALL | SyntaxKind::TOKEN_TREE)
+        })
+        .is_some_and(|node| {
+            node.descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .any(|t| t.text() == "feature")
+        })
+}
+
+/// The package directory a source at `file` belongs to: what precedes its
+/// `src/`, `tests/`, `benches/` or `examples/`.
+fn package_dir_of(file: &str) -> Option<&str> {
+    ["src/", "tests/", "benches/", "examples/"]
+        .iter()
+        .find_map(|dir| {
+            if file.starts_with(dir) {
+                return Some("");
+            }
+            file.find(&format!("/{dir}")).map(|at| &file[..at])
+        })
+}
+
+/// `relative` joined onto the directory `dir` of the tree, `..` resolved;
+/// `None` where it leaves the tree.
+fn tree_join(dir: &str, relative: &str) -> Option<String> {
+    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// What one call of an include macro reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Included {
+    /// A file of the tree, by path.
+    File(String),
+    /// A file of the build's output, which the build key holds.
+    Built,
+    /// What no syntax can name: an argument that is not a path.
+    Unknown,
+}
+
+/// What the include macro `call` in `file` reads.
+fn include_target(call: &ast::MacroCall, file: &str) -> Included {
+    include_path(call, file).unwrap_or(Included::Unknown)
+}
+
+fn include_path(call: &ast::MacroCall, file: &str) -> Option<Included> {
+    use ra_ap_syntax::AstToken as _;
+    let tree = call.token_tree()?;
+    let mut strings = Vec::new();
+    let mut idents = Vec::new();
+    for token in tree
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+    {
+        match token.kind() {
+            SyntaxKind::STRING => {
+                strings.push(ast::String::cast(token)?.value().ok()?.into_owned());
+            }
+            SyntaxKind::IDENT => idents.push(token.text().to_owned()),
+            SyntaxKind::WHITESPACE
+            | SyntaxKind::COMMENT
+            | SyntaxKind::L_PAREN
+            | SyntaxKind::R_PAREN
+            | SyntaxKind::COMMA
+            | SyntaxKind::BANG => {}
+            _ => return None,
+        }
+    }
+    match (idents.as_slice(), strings.as_slice()) {
+        ([], [path]) => {
+            let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
+            Some(Included::File(tree_join(dir, path)?))
+        }
+        ([concat, env], [var, rest @ ..]) if concat == "concat" && env == "env" => {
+            let path: String = rest.concat();
+            match var.as_str() {
+                "OUT_DIR" => Some(Included::Built),
+                "CARGO_MANIFEST_DIR" => {
+                    Some(Included::File(tree_join(package_dir_of(file)?, &path)?))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Every Rust source of the tree at `root`: the files git tracks or sees
+/// changed in a checkout, every file under a snapshot ([`super::cover::pristine`]).
+fn tree_rust_files(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let is_rust = |path: &str| {
+        std::path::Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "rs")
+    };
+    if root.join(".git").exists() {
+        let mut paths = crate::git::tracked_paths(root)?;
+        paths.extend(crate::git::changed_paths(root)?);
+        return Ok(paths
+            .into_iter()
+            .filter(|path| is_rust(path) && root.join(path).is_file())
+            .collect());
+    }
+    let mut files: Vec<String> = ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("target" | ".git")))
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            let relative = entry.path().strip_prefix(root).ok()?;
+            Some(relative.to_string_lossy().replace('\\', "/"))
+        })
+        .filter(|path| is_rust(path))
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// The tree at `root` read for selection, syntax alone: every Rust source
+/// rendered with no mutant, probed where `format` says the sweep probed it,
+/// so a function's digest and a name's items are the ones the sweep read;
+/// the rest, tests included, gives its items and the names they mention.
+///
+/// # Errors
+///
+/// The tree's sources cannot be listed or read.
+pub fn dependency_index(
+    root: &std::path::Path,
+    format: &Format,
+) -> anyhow::Result<DependencyIndex> {
+    let mut index = DependencyIndex::default();
+    let none = BTreeSet::new();
+    for file in tree_rust_files(root)? {
+        let source = crate::fsio::read_to_string(root.join(&file))?;
+        let first = index.probes.len();
+        let probe_from = format.probed.contains(&file).then_some(first);
+        let rendered = render(&source, &[], &none, probe_from);
+        for (offset, name) in rendered.fn_names.iter().enumerate() {
+            index
+                .own_names
+                .entry(name.clone())
+                .or_default()
+                .insert(first + offset);
+        }
+        index.probes.extend(rendered.probes.iter().cloned());
+        index.names.extend(rendered.names.iter().cloned());
+        for (name, digest) in rendered.items {
+            index.items.entry(name).or_default().insert(digest);
+        }
+        for (name, mentioned) in rendered.mentions {
+            index.mentions.entry(name).or_default().extend(mentioned);
+        }
+        let spans: Vec<(usize, Range<usize>)> = rendered
+            .fn_spans
+            .into_iter()
+            .enumerate()
+            .map(|(offset, span)| (first + offset, span))
+            .collect();
+        read_gates_and_includes(&mut index, &source, &file, &spans);
+    }
+    Ok(index)
+}
+
+/// Record each feature gate and each include in `source` against its owner.
+fn read_gates_and_includes(
+    index: &mut DependencyIndex,
+    source: &str,
+    file: &str,
+    spans: &[(usize, Range<usize>)],
+) {
+    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let root = parse.tree().syntax().clone();
+    let mut resolved: std::collections::BTreeMap<usize, Included> =
+        std::collections::BTreeMap::new();
+    for call in root.descendants().filter_map(ast::MacroCall::cast) {
+        let Some(ident) = call
+            .path()
+            .and_then(|path| path.segment())
+            .and_then(|segment| segment.name_ref())
+            .and_then(|name| name.ident_token())
+        else {
+            continue;
+        };
+        if INCLUDES.contains(&ident.text()) {
+            resolved.insert(
+                usize::from(ident.text_range().start()),
+                include_target(&call, file),
+            );
+        }
+    }
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| {
+            !matches!(
+                token.kind(),
+                SyntaxKind::STRING | SyntaxKind::COMMENT | SyntaxKind::WHITESPACE
+            )
+        })
+    {
+        let text = token.text();
+        if GATES.contains(&text) {
+            if names_a_feature(&token) {
+                match owner_of(&token, spans) {
+                    Owner::Probe(id) => {
+                        index.gated_probes.insert(id);
+                    }
+                    Owner::Names(names) => index.gated_names.extend(names),
+                }
+            }
+            continue;
+        }
+        if token.kind() != SyntaxKind::IDENT || !INCLUDES.contains(&text) {
+            continue;
+        }
+        // AN INCLUDE THE SYNTAX CANNOT PLACE (one in a macro's body or another
+        // macro's arguments) makes its owner unknown, never invisible.
+        let target = resolved
+            .get(&usize::from(token.text_range().start()))
+            .cloned()
+            .unwrap_or(Included::Unknown);
+        let merge = |held: &mut Option<BTreeSet<String>>| match (held.as_mut(), &target) {
+            (Some(targets), Included::File(path)) => {
+                targets.insert(path.clone());
+            }
+            (Some(_), Included::Built) | (None, _) => {}
+            (Some(_), Included::Unknown) => *held = None,
+        };
+        match owner_of(&token, spans) {
+            Owner::Probe(id) => merge(
+                index
+                    .probe_includes
+                    .entry(id)
+                    .or_insert_with(|| Some(BTreeSet::new())),
+            ),
+            Owner::Names(names) => {
+                for name in names {
+                    merge(
+                        index
+                            .name_includes
+                            .entry(name)
+                            .or_insert_with(|| Some(BTreeSet::new())),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The digest of a whole tree by its content ids ([`resource_ids`]), Rust
+/// included: what a case keys on that no trace could read.
+#[must_use]
+pub fn tree_ids_digest(resources: &std::collections::BTreeMap<String, String>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for (path, id) in resources {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(id.as_bytes());
+        hasher.update(b"\x1e");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// What one case's selection digest is taken from: the functions it ran by
+/// digest, and the tree paths it touched, `None` when it was not traced.
+pub type Ran = (BTreeSet<String>, Option<BTreeSet<String>>);
+
+/// Each case's selection digest over the tree at `root` ([`case_digests`]
+/// over `index`, plus what that cannot see), or `None` where it is unknown:
+/// a function it ran is gone, or what it reaches is feature-gated or includes
+/// a file no syntax can name.
+///
+/// BEYOND [`case_digests`]:
+/// - the names reached from the case's own test function too, so a test's
+///   helpers in another test module are in its key;
+/// - every probed function sharing a reached name, by digest, so a function
+///   added or edited where a call by that name may now land moves the key;
+/// - every file an include in what it reaches names, by content id;
+/// - for a case no trace could read, the whole tree, Rust included.
+///
+/// A FEATURE GATE IS UNKNOWN, never keyed: the sweep and the suite may build
+/// different feature sets, so what the record saw is not what the suite runs.
+#[must_use]
+pub fn test_digests(
+    root: &std::path::Path,
+    index: &DependencyIndex,
+    dirs: &std::collections::BTreeMap<String, String>,
+    cases: &std::collections::BTreeMap<Case, Ran>,
+    resources: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<Case, Option<String>> {
+    let by_digest = ids_by_value(index.probes.iter().enumerate());
+    let untraced = tree_ids_digest(resources);
+    let mut out = std::collections::BTreeMap::new();
+    let mut executed = std::collections::BTreeMap::new();
+    let mut read = std::collections::BTreeMap::new();
+    for (case, (functions, touched)) in cases {
+        let ids: Option<BTreeSet<usize>> = functions
+            .iter()
+            .map(|function| by_digest.get(function))
+            .try_fold(BTreeSet::new(), |mut ids, found| {
+                ids.extend(found?.iter().copied());
+                Some(ids)
+            });
+        let Some(ids) = ids else {
+            out.insert(case.clone(), None);
+            continue;
+        };
+        executed.insert(case.clone(), ids);
+        if let Some(touched) = touched {
+            read.insert(case.clone(), touched.clone());
+        }
+    }
+    let base = case_digests(
+        root,
+        executed.keys(),
+        dirs,
+        &executed,
+        &Depends {
+            probes: &index.probes,
+            names: &index.names,
+            items: &index.items,
+            mentions: &index.mentions,
+            read: &read,
+            resources,
+            untraced: &untraced,
+        },
+    );
+    for (case, ids) in &executed {
+        out.insert(
+            case.clone(),
+            selection_digest(index, case, ids, base.get(case), resources),
+        );
+    }
+    out
+}
+
+/// [`test_digests`] for one case past [`case_digests`]'s `base`.
+fn selection_digest(
+    index: &DependencyIndex,
+    case: &Case,
+    ids: &BTreeSet<usize>,
+    base: Option<&String>,
+    resources: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    let test = case.0.rsplit("::").next().unwrap_or(&case.0).to_owned();
+    let reached = named_closure(
+        ids.iter()
+            .filter_map(|id| index.names.get(*id))
+            .flatten()
+            .chain([&test, &String::new()]),
+        &index.mentions,
+    );
+    let mut probes: BTreeSet<usize> = ids.clone();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"tc1\x1f");
+    hasher.update(base?.as_bytes());
+    let mut includes: BTreeSet<String> = BTreeSet::new();
+    let mut include = |held: Option<&Option<BTreeSet<String>>>| match held {
+        Some(None) => false,
+        Some(Some(targets)) => {
+            includes.extend(targets.iter().cloned());
+            true
+        }
+        None => true,
+    };
+    for name in &reached {
+        if index.gated_names.contains(name) || !include(index.name_includes.get(name)) {
+            return None;
+        }
+        for digest in index.items.get(name).into_iter().flatten() {
+            hasher.update(format!("\x1b{name}\x1f{digest}").as_bytes());
+        }
+        for id in index.own_names.get(name).into_iter().flatten() {
+            probes.insert(*id);
+            hasher.update(format!("\x18{name}\x1f").as_bytes());
+            hasher.update(index.probes.get(*id).map_or("", String::as_str).as_bytes());
+        }
+    }
+    for id in &probes {
+        if index.gated_probes.contains(id) || !include(index.probe_includes.get(id)) {
+            return None;
+        }
+    }
+    for path in includes {
+        hasher.update(format!("\x17{path}\x1f").as_bytes());
+        hasher.update(resource_id(resources, &path).as_bytes());
+    }
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+/// One sealed record a selection can read ([`sealed_cases`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sealed {
+    /// The case: its name and binary id.
+    pub case: (String, String),
+    /// What its digest is taken from.
+    pub ran: Ran,
+    /// The key of the [`Format`] it was read in.
+    pub format: String,
+    /// Its selection digest over the tree it was recorded on.
+    pub tested: String,
+}
+
+/// Every record under `base` that finished passing and carries a selection
+/// digest ([`TESTED`]): what a run's selection may stand on. A record that
+/// reads short anywhere (a sweep clearing it mid-read) is left out, which
+/// reruns it.
+#[must_use]
+pub fn sealed_cases(base: &std::path::Path) -> Vec<Sealed> {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let read = |name: &str| crate::fsio::read_to_string(dir.join(name)).ok();
+        let Some(tested) = read(TESTED) else {
+            continue;
+        };
+        let Some((format, tested)) = tested.trim_end().split_once('\t') else {
+            continue;
+        };
+        let (Some(record), Some(case), true) = (
+            read(DEPENDS).and_then(|text| carried(&text)),
+            kept_case(&dir),
+            finished_passing(&dir),
+        ) else {
+            continue;
+        };
+        let touched = read(READ).map(|listing| listing.lines().map(str::to_owned).collect());
+        if read(TESTED).as_deref().map(str::trim_end) != Some(&format!("{format}\t{tested}")) {
+            continue;
+        }
+        out.push(Sealed {
+            case,
+            ran: (record.functions, touched),
+            format: format.to_owned(),
+            tested: tested.to_owned(),
+        });
+    }
+    out.sort_by(|a, b| a.case.cmp(&b.case));
+    out
+}
+
+/// Take the selection digest of every passing, sealed record under `base`
+/// that was recorded over the tree the reach directory now names ([`OVER`])
+/// and has none yet, over the snapshot at `root` with the checkout content
+/// ids `resources`, in `format`; how many it took.
+///
+/// TAKEN ONCE, WHERE THE RECORD WAS MADE: a carried record keeps the digest
+/// of its own tree, so a later head is compared with the tree its functions
+/// were read on, never with a tree a looser carry let it reach.
+///
+/// # Errors
+///
+/// The tree cannot be indexed or a digest cannot be written.
+pub fn seal_tested(
+    base: &std::path::Path,
+    root: &std::path::Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &Format,
+) -> anyhow::Result<usize> {
+    let Ok(over) = crate::fsio::read_to_string(base.join(TREE)) else {
+        return Ok(0);
+    };
+    let mut todo: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
+    for entry in std::fs::read_dir(base)? {
+        let dir = entry?.path();
+        if !dir.is_dir()
+            || dir.join(TESTED).exists()
+            || !finished_passing(&dir)
+            || crate::fsio::read_to_string(dir.join(OVER)).ok().as_deref() != Some(over.as_str())
+        {
+            continue;
+        }
+        let (Some(record), Some(case)) = (
+            crate::fsio::read_to_string(dir.join(DEPENDS))
+                .ok()
+                .and_then(|text| carried(&text)),
+            kept_case(&dir),
+        ) else {
+            continue;
+        };
+        let touched = crate::fsio::read_to_string(dir.join(READ))
+            .ok()
+            .map(|listing| listing.lines().map(str::to_owned).collect());
+        todo.push((dir, case, (record.functions, touched)));
+    }
+    if todo.is_empty() {
+        return Ok(0);
+    }
+    let key = format.store(base)?;
+    let index = dependency_index(root, format)?;
+    let cases: std::collections::BTreeMap<Case, Ran> = todo
+        .iter()
+        .map(|(_, case, ran)| (case.clone(), ran.clone()))
+        .collect();
+    let digests = test_digests(root, &index, &format.dirs, &cases, resources);
+    let mut sealed = 0;
+    for (dir, case, _) in &todo {
+        if let Some(Some(digest)) = digests.get(case) {
+            crate::durable::replace(dir.join(TESTED), format!("{key}\t{digest}"))?;
+            sealed += 1;
+        }
+    }
+    Ok(sealed)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A one-file crate at a fresh scratch root, its `src/lib.rs` probed as a
+    /// sweep would probe it, and `more` beside it in `src/more.rs`.
+    fn selection_tree(name: &str, lib: &str, more: &str) -> (std::path::PathBuf, Format) {
+        let root = crate::scratch::scratch(name);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), lib).unwrap();
+        std::fs::write(root.join("src/more.rs"), more).unwrap();
+        let format = Format {
+            dirs: [(String::from("fix"), String::new())].into(),
+            probed: [String::from("src/lib.rs")].into(),
+            ..Format::default()
+        };
+        (root, format)
+    }
+
+    /// The selection digest of the case `tests::checks` over the tree at
+    /// `root`, as having run `functions` and read `read`.
+    fn selection(
+        root: &std::path::Path,
+        format: &Format,
+        functions: &[&str],
+        read: Option<&[&str]>,
+        resources: &std::collections::BTreeMap<String, String>,
+    ) -> Option<String> {
+        let index = dependency_index(root, format).unwrap();
+        let ran: BTreeSet<String> = functions
+            .iter()
+            .flat_map(|name| index.digests_of(name))
+            .collect();
+        assert!(!ran.is_empty(), "the fixture's functions are probed");
+        let case = (String::from("tests::checks"), String::from("fix"));
+        let read = read.map(|paths| paths.iter().map(|p| (*p).to_owned()).collect());
+        let cases = [(case.clone(), (ran, read))].into();
+        test_digests(root, &index, &format.dirs, &cases, resources)
+            .remove(&case)
+            .unwrap()
+    }
+
+    const SELECTED: &str = "pub fn run() -> u8 { helper() }\nfn helper() -> u8 { 1 }\n\
+        #[cfg(test)]\nmod tests {\n    #[test]\n    fn checks() { assert_eq!(super::run(), 1); }\n}\n";
+
+    /// Fails by: a function added under a name the case's code calls left out
+    /// of its key (a call that may now land there skipped), or an unrelated
+    /// one moving it (every edit rerunning every case).
+    #[test]
+    fn a_function_sharing_a_called_name_moves_the_selection_digest() {
+        let none = std::collections::BTreeMap::new();
+        let ran = ["run", "helper", "checks"];
+        let (root, format) = selection_tree("schema-select-shadow", SELECTED, "");
+        let held = selection(&root, &format, &ran, Some(&[]), &none).unwrap();
+        std::fs::write(root.join("src/more.rs"), "pub fn other() -> u8 { 2 }\n").unwrap();
+        assert_eq!(
+            selection(&root, &format, &ran, Some(&[]), &none).as_deref(),
+            Some(held.as_str()),
+            "an unrelated function"
+        );
+        std::fs::write(root.join("src/more.rs"), "pub fn helper() -> u8 { 2 }\n").unwrap();
+        assert_ne!(
+            selection(&root, &format, &ran, Some(&[]), &none).as_deref(),
+            Some(held.as_str()),
+            "a function named as the case's code calls"
+        );
+    }
+
+    /// Fails by: a case whose code is feature-gated selected (the sweep's
+    /// features are not the suite's), a function it ran that is gone keyed
+    /// as if present, or an ungated case left unknown.
+    #[test]
+    fn a_feature_gate_or_a_vanished_function_is_unknown() {
+        let none = std::collections::BTreeMap::new();
+        let ran = ["run", "helper", "checks"];
+        let gated =
+            "pub fn run() -> u8 {\n    #[cfg(feature = \"x\")]\n    let _ = 0;\n    helper()\n}\n";
+        let (root, format) = selection_tree(
+            "schema-select-gate",
+            &SELECTED.replace("pub fn run() -> u8 { helper() }\n", gated),
+            "",
+        );
+        assert_eq!(
+            selection(&root, &format, &ran, Some(&[]), &none),
+            None,
+            "a gated function"
+        );
+        let (root, format) = selection_tree(
+            "schema-select-gated-item",
+            SELECTED,
+            "#[cfg(not(feature = \"x\"))]\npub const LIMIT: u8 = 1;\n",
+        );
+        let index = dependency_index(&root, &format).unwrap();
+        assert!(index.gated_names.contains("LIMIT"), "a gated item");
+        assert!(
+            selection(&root, &format, &ran, Some(&[]), &none).is_some(),
+            "an item nothing names"
+        );
+        let (root, format) = selection_tree("schema-select-gone", SELECTED, "");
+        let index = dependency_index(&root, &format).unwrap();
+        let case = (String::from("tests::checks"), String::from("fix"));
+        let cases = [(
+            case.clone(),
+            ([String::from("gone")].into(), Some(BTreeSet::new())),
+        )]
+        .into();
+        assert_eq!(
+            test_digests(&root, &index, &format.dirs, &cases, &none).remove(&case),
+            Some(None),
+            "a function no longer in the tree"
+        );
+        let cfg_variable =
+            "pub fn run() -> u8 { let cfg = 1; let feature = cfg; feature + helper() - 1 }\n";
+        let (root, format) = selection_tree(
+            "schema-select-variable",
+            &SELECTED.replace("pub fn run() -> u8 { helper() }\n", cfg_variable),
+            "",
+        );
+        assert!(
+            selection(&root, &format, &ran, Some(&[]), &none).is_some(),
+            "a variable is no gate"
+        );
+    }
+
+    /// Fails by: an included file's edit left out of the key of a case whose
+    /// code holds it (a stale pass of a rebuilt constant), an untraced case
+    /// keyed on less than the whole tree, or an include no syntax can name
+    /// keyed as if read.
+    #[test]
+    fn an_include_and_an_untraced_case_key_on_what_they_cannot_name() {
+        let lib = "const T: &str = include_str!(\"../tpl.txt\");\n\
+            pub fn run() -> u8 { u8::from(!T.is_empty()) }\n\
+            #[cfg(test)]\nmod tests {\n    #[test]\n    fn checks() { assert_eq!(super::run(), 1); }\n}\n";
+        let (root, format) = selection_tree("schema-select-include", lib, "");
+        let ran = ["run", "checks"];
+        let ids = |tpl: &str, other: &str| -> std::collections::BTreeMap<String, String> {
+            [
+                (String::from("tpl.txt"), tpl.to_owned()),
+                (String::from("x.txt"), other.to_owned()),
+            ]
+            .into()
+        };
+        let held = selection(&root, &format, &ran, Some(&[]), &ids("a", "a"));
+        assert!(held.is_some());
+        assert_eq!(
+            held,
+            selection(&root, &format, &ran, Some(&[]), &ids("a", "b")),
+            "a file it neither read nor holds"
+        );
+        assert_ne!(
+            held,
+            selection(&root, &format, &ran, Some(&[]), &ids("b", "a")),
+            "the included file"
+        );
+        let untraced = selection(&root, &format, &ran, None, &ids("a", "a"));
+        assert_ne!(
+            untraced,
+            selection(&root, &format, &ran, None, &ids("a", "b")),
+            "an untraced case reads all"
+        );
+        let wrapped = "macro_rules! held { ($p:literal) => { include_str!($p) }; }\n\
+            pub fn run() -> u8 { u8::from(!held!(\"../tpl.txt\").is_empty()) }\n\
+            #[cfg(test)]\nmod tests {\n    #[test]\n    fn checks() { assert_eq!(super::run(), 1); }\n}\n";
+        let (root, format) = selection_tree("schema-select-wrapped", wrapped, "");
+        assert_eq!(
+            selection(&root, &format, &ran, Some(&[]), &ids("a", "a")),
+            None,
+            "an include in a macro's body"
+        );
+    }
+
+    /// Fails by: a record made on another tree given a selection digest (a
+    /// carried record compared with a head its functions were not read on), a
+    /// failed or unsealed one given one, or a sealed one not read back.
+    #[test]
+    fn a_selection_digest_is_taken_once_over_the_tree_a_record_was_made_on() {
+        use std::fmt::Write as _;
+        let (root, format) = selection_tree("schema-seal-tested", SELECTED, "");
+        let index = dependency_index(&root, &format).unwrap();
+        let base = crate::scratch::scratch("schema-seal-tested-base");
+        std::fs::write(base.join(TREE), "t1").unwrap();
+        let mut functions = String::from("D-\n");
+        for name in ["run", "helper", "checks"] {
+            for digest in index.digests_of(name) {
+                let _ = writeln!(functions, "F{digest}");
+            }
+        }
+        for (dir, over, done, depends) in [
+            ("made", "t1", "0", true),
+            ("carried", "t0", "0", true),
+            ("failed", "t1", "101", true),
+            ("unsealed", "t1", "0", false),
+        ] {
+            let dir = base.join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("case"), "tests::checks\tfix").unwrap();
+            std::fs::write(dir.join(OVER), over).unwrap();
+            std::fs::write(dir.join(DONE), done).unwrap();
+            std::fs::write(dir.join(READ), "").unwrap();
+            if depends {
+                std::fs::write(dir.join(DEPENDS), &functions).unwrap();
+            }
+        }
+        let none = std::collections::BTreeMap::new();
+        assert_eq!(seal_tested(&base, &root, &none, &format).unwrap(), 1);
+        for (dir, tested) in [
+            ("made", true),
+            ("carried", false),
+            ("failed", false),
+            ("unsealed", false),
+        ] {
+            assert_eq!(base.join(dir).join(TESTED).is_file(), tested, "{dir}");
+        }
+        let sealed = sealed_cases(&base);
+        assert_eq!(sealed.len(), 1);
+        assert_eq!(Format::load(&base, &sealed[0].format), Some(format.clone()));
+        assert_eq!(
+            test_digests(
+                &root,
+                &index,
+                &format.dirs,
+                &[(sealed[0].case.clone(), sealed[0].ran.clone())].into(),
+                &none
+            )
+            .remove(&sealed[0].case),
+            Some(Some(sealed[0].tested.clone())),
+            "the digest a seal took is the one the same tree gives"
+        );
+        assert_eq!(
+            seal_tested(&base, &root, &none, &format).unwrap(),
+            0,
+            "taken once"
+        );
+    }
 
     #[test]
     fn a_journaled_verdict_outranks_the_line_before_it_and_a_torn_line_is_dropped() {
@@ -4361,6 +5339,7 @@ mod tests {
             sites: vec![Some(String::from("key-0"))],
             mutant_fns: std::collections::BTreeMap::new(),
             classic: BTreeSet::new(),
+            format: None,
         }
     }
 
