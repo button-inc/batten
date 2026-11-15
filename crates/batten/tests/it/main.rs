@@ -414,6 +414,7 @@ mod run_shape;
 mod run_shape_guard_door;
 mod runner_verdict;
 mod rust_paths_check;
+mod rust_row_references;
 #[cfg(unix)]
 mod sbom_binary;
 mod sbom_inventory;

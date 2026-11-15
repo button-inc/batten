@@ -4714,7 +4714,7 @@ mod lap_tests {
     }
 
     /// **A GATE'S `2` WITH NO BASE TO READ IS A REFUSAL OF THE TREE** (CLOUD-843),
-    /// and `#MUTANT unconfirmed-move-laps` reddens here.
+    /// and a mutant that laps on an unconfirmed move reddens here.
     ///
     /// The consumer's `verify` no longer re-numbers a policy verdict to `1`, so a
     /// `2` is not by itself evidence that trunk moved; reading it as that is

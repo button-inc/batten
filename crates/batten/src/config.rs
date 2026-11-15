@@ -2030,7 +2030,6 @@ pub const TEXT_CENSUS: &[TextColumn] = &[
 
 /// The cap a column's values are held to: its census row, else [`TEXT_MAX`].
 ///
-/// A loop rather than a closure, because a `//MUTANT` anchor may not hold `|`.
 fn text_cap(path: &str) -> usize {
     for column in TEXT_CENSUS {
         if column.path == path {
@@ -3070,12 +3069,6 @@ const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 
 /// Whether a rendered parse error is one of the unknown-key shapes.
 ///
-/// Named rather than inlined so the `//MUTANT` rows below can anchor on a line
-/// carrying no `|`: a mutation row is `id|script|case`, split on `|`, so a
-/// closure in the anchor yields five fields and the declaration can only ever
-/// report `malformed-row`. Both rows here did exactly that until it was caught
-/// in review.
-///
 /// Declared ABOVE `config_error`'s doc block rather than between it and the
 /// function: extracting it into the gap orphaned that whole block onto this
 /// helper and left `config_error` — the function all of it describes —
@@ -3848,10 +3841,6 @@ fn addressable_row(text: &str, header: Header<'_>) -> bool {
 }
 
 /// Whether `root` is itself declared as an array-of-tables anywhere in `text`.
-///
-/// Named rather than inlined for the `//MUTANT` row above's reason: a mutation
-/// row is `id|script|case` split on `|`, so an anchor carrying a closure yields
-/// five fields and the declaration can only ever report `malformed-row`.
 fn nests_in_a_row(text: &str, root: &str) -> bool {
     headers(text).any(|(_, other)| other.is_row() && other.name() == root)
 }
@@ -6649,7 +6638,7 @@ mod tests {
         usage.message.clone()
     }
 
-    /// `#MUTANT text-tier-flattened` reddens here: one column per tier, at its cap
+    /// A mutant flattening the tiers reddens here: one column per tier, at its cap
     /// and one over.
     #[test]
     fn a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads() {
@@ -6701,7 +6690,7 @@ mod tests {
         }
     }
 
-    /// `#MUTANT text-ceiling-census-only` reddens here: a column the census does
+    /// A mutant holding only census columns reddens here: a column the census does
     /// not name is still held to the ceiling.
     #[test]
     fn an_unlisted_string_column_is_held_to_the_text_ceiling() {
@@ -6718,7 +6707,7 @@ mod tests {
         assert!(message.contains("rule[0].glob 1537 over 1536"), "{message}");
     }
 
-    /// `#MUTANT text-meter-override-unwired` reddens here.
+    /// A mutant unwiring the override column reddens here.
     #[test]
     fn an_override_column_over_its_cap_is_refused_too() {
         let waiver = |len| {
@@ -6737,7 +6726,7 @@ mod tests {
         );
     }
 
-    /// `#MUTANT text-meter-judges-the-base` reddens here: a config read from a
+    /// A mutant metering the base reddens here: a config read from a
     /// ref is compared, never metered.
     #[test]
     fn an_over_cap_base_ref_is_compared_not_refused() {

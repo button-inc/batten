@@ -581,7 +581,7 @@ mod tests {
         assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
-    /// `#MUTANT exclusive-create-overwrites` reddens here: of many threads racing
+    /// A mutant that overwrites on create reddens here: of many threads racing
     /// to create one name, exactly one is told it created it, and its contents
     /// are what the file holds.
     #[test]

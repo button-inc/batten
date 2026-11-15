@@ -2778,7 +2778,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// `#MUTANT receipt-any-stops-at-the-first` reddens here. The disjunction
+    /// A mutant stopping at the first kind reddens here. The disjunction
     /// `verify`'s claim step asks (CLOUD-843): the second kind answering is
     /// enough, and the third is never read.
     #[test]

@@ -240,349 +240,107 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
     Ok(())
 }
 
-/// The pin a config declares, read from its raw text without validating it.
+/// The pin a config declares: the top-level `engine` key, read from the raw
+/// text as a stream and never parsed as a whole (CLOUD-2279).
 ///
-/// **THE `[[provision]] batten` ROW IS THE PIN** (CLOUD-2595). It already holds
-/// everything a follow needs — the version, and a URL plus pinned `sha256` per
-/// platform, the Gradle Wrapper's `distributionUrl` / `distributionSha256Sum`
-/// shape — and measured in a consumer's incident it was the ONE declaration a
-/// consumer had made, so an engine that read only the `engine` key followed
-/// nothing and a newer release refused the config for every call of a session.
-///
-/// Read syntactically, never validated: a later release's new check (the prose
-/// cap, CLOUD-1642) must not be able to stop the pin from being read, because
-/// following the pin is how that release gets out of the way.
-///
-/// The top-level `engine` key keeps one job of its own: a `source` pin, which
-/// no provision row can describe, wins. Its `release` form is an alias for the
-/// row, read where no row exists; [`check`] refuses one that disagrees with the
-/// row ([`row_disagreement`]). Top-level keys precede the first table header in
-/// TOML, so an `engine` line past it belongs to some table and is not the pin.
+/// The scan stops at the key, or at the first table header — top-level keys
+/// precede every table in TOML, so an `engine` line past one belongs to that
+/// table and is not the pin. A valid config puts the key at its head, after only
+/// `version` ([`pin_out_of_order`]), so a load reads a handful of lines here
+/// whatever the file's size. Read syntactically, never validated: a later
+/// release's new check (the prose cap, CLOUD-1642) must not be able to stop the
+/// pin from being read, because following the pin is how that release gets out
+/// of the way.
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
-    Pins::of(text).declared()
+    top_level(text, "engine")?.try_into().ok()
 }
 
-/// Both pin declarations of one config, each read ONCE: the top-level `engine`
-/// key and the batten row's release. [`declared`], [`row_disagreement`] and
-/// [`check`] all answer from one of these, so a load scans the text once for
-/// each rather than once per question (every hook call pays for this read).
-struct Pins {
-    key: Option<Pin>,
-    row: Option<String>,
-}
-
-impl Pins {
-    fn of(text: &str) -> Self {
-        Self {
-            key: top_level(text, "engine").and_then(|value| value.try_into().ok()),
-            row: row_release(text),
-        }
-    }
-
-    fn declared(self) -> Option<Pin> {
-        match (self.key, self.row) {
-            // A source pin, or a key naming both or neither, is the key's to answer.
-            (Some(pin), _) if pin.source.is_some() || pin.release.is_none() => Some(pin),
-            (_, Some(tag)) => Some(Pin {
-                release: Some(tag),
-                source: None,
-            }),
-            (key, None) => key,
-        }
-    }
-
-    /// `(key, row)` when both name a release and they are different versions.
-    fn disagreement(&self) -> Option<(String, String)> {
-        let key = self.key.as_ref()?.release.clone()?;
-        let row = self.row.clone()?;
-        // `row_tag` already spells the row as a tag, so the leading `v` is the
-        // one spelling the two can differ by.
-        (key.trim_start_matches('v') != row.trim_start_matches('v')).then_some((key, row))
-    }
-}
-
-// The rows below `declared` are judged by the install suite, as before it.
-
-/// The release the first `[[provision]] name = "batten"` row names, as a tag
-/// (`v0.0.216`), read with `toml_edit` and no validator (CLOUD-2595).
+/// The 1-based line of an `engine` pin some top-level key other than `version`
+/// precedes, or `None` for a pin at the head or no pin at all.
 ///
-/// `None` when the text does not parse as TOML at all, declares no batten row,
-/// or the row names no version: the load then reports the file as it always did.
+/// **A pin out of order is invalid, never unreadable**: [`declared`] still finds
+/// it, so the engine follows the pin, and `config lint` refuses the file until
+/// the key is moved up. The order is what keeps the hot path's read short, so a
+/// file that buries its pin is a config to rewrite, not one to scan further for.
 #[must_use]
-pub fn row_release(text: &str) -> Option<String> {
-    row_tag(&batten_row(text)?)
-}
-
-/// The release a parsed batten row names, as a tag.
-fn row_tag(row: &toml_edit::Table) -> Option<String> {
-    let version = row.get("version")?.as_str()?.trim();
-    let bare = version.trim_start_matches('v');
-    (!bare.is_empty()).then(|| format!("v{bare}"))
-}
-
-/// An artifact table's `sha256`, normalised, or `None` when it names none.
-fn artifact_digest(artifact: &dyn toml_edit::TableLike) -> Option<String> {
-    let digest = artifact
-        .get("sha256")?
-        .as_str()?
-        .trim()
-        .to_ascii_lowercase();
-    (!digest.is_empty()).then_some(digest)
-}
-
-/// The first batten `[[provision]]` row of `text`, parsed syntactically.
-///
-/// **ONLY THE ROW'S OWN LINES ARE PARSED**, never the whole file. Every engine
-/// call reads its pin, and parsing this repository's 962 KB `batten.toml` to
-/// find one row made `check`, `hook`, `passthrough` and the wired path 2.6-3x
-/// slower than the scan it replaced (`perf gate`, measured on this change). Each
-/// `[[provision]]` block runs from its header to the next table header that is
-/// not one of its own `[provision.…]` subtables, and only that slice meets
-/// `toml_edit`. A block that will not parse is passed over, so a malformed
-/// neighbour can no more hide the pin than a later release's check can.
-fn batten_row(text: &str) -> Option<toml_edit::Table> {
-    // Each block is parsed as it closes, and the first batten row ends the scan.
-    let parsed = |block: &str| {
-        let doc = block.parse::<toml_edit::DocumentMut>().ok()?;
-        doc.get("provision")?
-            .as_array_of_tables()?
-            .iter()
-            .find(|row| is_batten_row(*row))
-            .cloned()
-    };
-    let mut current: Option<String> = None;
-    for line in text.lines() {
-        let header = table_header(line);
-        let opens = header == Some(("provision", true));
-        if header.is_some_and(|(name, _)| opens || !name.starts_with("provision."))
-            && let Some(row) = current.take().as_deref().and_then(parsed)
+pub fn pin_out_of_order(text: &str) -> Option<usize> {
+    let mut buried = false;
+    for (index, line) in text.lines().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with('[') {
+            return None;
+        }
+        let Some((key, _)) = code.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || key.starts_with('#') {
+            continue;
+        }
+        if key == "engine" {
+            return buried.then_some(index + 1);
+        }
+        // A line continuing a multi-line value is not a key: it never begins
+        // with a bare key, so only a bare-key spelling counts.
+        if key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            return Some(row);
-        }
-        if opens {
-            current = Some(String::new());
-        }
-        if let Some(block) = current.as_mut() {
-            block.push_str(line);
-            block.push('\n');
+            buried |= key != "version";
         }
     }
-    current.as_deref().and_then(parsed)
+    None
 }
 
-/// The `sha256` the batten row pins for `platform` (`provision::platform_key`'s
-/// `<os>-<arch>` spelling), or for every platform when the row pins one artifact.
-///
-/// `None` where the row lists no digest for this platform: the follow then
-/// verifies against the release's `SHA256SUMS`, as it did before the row was
-/// read (CLOUD-2595 §2b).
-#[cfg(test)]
-fn row_digest(text: &str, platform: &str) -> Option<String> {
-    let row = batten_row(text)?;
-    platform_artifact(&row, platform)
-        .and_then(artifact_digest)
-        .or_else(|| artifact_digest(&row))
-}
-
-/// The key and array-ness of a TOML table header line (`[a.b]` or `[[a.b]]`),
-/// spaces inside the brackets ignored; `None` for any other line, a `[`-led
-/// value line of a multi-line array included.
-fn table_header(line: &str) -> Option<(&str, bool)> {
-    // EVERY LINE OF THE CONFIG MEETS THIS on every call (`batten_row`), so a
-    // line that cannot open a table is answered before it is scanned at all:
-    // the full-line comment search below cost every path ~2 ms on a 962 KB file.
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('[') {
-        return None;
-    }
-    let trimmed = trimmed
-        .split_once(" #")
-        .map_or(trimmed, |(head, _)| head)
-        .trim_end();
-    let (inner, array) = match trimmed.strip_prefix("[[") {
-        Some(rest) => (rest.strip_suffix("]]")?, true),
-        None => (trimmed.strip_prefix('[')?.strip_suffix(']')?, false),
-    };
-    let key = inner.trim();
-    let bare = key
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '"' | ' '));
-    (bare && !key.is_empty()).then_some((key, array))
-}
-
-/// The row's `platforms.<key>` artifact table.
-fn platform_artifact<'row>(
-    row: &'row toml_edit::Table,
-    key: &str,
-) -> Option<&'row dyn toml_edit::TableLike> {
-    row.get("platforms")?
-        .as_table_like()?
-        .get(key)?
-        .as_table_like()
-}
-
-/// The `sha256` the batten row pins for the asset THIS engine follows: its own
-/// target triple's (`running_target`), never a sibling libc's (CLOUD-2595).
-///
-/// **A FOLLOW KEEPS ITS LIBC.** The row's `<os>-<arch>` artifact is the static
-/// musl build, the one `provision apply` can install on any Linux; a gnu engine
-/// following that digest would fetch the gnu asset and refuse it as tampered.
-/// So the triple's own table answers first; the `<os>-<arch>` one only when its
-/// URL names this engine's asset; otherwise `None`, and the follow verifies
-/// against the release's `SHA256SUMS`.
-#[must_use]
-pub fn followed_digest(text: &str) -> Option<String> {
-    let row = batten_row(text)?;
-    let target = running_target();
-    if let Some(own) = platform_artifact(&row, &target) {
-        return artifact_digest(own);
-    }
-    let asset = release_asset(&row_tag(&row)?, &target);
-    // A row pinning ONE artifact is this engine's only when its url is: a
-    // single musl tarball's digest is never a gnu or macOS engine's.
-    if row.get("platforms").is_none() {
-        return url_names(&row, &asset)
-            .then(|| artifact_digest(&row))
-            .flatten();
-    }
-    platform_artifact(&row, &crate::provision::platform_key())
-        .filter(|artifact| url_names(*artifact, &asset))
-        .and_then(artifact_digest)
-}
-
-/// Whether an artifact table's `url` downloads `asset`.
-fn url_names(artifact: &dyn toml_edit::TableLike, asset: &str) -> bool {
-    artifact
-        .get("url")
-        .and_then(toml_edit::Item::as_str)
-        .is_some_and(|url| url.rsplit('/').next() == Some(asset))
-}
-
-/// The `engine` key's release and the batten row's, when both are declared and
-/// they name different releases (CLOUD-2595): `(key, row)`, both as tags.
-///
-/// One declaration is the design; while the key's release form is still read
-/// as an alias, two that disagree are refused rather than one silently winning.
-#[must_use]
-pub fn row_disagreement(text: &str) -> Option<(String, String)> {
-    Pins::of(text).disagreement()
-}
-
-/// `text` with a batten `[[provision]]` row pinning release `tag` appended, for
-/// a config that pins nothing at all; `None` for one that already pins, or a
-/// release `sums` (its `SHA256SUMS`) lists no archive for (CLOUD-2595 §2c).
+/// `text` with the `engine` key pinning release `tag`, for a config that pins
+/// nothing at all; `None` for one that already pins (CLOUD-2595 §2c).
 ///
 /// **The Gradle Wrapper's move.** "Any later version of batten that finds a
 /// toml without a pin should just add it after the parse succeeds" (the owner,
 /// 2026-11-04): the engine that loaded the file writes its own release in, so the
-/// file is read only by the release it pins from then on. A config already
-/// pinned — by a row, or by the `engine` key's alias — is never written.
-///
-/// The row is APPENDED, so every other byte of the file is the bytes it had. It
-/// carries, URL and `sha256` from the release itself:
-///
-/// - **one artifact per published `.tar.gz` target under its own triple**
-///   (`[provision.platforms.x86_64-unknown-linux-gnu]`), which is what a
-///   follow reads ([`followed_digest`]): an engine keeps the libc it runs as;
-/// - **one per `<os>-<arch>`**, the key `provision apply` looks up. On Linux
-///   that is the static musl build, because a generic provision cannot tell
-///   which libc a host has and musl runs on every one; `engine install` is what
-///   upgrades a glibc host to the faster gnu build.
-///
-/// A `.zip` target has no `unpack` spelling a provision row can carry, so it is
-/// left to the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
+/// file is read only by the release it pins from then on. [`rewrite`] places the
+/// key at the head, after `version`, where [`pin_out_of_order`] wants it.
 #[must_use]
-pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<String> {
+pub fn adopted(text: &str, tag: &str) -> Option<String> {
     if declared(text).is_some() {
         return None;
     }
-    let bare = tag.trim_start_matches('v');
-    // The asset names are `dist`'s contract, never spelled here.
-    let prefix = crate::dist::archive_stem("batten", bare, "");
-    // key -> (url, digest): every triple under its own name, and each
-    // `<os>-<arch>` key once, the musl build where a platform has one.
-    let mut platforms: std::collections::BTreeMap<String, (String, String)> =
-        std::collections::BTreeMap::new();
-    for (digest, asset) in sums_entries(sums) {
-        let Some(target) = asset
-            .strip_prefix(&prefix)
-            .and_then(|rest| rest.strip_suffix(crate::dist::archive_ext(rest)))
-        else {
-            continue;
-        };
-        let Some(key) = platform_of(target) else {
-            continue;
-        };
-        let url = release_url(repository, tag, asset);
-        platforms.insert(target.to_owned(), (url.clone(), digest.clone()));
-        let held_musl = platforms
-            .get(&key)
-            .map(|(held, _)| held.ends_with(&format!("-musl{}", crate::dist::archive_ext(target))));
-        if held_musl.is_some_and(|held| held || !target.ends_with("-musl")) {
-            continue;
-        }
-        platforms.insert(key, (url, digest));
-    }
-    if platforms.is_empty() {
-        return None;
-    }
-    let mut row = format!(
-        "\n[[provision]]\nname = \"batten\"\nversion = \"{bare}\"\nunpack = \"tar_gz\"\nbinary = \"batten\"\n"
-    );
-    for (key, (url, digest)) in &platforms {
-        use std::fmt::Write as _;
-        // Writing to a `String` cannot fail.
-        let _ = write!(
-            row,
-            "\n[provision.platforms.{key}]\nurl = \"{url}\"\nsha256 = \"{digest}\"\n"
-        );
-    }
-    // The row opens on its own newline, so it starts a line whether or not the
-    // file ended in one.
-    let out = format!("{text}{row}");
-    // A WRITE IS DECIDED ON THE WHOLE DOCUMENT, never the hot path's line scan:
-    // a batten row spelled any other valid way (an inline `provision = [{…}]`, a
-    // quoted header) is a pin the scan cannot see, and appending beside it would
-    // leave a file that no longer loads. This runs once per session, not per call.
-    (!declares_batten(text) && declared(&out).is_some() && parses(&out)).then_some(out)
-}
-
-/// Whether `text` parses as TOML and declares a batten `[[provision]]` row in
-/// any header spelling (a quoted `[["provision"]]` included). A file that does
-/// not parse answers `true`, so nothing is written beside it.
-///
-/// An INLINE `provision = [{…}]` needs no arm: a `[[provision]]` appended after
-/// it can never parse, so [`parses`] refuses that write whatever it declares.
-fn declares_batten(text: &str) -> bool {
-    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
-        return true;
+    let pin = Pin {
+        release: Some(tag.to_owned()),
+        source: None,
     };
-    doc.get("provision")
-        .and_then(toml_edit::Item::as_array_of_tables)
-        .is_some_and(|rows| rows.iter().any(|row| is_batten_row(row)))
+    Some(rewrite(text, &pin))
 }
 
-/// Every batten declaration in `text` that disagrees with pin `tag`, as
-/// `(line, what)`, for `engine gate` (CLOUD-2595): a `min_batten_version` above
-/// the pin, which the followed engine would refuse as too old on every call,
-/// and EVERY batten row naming another release — not only the first, which the
-/// follow reads, but any a merge left behind that `provision apply` still acts on.
+/// The remedy for a declaration [`ahead_of`] the pin, which `engine update`
+/// never moves back.
+const PIN_UP: &str = "pin a release at or above it, or lower it";
+
+/// The batten declarations in `text` that disagree with release pin `tag`
+/// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
+/// the pin, and a `min_batten_version` above it. Each is its 1-based line, what
+/// it says, and the remedy that clears it: `engine update` moves a provision row
+/// to the pin, but never lowers a floor, so a floor above the pin names the two
+/// moves that can.
 ///
-/// The gate's question, off the hot path, so it reads the whole document.
+/// The document is parsed once, so a row is found however it is spelled, by
+/// the same [`is_batten_row`] `engine update` rewrites by; a config that will
+/// not parse is the load's to refuse, and has no findings here.
 #[must_use]
-pub fn gate_disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
+pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)> {
     let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
         return Vec::new();
     };
     let mut found = Vec::new();
     if let Some(item) = doc.get("min_batten_version")
         && let Some(floor) = item.as_str()
-        && semver::Version::parse(floor).is_ok_and(|floor| floor > pin)
+        && semver::Version::parse(floor).is_ok_and(|floor| ahead_of(&floor, &pin))
     {
         found.push((
             item_line(text, item),
-            format!("min_batten_version {floor} is above engine pin {tag}"),
+            format!("min_batten_version {floor}"),
+            PIN_UP,
         ));
     }
     let rows = doc
@@ -597,34 +355,23 @@ pub fn gate_disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
         let Some(version) = item.as_str() else {
             continue;
         };
-        if release_version(version).ok().as_ref() != Some(&pin) {
-            found.push((
-                item_line(text, item),
-                format!("provision batten {version} disagrees with engine pin {tag}"),
-            ));
+        let parsed = release_version(version).ok();
+        if parsed.as_ref() == Some(&pin) {
+            continue;
         }
+        let remedy = if parsed.is_some_and(|have| ahead_of(&have, &pin)) {
+            PIN_UP
+        } else {
+            "run `batten engine update`"
+        };
+        found.push((
+            item_line(text, item),
+            format!("provision batten {version}"),
+            remedy,
+        ));
     }
     found.sort();
     found
-}
-
-/// Whether `text` is a TOML document.
-fn parses(text: &str) -> bool {
-    text.parse::<toml_edit::DocumentMut>().is_ok()
-}
-
-/// The `<os>-<arch>` provision key (`provision::platform_key`'s spelling) a Rust
-/// target triple installs on, or `None` for a target a row cannot carry.
-fn platform_of(target: &str) -> Option<String> {
-    let arch = target.split('-').next()?;
-    let os = if target.contains("-linux-") {
-        "linux"
-    } else if target.ends_with("-apple-darwin") {
-        "macos"
-    } else {
-        return None;
-    };
-    Some(format!("{os}-{arch}"))
 }
 
 // The rows below are judged by the install suite, as before this block.
@@ -844,14 +591,7 @@ pub fn release_build(root: &Path) -> PathBuf {
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
-    let pins = Pins::of(text);
-    if let Some((key, row)) = pins.disagreement() {
-        return Err(UsageError::raise(format!(
-            "{source}: `engine` pins {key} and the `[[provision]] batten` row pins {row}; the row \
-             is the pin, so remove the `engine` key or make it agree"
-        )));
-    }
-    let Some(pin) = pins.declared() else {
+    let Some(pin) = declared(text) else {
         return Ok(());
     };
     match pin.kind() {
@@ -1032,17 +772,10 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
             "engine install: the release publishes no digest for {asset}, so it cannot be verified"
         ))
     })?;
-    verify_digest(archive, &want, asset, "its release published")
-}
-
-/// Refuse an archive whose SHA-256 is not `want`, naming `whose` digest it was:
-/// the release's `SHA256SUMS`, or the consumer's batten row (CLOUD-2595). The
-/// one comparison every download passes, whichever side vouched for the bytes.
-fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result<()> {
     let got = crate::receipt::hex_sha256(archive);
     if got != want {
         return Err(UsageError::raise(format!(
-            "engine install: {asset} hashes {got}, not the {want} {whose}; nothing was installed"
+            "engine install: {asset} hashes {got}, not the {want} its release published; nothing was installed"
         )));
     }
     Ok(())
@@ -1062,49 +795,18 @@ fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result
 /// Either download answering other than 200, a digest that disagrees, or an
 /// archive with no binary at its root — in every case nothing is installed.
 pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
-    fetch_release_pinned(repository, tag, None)
+    fetch_release_for(repository, tag, &running_target())
 }
 
-/// [`fetch_release`], verified against `pinned` — the `sha256` the config's own
-/// batten row declares for this platform — when there is one (CLOUD-2595 §2b).
-///
-/// **The row's digest is the Gradle Wrapper's `distributionSha256Sum`**: the
-/// consumer pinned these bytes, so they are checked against what the consumer
-/// wrote and the release's `SHA256SUMS` is not consulted. Only a platform the row
-/// lists no digest for falls back to the manifest, as every fetch did before the
-/// row was read.
+/// [`fetch_release`] for `target`'s asset rather than this engine's: how
+/// `engine install` fetches the same tag's gnu build to try it here.
 ///
 /// # Errors
 ///
-/// As [`fetch_release`], and an archive whose digest is not `pinned`.
-pub fn fetch_release_pinned(repository: &str, tag: &str, pinned: Option<&str>) -> Result<Vec<u8>> {
-    fetch_release_for(repository, tag, &running_target(), pinned)
-}
-
-/// [`fetch_release_pinned`] for `target`'s asset rather than this engine's:
-/// how `engine install` fetches the same tag's gnu build to try it here.
-///
-/// # Errors
-///
-/// As [`fetch_release_pinned`].
-pub fn fetch_release_for(
-    repository: &str,
-    tag: &str,
-    target: &str,
-    pinned: Option<&str>,
-) -> Result<Vec<u8>> {
+/// As [`fetch_release`].
+pub fn fetch_release_for(repository: &str, tag: &str, target: &str) -> Result<Vec<u8>> {
     let asset = release_asset(tag, target);
     let archive = crate::fetch::get(&release_url(repository, tag, &asset), &[])?;
-    if let Some(want) = pinned {
-        if archive.status != 200 {
-            return Err(UsageError::raise(format!(
-                "engine install: {tag} answered {} for {asset}; nothing was installed",
-                archive.status
-            )));
-        }
-        verify_digest(&archive.body, want, &asset, "the batten provision row pins")?;
-        return extract(&archive.body, &crate::dist::binary_file("batten", target));
-    }
     let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
     if archive.status != 200 || sums.status != 200 {
         return Err(UsageError::raise(format!(
@@ -1471,10 +1173,11 @@ pub fn local_source_pin(head: &str, worktree: &str) -> bool {
 
 /// `text` with its top-level pin set to `pin` (CLOUD-2063).
 ///
-/// The existing line is replaced in place. With none, the pin goes directly
-/// after the first top-level key, so it stays above every table header — where
-/// [`declared`] reads it — and no comment block is separated from its table.
-/// Every other byte is kept.
+/// The pin line goes directly after `version`, or before the first top-level
+/// key where there is no `version`: the head of the file, where [`declared`]
+/// reads it in a few lines and [`pin_out_of_order`] wants it. An existing line
+/// is moved there, so a rewrite also repairs a buried pin, and a pin already in
+/// place is rewritten where it stands. Every other byte is kept.
 #[must_use]
 pub fn rewrite(text: &str, pin: &Pin) -> String {
     let wanted = line(pin);
@@ -1483,15 +1186,32 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
         .iter()
         .position(|line| line.trim_start().starts_with('['))
         .unwrap_or(lines.len());
+    // THE PIN GOES AT THE HEAD, after only `version` ([`pin_out_of_order`]): an
+    // existing line is lifted out and set back in its place, so a pin already
+    // there is rewritten where it stands and a buried one is moved up.
+    let mut header = header;
     if let Some(at) = lines[..header].iter().position(|line| is_pin_line(line)) {
-        lines[at] = wanted;
-    } else {
-        let key = lines[..header].iter().position(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.is_empty() && !trimmed.starts_with('#')
-        });
-        lines.insert(key.map_or(0, |at| at + 1), wanted);
+        lines.remove(at);
+        header -= 1;
     }
+    let version = lines[..header].iter().position(|line| {
+        line.trim_start()
+            .strip_prefix("version")
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    });
+    let at = version.map_or_else(
+        || {
+            lines[..header]
+                .iter()
+                .position(|line| {
+                    let trimmed = line.trim_start();
+                    !trimmed.is_empty() && !trimmed.starts_with('#')
+                })
+                .unwrap_or(header)
+        },
+        |at| at + 1,
+    );
+    lines.insert(at, wanted);
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
         out.push('\n');
@@ -1911,25 +1631,19 @@ pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
 
 /// The pinned release's binary, fetched and verified once and cached after.
 ///
-/// `pinned` answers the batten row's `sha256` for this engine's asset, when the
-/// config declares one ([`fetch_release_pinned`]). It is asked only on a cache
-/// miss: every followed hook call reaches here, and a cached binary was verified
-/// before it was written, so it is never re-checked and its digest never read.
+/// Every followed hook call reaches here, and a cached binary was verified
+/// against its release's `SHA256SUMS` before it was written, so it is never
+/// re-checked and its digest never read.
 ///
 /// # Errors
 ///
-/// As [`fetch_release_pinned`], or a cache that will not write.
-pub fn pinned_release(
-    state_dir: &Path,
-    repository: &str,
-    tag: &str,
-    pinned: impl FnOnce() -> Option<String>,
-) -> Result<PathBuf> {
+/// As [`fetch_release`], or a cache that will not write.
+pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<PathBuf> {
     let path = cached_release(state_dir, tag);
     if path.is_file() {
         return Ok(path);
     }
-    let bytes = fetch_release_pinned(repository, tag, pinned().as_deref())?;
+    let bytes = fetch_release(repository, tag)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1977,6 +1691,70 @@ mod tests {
     }
 
     #[test]
+    fn a_buried_pin_is_moved_under_version_and_a_versionless_one_heads_the_keys() {
+        let release = Pin {
+            release: Some("v0.0.201".into()),
+            source: None,
+        };
+        let buried = "version = 1\nname = \"x\"\nengine = { release = \"v0.0.1\" }\n[t]\n";
+        let moved = rewrite(buried, &release);
+        assert_eq!(
+            moved,
+            "version = 1\nengine = { release = \"v0.0.201\" }\nname = \"x\"\n[t]\n"
+        );
+        assert_eq!(pin_out_of_order(buried), Some(3));
+        assert_eq!(pin_out_of_order(&moved), None);
+        let versionless = "# head\nname = \"x\"\n";
+        assert_eq!(
+            rewrite(versionless, &release),
+            "# head\nengine = { release = \"v0.0.201\" }\nname = \"x\"\n"
+        );
+    }
+
+    #[test]
+    fn a_pin_out_of_order_is_still_the_pin_and_is_named_by_its_line() {
+        let buried = "version = 1\n# a note\nmin = 2\nengine = { release = \"v0.0.9\" }\n";
+        assert_eq!(pin_out_of_order(buried), Some(4));
+        assert_eq!(
+            declared(buried).and_then(|pin| pin.release).as_deref(),
+            Some("v0.0.9")
+        );
+        for head in [
+            "engine = { release = \"v0.0.9\" }\nversion = 1\n",
+            "version = 1\nengine = { release = \"v0.0.9\" }\nmin = 2\n",
+            "version = 1\n\n# comment = here\nengine = { release = \"v0.0.9\" }\n",
+            // No pin, or a pin only inside a table, is never out of order.
+            "version = 1\nmin = 2\n",
+            "version = 1\nmin = 2\n[t]\nengine = 1\n",
+        ] {
+            assert_eq!(pin_out_of_order(head), None, "{head}");
+        }
+    }
+
+    #[test]
+    fn the_pin_read_stops_at_the_pin_and_never_reads_the_rest() {
+        // Everything past the pin is not TOML at all: a read that went on would
+        // still answer, so this asserts the answer, and the order check, never
+        // depend on the tail.
+        let text = "version = 1\nengine = { release = \"v0.0.9\" }\n\u{0}not = [toml\n";
+        assert_eq!(
+            declared(text).and_then(|pin| pin.release).as_deref(),
+            Some("v0.0.9")
+        );
+        assert_eq!(pin_out_of_order(text), None);
+    }
+
+    #[test]
+    fn adoption_writes_the_key_under_version_and_never_over_a_pin() {
+        let written = adopted("version = 1\nname = \"x\"\n", "v0.0.216").expect("a pin");
+        assert_eq!(
+            written,
+            "version = 1\nengine = { release = \"v0.0.216\" }\nname = \"x\"\n"
+        );
+        assert_eq!(adopted(&written, "v0.0.217"), None);
+    }
+
+    #[test]
     fn only_command_lines_invoke_a_verb() {
         let workflow = "      # hands them to `batten checks green`, a pure function\n\
                         \x20       run: |\n\
@@ -1987,7 +1765,7 @@ mod tests {
         assert_eq!(verbs, ["checks green", "pr ensure"]);
     }
 
-    /// `#MUTANT wrapped-verb-unseen` reads only each line's first verb.
+    /// A mutant reading only each line's first verb reddens here.
     #[test]
     fn a_wrapped_released_call_invokes_its_verb() {
         let workflow = "      - run: batten ci step --arg-env X -- batten release path --strict\n\
@@ -2088,83 +1866,6 @@ mod tests {
         assert!(found.is_empty(), "{found:?}");
     }
 
-    /// The batten row alone is the pin; the `engine` key's release form is its
-    /// alias; a source key wins; a key that disagrees with the row is reported.
-    #[test]
-    fn the_row_is_the_pin_and_the_key_is_its_alias() {
-        let row = "version = 1\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
-        assert_eq!(
-            declared(row).and_then(|pin| pin.release).as_deref(),
-            Some("v0.0.216")
-        );
-        assert_eq!(row_disagreement(row), None);
-
-        let agreeing = format!("engine = {{ release = \"v0.0.216\" }}\n{row}");
-        assert_eq!(row_disagreement(&agreeing), None);
-        let disagreeing = format!("engine = {{ release = \"v0.0.217\" }}\n{row}");
-        assert_eq!(
-            row_disagreement(&disagreeing),
-            Some(("v0.0.217".to_owned(), "v0.0.216".to_owned()))
-        );
-        let source = format!("engine = {{ source = \"{}\" }}\n{row}", "a".repeat(64));
-        assert!(declared(&source).is_some_and(|pin| pin.source.is_some()));
-        // A release key beside a row yields the ROW's release: the key is the alias.
-        assert_eq!(
-            declared(&disagreeing)
-                .and_then(|pin| pin.release)
-                .as_deref(),
-            Some("v0.0.216")
-        );
-        // A key naming neither is the key's to refuse, never masked by the row.
-        let neither = format!("engine = {{}}\n{row}");
-        assert!(declared(&neither).is_some_and(|pin| pin.kind() == PinKind::Malformed));
-
-        // A file a later release would refuse is still read for its pin.
-        let unvalidated = format!("{row}\n[[rule]]\nreason = \"{}\"\n", "x".repeat(400));
-        assert_eq!(row_release(&unvalidated).as_deref(), Some("v0.0.216"));
-        assert_eq!(row_release("not = [toml"), None);
-    }
-
-    /// A platform's own digest is preferred; a row-level one serves every platform.
-    #[test]
-    fn the_rows_digest_is_read_per_platform() {
-        let text = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\n\
-                    [provision.platforms.linux-x86_64]\nurl = \"u\"\nsha256 = \"ABC\"\n";
-        assert_eq!(row_digest(text, "linux-x86_64").as_deref(), Some("abc"));
-        assert_eq!(row_digest(text, "macos-aarch64"), None);
-        let single = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\nsha256 = \"def\"\n";
-        assert_eq!(row_digest(single, "macos-aarch64").as_deref(), Some("def"));
-    }
-
-    /// The row is read from its own block: a later table, a broken neighbour,
-    /// or another `[[provision]]` row before it never changes the answer.
-    #[test]
-    fn a_row_is_read_from_its_own_block() {
-        let text = "version = 1\n\n[[provision]]\nname = \"other\"\nversion = \"9.9.9\"\n\n\
-                    [[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\n\
-                    [provision.platforms.linux-x86_64]\nurl = \"u\"\nsha256 = \"abc\"\n\n\
-                    [[rule]]\nid = \"x\"\nversion = \"not the row's\"\n\n\
-                    [broken\n";
-        assert_eq!(row_release(text).as_deref(), Some("v0.0.216"));
-        assert_eq!(row_digest(text, "linux-x86_64").as_deref(), Some("abc"));
-        // The block ends at the next foreign table: `[[rule]]`'s keys are not the row's.
-        let swallowed = "[[provision]]\nname = \"batten\"\n\n[[rule]]\nversion = \"1.2.3\"\n";
-        assert_eq!(row_release(swallowed), None);
-        // An array subtable of the row, and a `[`-led line of a multi-line
-        // array, are the row's own: neither ends the block.
-        let nested = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\
-                      matrix = [\n  [1, 2],\n]\n\n[[provision.env]]\nname = \"K\"\nvalue = \"v\"\n\n\
-                      [provision.platforms.linux-x86_64]\nurl = \"u\"\nsha256 = \"abc\"\n";
-        assert_eq!(row_release(nested).as_deref(), Some("v0.0.216"));
-        assert_eq!(row_digest(nested, "linux-x86_64").as_deref(), Some("abc"));
-        assert_eq!(
-            table_header("[[ provision ]]  # a comment"),
-            Some(("provision", true))
-        );
-        assert_eq!(table_header("  [1, 2],"), None);
-        assert_eq!(table_header("[]"), None);
-    }
-
     /// The gate refuses every batten declaration off the pin: a floor ABOVE it
     /// (never one at or below), and every batten row naming another release,
     /// each at its own line; a row at the pin and another tool's row say nothing.
@@ -2175,15 +1876,13 @@ mod tests {
                     [[provision]]\nname = \"other\"\nversion = \"9.0.0\"\n\n\
                     [[provision]]\nname = \"batten\"\nversion = \"0.0.210\"\n";
         assert_eq!(
-            gate_disagreements(text, "v0.0.216"),
+            disagreements(text, "v0.0.216"),
             [
-                (
-                    2,
-                    "min_batten_version 0.0.217 is above engine pin v0.0.216".to_owned()
-                ),
+                (2, "min_batten_version 0.0.217".to_owned(), PIN_UP),
                 (
                     14,
-                    "provision batten 0.0.210 disagrees with engine pin v0.0.216".to_owned()
+                    "provision batten 0.0.210".to_owned(),
+                    "run `batten engine update`"
                 ),
             ]
         );
@@ -2191,50 +1890,34 @@ mod tests {
             let at = format!(
                 "min_batten_version = \"{floor}\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n"
             );
-            assert!(gate_disagreements(&at, "v0.0.216").is_empty(), "{floor}");
+            assert!(disagreements(&at, "v0.0.216").is_empty(), "{floor}");
         }
     }
 
-    /// A pin the line scan cannot see is still a pin: no row is appended beside
-    /// an inline-array or quoted-header batten entry, or to a file that does not
-    /// parse, and what is written always loads as pinned.
     #[test]
-    fn adopted_never_writes_beside_a_row_the_scan_cannot_see() {
-        let sums = format!(
-            "{}  batten-v0.0.216-x86_64-unknown-linux-musl.tar.gz\n",
-            "2".repeat(64)
+    fn a_declaration_ahead_of_the_pin_names_its_own_remedy() {
+        let found = disagreements(
+            "min_batten_version = \"0.0.220\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.218\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.210\"\n",
+            "v0.0.216",
         );
-        for pinned in [
-            "version = 1\nprovision = [{ name = \"batten\", version = \"0.0.216\" }]\n",
-            // Another tool's inline array: the append would not parse.
-            "version = 1\nprovision = [{ name = \"other\", version = \"1.0.0\" }]\n",
-            "version = 1\n\n[[\"provision\"]]\nname = \"batten\"\nversion = \"0.0.216\"\n",
-            "version = [\n",
-        ] {
-            assert_eq!(adopted(pinned, "o/r", "v0.0.216", &sums), None, "{pinned}");
-        }
-        let written = adopted("version = 1\n", "o/r", "v0.0.216", &sums).expect("a row");
-        assert!(declares_batten(&written), "{written}");
+        let remedies: Vec<&str> = found.iter().map(|(_, _, remedy)| *remedy).collect();
+        assert_eq!(remedies, [PIN_UP, PIN_UP, "run `batten engine update`"]);
     }
 
     /// A pinned tag that is not a release never reaches a path (CLOUD-2644):
     /// from the row or from the key, it reads as malformed.
     #[test]
     fn a_tag_that_is_not_a_release_is_malformed() {
-        let row = "[[provision]]\nname = \"batten\"\nversion = \"../../x\"\n";
         let key = "engine = { release = \"../../x\" }\n";
-        for text in [row, key] {
-            assert_eq!(
-                declared(text).map(Pin::kind),
-                Some(PinKind::Malformed),
-                "{text}"
-            );
-        }
-        let good = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
+        assert_eq!(declared(key).map(Pin::kind), Some(PinKind::Malformed));
+        let good = "engine = { release = \"v0.0.216\" }\n";
         assert_eq!(
             declared(good).map(Pin::kind),
             Some(PinKind::Release("v0.0.216".to_owned()))
         );
+        // A batten provision row is a provision, never a pin.
+        let row = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
+        assert_eq!(declared(row), None);
     }
 
     /// A musl engine whose tag's gnu build runs here places gnu.
@@ -2288,107 +1971,6 @@ mod tests {
             assert_eq!(target, running);
         }
         assert_eq!(gnu_twin("x86_64-unknown-linux-gnu"), None);
-    }
-
-    /// A follow verifies against its OWN triple's digest, and takes the
-    /// `<os>-<arch>` one only when that artifact is this engine's asset.
-    #[test]
-    fn the_follow_reads_its_own_triples_digest() {
-        let target = running_target();
-        let own = release_asset("v0.0.216", &target);
-        let head = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
-        let key = crate::provision::platform_key();
-        let triple = format!(
-            "{head}\n[provision.platforms.{target}]\nurl = \"https://h/{own}\"\nsha256 = \"aa\"\n\n\
-             [provision.platforms.{key}]\nurl = \"https://h/{own}\"\nsha256 = \"bb\"\n"
-        );
-        assert_eq!(followed_digest(&triple).as_deref(), Some("aa"));
-        let generic_own = format!(
-            "{head}\n[provision.platforms.{key}]\nurl = \"https://h/{own}\"\nsha256 = \"bb\"\n"
-        );
-        assert_eq!(followed_digest(&generic_own).as_deref(), Some("bb"));
-        // The generic artifact is a SIBLING libc's: never this engine's digest.
-        let sibling = format!(
-            "{head}\n[provision.platforms.{key}]\nurl = \"https://h/batten-v0.0.216-other.tar.gz\"\nsha256 = \"cc\"\n"
-        );
-        assert_eq!(followed_digest(&sibling), None);
-        // A row pinning ONE artifact answers only when that artifact is this
-        // engine's asset; another build's digest is never checked against it.
-        let single_own = format!("{head}url = \"https://h/{own}\"\nsha256 = \"dd\"\n");
-        assert_eq!(followed_digest(&single_own).as_deref(), Some("dd"));
-        let single_other =
-            format!("{head}url = \"https://h/batten-v0.0.216-other.tar.gz\"\nsha256 = \"ee\"\n");
-        assert_eq!(followed_digest(&single_other), None);
-    }
-
-    /// The written row pins every archive under its own triple, plus one per
-    /// `<os>-<arch>` key — the static musl build where a platform has one, for
-    /// `provision apply` — and no `.zip` target.
-    #[test]
-    fn the_adopted_row_pins_one_archive_per_platform() {
-        let gnu = "batten-v0.0.216-x86_64-unknown-linux-gnu.tar.gz";
-        let musl = "batten-v0.0.216-x86_64-unknown-linux-musl.tar.gz";
-        let mac = "batten-v0.0.216-aarch64-apple-darwin.tar.gz";
-        let win = "batten-v0.0.216-x86_64-pc-windows-msvc.zip";
-        for sums in [
-            format!(
-                "{}  {gnu}\n{}  {musl}\n{}  {mac}\n{}  {win}\n",
-                "1".repeat(64),
-                "2".repeat(64),
-                "3".repeat(64),
-                "4".repeat(64)
-            ),
-            format!(
-                "{}  {musl}\n{}  {gnu}\n{}  {mac}\n{}  {win}\n",
-                "2".repeat(64),
-                "1".repeat(64),
-                "3".repeat(64),
-                "4".repeat(64)
-            ),
-        ] {
-            let written = adopted("version = 1\n", "o/r", "v0.0.216", &sums).expect("a row");
-            assert_eq!(row_release(&written).as_deref(), Some("v0.0.216"));
-            assert_eq!(
-                row_digest(&written, "linux-x86_64"),
-                Some("2".repeat(64)),
-                "{written}"
-            );
-            assert_eq!(
-                row_digest(&written, "macos-aarch64"),
-                Some("3".repeat(64)),
-                "{written}"
-            );
-            // Each libc keeps its own artifact, under its own triple.
-            assert_eq!(
-                row_digest(&written, "x86_64-unknown-linux-gnu"),
-                Some("1".repeat(64)),
-                "{written}"
-            );
-            assert_eq!(
-                row_digest(&written, "x86_64-unknown-linux-musl"),
-                Some("2".repeat(64)),
-                "{written}"
-            );
-            assert!(written.contains(musl) && written.contains(gnu), "{written}");
-            assert!(
-                !written.contains(".zip") && !written.contains("windows"),
-                "{written}"
-            );
-        }
-        // Two builds of one flavour on one key: the first published is kept.
-        let x32 = "batten-v0.0.216-x86_64-unknown-linux-gnux32.tar.gz";
-        let sums = format!("{}  {gnu}\n{}  {x32}\n", "1".repeat(64), "5".repeat(64));
-        let written = adopted("version = 1\n", "o/r", "v0.0.216", &sums).expect("a row");
-        assert_eq!(
-            row_digest(&written, "linux-x86_64"),
-            Some("1".repeat(64)),
-            "{written}"
-        );
-        assert_eq!(
-            adopted("version = 1\n", "o/r", "v0.0.216", "nothing here\n"),
-            None,
-            "a release with no archive a row can carry writes nothing"
-        );
     }
 
     /// Only the download segment and the asset name move; a mirror path that
