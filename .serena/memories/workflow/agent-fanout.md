@@ -519,8 +519,8 @@ written down.
 
 ## What each implementer does
 
-The existing contract: claim → build → draft PR → `mise run verify` → `mise run
-linear-check` → `mise run land` (backgrounded) → In Review + attach the PR (the attachment is what makes `graph-check`'s
+The existing contract: claim → build → draft PR → `mise run land` (backgrounded;
+each lap runs `verify` and `linear-check`, so neither is a prior step) → In Review + attach the PR (the attachment is what makes `graph-check`'s
 In-Review predicate true). **`land` is the only readier** — a hand `gh pr ready`
 spent before its push buys only draft-era skips (CLOUD-247), and the ready must
 be the event that fires CI on the SHA that lands. Blocked mid-build? Same question protocol: write it

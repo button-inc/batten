@@ -14927,6 +14927,17 @@ pub struct PathSet {
 }
 
 impl PathSet {
+    /// The include patterns as written, so a caller can ENUMERATE what the set
+    /// covers rather than only ask about one path (step 14: the protected-path
+    /// snapshot walks them).
+    #[must_use]
+    pub fn include_patterns(&self) -> Vec<&str> {
+        self.includes
+            .iter()
+            .map(|selector| selector.glob.glob())
+            .collect()
+    }
+
     /// The set that contains nothing.
     ///
     /// Spelled out rather than derived as `Default`, because the safe empty value
