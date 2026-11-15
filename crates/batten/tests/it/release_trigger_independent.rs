@@ -29,7 +29,9 @@ const BUILDS: &str = "      - run: mise run ci\n";
 /// it, the class it raises, and one workflow built from a trigger block and a
 /// step.
 fn fixture(name: &str, triggers: &str, step: &str) -> PathBuf {
-    let root = common::scratch(&format!("release-trigger-{name}"));
+    let root = common::Fixture::new(&format!("release-trigger-{name}"))
+        .git()
+        .build();
     fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
     fs::create_dir_all(root.join(".github/workflows")).expect("scratch workflows dir");
     let module = common::at_root("policy/release-trigger-independent.rego")
@@ -69,7 +71,6 @@ fn fixture(name: &str, triggers: &str, step: &str) -> PathBuf {
         ),
     )
     .expect("write the fixture authority");
-    common::git_in(&root, &["init", "-q", "-b", "main"]);
     root
 }
 
