@@ -518,14 +518,19 @@ A program that runs other programs is followed into them by the engine, once,
 for every module: a shell's `-c` script, `eval`'s words, `exec`, the binary
 `cargo run` starts (named by `-p`/`--bin`, else the workspace's one binary),
 the argv after `--` in `batten step run`, `find -exec`, `watch` and `env -S`.
-Each inner entry carries `via` (`script`, `cargo run`, `step run`, `exec`;
-`null` where the call wrote it) and `unread` (`true` where its text would not parse and was read by
-whitespace, so an unparseable script is not a bypass). `batten`'s verb is its
+Each inner entry carries `via` (`script`, `cargo run`, `step run`, `ci step`,
+`exec`; `null` where the call wrote it), `unread` (`true` where its text would not parse and was read by
+whitespace, so an unparseable script is not a bypass) and `receipted` (`true`
+for everything a `batten step run` reaches, the binary a `cargo run` inside it
+starts included, since the run writes that step's receipt). `batten`'s verb is its
 `subcommand` and the verb after it is `nested` (`batten land lap` is
 `land`/`lap`), and a `mise` entry's `tasks` is every task it starts by any run
 spelling. `input.call["task-programs"]` follows those tasks into their bodies
 from the task receipt (`null` where it could not be read), so a module classifies
-a `mise run` by what it reaches rather than by a list of task names. Never
+a `mise run` by what it reaches rather than by a list of task names.
+`input.call["step-programs"]` is every program a task body runs under `step
+run` (`null` where the receipt could not be read): the land stages, derived from
+the manifest, so a stage gate names no step. Never
 re-derive any of these in Rego: `policy/land-stage-direct.rego` reads them and
 parses nothing.
 
