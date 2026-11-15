@@ -16842,7 +16842,10 @@ mod tests {
         let plain = file("plain", "git push\n");
         let big = file(
             "big",
-            &format!("#!/bin/sh\n{}", "#".repeat(SCRIPT_FILE_MAX as usize)),
+            &format!(
+                "#!/bin/sh\n{}",
+                "#".repeat(usize::try_from(SCRIPT_FILE_MAX).unwrap())
+            ),
         );
         assert!(shebang_script(&shell).is_some_and(|text| text.contains("git push")));
         assert!(shebang_script(&through_env).is_some());
