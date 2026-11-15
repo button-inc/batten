@@ -12504,10 +12504,23 @@ static LAP_ENGINE: std::sync::OnceLock<Option<(PathBuf, String)>> = std::sync::O
 /// tree's engine. `None` for an installed or hand-started binary.
 fn lap_engine_at_start(root: &Path) -> Option<(PathBuf, String)> {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
-    if !manifest.starts_with(root) {
+    if !built_under(&manifest, root) {
         return None;
     }
     Some((std::env::current_exe().ok()?, engine::digest(root).ok()?))
+}
+
+/// Was `manifest` built from inside `root`? Both sides canonicalised first.
+///
+/// **A bare `starts_with` never matched** (#1276): `land` hands its root as
+/// `.`, and an absolute `CARGO_MANIFEST_DIR` never starts with `.`, so the lap's
+/// engine never reached its gate and every gate step paid `cargo run` again.
+/// A side that will not canonicalise is not under the other.
+fn built_under(manifest: &Path, root: &Path) -> bool {
+    match (std::fs::canonicalize(manifest), std::fs::canonicalize(root)) {
+        (Ok(manifest), Ok(root)) => manifest.starts_with(root),
+        _ => false,
+    }
 }
 
 /// The `BATTEN_BIN` a lap hands its gate: the lap's own engine, while the tree's
@@ -31965,6 +31978,20 @@ mod tests {
         assert_eq!(super::engine_for_gate(exe, "d1", "d2"), None);
         let spaced = std::path::Path::new("/my repo/target/debug/batten");
         assert_eq!(super::engine_for_gate(spaced, "d1", "d1"), None);
+    }
+
+    /// Fails by: `land`'s `.` root compared without resolving it, so a binary
+    /// cargo just built from this tree is never recognised as its engine.
+    #[test]
+    fn a_relative_root_is_resolved_before_the_manifest_is_compared() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // A unit test runs from its crate's directory, which is the manifest's.
+        assert!(super::built_under(manifest, std::path::Path::new(".")));
+        assert!(!super::built_under(manifest, &manifest.join("src")));
+        assert!(!super::built_under(
+            manifest,
+            std::path::Path::new("/nonexistent-batten-root")
+        ));
     }
     use super::*;
 
