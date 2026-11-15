@@ -3647,10 +3647,10 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
             interval: matches.get_one::<String>("interval").cloned(),
-            evict_after: matches.get_one::<String>("evict-after").cloned(),
+            evict_after: matches.get_one::<String>("evict_after").cloned(),
             buffer: matches.get_one::<String>("buffer").cloned(),
             singleton: matches.get_one::<String>("singleton").cloned(),
-            each_receipt: matches.get_one::<String>("each-receipt").cloned(),
+            each_receipt: matches.get_one::<String>("each_receipt").cloned(),
             arg: matches.get_one::<String>("arg").cloned(),
         }),
         // The trailing argv is `num_args(1..)` in the surface, so clap has

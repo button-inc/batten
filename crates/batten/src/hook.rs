@@ -291,6 +291,10 @@ pub trait HarnessExt: Sized {
     fn mcp_logs(self) -> Option<&'static str>;
 }
 
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT gemini-write-file-unnamed|s@^                "write_file",$@@|gemini_write_file_against_a_protected_path_is_denied
+//MUTANT gemini-replace-unnamed|s@^                "replace",$@@|gemini_replace_against_a_protected_path_is_denied
+//MUTANT eviction-limit-invented|s@^                cache_eviction: None,$@                cache_eviction: Some(\&crate::prompt_cache::CLAUDE_CODE),@|only_claude_code_declares_an_eviction_limit
 impl HarnessExt for Harness {
     const ALL: &'static [Harness] = &[
         Harness::ClaudeCode,
@@ -462,9 +466,6 @@ impl HarnessExt for Harness {
             // google-gemini/gemini-cli, read 2026-11-14. A spike capturing a real
             // payload confirms them; the older names stay, since removing one can
             // only stop judging something.
-            //MUTANT-SUITE crates/batten/src/hook.rs
-            //MUTANT gemini-write-file-unnamed|s@^                "write_file",$@@|gemini_write_file_against_a_protected_path_is_denied
-            //MUTANT gemini-replace-unnamed|s@^                "replace",$@@|gemini_replace_against_a_protected_path_is_denied
             Harness::GeminiCli => &[
                 "WriteFile",
                 "Edit",
@@ -685,8 +686,6 @@ impl HarnessExt for Harness {
                 },
                 // THE PUBLISHED PROMPT-CACHE FIGURES (CLOUD-2763), read
                 // 2026-11-14; `prompt_cache::CLAUDE_CODE` carries the sources.
-                //MUTANT-SUITE crates/batten/src/hook.rs
-                //MUTANT eviction-limit-invented|s@^                cache_eviction: None,$@                cache_eviction: Some(\&crate::prompt_cache::CLAUDE_CODE),@|only_claude_code_declares_an_eviction_limit
                 cache_eviction: Some(&crate::prompt_cache::CLAUDE_CODE),
             },
             Harness::Cursor => Capabilities {
@@ -13835,10 +13834,11 @@ mod tests {
             .map(|bucket| (bucket.lifetime_secs, bucket.write_milli))
             .collect();
         assert_eq!(buckets, vec![(300, 1250), (3600, 2000)]);
-        assert_eq!(eviction.read_milli("claude-fable-5-2"), Some(25));
-        assert_eq!(eviction.read_milli("claude-opus-5-5"), Some(50));
-        assert_eq!(eviction.read_milli("claude-sonnet-5-5"), Some(50));
-        assert_eq!(eviction.read_milli("claude-haiku-5-5"), Some(100));
+        let model = |family: &str| format!("{}{family}", eviction.vendor);
+        assert_eq!(eviction.read_milli(&model("fable-5-2")), Some(25));
+        assert_eq!(eviction.read_milli(&model("opus-5-5")), Some(50));
+        assert_eq!(eviction.read_milli(&model("sonnet-5-5")), Some(50));
+        assert_eq!(eviction.read_milli(&model("haiku-5-5")), Some(100));
         assert_eq!(eviction.read_milli("gpt-5"), None, "not a Claude model");
     }
 

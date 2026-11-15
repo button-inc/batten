@@ -53,8 +53,12 @@ pub struct Bucket {
 pub struct Eviction {
     /// Every bucket the host publishes.
     pub buckets: &'static [Bucket],
-    /// Read prices in thousandths, keyed by model-id prefix, most specific
-    /// first: the first prefix a model id starts with is its price.
+    /// The prefix every model id this host prices starts with. A model id
+    /// without it has no price.
+    pub vendor: &'static str,
+    /// Read prices in thousandths, keyed by the model family that follows
+    /// [`Eviction::vendor`], most specific first: the first family the rest of
+    /// a model id starts with is its price, and `""` prices every other model.
     pub reads: &'static [(&'static str, u64)],
 }
 
@@ -72,9 +76,10 @@ impl Eviction {
     /// price for: no price, no wake.
     #[must_use]
     pub fn read_milli(&self, model: &str) -> Option<u64> {
+        let family = model.strip_prefix(self.vendor)?;
         self.reads
             .iter()
-            .find(|(prefix, _)| model.starts_with(prefix))
+            .find(|(prefix, _)| family.starts_with(prefix))
             .map(|(_, price)| *price)
     }
 }
@@ -98,11 +103,12 @@ pub const CLAUDE_CODE: Eviction = Eviction {
             write_milli: 2000,
         },
     ],
+    vendor: "claude-",
     reads: &[
-        ("claude-fable-5-2", 25),
-        ("claude-opus-5-5", 50),
-        ("claude-sonnet-5-5", 50),
-        ("claude-", 100),
+        ("fable-5-2", 25),
+        ("opus-5-5", 50),
+        ("sonnet-5-5", 50),
+        ("", 100),
     ],
 };
 
@@ -288,8 +294,9 @@ mod tests {
         let store = dir.join("receipts");
         let transcript = dir.join("session.jsonl");
         let claude = crate::hook::Harness::ClaudeCode;
-        let one_hour = write("ephemeral_1h_input_tokens", "claude-fable-5-2");
-        let five_minutes = write("ephemeral_5m_input_tokens", "claude-fable-5-2");
+        let model = format!("{}fable-5-2", CLAUDE_CODE.vendor);
+        let one_hour = write("ephemeral_1h_input_tokens", &model);
+        let five_minutes = write("ephemeral_5m_input_tokens", &model);
         std::fs::write(&transcript, format!("{five_minutes}\n{one_hour}\n")).expect("t");
         crate::record_cache_limit(&store, claude, &stop(&transcript, false, "Stop"));
         assert_eq!(InForce::read(&store).map(|it| it.lifetime_secs), Some(3600));

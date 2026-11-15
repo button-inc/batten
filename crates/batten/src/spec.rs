@@ -1121,6 +1121,9 @@ mod tests {
             // name, so a second server meant a second copy of the script. Here it
             // is an argument.
             "mcp spawn".to_owned(),
+            // CLOUD-2759: a declared method polled until its answer changes, on
+            // `mcp call`'s client. Read-only, and an agent's own verb.
+            "mcp wait".to_owned(),
             // The module-graph noun and its verb (CLOUD-2789): the gate that
             // holds the crate's largest cycle from growing.
             "modules".to_owned(),

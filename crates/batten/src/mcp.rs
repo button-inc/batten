@@ -2223,6 +2223,9 @@ pub struct Pacing {
     pub pauses: Option<u128>,
 }
 
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT no-limit-gets-a-default|s@^        let Some(evict) = evict_after else {$@        let Some(evict) = evict_after.or(Some(std::time::Duration::from_secs(3000))) else {@|the_limit_is_the_eviction_limit_less_the_buffer
+//MUTANT evict-limit-miscounted|s@^        let pauses = evict.saturating_sub(buffer).as_millis() / step;$@        let pauses = evict.saturating_sub(buffer).as_millis() / step + 1;@|the_limit_is_the_eviction_limit_less_the_buffer
 impl Pacing {
     /// Pacing for `interval`, bounded by `evict_after` less `buffer` where an
     /// eviction limit is given (CLOUD-2759).
@@ -2233,9 +2236,6 @@ impl Pacing {
     /// no `evict_after` the wait ends only on a change, because a default would be
     /// one host's figure under one billing state, and this crate carries none.
     /// `None` for a zero interval, which is no pacing at all.
-    //MUTANT-SUITE crates/batten/src/mcp.rs
-    //MUTANT no-limit-gets-a-default|s@^        let Some(evict) = evict_after else {$@        let Some(evict) = evict_after.or(Some(std::time::Duration::from_secs(3000))) else {@|the_limit_is_the_eviction_limit_less_the_buffer
-    //MUTANT evict-limit-miscounted|s@^        let pauses = evict.saturating_sub(buffer).as_millis() / step;$@        let pauses = evict.saturating_sub(buffer).as_millis() / step + 1;@|the_limit_is_the_eviction_limit_less_the_buffer
     #[must_use]
     pub fn new(
         interval: std::time::Duration,
