@@ -23049,6 +23049,24 @@ deny contains "refused by themodule" if {
         pipeline_rules(&ceiling_policy(vec![row]), &envelope(command))
     }
 
+    /// The cut is offered only behind a verdict-bearing PIPED stage, and walks a
+    /// run of several filters joined by pipes (CLOUD-1939).
+    ///
+    /// Fails by: any line read as bearing a verdict, the piped-terminator test
+    /// disjoined from the verdict test, or a middle filter stage required to end
+    /// the command rather than pipe onward.
+    #[test]
+    fn the_filter_cut_needs_a_piped_verdict_and_walks_every_filter() {
+        let policy = ceiling_policy(vec![verdict_row(&["grep", "tail"])]);
+        let cut = |command: &str| filter_free_command(&policy, &envelope(command));
+        assert_eq!(cut("echo hi | tail"), None);
+        assert_eq!(cut("mise run ci; tail x"), None);
+        assert_eq!(
+            cut("mise run ci | grep a | tail").as_deref(),
+            Some("mise run ci")
+        );
+    }
+
     /// A verdict is discarded by a detach, by a filter downstream in its own
     /// pipeline, or by a trailing element — and by nothing else.
     ///
