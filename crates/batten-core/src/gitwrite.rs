@@ -2091,6 +2091,9 @@ pub fn commit_tree(
         message: message.into(),
         extra_headers: Vec::new(),
     };
+    // A durable step: a kill here leaves every blob and the tree, and no
+    // commit naming them, which the next snapshot writes again.
+    crate::testing::step()?;
     let commit = repo
         .write_object(&commit)
         .map_err(|err| anyhow::anyhow!("gitwrite: the commit will not write: {err}"))?
@@ -2111,6 +2114,9 @@ pub fn commit_tree(
 /// the odb refuses the write.
 pub fn write_blob(dir: &Path, bytes: &[u8]) -> Result<String> {
     let repo = open_bare(dir)?;
+    // A DURABLE STEP, so a kill case can stop a snapshot between any two of
+    // its object writes; the write itself is gix's temp-and-rename.
+    crate::testing::step()?;
     Ok(repo
         .write_blob(bytes)
         .map_err(|err| anyhow::anyhow!("gitwrite: a blob will not write: {err}"))?
@@ -2357,6 +2363,9 @@ pub fn prune_unreachable(dir: &Path, keep: &[String]) -> Result<usize> {
             if reached.contains(&id) {
                 continue;
             }
+            // A durable step per deletion: a kill between two leaves some
+            // unreachable objects behind, which the next prune removes.
+            crate::testing::step()?;
             if remove_object(&object.path()) {
                 removed += 1;
             }
