@@ -1114,6 +1114,11 @@ pub enum WeakeningKind {
     /// The REMOVED direction only: an added hold is one more refusal. Appended,
     /// for the `Ord` reason its neighbours give.
     StopHoldRemoved,
+    /// A `[plan]` obligation the base ref declared is gone: a section, the
+    /// verdict line, the `requires` receipt, or the whole table, so a plan is
+    /// judged against less (CLOUD-2766). Added obligations are no weakening.
+    /// Appended, for the `Ord` reason its neighbours give.
+    PlanObligationRemoved,
 }
 
 impl WeakeningKind {
@@ -1203,6 +1208,7 @@ impl WeakeningKind {
         WeakeningKind::TaskRelaunchRemoved,
         WeakeningKind::TaskLifetimeFloorRaised,
         WeakeningKind::StopHoldRemoved,
+        WeakeningKind::PlanObligationRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1273,6 +1279,7 @@ impl WeakeningKind {
             WeakeningKind::TaskRelaunchRemoved => "task-relaunch-removed",
             WeakeningKind::TaskLifetimeFloorRaised => "task-lifetime-floor-raised",
             WeakeningKind::StopHoldRemoved => "stop-hold-removed",
+            WeakeningKind::PlanObligationRemoved => "plan-obligation-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1422,6 +1429,8 @@ impl WeakeningKind {
          lived longer before it forces a relaunch.";
     const STOP_HOLD_REMOVED: &'static str = "A `[[stop.hold]]` row the base ref declared is gone or guards something else, so a \
          turn may end while a required task is not running.";
+    const PLAN_OBLIGATION_REMOVED: &'static str = "A `[plan]` section, verdict line or `requires` receipt the base ref declared is gone, \
+         so `plan lint` passes a plan judged against less.";
     const ADVISORY_CEILING_RAISED: &'static str =
         "The `[advisory]` channel ceiling rose, or stopped being declared.";
     const HOOK_OUTPUT_CEILING_RAISED: &'static str =
@@ -1525,6 +1534,7 @@ impl WeakeningKind {
             WeakeningKind::TaskRelaunchRemoved => Self::TASK_RELAUNCH_REMOVED,
             WeakeningKind::TaskLifetimeFloorRaised => Self::TASK_LIFETIME_FLOOR_RAISED,
             WeakeningKind::StopHoldRemoved => Self::STOP_HOLD_REMOVED,
+            WeakeningKind::PlanObligationRemoved => Self::PLAN_OBLIGATION_REMOVED,
             WeakeningKind::AdvisoryCeilingRaised => Self::ADVISORY_CEILING_RAISED,
             WeakeningKind::HookOutputCeilingRaised => Self::HOOK_OUTPUT_CEILING_RAISED,
             WeakeningKind::HookRepeatsRaised => Self::HOOK_REPEATS_RAISED,
@@ -1998,6 +2008,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "stop",
         coverage: Coverage::Compared(&[WeakeningKind::StopHoldRemoved]),
+    },
+    FieldCoverage {
+        field: "plan",
+        coverage: Coverage::Compared(&[WeakeningKind::PlanObligationRemoved]),
     },
     FieldCoverage {
         field: "forge",
@@ -4041,7 +4055,33 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     }));
     // The other end-of-turn bar (CLOUD-2761), compared beside the watchdog's.
     found.extend(stop_hold_weakenings(base, working));
+    found.extend(plan_weakenings(base, working));
     found
+}
+
+/// A `[plan]` obligation removed (CLOUD-2766): each section, the verdict line
+/// and the `requires` receipt is one entry, so a rename reads as the old entry
+/// gone. Removing the table removes every entry.
+//MUTANT-SUITE crates/batten/src/trust.rs
+//MUTANT plan-removal-unjudged|s@^        \&obligations(working),$@        \&obligations(base),@|a_plan_obligation_removed_is_a_weakening
+fn plan_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    fn obligations(config: &Config) -> Vec<String> {
+        config.plan.as_ref().map_or_else(Vec::new, |table| {
+            table
+                .sections
+                .iter()
+                .map(|section| format!("section {section}"))
+                .chain(std::iter::once(format!("verdict {}", table.verdict)))
+                .chain(table.requires.iter().map(|name| format!("requires {name}")))
+                .collect()
+        })
+    }
+    removed_entries(
+        WeakeningKind::PlanObligationRemoved,
+        &obligations(base),
+        &obligations(working),
+        "plan",
+    )
 }
 
 /// A `[[stop.hold]]` row removed, or changed in what it guards (CLOUD-2761).
@@ -6895,6 +6935,43 @@ mod tests {
         assert_eq!(only(&base, &hold("pr-merged")), lost);
         // ANTI-VACUITY: adding the row is a tightening, and no change is silent.
         assert!(weakenings(&config(""), &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
+    /// CLOUD-2766: each `[plan]` section, the verdict line and the `requires`
+    /// receipt is an obligation a plan is judged against; removing one is a
+    /// weakening, adding one is not.
+    #[test]
+    fn a_plan_obligation_removed_is_a_weakening() {
+        let plan = |sections: &str, requires: &str| {
+            config(&format!(
+                "[plan]\nsections = [{sections}]\nverdict = \"verdict: ok\"\n{requires}"
+            ))
+        };
+        let base = plan("\"A\", \"S\", \"N\", \"V\"", "requires = \"skill\"\n");
+        let lost = |entry: &str| {
+            Weakening::new(
+                WeakeningKind::PlanObligationRemoved,
+                &format!("plan[{entry}]"),
+                "present",
+                "absent",
+            )
+        };
+        assert_eq!(
+            only(
+                &base,
+                &plan("\"A\", \"S\", \"V\"", "requires = \"skill\"\n")
+            ),
+            lost("section N")
+        );
+        assert_eq!(
+            only(&base, &plan("\"A\", \"S\", \"N\", \"V\"", "")),
+            lost("requires skill")
+        );
+        assert_eq!(weakenings(&base, &config("")).len(), 6, "every obligation");
+        // ANTI-VACUITY: adding an obligation is a tightening, and no change is
+        // silent.
+        assert!(weakenings(&plan("\"A\", \"S\", \"V\"", ""), &base).is_empty());
         assert!(weakenings(&base, &base).is_empty());
     }
 

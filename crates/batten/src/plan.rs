@@ -29,7 +29,7 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::UsageError;
+use crate::error::UsageError;
 
 /// The receipt a passing lint appends to, keyed by branch.
 pub const RECEIPT: &str = "plan-check";

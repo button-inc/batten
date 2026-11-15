@@ -1437,6 +1437,21 @@ const CENSUS: &[Verb] = &[
              before any read",
         ),
     },
+    // `plan lint` (CLOUD-2766): each finding is `<plan>:<line> <clause>` from a
+    // fixed clause set, and `Finding` has no field the plan's text could ride in.
+    Verb {
+        path: "plan lint",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `plan path` prints one path: the pointer itself.
+    Verb {
+        path: "plan path",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property
     // that lets them run in CI at all: an issue body can carry consumer detail, so
     // a gate that echoed the prose it matched would leak it through the log. Every
