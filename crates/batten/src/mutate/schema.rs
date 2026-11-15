@@ -3917,6 +3917,31 @@ pub struct Swept {
     pub classic: Vec<String>,
 }
 
+/// The schema mirror's state directory for the checkout at `root`.
+///
+/// # Errors
+///
+/// The repository state directory cannot be resolved.
+fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    Ok(crate::state::repo_state_dir(root)?
+        .join("mutate")
+        .join("schema"))
+}
+
+/// The schema mirror's build tree: a cache, one more tree the disk collector
+/// ranks (`collect::trees`). It holds a whole incremental build, 6.0 GB measured
+/// on #1276, outside `[prune] root`. Unseen by the collector, it left a lap's
+/// parallel builds no room and the lap died of a full disk while the collector
+/// reported nothing it might remove. Losing it costs one sweep rebuild; a held
+/// build lock spares it while a sweep runs.
+///
+/// # Errors
+///
+/// The repository state directory cannot be resolved.
+pub fn mirror_target(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    Ok(mirror_state(root)?.join("tree").join("target"))
+}
+
 /// Every one of `mutants` judged in one schema build of the checkout at
 /// `root`, on `jobs` workers.
 ///
@@ -3932,15 +3957,13 @@ pub fn sweep(
     handback: Option<&Handback<'_>>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Swept> {
-    let state = crate::state::repo_state_dir(root)?
-        .join("mutate")
-        .join("schema");
+    let state = mirror_state(root)?;
     let work = state.join("tree");
     // INSIDE THE TREE, where cargo-mutants' copies keep theirs: a case's
     // fixtures land under the target's `tmp/`, and on #1276 one with no `.git`
     // of its own passed only inside a checkout, so a target beside the tree
     // failed the unmutated baseline.
-    let target = work.join("target");
+    let target = mirror_target(root)?;
     let started = std::time::Instant::now();
     // WHAT A STOPPED RUN FINISHED IS KEPT, BEFORE ANYTHING MOVES IT: its
     // records are sealed against the snapshot it ran over, which the copy
