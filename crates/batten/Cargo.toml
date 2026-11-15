@@ -201,6 +201,7 @@ nix.workspace = true
 # is `std`, and its Windows analogue is not.
 [target.'cfg(windows)'.dependencies]
 winapi-util.workspace = true
+sysinfo.workspace = true
 
 # The global allocator (CLOUD-2315), Linux glibc only. Its C source needs a
 # platform SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear

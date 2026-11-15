@@ -17,7 +17,7 @@ fn run(path: &Path, args: &[&str], stdin: &str) -> Output {
     use std::io::Write as _;
     #[expect(
         clippy::disallowed_types,
-        reason = "the subject is the stand-in program itself, so these cases must execute it (CLOUD-2336)"
+        reason = "stays: the subject is the stand-in program itself, so these cases must execute it (CLOUD-2336)"
     )]
     let mut child = std::process::Command::new(path)
         .args(args)
@@ -51,7 +51,7 @@ fn a_program_run_by_name_finds_its_plan_on_path() {
     .expect("a PATH");
     #[expect(
         clippy::disallowed_types,
-        reason = "the subject is the stand-in run by bare name, which only a PATH lookup does (CLOUD-2336)"
+        reason = "stays: the subject is the stand-in run by bare name, which only a PATH lookup does (CLOUD-2336)"
     )]
     let out = std::process::Command::new("fake-tool")
         .env("PATH", path)
@@ -180,7 +180,7 @@ fn a_spawned_child_outlives_the_stand_in() {
     let pid = std::fs::read_to_string(dir.join("child.pid")).unwrap();
     #[expect(
         clippy::disallowed_types,
-        reason = "reaps the child this case spawned through the stand-in, so the run leaves no sleeper behind (CLOUD-2336)"
+        reason = "stays: reaps the child this case spawned through the stand-in, so the run leaves no sleeper behind (CLOUD-2336)"
     )]
     let _ = std::process::Command::new("kill").arg(pid.trim()).status();
 }
