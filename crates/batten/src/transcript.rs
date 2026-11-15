@@ -2385,6 +2385,21 @@ pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A caller holding a `dyn Summary` reads the stream's own usage, not an
+    /// empty one: `doctor session` reaches a whole parse only through the trait.
+    #[test]
+    fn the_summary_of_a_stream_is_its_usage() {
+        let text = concat!(
+            r#"{"type":"assistant","message":{"id":"m1","role":"assistant","content":[],"usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":1000,"output_tokens":5}}}"#,
+            "\n"
+        );
+        let stream = parse(text, "t", RecordShape::Jsonl).expect("parses");
+        let summary: &dyn Summary = &stream;
+        assert_eq!(summary.usage(), stream.usage());
+        assert_eq!(summary.usage().cache_write, 1000);
+    }
+
     #[cfg(test)]
     // --- the independent-session census (CLOUD-1717) -----------------------
 

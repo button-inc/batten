@@ -239,6 +239,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_wake_that_costs_a_write_or_nothing_buys_no_wake() {
+        assert_eq!(wakes_allowed(1000, 0, 5), 0, "a free read prices nothing");
+        assert_eq!(wakes_allowed(1000, 600, 2), 0, "a wake past a write");
+        assert_eq!(wakes_allowed(1000, 500, 2), 0, "a wake that is a write");
+        assert_eq!(wakes_allowed(1000, 50, 1), 19, "under a write");
+    }
+
+    #[test]
+    fn a_bucket_written_with_no_tokens_is_not_the_write() {
+        let line = |one_hour: u64, five_minute: u64| {
+            serde_json::json!({
+                "message": {
+                    "role": "assistant",
+                    "model": "m",
+                    "usage": {"cache_creation": {
+                        "ephemeral_1h_input_tokens": one_hour,
+                        "ephemeral_5m_input_tokens": five_minute,
+                    }},
+                }
+            })
+            .to_string()
+        };
+        assert_eq!(last_write(&line(0, 10)), Some((300, "m".to_owned())));
+        assert_eq!(last_write(&line(7, 0)), Some((3600, "m".to_owned())));
+        assert_eq!(last_write(&line(0, 0)), None);
+    }
+
+    #[test]
     fn keep_warm_matches_the_published_table() {
         let rows = [
             (1250, 100),

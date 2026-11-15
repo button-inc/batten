@@ -1391,10 +1391,8 @@ fn first_object(text: &str) -> Option<serde_json::Value> {
     text.match_indices('{').find_map(|(at, _)| {
         let mut stream =
             serde_json::Deserializer::from_str(text.get(at..)?).into_iter::<serde_json::Value>();
-        match stream.next() {
-            Some(Ok(value)) if value.is_object() => Some(value),
-            _ => None,
-        }
+        // A value read from a `{` is an object or an error; no third shape.
+        stream.next().and_then(std::result::Result::ok)
     })
 }
 
@@ -4059,6 +4057,17 @@ mod tests {
         Subjects::Fixed(vec![serde_json::json!({})])
     }
 
+    /// A pause that refuses to be taken a hundredth time: a case waiting with
+    /// no limit then FAILS when a mutation stops the wait ending, rather than
+    /// hanging until the suite's bound reports a timeout.
+    fn capped() -> impl FnMut(f64) {
+        let mut taken = 0u32;
+        move |_| {
+            taken += 1;
+            assert!(taken < 100, "the wait did not end");
+        }
+    }
+
     #[test]
     fn a_changed_reduction_ends_the_wait() {
         let config = wait_config(wait_row("get", &["status"], false));
@@ -4075,10 +4084,14 @@ mod tests {
                 reads.set(at + 1);
                 Ok(script[at.min(2)].clone())
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(reads.get(), 3, "returns after the third read");
         assert_eq!(waited.exit, crate::exit::ExitCode::Success);
+        assert!(
+            waited.changed && !waited.at_limit,
+            "a change, not the limit"
+        );
         assert_eq!(
             waited.line, r#"mcp wait: subject 1 changed: status "A" -> "B""#,
             "the changed field, old and new, and nothing else from the answer"
@@ -4099,7 +4112,7 @@ mod tests {
                 reads.set(reads.get() + 1);
                 Ok(status("A", reads.get()))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(waited.line, "mcp wait: no change in 4 polls");
         assert_eq!(reads.get(), 4, "the wait ran to its limit");
@@ -4119,10 +4132,15 @@ mod tests {
             &mut |seconds| {
                 assert!((seconds - 30.0).abs() < f64::EPSILON, "the interval");
                 pauses.set(pauses.get() + 1);
+                assert!(pauses.get() < 100, "the wait did not end");
             },
         );
         assert_eq!(pauses.get(), 3, "a first read, then exactly three pauses");
         assert_eq!(waited.exit, crate::exit::ExitCode::Success);
+        assert!(
+            waited.at_limit && !waited.changed,
+            "the limit, not a change"
+        );
         assert_eq!(waited.line, "mcp wait: no change in 4 polls");
     }
 
@@ -4136,7 +4154,7 @@ mod tests {
             pacing(Some(150)),
             None,
             &mut |_| Err(anyhow::anyhow!("the transport failed")),
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.exit,
@@ -4162,7 +4180,7 @@ mod tests {
                 reads.set(reads.get() + 1);
                 Ok(status("A", 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(waited.exit, crate::exit::ExitCode::Usage, "{}", waited.line);
         assert_eq!(reads.get(), 0, "zero reads");
@@ -4200,7 +4218,7 @@ mod tests {
                 reads.set(at + 1);
                 Ok(script[at.min(1)].clone())
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.line,
@@ -4222,7 +4240,7 @@ mod tests {
                 reads.set(reads.get() + 1);
                 Ok(enveloped("working"))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.exit,
@@ -4249,7 +4267,10 @@ mod tests {
                     reads.set(reads.get() + 1);
                     Ok(status("A", 0))
                 },
-                &mut |_| pauses.set(pauses.get() + 1),
+                &mut |_| {
+                    pauses.set(pauses.get() + 1);
+                    assert!(pauses.get() < 1000, "the wait did not end");
+                },
             );
             assert_eq!(pauses.get(), expected, "--evict-after {evict}s");
             assert_eq!(reads.get(), expected + 1, "each pause followed by a read");
@@ -4289,7 +4310,7 @@ mod tests {
                 let moved = params["n"] == 2 && reads.get() > 3;
                 Ok(status(if moved { "B" } else { "A" }, 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.line,
@@ -4313,6 +4334,7 @@ mod tests {
             &mut |_| {
                 seen.borrow_mut()
                     .push(crate::task::singleton_holder(&dir, "w"));
+                assert!(seen.borrow().len() < 100, "the wait did not end");
             },
         );
         assert_eq!(*seen.borrow(), vec![Some(own)], "held during the pause");
@@ -4343,7 +4365,7 @@ mod tests {
                 reads.set(reads.get() + 1);
                 Ok(status("A", 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         crate::task::singleton_release(&dir, "w");
         assert_eq!(
@@ -4373,7 +4395,7 @@ mod tests {
             pacing(Some(90)),
             Some((file.as_path(), "w")),
             &mut |_| Ok(status("A", 0)),
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.exit,
@@ -4414,8 +4436,12 @@ mod tests {
                 }
                 Ok(status("A", 0))
             },
-            &mut |_| {
-                std::fs::write(store.join("mint.B"), b"").expect("a receipt mid-wait");
+            &mut {
+                let mut cap = capped();
+                move |seconds| {
+                    cap(seconds);
+                    std::fs::write(store.join("mint.B"), b"").expect("a receipt mid-wait");
+                }
             },
         );
         assert_eq!(
@@ -4439,7 +4465,7 @@ mod tests {
                 reads.set(reads.get() + 1);
                 Ok(status("A", 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(waited.exit, crate::exit::ExitCode::Success);
         assert_eq!(waited.line, "mcp wait: nothing to wait for");
@@ -4463,8 +4489,12 @@ mod tests {
                 }
                 Ok(status("A", 0))
             },
-            &mut |_| {
-                let _ = std::fs::remove_file(store.join("mint.B"));
+            &mut {
+                let mut cap = capped();
+                move |seconds| {
+                    cap(seconds);
+                    let _ = std::fs::remove_file(store.join("mint.B"));
+                }
             },
         );
         assert_eq!(reads_of_b.get(), 1, "the removed subject is not read again");
@@ -4489,7 +4519,7 @@ mod tests {
                 }
                 Ok(status("A", 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(
             waited.line, "mcp wait: no change in 4 polls",
@@ -4513,7 +4543,7 @@ mod tests {
                 }
                 Ok(status("A", 0))
             },
-            &mut |_| {},
+            &mut capped(),
         );
         assert_eq!(waited.line, "mcp wait: subject B became unreadable");
     }

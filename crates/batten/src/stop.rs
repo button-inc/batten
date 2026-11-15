@@ -350,6 +350,18 @@ fn discharge_of(check: &Check) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hold_key_names_every_guarded_field() {
+        let hold = Hold {
+            id: String::from("h"),
+            while_receipt: String::from("r"),
+            unless_singleton: String::from("s"),
+            start: vec![String::from("go")],
+        };
+        assert_eq!(hold.key(), "h while r unless s");
+    }
+
     #[cfg(test)]
     use crate::worktree::Unlanded;
 
