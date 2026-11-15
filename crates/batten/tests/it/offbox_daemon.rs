@@ -125,6 +125,34 @@ fn the_status_file_names_the_daemons_pid_and_session() {
     kill(child);
 }
 
+/// Fails by: the daemon learning of a tool call only at its next tick, which
+/// is the timer this wait replaced.
+#[test]
+fn a_tool_call_wakes_the_daemon_before_its_deadline() {
+    let checkout = Checkout::new("offbox-daemon-woken");
+    let child = checkout.launch("exit-code", "s");
+    let status = checkout.status_when("a wake port", |status| status.wake != 0);
+    let dir = checkout.offbox().expect("the off-box directory");
+    // Past the first wake, so the daemon is in its five-second wait.
+    let settled = std::time::Instant::now();
+    checkout.status_when("the first wake", |seen| {
+        seen.inbox_read == 0 && seen.pid == status.pid
+    });
+
+    batten::offbox_watch::message(&dir, "s").expect("the hook's word");
+    let inbox = std::fs::metadata(dir.join(offbox::INBOX)).unwrap().len();
+    let heard = std::time::Instant::now();
+    checkout.status_when("the call read", |seen| seen.inbox_read == inbox);
+
+    assert!(
+        heard.elapsed() < std::time::Duration::from_secs(2),
+        "read within two seconds of the call, not at the five-second tick: {:?} (settled {:?} before)",
+        heard.elapsed(),
+        heard.duration_since(settled)
+    );
+    kill(child);
+}
+
 /// Fails by: two daemons in one checkout, or the second taking the first down.
 #[test]
 fn a_second_daemon_in_one_checkout_says_running_and_exits() {

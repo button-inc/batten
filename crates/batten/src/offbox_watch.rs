@@ -9,7 +9,9 @@
 //! # It does file operations and nothing else
 //!
 //! The hook path may not reach `offbox`, `lease`, `fetch` or `gitwrite` — it
-//! must never be able to start a process or open a connection — so everything
+//! must never be able to start a process or open a connection; the one thing
+//! it sends is a loopback datagram that ends the daemon's wait ([`message`]) —
+//! so everything
 //! the hook needs to know about the daemon lives here, apart from them: the
 //! file names, the session's leaf name, the probe, the hook's own two-line
 //! file, and the two remedy commands. `offbox` reads its names from here.
@@ -36,6 +38,9 @@ pub const INBOX: &str = "inbox";
 
 /// The one line telling an agent how to attach the state repository.
 pub const NOTE: &str = "note";
+
+/// The status file's key for the loopback port the daemon waits on.
+pub const WAKE: &str = "wake";
 
 /// The hook's own file: `misses <n>`, `noted <0|1>` and `owed <0|1>`.
 pub const HOOK: &str = "hook";
@@ -178,7 +183,33 @@ pub fn message(dir: &Path, session: &str) -> std::io::Result<()> {
         &session.replace(['\n', '\r'], " "),
         0o600,
         crate::durable::Persist::Atomic,
-    )
+    )?;
+    wake(dir);
+    Ok(())
+}
+
+/// Tell a waiting daemon a tool call happened: one datagram to the loopback
+/// port its status file names.
+///
+/// A DATAGRAM, NOT A CONNECTION: it is sent and forgotten, never waits on the
+/// daemon, and cannot leave the machine — the address is loopback by
+/// construction. The inbox line is the record; this only ends the daemon's
+/// wait early, so a datagram lost, or a port that no daemon holds any more,
+/// costs one wake at the daemon's own deadline instead.
+//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
+//MUTANT hook-never-wakes-the-daemon|s@^        .and_then(\x7csocket\x7c socket.send_to(b"1", (loopback, port)));$@        .map(\x7c_\x7c 0_usize);@|a_tool_call_wakes_the_daemon_before_its_deadline
+fn wake(dir: &Path) {
+    let status = std::fs::read_to_string(dir.join(STATUS)).unwrap_or_default();
+    let Some(port) = field(&status, WAKE)
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+    else {
+        return;
+    };
+    let loopback = std::net::Ipv4Addr::LOCALHOST;
+    let sent = std::net::UdpSocket::bind((loopback, 0))
+        .and_then(|socket| socket.send_to(b"1", (loopback, port)));
+    let _ = sent;
 }
 
 /// The hook's own two lines.
