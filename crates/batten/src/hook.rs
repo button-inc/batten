@@ -9905,6 +9905,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "task-programs".to_owned(),
             task_programs(&envelope.command, facts.task_bodies),
         );
+        // WHAT EVERY RECEIPTED STEP RUNS (step 21): the stage set, derived.
+        call.insert("step-programs".to_owned(), step_programs(facts.task_bodies));
     }
     serde_json::to_string(&document)
 }
@@ -10029,6 +10031,44 @@ pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) 
             }
         }
     }
+    Value::Array(found)
+}
+
+/// Every program a task body runs under `batten step run`: what a `[[step]]`
+/// receipts, which is what a land stage IS (step 21). `null` where the task
+/// receipt could not be read.
+///
+/// The stage set is DERIVED from the manifest, never listed: a step added to a
+/// task is a stage on the commit that adds it. Only a line naming `step run` is
+/// parsed, so the hook pays for the receipted lines alone, not every body.
+pub(crate) fn step_programs(bodies: &crate::taskset::TaskBodies) -> Value {
+    let crate::facts::Look::Is(bodies) = bodies else {
+        return Value::Null;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let found = bodies
+        .iter()
+        .flat_map(|(task, lines)| lines.iter().map(move |line| (task, line)))
+        .filter(|(_, line)| line.contains("step run"))
+        .flat_map(|(task, line)| {
+            reach_into(line, true, Some("task"), REACH_DEPTH)
+                .into_iter()
+                // What the step runs, minus the `cargo run` that only launches
+                // the program carrying the stage's identity.
+                .filter(|entry| entry["receipted"] == true)
+                .filter(|entry| {
+                    !(entry["name"] == "cargo"
+                        && matches!(entry["subcommand"].as_str(), Some("run" | "r")))
+                })
+                .map(move |mut entry| {
+                    if let Some(object) = entry.as_object_mut() {
+                        object.insert("task".to_owned(), serde_json::json!(task));
+                    }
+                    entry
+                })
+        })
+        .filter(|entry| seen.insert(entry.to_string()))
+        .collect();
     Value::Array(found)
 }
 
@@ -10322,7 +10362,18 @@ fn reach_argv(
     ) {
         let inner: Vec<&str> = inner.iter().map(String::as_str).collect();
         if let Some(at) = effective_program(&inner) {
-            reached.extend(reach_argv(&inner, at, mediated, Some(how), unread, depth));
+            let mut nested = reach_argv(&inner, at, mediated, Some(how), unread, depth);
+            // EVERYTHING A STEP RUNS IS RECEIPTED, all the way down (step 21):
+            // `step run x -- cargo run -p batten -- semver check` receipts the
+            // `batten semver check` the `cargo run` starts, not only the launcher.
+            if how == "step run" {
+                for entry in &mut nested {
+                    if let Some(object) = entry.as_object_mut() {
+                        object.insert("receipted".to_owned(), Value::Bool(true));
+                    }
+                }
+            }
+            reached.extend(nested);
         }
     }
     reached
@@ -10412,8 +10463,14 @@ fn inner_argv(name: &str, arguments: &[&str]) -> Option<(Vec<String>, &'static s
                 )
             }) =>
         {
+            // `ci step` keeps no receipt, so it is reached as itself (step 21).
+            let how = if arguments[verb] == "step" {
+                "step run"
+            } else {
+                "ci step"
+            };
             let inner = after_separator(rest);
-            (!inner.is_empty()).then_some((inner, "step run"))
+            (!inner.is_empty()).then_some((inner, how))
         }
         _ => None,
     }
@@ -10639,6 +10696,9 @@ fn program_entry(
         // unparseable spelling the bypass, so the entry is a best-effort
         // reading flagged as one rather than no entry at all.
         "unread": unread,
+        // `true` for everything reached inside a `batten step run`, whose
+        // receipt the run writes (step 21); set by the reach, `false` here.
+        "receipted": false,
         // THE VERB AFTER THE SUBCOMMAND (step 14): the next bare word past the
         // same options, so `batten land lap` is `land`/`lap` and `cargo nextest
         // run` is `nextest`/`run`. `null` where there is none or no table.
@@ -22739,6 +22799,68 @@ deny contains "refused by themodule" if {
         assert_eq!(step[1]["via"], "step run");
         assert_eq!(step[1]["subcommand"], "nextest");
         assert_eq!(step[1]["nested"], "run");
+    }
+
+    /// Fails by: a step's program missed, a program outside `step run` taken
+    /// for a stage, a line without `step run` parsed into one, or an unread
+    /// receipt answered as an empty stage set.
+    #[test]
+    fn step_programs_are_what_the_receipted_steps_run() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                (
+                    "lint:clippy",
+                    vec![
+                        "cargo run -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=t cargo clippy --all-targets",
+                        "cargo clippy --fix",
+                    ],
+                ),
+                ("deny", vec!["batten step run deny -- cargo deny check"]),
+                (
+                    "semver",
+                    vec!["cargo run -p batten -- step run semver -- cargo run -p batten -- semver check"],
+                ),
+                ("echo", vec!["echo step"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let steps = step_programs(&bodies);
+        let found: Vec<(String, String, String)> = steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["task"].as_str().unwrap().to_owned(),
+                    entry["name"].as_str().unwrap().to_owned(),
+                    entry["subcommand"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("deny".to_owned(), "cargo".to_owned(), "deny".to_owned()),
+                (
+                    "lint:clippy".to_owned(),
+                    "cargo".to_owned(),
+                    "clippy".to_owned()
+                ),
+                (
+                    "semver".to_owned(),
+                    "batten".to_owned(),
+                    "semver".to_owned()
+                ),
+            ]
+        );
+        assert!(step_programs(&crate::facts::Look::CouldNotLook).is_null());
     }
 
     /// `batten`'s verb and its nested verb are projected; a `mise` entry

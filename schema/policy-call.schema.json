@@ -142,6 +142,9 @@
               "reads-only": {
                 "type": "boolean"
               },
+              "receipted": {
+                "type": "boolean"
+              },
               "subcommand": {
                 "type": [
                   "string",
@@ -166,6 +169,7 @@
                   "script",
                   "cargo run",
                   "step run",
+                  "ci step",
                   "exec",
                   "task"
                 ],
@@ -249,6 +253,96 @@
             "null"
           ]
         },
+        "step-programs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "batten-effect": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "global-options": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "mediated": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "nested": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "program": {
+                "type": "string"
+              },
+              "reads-only": {
+                "type": "boolean"
+              },
+              "receipted": {
+                "type": "boolean"
+              },
+              "subcommand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "task": {
+                "type": "string"
+              },
+              "tasks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "unread": {
+                "type": "boolean"
+              },
+              "via": {
+                "enum": [
+                  null,
+                  "script",
+                  "cargo run",
+                  "step run",
+                  "ci step",
+                  "exec",
+                  "task"
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "stop-repeat": {},
         "task-programs": {
           "items": {
@@ -293,6 +387,9 @@
               "reads-only": {
                 "type": "boolean"
               },
+              "receipted": {
+                "type": "boolean"
+              },
               "subcommand": {
                 "type": [
                   "string",
@@ -320,6 +417,7 @@
                   "script",
                   "cargo run",
                   "step run",
+                  "ci step",
                   "exec",
                   "task"
                 ],
