@@ -165,14 +165,27 @@ fn an_owed_stamp_is_not_paid_while_the_restore_is_pending() {
         // THE BOARD AND THE GRAMMAR ARE THE CONSUMER'S, so the fixture declares
         // them: without them `claim check` refuses the run before it reaches
         // the stamp, which is not what this case is about.
-        repo: common::adjudicable_with(
-            "offbox-restore-pending",
-            &format!(
-                "{}\n{}",
+        // And a workspace version, which §6 reads to know which arrows fire.
+        repo: common::Fixture::new("offbox-restore-pending")
+            .config(&format!(
+                "version = 1\n\
+                 protected = [\"guarded.txt\"]\n\n\
+                 [[verb]]\n\
+                 verb = \"rm\"\n\
+                 effect = \"write\"\n\
+                 redirect = \"restore it with git\"\n\n\
+                 {}\n{}",
                 common::declared_board(),
                 common::declared_patterns()
-            ),
-        ),
+            ))
+            .file("guarded.txt", "guarded\n")
+            .file(
+                "Cargo.toml",
+                "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
+            )
+            .git()
+            .base_commit()
+            .build(),
         ..Rig::new("offbox-restore-pending-home")
     };
     rig.start();
@@ -186,7 +199,11 @@ fn an_owed_stamp_is_not_paid_while_the_restore_is_pending() {
     let payload = serde_json::json!({
         "id": "CLOUD-1",
         "status": "Todo",
-        "description": "a body",
+        // A Ready block, as `claim.rs`'s `refined_body`, so the readiness rule
+        // passes and the sequence rule is what answers.
+        "description": "**Refinement — Ready (a summary)**\n\n\
+             * **Source of truth (§1).** One authoritative artifact.\n\
+             * **Commit / bump (§6).** `ci` → **no bump**.\n",
         "updatedAt": "2026-08-01T00:00:00Z",
     });
     let checked = common::run_with_stdin(&rig.repo, &["claim", "check"], &payload.to_string());
