@@ -176,6 +176,9 @@ complete -c batten -n "__fish_batten_using_subcommand check" -l no-input -d 'Nev
 complete -c batten -n "__fish_batten_using_subcommand check" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l rule -d 'Run only the declared rules with these ids (repeatable)' -r
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l half -d 'Judge only the tree half (receipt-keyed on the index) or the live half of the rows' -r -f -a "tree\t'Rows whose verdict is a function of the indexed tree alone'
+live\t'Every other row, and any row whose half cannot be established'"
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l keyed-base -d 'A ref whose merge base the tree half\'s receipt keys, admitting ratchets against it (repeatable)' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -187,6 +190,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l inputs-digest -d 'With --half tree: print a digest of the out-of-tree state that half reads, and judge nothing'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l silent -d 'Say nothing but a verdict or a usage error'

@@ -1541,12 +1541,36 @@ expression: stdout_of(&output)
       "data_channel": true,
       "flags": [
         {
+          "name": "half",
+          "short": null,
+          "long": "half",
+          "takes_value": true,
+          "positional": false,
+          "help": "Judge only the tree half (receipt-keyed on the index) or the live half of the rows"
+        },
+        {
+          "name": "inputs_digest",
+          "short": null,
+          "long": "inputs-digest",
+          "takes_value": false,
+          "positional": false,
+          "help": "With --half tree: print a digest of the out-of-tree state that half reads, and judge nothing"
+        },
+        {
           "name": "json",
           "short": "J",
           "long": "json",
           "takes_value": false,
           "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
+        },
+        {
+          "name": "keyed_base",
+          "short": null,
+          "long": "keyed-base",
+          "takes_value": true,
+          "positional": false,
+          "help": "A ref whose merge base the tree half's receipt keys, admitting ratchets against it (repeatable)"
         },
         {
           "name": "rule",

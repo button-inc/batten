@@ -91,6 +91,16 @@
 //! consumes is hook-resolvable, and the second axis exists for the facts the
 //! mediated path must not be made to pay for.
 
+/// Which half of a split `enforce` a fact belongs to (step 13a): see
+/// [`Fact::subject`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Subject {
+    /// A function of the indexed tree alone, so a tree-keyed receipt covers it.
+    Tree,
+    /// A function of anything else, or of something undeterminable.
+    Live,
+}
+
 /// What resolving a fact spends.
 ///
 /// The narrow question — the price — with no claim about *where* it may be
@@ -1984,6 +1994,82 @@ impl Fact {
             | Fact::PathspecStatus
             | Fact::Budgeted => None,
         }
+    }
+
+    /// What this fact's answer is a function of: the committed tree, or the
+    /// world around it (step 13a).
+    ///
+    /// [`Subject::Tree`] means the answer is fixed by the indexed content of the
+    /// checkout, so a receipt keyed on that content may stand in for resolving
+    /// it again. [`Subject::Live`] is everything else — a ref, a remote, the
+    /// forge, the store, the clock, a session — and is the answer for anything
+    /// undeterminable, because the conservative side of an unreceipted half is
+    /// re-running it.
+    ///
+    /// Exhaustive with no wildcard arm, like [`Fact::tree_key`]: a new fact
+    /// decides here or fails to compile, rather than defaulting to `Tree` — the
+    /// default that would let a cached verdict hide a moved world.
+    #[must_use]
+    pub const fn subject(self) -> Subject {
+        match self {
+            Fact::Document
+            | Fact::Lines
+            | Fact::Traversals
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Tracked
+            | Fact::GitIndex
+            | Fact::Staged => Subject::Tree,
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Instant
+            | Fact::Pinned
+            | Fact::DispatchCleared
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted => Subject::Live,
+        }
+    }
+
+    /// The fact projected under `key` in the tree input document, or `None` for
+    /// a key no fact carries there — the inverse of [`Fact::tree_key`], derived
+    /// from it so the two cannot drift.
+    #[must_use]
+    pub fn from_tree_key(key: &str) -> Option<Fact> {
+        Fact::ALL
+            .iter()
+            .copied()
+            .find(|fact| fact.tree_key() == Some(key))
     }
 
     /// The JSON Schema fragment this fact is projected as, on whichever surface
