@@ -22,7 +22,7 @@ use batten::offbox::{self, Feed, Meta, Refusal, Snapshot};
 use batten::provision::digest;
 use batten::sessions::{Batch, Cursor, JsonlFile, SessionRef, SessionSource};
 
-use crate::common::{self, Fixture, batten, scratch};
+use crate::common::{self, Fixture, batten, git_in, scratch};
 
 const TOKEN_PARTS: [&str; 5] = ["AKIA", "7QF2", "NX8M", "3JD5", "W0PC"];
 const MIB: usize = 1024 * 1024;
@@ -273,10 +273,22 @@ fn the_tree_holds_the_stores_and_the_transcript_in_segments() {
     assert!(body.len() > 2 * MIB, "the premise: over two segments");
     write(&path, &body);
     let source = JsonlFile::at(&path);
+    let checkout_before = git_in(&rig.repo, &["status", "--porcelain", "--ignored"]);
 
     let (commit, _, new_bytes, _, ended) =
         built(rig.snap(&meta, &[feed(MAIN, &source)], TIME, NO_CAP));
     let tree = rig.tree(&meta, &commit);
+
+    // AN ORPHAN, OUTSIDE THE CHECKOUT: the commit has no parent, and the
+    // project's own status reads the same after the snapshot as before it.
+    let local = offbox::local_repo(&rig.dir(&meta));
+    let parents = git_in(&local, &["rev-list", "--parents", "-n", "1", &commit]);
+    assert_eq!(parents.trim(), commit, "a commit with no parent");
+    assert_eq!(
+        git_in(&rig.repo, &["status", "--porcelain", "--ignored"]),
+        checkout_before,
+        "the checkout's status is unchanged"
+    );
 
     for held in [
         "meta.json",
