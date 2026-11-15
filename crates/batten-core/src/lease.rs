@@ -3471,8 +3471,7 @@ pub fn push(
     // as an untracked change mid-landing — and is removed on every path out.
     let request = Scratch::under(repo)?;
     let reader = crate::git::ObjectReader::open(repo)?;
-    let file = std::fs::File::create(&request.0)
-        .map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))?;
+    let file = request.create()?;
     write_request(std::io::BufWriter::new(file), &update, &ids, &|id| {
         reader.read(id).map(|raw| Object {
             id: raw.id,
@@ -3554,9 +3553,7 @@ pub fn swap_many(remote: &str, repo: &std::path::Path, updates: &[Update]) -> Re
         |err: std::io::Error| anyhow::anyhow!("lease: the push request will not write: {err}");
     let request = Scratch::under(repo)?;
     let reader = crate::git::ObjectReader::open(repo)?;
-    let file = std::fs::File::create(&request.0)
-        .map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))?;
-    let mut out = std::io::BufWriter::new(file);
+    let mut out = std::io::BufWriter::new(request.create()?);
     for (index, update) in updates.iter().enumerate() {
         let capabilities = if index == 0 { FIRST_ASKS } else { "" };
         let command = format!(
@@ -3578,17 +3575,67 @@ pub fn swap_many(remote: &str, repo: &std::path::Path, updates: &[Update]) -> Re
 }
 
 /// A file this module writes and removes: the push request being sent.
+///
+/// A REQUEST IS A SPOOL, NOT STATE: it is read once, by the send that follows,
+/// and nothing reads it after. A torn one fails that send and is never retried
+/// from, so it needs no `durable` publish. What a crash CAN leave is the file
+/// itself, since `Drop` does not run on a kill — so every new request first
+/// removes those whose writer is gone, and the start path is the recovery.
 struct Scratch(std::path::PathBuf);
 
+/// The prefix of every push request's name in a git directory.
+const REQUEST_PREFIX: &str = "batten-push-";
+
 impl Scratch {
-    /// A fresh name under `repo`'s git directory.
+    /// A fresh name under `repo`'s git directory, after sweeping the requests
+    /// left there by pushes that were killed.
     fn under(repo: &std::path::Path) -> Result<Self> {
         let dir = crate::git::git_dir(repo)?;
+        sweep_orphan_requests(&dir);
         Ok(Scratch(dir.join(format!(
-            "batten-push-{}-{}.request",
+            "{REQUEST_PREFIX}{}-{}.request",
             std::process::id(),
             nonce()
         ))))
+    }
+
+    /// The request file, created empty for the request to be written into.
+    fn create(&self) -> Result<std::fs::File> {
+        let opened = std::fs::File::create(&self.0); // stream: a spool sent once, see `Scratch`
+        opened.map_err(|err| anyhow::anyhow!("lease: the push request will not open: {err}"))
+    }
+}
+
+/// Remove every push request in `dir` whose writer is no longer running.
+///
+/// ONLY A WRITER PROVED GONE: [`holder_alive`] answers `false` where it cannot
+/// tell, so this sweeps only where `/proc` can say a pid runs a `batten`, and
+/// never touches a request a live push may still be sending. A pid reused by
+/// another `batten` keeps its file one sweep longer, which costs a few bytes.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT orphan-request-kept|s@^        if !holder_alive(pid, "batten") {$@        if false {@|a_killed_push_leaves_no_request_behind_the_next_one
+//MUTANT live-request-swept|s@^        if !holder_alive(pid, "batten") {$@        if true {@|a_killed_push_leaves_no_request_behind_the_next_one
+fn sweep_orphan_requests(dir: &std::path::Path) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(rest) = name
+            .strip_prefix(REQUEST_PREFIX)
+            .and_then(|rest| rest.strip_suffix(".request"))
+        else {
+            continue;
+        };
+        let Some(pid) = rest.split('-').next().and_then(|pid| pid.parse().ok()) else {
+            continue;
+        };
+        if !holder_alive(pid, "batten") {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -7944,6 +7991,27 @@ mod transport_tests {
             .filter(|name| name.starts_with("batten-push-"))
             .collect();
         assert!(left.is_empty(), "the request file is removed: {left:?}");
+    }
+
+    /// Fails by: a request left by a killed push surviving the next push, or a
+    /// live push's request being removed under it.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_killed_push_leaves_no_request_behind_the_next_one() {
+        let repo = bare("lease-orphan-request");
+        let dead = repo.join(format!("{REQUEST_PREFIX}{}-1.request", u32::MAX - 1));
+        let live = repo.join(format!("{REQUEST_PREFIX}{}-1.request", std::process::id()));
+        std::fs::write(&dead, "torn").unwrap();
+        std::fs::write(&live, "sending").unwrap();
+
+        let fresh = Scratch::under(&repo).unwrap();
+
+        assert!(!dead.exists(), "the killed push's request is swept");
+        assert!(live.exists(), "a running push's request is kept");
+        assert!(
+            !fresh.0.exists(),
+            "the new name is only a name until written"
+        );
     }
 
     /// Fails by: a swap the server refused reading as applied, or the other

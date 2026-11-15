@@ -1862,7 +1862,7 @@ fn stand_in_daemon(state_root: &str, dir: &Path) -> Result<std::fs::File> {
     let offbox = crate::state::repo_state_dir_under(Path::new(state_root), dir)?
         .join(crate::offbox_watch::DIR);
     std::fs::create_dir_all(&offbox).context("perf: could not create the off-box directory")?;
-    std::fs::write(
+    crate::durable::replace(
         offbox.join(crate::offbox_watch::STATUS),
         format!("pid 1\ninbox_read {}\nattached yes\n", u64::MAX / 2),
     )
