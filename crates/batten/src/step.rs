@@ -481,9 +481,16 @@ pub fn run_step(
     let journaled = Some(command)
         .filter(|command| crate::mutate::resume::is_nextest_run(command))
         .and_then(|_| crate::git::repo_root(Path::new(".")).ok())
-        .and_then(|root| crate::mutate::resume::journaled(&root, command).ok());
-    let running = journaled.as_deref().unwrap_or(command);
+        .and_then(|root| Some((crate::mutate::resume::journaled(&root, command).ok()?, root)));
+    let running = journaled
+        .as_ref()
+        .map_or(command, |(argv, _)| argv.as_slice());
     let ran = crate::exec::run_with(running, &[], &settings, &mut std::io::sink());
+    // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
+    // the whole of it; an economy either way, so its failure is swallowed.
+    if let Some((_, root)) = &journaled {
+        let _ = crate::mutate::resume::promote(root);
+    }
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && matches!(answer, Answer::Miss(_)) {
         // A record that refuses or fails here — the inputs moved while the
