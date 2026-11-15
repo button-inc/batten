@@ -358,6 +358,15 @@ pub fn canonical_remote_url(url: &str) -> String {
 ///
 /// Returns an error when `repo_root` is not a readable git repository.
 pub fn observe(repo_root: &Path) -> Result<KeyMaterial> {
+    let mut observed = observe_cheap(repo_root)?;
+    observed.root_commits = git::root_commits(repo_root)?;
+    Ok(observed)
+}
+
+/// [`observe`] without the root commits, which are the one costly field: they
+/// are found by walking every commit every ref reaches. Measured on this
+/// repository on 2026-11-15, the walk was 99% of a `Stop` hook's 185 ms.
+fn observe_cheap(repo_root: &Path) -> Result<KeyMaterial> {
     let remotes = git::remotes(repo_root)?
         .into_iter()
         .map(|(name, url)| Remote {
@@ -368,7 +377,7 @@ pub fn observe(repo_root: &Path) -> Result<KeyMaterial> {
         .collect();
     Ok(KeyMaterial {
         common_dir: git::common_dir(repo_root)?,
-        root_commits: git::root_commits(repo_root)?,
+        root_commits: Vec::new(),
         remotes,
         repo_name: state::derive_repo_name(repo_root)?,
     })
@@ -503,13 +512,24 @@ fn scan_stores() -> Result<Vec<(PathBuf, StoreRecord)>> {
 ///
 /// Returns an error when `repo_root` is not a readable git repository, or when
 /// the OS state directory cannot be resolved.
+//MUTANT-SUITE crates/batten/src/store.rs
+//MUTANT marker-path-walks-history|s@^            observed.root_commits.clone_from(\&record.key_material.root_commits);$@            observed.root_commits = git::root_commits(repo_root)?;@|a_marked_store_resolves_without_walking_history
 pub fn resolve(repo_root: &Path) -> Result<Opened> {
-    let observed = observe(repo_root)?;
+    let mut observed = observe_cheap(repo_root)?;
     let expected = state::repo_state_dir(repo_root)?;
 
     // 1. The repository's own marker is the most direct answer there is.
+    //
+    // AND IT NEEDS NO HISTORY WALK. The marker names the store outright, so the
+    // root commits decide nothing here; they would only annotate a drift. They
+    // are carried from the record instead of observed, which is what keeps the
+    // common case — every hook call in a checkout that has a store — off a walk
+    // of every commit. Every path below decides identity by evidence, and walks.
     if let Some(marked) = read_marker(&observed.common_dir) {
         if let Some(record) = read_record(&expected).filter(|record| record.id == marked) {
+            observed
+                .root_commits
+                .clone_from(&record.key_material.root_commits);
             let migrations = migration_for(&record, &observed, MatchCriterion::Marker);
             return Ok(Opened::Existing {
                 record,
@@ -518,6 +538,7 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
                 migrations,
             });
         }
+        observed.root_commits = git::root_commits(repo_root)?;
         if let Some((dir, record)) = scan_stores()?
             .into_iter()
             .find(|(_, record)| record.id == marked)
@@ -532,6 +553,8 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
         // The marker names a store that no longer exists. Fall through: the
         // criteria below may still find it, and a dangling marker must not
         // short-circuit into a fresh mint.
+    } else {
+        observed.root_commits = git::root_commits(repo_root)?;
     }
 
     // 2. The store at the expected location — is it ours, or a stranger's?
@@ -1667,6 +1690,39 @@ mod tests {
                 assert_eq!(criterion, MatchCriterion::Marker);
             }
             other => panic!("expected the marker to follow the move, got {other:?}"),
+        }
+    }
+
+    /// Fails by: a store its own marker names being resolved by a walk of every
+    /// commit, which was 99% of a `Stop` hook's cost (2026-11-15).
+    #[test]
+    fn a_marked_store_resolves_without_walking_history() {
+        let dir = crate::scratch::scratch("store-marked-no-walk");
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = repo_in(&dir, "proj");
+        let minted = commit(resolve(&repo).unwrap()).unwrap();
+        let recorded = minted.record.key_material.root_commits.clone();
+        assert_eq!(recorded.len(), 1);
+
+        // A second root, reachable from a ref: a walk would now find two. HEAD
+        // on an unborn branch makes the next commit one with no parent.
+        let head = repo.join(".git/HEAD");
+        let was = std::fs::read_to_string(&head).unwrap();
+        std::fs::write(&head, "ref: refs/heads/other\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &[], "another root").unwrap();
+        std::fs::write(&head, was).unwrap();
+        assert_eq!(observe(&repo).unwrap().root_commits.len(), 2, "the premise");
+
+        match resolve(&repo).unwrap() {
+            Opened::Existing {
+                observed,
+                migrations,
+                ..
+            } => {
+                assert_eq!(observed.root_commits, recorded, "carried, not walked");
+                assert!(migrations.is_empty(), "{migrations:?}");
+            }
+            other => panic!("expected the existing store, got {other:?}"),
         }
     }
 
