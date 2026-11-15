@@ -745,7 +745,7 @@ const EXTENSIONS: [&str; 13] = [
 /// Whether a path is shell by its name alone. The extension is read
 /// case-insensitively, as Windows reads `RUN.BAT`.
 //MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
-//MUTANT file-extension-unread|s@^    EXTENSIONS.iter().any(.extension. lower.ends_with(extension))$@    false@|an_added_shell_script_is_refused
+//MUTANT file-extension-unread|s@^        .any(.extension. lower.ends_with(extension))$@        .any(\x7c_\x7c false)@|an_added_shell_script_is_refused
 #[must_use]
 pub fn shell_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
