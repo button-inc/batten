@@ -547,10 +547,10 @@ trace\:"Add everything"))' \
 (wait)
 _arguments "${_arguments_options[@]}" : \
 '--interval=[Seconds between polls (default 30)]:interval:_default' \
-'--evict-after=[The host'\''s cache-eviction limit in seconds; absent, the wait ends only on a change]:evict-after:_default' \
+'--evict-after=[The host'\''s cache-eviction limit in seconds; absent, the wait ends only on a change]:evict_after:_default' \
 '--buffer=[Seconds subtracted from the eviction limit (default 60)]:buffer:_default' \
 '--singleton=[Hold the clone'\''s singleton lock of this name while waiting]:singleton:_default' \
-'--each-receipt=[Read one subject per receipt minted under this name, listed again on every poll]:each-receipt:_default' \
+'--each-receipt=[Read one subject per receipt minted under this name, listed again on every poll]:each_receipt:_default' \
 '--arg=[The argument key each receipt'\''s suffix is passed as, with --each-receipt]:arg:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
