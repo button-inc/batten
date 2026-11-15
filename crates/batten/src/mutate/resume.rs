@@ -5,18 +5,24 @@
 //! stopped partway kept nothing, so a stopped landing lap re-ran every case it
 //! had already passed. Here the suite runs under a nextest run-wrapper that is
 //! this binary: each case's pass is written durably the moment it passes, keyed
-//! on what decides it — the test binary's bytes, the case's argv, and every
-//! non-Rust file a case may read — and a case whose key holds reports a pass
-//! without running. A stopped run resumes; a head that moves nothing a binary
-//! holds, and no non-Rust input, re-runs nothing in it.
+//! on what decides it — the build's inputs (every Rust file the checkout holds,
+//! by content id, the manifests, lockfile, build scripts, toolchain and build
+//! flags), every non-Rust file a case may read, the case's test target and its
+//! argv — and a case whose key holds reports a pass without running. A stopped
+//! run resumes; a head that moves no input re-runs nothing.
+//!
+//! THE INPUTS, NEVER THE BINARY'S BYTES: incremental compilation is not
+//! byte-reproducible, so a key over the bytes missed on every relink of an
+//! unchanged tree (measured 2026-11-15: 9,817 new passes in one journal over an
+//! unmoved tree, after the pruner forced a rebuild between laps).
 //!
 //! ACROSS HEADS, CASE BY CASE (Ekstazi, Gligoric et al. ISSTA 2015): where the
 //! mutation sweep's reach run recorded a case — the functions it ran, the files
 //! it read — and nothing of that moved since the tree it was recorded on, the
 //! case's pass is keyed on that dependency digest, the build's inputs and the
-//! environment instead of the binary, so a head that relinks every binary still
-//! skips each case its change cannot reach. A case with no such record, or one
-//! whose record cannot be read, keeps the binary key: unknown reruns.
+//! environment instead of every Rust file the build reads, so a head that
+//! moves any of them still skips each case its change cannot reach. A case with no such record, or one
+//! whose record cannot be read, keeps the build key: unknown reruns.
 //!
 //! The wrapper is the running binary itself (`current_exe`), so the path is right
 //! on every platform and the mechanism is the one under test, as every verify
@@ -37,8 +43,8 @@ pub const CASE_ARG: &str = "__test-case";
 /// The run-wrapper's name in the generated nextest config.
 const WRAPPER: &str = "batten-resume";
 
-/// Under the run state: one directory per non-Rust input state, holding the
-/// binary-keyed passes and the binary digest cache.
+/// Under the run state: one directory per input state ([`run_key`]), holding
+/// the passes keyed on each case's target and argv.
 const BIN: &str = "bin";
 
 /// Under the run state: each selected case's dependency half of its key, by
@@ -84,31 +90,117 @@ pub fn wrapped(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::pr
 /// and named by `--config-file` ahead of any `--`, past which nextest hands
 /// arguments to the test binaries.
 ///
-/// ONE JOURNAL PER INPUT STATE: the non-Rust files every case may read are
-/// digested once here, not by each of ~10,000 wrappers, and a journal for any
-/// other state is stale by construction and goes, so the store stays one run's
-/// worth.
+/// ONE JOURNAL PER INPUT STATE: the build's inputs and the non-Rust files every
+/// case may read are digested once here ([`build_inputs`]), not by each of
+/// ~10,000 wrappers, and a journal for any other state is stale by construction
+/// and goes, so the store stays one run's worth.
 ///
 /// # Errors
 ///
 /// The state directory, the input digest, or the config cannot be made.
 pub fn journaled(root: &Path, command: &[String]) -> Result<Vec<String>> {
     let state = crate::state::repo_state_dir(root)?.join("test-run");
-    let inputs = schema::resource_digest(root)?;
-    let bins = state.join(BIN);
-    let journal = bins.join(&inputs[..16]);
+    let resources = schema::resource_ids(root)?;
+    let inputs = build_inputs(root, &resources)?;
     retire_legacy(&state)?;
+    // THE SELECTION IS AN ECONOMY: a store that cannot be read or a digest
+    // that cannot be taken leaves every case on the build key, never a skip.
+    let _ = select(root, &state, &resources, command);
+    wrap(root, &state, &inputs, command)
+}
+
+/// `command` under the journaling run-wrapper: each case's pass kept in the
+/// journal for `key` under `state`'s [`BIN`], every other key's journal
+/// removed, and the config — `config_root`'s nextest config with the wrapper
+/// on every case ([`config_text`]) — written under `state` and named ahead of
+/// any `--`.
+///
+/// ONE WRAPPER, TWO RUNS: `test:cargo` ([`journaled`]) and `test replay`'s
+/// union run (`crate::replay`) keep their cases through the same wrapper, each
+/// under its own state and key, so a case either finishes is durable the
+/// moment it passes.
+///
+/// # Errors
+///
+/// The journal or the config cannot be written, or the config does not parse.
+pub fn wrap(
+    config_root: &Path,
+    state: &Path,
+    key: &str,
+    command: &[String],
+) -> Result<Vec<String>> {
+    let bins = state.join(BIN);
+    let journal = bins.join(key.get(..16).unwrap_or(key));
     prune_others(&bins, &journal)?;
     std::fs::create_dir_all(&journal)?;
-    // THE SELECTION IS AN ECONOMY: a store that cannot be read or a digest
-    // that cannot be taken leaves every case on the binary key, never a skip.
-    let _ = select(root, &state, command);
     let config = state.join("nextest.toml");
     crate::durable::replace(
         &config,
-        config_text(root, &std::env::current_exe()?, &journal)?,
+        config_text(config_root, &std::env::current_exe()?, &journal)?,
     )?;
     Ok(with_config(command, &config.to_string_lossy()))
+}
+
+/// The format tag of a run's journal key ([`run_key`]), moved whenever what
+/// the key reads changes, so a journal of another reading is never this one's.
+const RUN_KEY_FORMAT: &str = "rk1";
+
+/// The key of one run's journal: what every case's build and run are a
+/// function of, besides its own target and argv ([`case_key`]) — the non-Rust
+/// inputs (`non_rust`, [`schema::resource_digest`]), every Rust file of
+/// `resources` by content id, the build's inputs (`build`, [`build_digest`])
+/// and the code-generation variables (`flags`, [`flags_digest`]).
+#[must_use]
+pub fn run_key(
+    non_rust: &str,
+    resources: &std::collections::BTreeMap<String, String>,
+    build: &str,
+    flags: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in [RUN_KEY_FORMAT, non_rust, build, flags] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\x1f");
+    }
+    for (path, id) in resources {
+        if Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "rs")
+        {
+            hasher.update(format!("{path}\x1f{id}\x1e").as_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// [`run_key`] over the checkout at `root`, whose content ids are `resources`
+/// ([`schema::resource_ids`]), under this process's build variables.
+///
+/// # Errors
+///
+/// The checkout cannot be read, or the compiler cannot be asked.
+pub fn build_inputs(
+    root: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    let non_rust = schema::resource_digest(root)?;
+    let build = build_digest(root, resources).context("the compiler cannot be asked")?;
+    Ok(run_key(
+        &non_rust,
+        resources,
+        &build,
+        &flags_digest(&schema::build_flags()),
+    ))
+}
+
+/// The digest of the code-generation variables `flags` ([`schema::build_flags`]).
+#[must_use]
+pub fn flags_digest(flags: &std::collections::BTreeMap<String, String>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for (key, value) in flags {
+        hasher.update(format!("{key}={value}\x1e").as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Whether `command` is a `cargo nextest run`: the one shape a step's miss runs
@@ -137,39 +229,69 @@ pub fn with_config(command: &[String], config: &str) -> Vec<String> {
 /// Write the run's selection under `state`: the start tree ([`RUN`]), an
 /// empty [`PENDING`], [`PASS`] aged, and in [`EXPECT`] the dependency half of
 /// the key of every case the sweep's reach store lets this tree select.
+/// `resources` is the tree's content ids ([`schema::resource_ids`]).
 ///
 /// # Errors
 ///
 /// The state cannot be written, or the tree cannot be read.
-fn select(root: &Path, state: &Path, command: &[String]) -> Result<usize> {
+fn select(
+    root: &Path,
+    state: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    command: &[String],
+) -> Result<usize> {
     let expect = state.join(EXPECT);
     let _ = std::fs::remove_dir_all(&expect);
     let _ = std::fs::remove_dir_all(state.join(PENDING));
     std::fs::create_dir_all(&expect)?;
     std::fs::create_dir_all(state.join(PENDING))?;
     collect_passes(&state.join(PASS), PASS_LIFETIME)?;
-    let resources = schema::resource_ids(root)?;
-    crate::durable::replace(state.join(RUN), schema::tree_ids_digest(&resources))?;
+    crate::durable::replace(state.join(RUN), schema::tree_ids_digest(resources))?;
     if !builds_as_swept(command) {
         return Ok(0);
     }
+    let held = held_cases(root, resources, &env_digest(std::env::vars_os()))?;
+    for ((name, binary), key) in &held {
+        crate::durable::replace(expect.join(expect_name(name, binary)), key)?;
+    }
+    Ok(held.len())
+}
+
+/// Every case of the sweep's reach store under the checkout at `root` whose
+/// sealed record still holds on that tree (its selection digest unmoved), with
+/// the dependency half of its key ([`expected`]) under the environment digest
+/// `env`. `resources` is the tree's content ids ([`schema::resource_ids`]).
+///
+/// ONE READING OF THE STORE, TWO CONSUMERS: [`select`] writes each into
+/// [`EXPECT`] for the run-wrapper, and `test replay` keys each modified test's
+/// verdict on it (`crate::replay`'s journal), so neither can drift from the other's
+/// notion of what a case depends on. A case missing here is unknown, and each
+/// consumer falls back to its own conservative key.
+///
+/// # Errors
+///
+/// The store's tree cannot be indexed, or the compiler cannot be asked.
+pub fn held_cases(
+    root: &Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    env: &str,
+) -> Result<std::collections::BTreeMap<(String, String), String>> {
+    let mut held = std::collections::BTreeMap::new();
     let base = crate::state::repo_state_dir(root)?
         .join("mutate")
         .join("schema")
         .join("reach");
     let sealed = schema::sealed_cases(&base);
     if sealed.is_empty() {
-        return Ok(0);
+        return Ok(held);
     }
-    let build = build_digest(root, &resources).context("the compiler cannot be asked")?;
-    let env = env_digest(std::env::vars_os());
+    let build = build_digest(root, resources).context("the compiler cannot be asked")?;
     let flags = schema::build_flags();
     let mut formats: std::collections::BTreeMap<&str, Vec<&schema::Sealed>> =
         std::collections::BTreeMap::new();
     for record in &sealed {
         formats.entry(&record.format).or_default().push(record);
     }
-    let mut written = 0;
     for (key, records) in formats {
         // A FORMAT THAT CANNOT BE READ, OR A SUITE BUILT UNDER OTHER FLAGS, is
         // unknown for every record read in it.
@@ -177,25 +299,24 @@ fn select(root: &Path, state: &Path, command: &[String]) -> Result<usize> {
             continue;
         };
         let index = schema::dependency_index(root, &format)?;
-        let build = format_build(&build, &unprobed_packages_digest(root, &resources, &format));
+        let build = format_build(&build, &unprobed_packages_digest(root, resources, &format));
         let cases: std::collections::BTreeMap<(String, String), schema::Ran> = records
             .iter()
             .map(|record| (record.case.clone(), record.ran.clone()))
             .collect();
-        let now = schema::test_digests(root, &index, &format.dirs, &cases, &resources);
+        let now = schema::test_digests(root, &index, &format.dirs, &cases, resources);
         for record in records {
             if now.get(&record.case).and_then(Option::as_deref) != Some(record.tested.as_str()) {
                 continue;
             }
             let (name, binary) = &record.case;
-            crate::durable::replace(
-                expect.join(expect_name(name, binary)),
-                expected(name, binary, &record.tested, &build, &env),
-            )?;
-            written += 1;
+            held.insert(
+                record.case.clone(),
+                expected(name, binary, &record.tested, &build, env),
+            );
         }
     }
-    Ok(written)
+    Ok(held)
 }
 
 /// The build half of a key for records read in one format: the build's inputs
@@ -528,15 +649,14 @@ pub fn config_text(root: &Path, wrapper: &Path, journal: &Path) -> Result<String
 }
 
 /// Run one case as the wrapper, or report its journaled pass: under its
-/// binary key, or under its dependency key where the run selected it.
+/// target in the run's journal, or under its dependency key where the run
+/// selected it.
 fn case(args: &[String]) -> Result<u8> {
     let (journal, test) = args.split_first().context("no journal named")?;
     let journal = PathBuf::from(journal);
     let (program, rest) = test.split_first().context("no case to run")?;
-    let marker = journal.join(case_key(
-        Key::Binary(&binary_digest(&journal, program)?),
-        test,
-    ));
+    let target = case_target(program, &std::env::current_dir()?)?;
+    let marker = journal.join(case_key(Key::Target(&target), test));
     if marker.is_file() {
         return Ok(0);
     }
@@ -567,7 +687,7 @@ fn case(args: &[String]) -> Result<u8> {
 }
 
 /// The dependency key of the case `test` of `program`, where the run selected
-/// it ([`EXPECT`]); `None` keeps it on the binary key.
+/// it ([`EXPECT`]); `None` keeps it on the build key.
 fn dependency_key(state: &Path, program: &str, test: &[String]) -> Option<String> {
     let name = super::cover::test_name(test)?;
     let binary = super::cover::binary_id(program, &std::env::current_dir().ok()?);
@@ -599,19 +719,20 @@ fn spawn_case(program: &str, rest: &[String]) -> Result<u8> {
 /// What a case's pass is keyed on besides its argv.
 #[derive(Debug, Clone, Copy)]
 pub enum Key<'a> {
-    /// Its test binary's digest ([`binary_digest`]).
-    Binary(&'a str),
+    /// Its test target ([`case_target`]), in a journal keyed on the run's
+    /// inputs ([`run_key`]).
+    Target(&'a str),
     /// The dependency half the run selected it with ([`expected`]).
     Dep(&'a str),
 }
 
-/// A case's journal key: its binary's digest or its dependency half, and its
-/// whole argv but the binary's path.
+/// A case's journal key: its target or its dependency half, and its whole
+/// argv but the binary's path.
 #[must_use]
 pub fn case_key(key: Key<'_>, test: &[String]) -> String {
     let mut hasher = blake3::Hasher::new();
     match key {
-        Key::Binary(binary) => hasher.update(binary.as_bytes()),
+        Key::Target(target) => hasher.update(b"target\x1e").update(target.as_bytes()),
         Key::Dep(expected) => hasher.update(b"dep\x1e").update(expected.as_bytes()),
     };
     for arg in test.iter().skip(1) {
@@ -621,37 +742,24 @@ pub fn case_key(key: Key<'_>, test: &[String]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// The digest of the test binary at `program`, read once per build: cached
-/// under `journal` by its path, size and modification time, so ~10,000 cases
-/// sharing a few binaries hash each once.
+/// The test target the binary at `program` builds, as nextest runs it from
+/// `package_dir`: its binary id ([`super::cover::binary_id`]) and its file
+/// name, whose cargo metadata suffix moves with the package, target, profile
+/// and features. Never the binary's bytes, which a relink of an unchanged
+/// tree moves, so a rebuilt binary over unmoved inputs keeps every pass.
 ///
 /// # Errors
 ///
-/// The binary cannot be read.
-pub fn binary_digest(journal: &Path, program: &str) -> Result<String> {
-    let meta = std::fs::metadata(program).with_context(|| format!("stat {program}"))?;
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |at| at.as_nanos());
-    let stamp = format!("{} {modified}", meta.len());
-    let cache = journal
-        .join("binaries")
-        .join(blake3::hash(program.as_bytes()).to_hex().as_str());
-    if let Ok(held) = crate::fsio::read_to_string(&cache)
-        && let Some(digest) = held.strip_prefix(&format!("{stamp} "))
-    {
-        return Ok(digest.to_owned());
-    }
-    let digest = blake3::hash(&crate::fsio::read(program)?)
-        .to_hex()
-        .to_string();
-    if let Some(parent) = cache.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    crate::durable::replace(&cache, format!("{stamp} {digest}"))?;
-    Ok(digest)
+/// `program` names no file.
+pub fn case_target(program: &str, package_dir: &Path) -> Result<String> {
+    let file = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .with_context(|| format!("no test binary in {program}"))?;
+    Ok(format!(
+        "{}\x1f{file}",
+        super::cover::binary_id(program, package_dir)
+    ))
 }
 
 #[cfg(test)]
@@ -660,30 +768,30 @@ mod tests {
     use super::*;
 
     /// Fails by: two cases sharing a key (one's pass skipping the other), or
-    /// a key that holds when the binary changed (a stale pass reused).
+    /// a key that holds across another target (a stale pass reused).
     #[test]
-    fn a_case_key_moves_with_its_binary_and_its_argv() {
+    fn a_case_key_moves_with_its_target_and_its_argv() {
         let argv = |name: &str| {
             ["bin", "--exact", name, "--nocapture"]
                 .map(String::from)
                 .to_vec()
         };
-        let one = case_key(Key::Binary("b1"), &argv("a"));
-        assert_eq!(one, case_key(Key::Binary("b1"), &argv("a")));
-        assert_ne!(one, case_key(Key::Binary("b1"), &argv("b")), "another case");
+        let one = case_key(Key::Target("b1"), &argv("a"));
+        assert_eq!(one, case_key(Key::Target("b1"), &argv("a")));
+        assert_ne!(one, case_key(Key::Target("b1"), &argv("b")), "another case");
         assert_ne!(
             one,
-            case_key(Key::Binary("b2"), &argv("a")),
-            "another build"
+            case_key(Key::Target("b2"), &argv("a")),
+            "another target"
         );
         assert_ne!(
             one,
             case_key(Key::Dep("b1"), &argv("a")),
-            "a dependency key is never a binary key"
+            "a dependency key is never a target key"
         );
         assert_eq!(
             case_key(
-                Key::Binary("b1"),
+                Key::Target("b1"),
                 &[
                     "elsewhere/bin".to_owned(),
                     "--exact".to_owned(),
@@ -692,7 +800,7 @@ mod tests {
                 ]
             ),
             one,
-            "the binary's path is its digest's business, not the key's"
+            "the binary's path is its target's business, not the key's"
         );
     }
 
@@ -742,18 +850,58 @@ mod tests {
         );
     }
 
-    /// Fails by: a rebuilt binary read from the cache (its old digest keeping
-    /// every stale pass), or an unchanged one hashed again for every case.
+    /// Fails by: a rebuilt binary over an unchanged tree missing its pass (a
+    /// key over the binary's bytes, which a relink moves), or the wrapper
+    /// running a case its journal holds.
+    ///
+    /// The binary is not executable, so a wrapper that ran it would fail.
     #[test]
-    fn a_binary_is_hashed_once_per_build() {
-        let base = crate::scratch::scratch("test-run-binary");
-        let bin = base.join("bin");
-        std::fs::write(&bin, "one").unwrap();
-        let bin = bin.to_string_lossy().into_owned();
-        let first = binary_digest(&base, &bin).unwrap();
-        assert_eq!(first, binary_digest(&base, &bin).unwrap());
-        std::fs::write(&bin, "a rebuilt binary").unwrap();
-        assert_ne!(first, binary_digest(&base, &bin).unwrap(), "a new build");
+    fn a_rebuilt_binary_over_an_unchanged_tree_keeps_its_pass() {
+        let base = crate::scratch::scratch("test-run-rebuilt");
+        let journal = base.join("journal");
+        std::fs::create_dir_all(&journal).unwrap();
+        let bin = base.join("fix-0123456789abcdef");
+        std::fs::write(&bin, "one build").unwrap();
+        let program = bin.to_string_lossy().into_owned();
+        let test = [program.as_str(), "--exact", "tests::a", "--nocapture"].map(String::from);
+        let target = case_target(&program, &std::env::current_dir().unwrap()).unwrap();
+        std::fs::write(journal.join(case_key(Key::Target(&target), &test)), "").unwrap();
+        std::fs::write(&bin, "a relinked build, other bytes").unwrap();
+        let mut args = vec![journal.to_string_lossy().into_owned()];
+        args.extend(test.iter().cloned());
+        assert_eq!(case(&args).unwrap(), 0, "the pass holds across the relink");
+        assert_ne!(
+            target,
+            case_target(
+                &base.join("fix-fedcba9876543210").to_string_lossy(),
+                &std::env::current_dir().unwrap()
+            )
+            .unwrap(),
+            "another profile or feature set builds another target"
+        );
+    }
+
+    /// Fails by: a `.rs` edit that leaves the run's journal key standing (a
+    /// pass of the old code read back), a non-Rust content id moving it (the
+    /// non-Rust half is `resource_digest`'s), or an unchanged tree moving it.
+    #[test]
+    fn a_rust_edit_moves_the_run_key_and_nothing_else_of_the_tree_does() {
+        let ids = |lib: &str, notes: &str| -> std::collections::BTreeMap<String, String> {
+            [("src/lib.rs", lib), ("notes.txt", notes)]
+                .map(|(path, id)| (path.to_owned(), id.to_owned()))
+                .into()
+        };
+        let held = run_key("n", &ids("1", "1"), "b", "f");
+        assert_eq!(held, run_key("n", &ids("1", "1"), "b", "f"));
+        assert_ne!(held, run_key("n", &ids("2", "1"), "b", "f"), "a .rs edit");
+        assert_eq!(held, run_key("n", &ids("1", "2"), "b", "f"));
+        for moved in [
+            run_key("n2", &ids("1", "1"), "b", "f"),
+            run_key("n", &ids("1", "1"), "b2", "f"),
+            run_key("n", &ids("1", "1"), "b", "f2"),
+        ] {
+            assert_ne!(held, moved);
+        }
     }
 
     /// Fails by: a pass promoted after the tree moved under its run (a pass of

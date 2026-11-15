@@ -27,10 +27,29 @@
 //! Each finding is a pointer (rule 4): the test's key and a token. It is admitted
 //! only through the `asked` ledger, the one route `config lint` uses, so one
 //! landing puts every changed expectation to the owner in one recorded question.
+//!
+//! # Crash-only, test by test
+//!
+//! The replay used to be all-or-nothing: it rematerialised HEAD on every run and
+//! judged every modified test in one union run with no per-test record, so a
+//! stopped lap kept nothing. Now each modified test's verdict — passed,
+//! expectation changed, or charged as not compiling — is journaled durably under
+//! `replay/journal/` the moment it is read, keyed on what decides it: the spliced
+//! base body, the test's dependency key at HEAD (the one `test:cargo` selects by,
+//! [`crate::mutate::resume::held_cases`]; HEAD's tree id where that is unknown),
+//! the build's inputs and the base commit. A rerun reads the journal first and
+//! runs the union only over what it does not hold, and `replay/tree` is kept
+//! while HEAD's tree id is the one it was materialised from.
+//!
+//! Inside the union run, each case is kept too: the run goes under the same
+//! nextest run-wrapper `test:cargo` uses ([`crate::mutate::resume::wrap`]),
+//! journaled under a key over the base commit, HEAD's tree, every spliced
+//! body and the build ([`union_key`]), so a lap stopped mid-run keeps every
+//! case it passed and the next one reads those back as passes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -357,7 +376,7 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     }
 
     if !splices.is_empty() {
-        findings.extend(replay(root, &splices)?);
+        findings.extend(replay(root, &fork, &after, &splices)?);
     }
 
     let smells: Vec<crate::lint::Smell> = findings
@@ -389,17 +408,27 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
 /// **Outside the checkout**, CLOUD-2096's lesson: a tree or a build cache inside
 /// the repository is walked by its own scans. The target directory persists, so a
 /// later lap builds warm.
+///
+/// **Journaled first** ([`Journal`]): a test whose verdict the journal holds is
+/// read back, never rerun, and when it holds every one no tree is placed and
+/// nothing is built. `fork` is the base commit and `after` HEAD's Rust by path.
 fn replay(
     root: &Path,
+    fork: &str,
+    after: &BTreeMap<String, String>,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
 ) -> Result<Vec<Finding>> {
     let state = crate::state::repo_state_dir(root)?.join("replay");
     let tree = state.join("tree");
-    if tree.exists() {
-        std::fs::remove_dir_all(&tree)
-            .with_context(|| format!("test replay: clear {}", tree.display()))?;
+    let head =
+        crate::git::resolve_ref(root, "HEAD^{tree}")?.context("test replay: HEAD names no tree")?;
+    // THE BASE BY COMMIT, never by a name that can move under the journal.
+    let base = crate::git::resolve_ref(root, fork)?.unwrap_or_else(|| fork.to_owned());
+    let journal = Journal::open(root, &state, &base, &head, splices);
+    if !journal.lacks_any(splices) {
+        return resume(&tree, splices, &journal, &|_| None);
     }
-    crate::git::materialize_rev(root, "HEAD", &tree)?;
+    place_tree(root, &state, &tree, &head, after)?;
     // THE BUILD LIVES UNDER THE CHECKOUT'S `target/`, THE TREE OUTSIDE IT (CLOUD-2196).
     // CLOUD-2096 moved the tree out because a checkout's scans walk it; the build
     // cache went with it, and there no reclaim could reach it: measured on #1132,
@@ -450,7 +479,401 @@ fn replay(
     // to the spliced bodies that hold them; those alone are findings, and the
     // rest are rebuilt without them. An error no body holds keeps the old,
     // conservative answer: every remaining test is a finding.
-    judge(&tree, splices, &|still| run_union(&tree, still, &published))
+    //
+    // EACH CASE IS KEPT THE MOMENT IT PASSES (step 17), under `test:cargo`'s
+    // own run-wrapper, so a lap stopped mid-run loses only the cases still
+    // running. Keyed over every spliced body rather than the ones still
+    // standing, so a resumed run filtered to the rest reads its passes back.
+    let wrapped = journal
+        .union(splices)
+        .map(|key| (state.join("test-run"), key));
+    resume(&tree, splices, &journal, &|still| {
+        run_union(&tree, still, &published, wrapped.as_ref())
+    })
+}
+
+/// The file beside `replay/tree` naming the HEAD tree id it was materialised
+/// from; absent while no whole tree stands there.
+const TREE_ID: &str = "tree.id";
+
+/// HEAD at `tree`: kept when [`TREE_ID`] names `head`, HEAD's tree id, with its
+/// Rust put back to HEAD's text (`after`) wherever an earlier run's splice was
+/// left; materialised afresh otherwise.
+///
+/// THE ID GOES FIRST AND COMES BACK LAST, so a run stopped mid-materialise
+/// leaves no tree that claims a HEAD it does not wholly hold.
+fn place_tree(
+    root: &Path,
+    state: &Path,
+    tree: &Path,
+    head: &str,
+    after: &BTreeMap<String, String>,
+) -> Result<()> {
+    let marker = state.join(TREE_ID);
+    let recorded = crate::fsio::read_to_string(&marker).ok();
+    if tree.is_dir() && recorded.as_deref().map(str::trim_end) == Some(head) {
+        return restore(tree, after);
+    }
+    if marker.exists() {
+        std::fs::remove_file(&marker)
+            .with_context(|| format!("test replay: clear {}", marker.display()))?;
+    }
+    if tree.exists() {
+        std::fs::remove_dir_all(tree)
+            .with_context(|| format!("test replay: clear {}", tree.display()))?;
+    }
+    crate::git::materialize_rev(root, "HEAD", tree)?;
+    crate::durable::replace(&marker, head)
+        .with_context(|| format!("test replay: record {}", marker.display()))
+}
+
+/// Rewrite every Rust file of a kept `tree` whose text is not HEAD's (`after`):
+/// the splices a stopped run left, and any a test wrote into its own tree.
+fn restore(tree: &Path, after: &BTreeMap<String, String>) -> Result<()> {
+    for (path, text) in after {
+        let at = tree.join(path);
+        if crate::fsio::read_to_string(&at).ok().as_deref() != Some(text.as_str()) {
+            crate::durable::replace(&at, text)
+                .with_context(|| format!("test replay: restore {path}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// What one modified test's base body was judged against HEAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// It ran and passed.
+    Passed,
+    /// It ran and failed: its expectation changed.
+    Changed,
+    /// HEAD's code would not compile it, and the refusal was charged to it.
+    Charged,
+}
+
+impl Verdict {
+    /// Every verdict, in the order [`Verdict::read`] tries them.
+    const ALL: [Self; 3] = [Self::Passed, Self::Changed, Self::Charged];
+
+    /// The word the journal holds for it.
+    fn word(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Changed => "expectation-changed",
+            Self::Charged => "charged-non-compiling",
+        }
+    }
+
+    /// The verdict a journal entry holds, or `None` for one it does not name.
+    fn read(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|verdict| verdict.word() == text.trim_end())
+    }
+}
+
+/// Where each modified test's verdict is kept the moment it is read, and what
+/// each entry's key is taken over besides the test and its base body.
+///
+/// UNKNOWN NEVER HITS ACROSS HEADS: a test with no dependency key keys on
+/// HEAD's whole tree id, and a build whose inputs cannot be read journals
+/// nothing at all, so every test reruns rather than one being read back wrong.
+struct Journal {
+    /// `replay/journal` under the repository's state directory.
+    dir: PathBuf,
+    /// The base commit the bodies were read at.
+    base: String,
+    /// The build's inputs ([`crate::mutate::resume::build_digest`]), `None`
+    /// where they cannot be read.
+    build: Option<String>,
+    /// HEAD's tree id: the dependency half of a test with none of its own.
+    tree: String,
+    /// Each test's dependency key at HEAD, by `<path>::<inner>`, where one is
+    /// known ([`dependency_keys`]).
+    deps: BTreeMap<String, String>,
+}
+
+impl Journal {
+    /// The journal under `state` for the base commit `base` and HEAD's tree id
+    /// `tree`, with each test of `splices` whose dependency key is known.
+    fn open(
+        root: &Path,
+        state: &Path,
+        base: &str,
+        tree: &str,
+        splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    ) -> Self {
+        let resources = crate::mutate::schema::resource_ids(root).ok();
+        let build = resources
+            .as_ref()
+            .and_then(|ids| crate::mutate::resume::build_digest(root, ids));
+        let deps = resources
+            .map(|ids| dependency_keys(root, &ids, splices))
+            .unwrap_or_default();
+        Self {
+            dir: state.join("journal"),
+            base: base.to_owned(),
+            build,
+            tree: tree.to_owned(),
+            deps,
+        }
+    }
+
+    /// The entry name of `test` in `path`, or `None` when nothing is journaled.
+    fn key(&self, path: &str, test: &Modified) -> Option<String> {
+        let build = self.build.as_deref()?;
+        let id = format!("{path}::{}", test.inner);
+        let body = blake3::hash(test.base_body.as_bytes()).to_hex().to_string();
+        let dependency = self.deps.get(&id).map_or_else(
+            || format!("tree\x1e{}", self.tree),
+            |key| format!("dep\x1e{key}"),
+        );
+        let mut hasher = blake3::Hasher::new();
+        for part in [
+            "rj1",
+            id.as_str(),
+            body.as_str(),
+            dependency.as_str(),
+            build,
+            self.base.as_str(),
+        ] {
+            hasher.update(part.as_bytes());
+            hasher.update(b"\x1f");
+        }
+        Some(hasher.finalize().to_hex().to_string())
+    }
+
+    /// The verdict journaled for `test` in `path`, if any.
+    fn read(&self, path: &str, test: &Modified) -> Option<Verdict> {
+        let word = crate::fsio::read_to_string(self.dir.join(self.key(path, test)?)).ok()?;
+        Verdict::read(&word)
+    }
+
+    /// Journal `verdict` for `test` in `path`, durably. An economy: an entry
+    /// that cannot be written costs the next run a rerun, never this run its
+    /// verdict.
+    fn record(&self, path: &str, test: &Modified, verdict: Verdict) {
+        let Some(key) = self.key(path, test) else {
+            return;
+        };
+        if std::fs::create_dir_all(&self.dir).is_ok() {
+            let _ = crate::durable::replace(self.dir.join(key), verdict.word());
+        }
+    }
+
+    /// Whether any test of `splices` has no journaled verdict.
+    fn lacks_any(&self, splices: &BTreeMap<String, (String, Vec<Modified>)>) -> bool {
+        splices.iter().any(|(path, (_, modified))| {
+            modified.iter().any(|test| self.read(path, test).is_none())
+        })
+    }
+
+    /// The key the union run's per-case journal is kept under for `splices`
+    /// ([`union_key`]), under this process's build variables; `None` where the
+    /// build cannot be read, which runs the union unwrapped.
+    fn union(&self, splices: &BTreeMap<String, (String, Vec<Modified>)>) -> Option<String> {
+        let build = self.build.as_deref()?;
+        let flags = crate::mutate::resume::flags_digest(&crate::mutate::schema::build_flags());
+        Some(union_key(&self.base, &self.tree, build, &flags, splices))
+    }
+}
+
+/// The key of the union run's per-case journal: the base commit `base`,
+/// HEAD's tree id `tree`, the build's inputs `build`
+/// ([`crate::mutate::resume::build_digest`]), the code-generation variables
+/// `flags`, and every spliced body of `splices` by path and test.
+///
+/// HEAD'S TREE ID STANDS FOR THE CHECKOUT'S CONTENT IDS: the union builds HEAD
+/// as materialised, never the working tree, so the tree id names every byte a
+/// case's build reads besides the splices.
+///
+/// THE WHOLE SPLICE SET, NOT THE BODIES STILL STANDING: a resumed run splices
+/// only the tests the verdict journal lacks, and keyed on those it would read
+/// back none of the passes the stopped run kept. The bound, stated: a pass is
+/// read back across runs that spliced different subsets of the same set, so
+/// one test's base body is taken never to be code another test runs, the
+/// bound the module doc already states for helpers.
+fn union_key(
+    base: &str,
+    tree: &str,
+    build: &str,
+    flags: &str,
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in ["ru1", base, tree, build, flags] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\x1f");
+    }
+    for (path, (_, modified)) in splices {
+        for test in modified {
+            for part in [path.as_str(), test.inner.as_str(), test.base_body.as_str()] {
+                hasher.update(part.as_bytes());
+                hasher.update(b"\x1f");
+            }
+            hasher.update(b"\x1e");
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Each modified test's dependency key at HEAD, by `<path>::<inner>`: the key
+/// `test:cargo` selects its case by ([`crate::mutate::resume::held_cases`]),
+/// where the reach store holds one for it on this tree. Every other test is
+/// left out, and keys on HEAD's tree id.
+///
+/// THE KEY TRACED HEAD'S BODY, NOT THE BASE BODY THAT RUNS, so it stands only
+/// where the base body names nothing the head body does not ([`names`]): what
+/// the base body can reach by name or read by path is then in the head body's
+/// key. A working tree that is not HEAD keys nothing: the store is read off
+/// the checkout, and the replay runs HEAD.
+fn dependency_keys(
+    root: &Path,
+    resources: &BTreeMap<String, String>,
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+) -> BTreeMap<String, String> {
+    let mut deps = BTreeMap::new();
+    if !crate::git::changed_paths(root).is_ok_and(|changed| changed.is_empty()) {
+        return deps;
+    }
+    let env = crate::mutate::resume::env_digest(std::env::vars_os());
+    let Ok(held) = crate::mutate::resume::held_cases(root, resources, &env) else {
+        return deps;
+    };
+    for (path, (head_text, modified)) in splices {
+        let Some((module, binary)) = case_of(root, path) else {
+            continue;
+        };
+        for test in modified {
+            let head_body = head_text.get(test.head_body.0..test.head_body.1);
+            let covered = names(&test.base_body)
+                .zip(head_body.and_then(names))
+                .is_some_and(|(base, head)| base.is_subset(&head));
+            if !covered {
+                continue;
+            }
+            let name = if module.is_empty() {
+                test.inner.clone()
+            } else {
+                format!("{module}::{}", test.inner)
+            };
+            if let Some(key) = held.get(&(name, binary.clone())) {
+                deps.insert(format!("{path}::{}", test.inner), key.clone());
+            }
+        }
+    }
+    deps
+}
+
+/// The libtest module prefix and nextest binary id a `#[test]` in `path` runs
+/// under, where the file's place in its innermost package names them: the
+/// library's modules, or an integration-test target and its modules. `None`
+/// where it cannot (a binary's or example's file), which keys on the tree; a
+/// `#[path]`ed module names a case no record holds, which does too.
+fn case_of(root: &Path, path: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let (at, package) = (0..parts.len()).rev().find_map(|depth| {
+        let manifest = root.join(parts[..depth].join("/")).join("Cargo.toml");
+        let table = crate::fsio::read_to_string(manifest)
+            .ok()?
+            .parse::<toml::Table>()
+            .ok()?;
+        let name = table.get("package")?.get("name")?.as_str()?.to_owned();
+        Some((depth, name))
+    })?;
+    match &parts[at..] {
+        ["src", "main.rs"] | ["src", "bin", ..] => None,
+        ["src", rest @ ..] => Some((module_of(rest, "lib")?, package)),
+        ["tests", file] => {
+            let target = file.strip_suffix(".rs")?.replace('-', "_");
+            Some((String::new(), format!("{package}::{target}")))
+        }
+        ["tests", target, rest @ ..] => Some((
+            module_of(rest, "main")?,
+            format!("{package}::{}", target.replace('-', "_")),
+        )),
+        _ => None,
+    }
+}
+
+/// The module path of a target's file from its parts under the target's
+/// directory, `crate_root` (`lib`, `main`) being the file that is the crate.
+fn module_of(rest: &[&str], crate_root: &str) -> Option<String> {
+    let (last, dirs) = rest.split_last()?;
+    let stem = last.strip_suffix(".rs")?;
+    let mut segments: Vec<&str> = dirs.to_vec();
+    if !(stem == "mod" || (dirs.is_empty() && stem == crate_root)) {
+        segments.push(stem);
+    }
+    Some(segments.join("::"))
+}
+
+/// Every identifier and every non-numeric literal `body` holds: what it can
+/// reach by name or read by path. `None` when it does not lex.
+fn names(body: &str) -> Option<BTreeSet<String>> {
+    /// Add every name in `stream`, groups descended into, to `out`.
+    fn gather(stream: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+        for token in stream {
+            match token {
+                proc_macro2::TokenTree::Group(group) => gather(group.stream(), out),
+                proc_macro2::TokenTree::Ident(ident) => {
+                    out.insert(ident.to_string());
+                }
+                proc_macro2::TokenTree::Literal(literal) => {
+                    let text = literal.to_string();
+                    if !text.starts_with(|c: char| c.is_ascii_digit()) {
+                        out.insert(text);
+                    }
+                }
+                proc_macro2::TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    let stream: proc_macro2::TokenStream = body.parse().ok()?;
+    let mut out = BTreeSet::new();
+    gather(stream, &mut out);
+    Some(out)
+}
+
+/// Every modified test's finding: each the journal holds read back, the rest
+/// judged through `run` ([`judge`]), which journals each verdict as it reads
+/// it. Sorted, so a verdict read back prints where a judged one would.
+fn resume(
+    tree: &Path,
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    journal: &Journal,
+    run: UnionRun<'_>,
+) -> Result<Vec<Finding>> {
+    let mut findings = Vec::new();
+    let mut rest: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
+    for (path, (head_text, modified)) in splices {
+        let mut left = Vec::new();
+        for test in modified {
+            match journal.read(path, test) {
+                Some(Verdict::Passed) => {}
+                Some(Verdict::Changed | Verdict::Charged) => findings.push(changed(path, test)),
+                None => left.push(test.clone()),
+            }
+        }
+        if !left.is_empty() {
+            rest.insert(path.clone(), (head_text.clone(), left));
+        }
+    }
+    if !rest.is_empty() {
+        findings.extend(judge(tree, &rest, journal, run)?);
+    }
+    findings.sort_by(|a, b| (&a.path, a.line, &a.key).cmp(&(&b.path, b.line, &b.key)));
+    Ok(findings)
+}
+
+/// `test`'s `test-expectation-changed` finding in `path`.
+fn changed(path: &str, test: &Modified) -> Finding {
+    Finding {
+        key: format!("{path}::{}", test.inner),
+        path: path.to_owned(),
+        line: test.line,
+        id: SmellId::TestExpectationChanged,
+    }
 }
 
 /// One union run over the splices still standing: its exit code and output.
@@ -463,9 +886,14 @@ type UnionRun<'a> = &'a dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Op
 /// is charged to itself and the rest rebuilt without it — a sequence of runs a
 /// real `nextest` produces only over a real broken body, and a run handed in
 /// produces on demand.
+///
+/// **EACH VERDICT IS JOURNALED THE MOMENT IT IS DECIDED** ([`Journal::record`]):
+/// a charged body as it is charged, each other test as its result is read. The
+/// verdicts themselves are exactly what this loop decided before the journal.
 fn judge(
     tree: &Path,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    journal: &Journal,
     run: UnionRun<'_>,
 ) -> Result<Vec<Finding>> {
     let mut splices = splices.clone();
@@ -490,26 +918,32 @@ fn judge(
                         && let Some(at) = modified.iter().position(|test| test.inner == inner)
                     {
                         let test = modified.remove(at);
-                        findings.push(Finding {
-                            key: format!("{path}::{}", test.inner),
-                            path: path.clone(),
-                            line: test.line,
-                            id: SmellId::TestExpectationChanged,
-                        });
+                        journal.record(&path, &test, Verdict::Charged);
+                        findings.push(changed(&path, &test));
                     }
                 }
                 continue;
             }
         }
+        // A REFUSAL NO BODY HOLDS IS THE UNION'S, NEVER ONE TEST'S: it fails
+        // every test still standing, and journaled it would outlive the body
+        // that caused it. So it is reported as before and journaled not at all.
+        let unattributed = outcome
+            .as_ref()
+            .is_some_and(|(code, output)| *code == BUILD_FAILED && output.contains(COMPILE_FAILED));
         for (path, (_, modified)) in &splices {
             for test in modified {
-                if !passes(outcome.as_ref(), &test.inner)? {
-                    findings.push(Finding {
-                        key: format!("{path}::{}", test.inner),
-                        path: path.clone(),
-                        line: test.line,
-                        id: SmellId::TestExpectationChanged,
-                    });
+                let passed = passes(outcome.as_ref(), &test.inner)?;
+                if !unattributed {
+                    let verdict = if passed {
+                        Verdict::Passed
+                    } else {
+                        Verdict::Changed
+                    };
+                    journal.record(path, test, verdict);
+                }
+                if !passed {
+                    findings.push(changed(path, test));
                 }
             }
         }
@@ -518,11 +952,16 @@ fn judge(
 }
 
 /// Run every still-spliced test in one `nextest` call: its outcome, or `None`
-/// when it could not be spawned.
+/// when it could not be spawned. With `wrapped` — the journal's state
+/// directory and key ([`Journal::union`]) — each case runs under the
+/// journaling run-wrapper, so a case passed by an earlier run over the same
+/// key reports its pass without running; a wrapper that cannot be set up runs
+/// the union as before, since the journal is an economy.
 fn run_union(
     tree: &Path,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
     published: &[(String, Option<String>)],
+    wrapped: Option<&(PathBuf, String)>,
 ) -> Option<(i32, String)> {
     let tests: Vec<&str> = splices
         .values()
@@ -548,6 +987,10 @@ fn run_union(
     .iter()
     .map(|word| (*word).to_owned())
     .collect();
+    let argv = match wrapped {
+        Some((state, key)) => crate::mutate::resume::wrap(tree, state, key, &argv).unwrap_or(argv),
+        None => argv,
+    };
     // `piped_argv` because it runs the child IN `tree`: `run_in_env`'s root
     // names only where a capture is stored, and the child inherits this
     // process's directory — the checkout, whose HEAD test passes.
@@ -1004,12 +1447,277 @@ mod tests {
                 String::from("        PASS [   0.010s] batten::it tests::kept\n"),
             ))
         };
-        let findings = judge(&tree, &splices, &run).unwrap();
+        let findings = judge(&tree, &splices, &journal("replay-judge-journal"), &run).unwrap();
         assert_eq!(
             findings.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(),
             ["src/x.rs::tests::narrowed"]
         );
         assert_eq!(runs.get(), 2);
+    }
+
+    /// The splices a test of the journal judges through.
+    type Splices = BTreeMap<String, (String, Vec<Modified>)>;
+
+    /// `kept`'s base body at the start of the journal's fixtures.
+    const KEPT_BASE: &str = "assert_eq!(1, 1);\n        assert_eq!(2, 2);";
+
+    /// Two modified tests in `src/x.rs`: `kept`, whose base body is `kept_base`
+    /// and passes, and `narrowed`, whose base body names a helper HEAD's code
+    /// will not compile it against. With the line that refusal points at.
+    fn two_modified(kept_base: &str) -> (Splices, usize) {
+        let base = BASE.replace("assert_eq!(1, 1);", kept_base);
+        let head = BASE
+            .replace("assert_eq!(1, 1);", "assert_eq!(9, 9);")
+            .replace(
+                "assert_eq!(super::helper(), 1);",
+                "let _ = super::helper();",
+            );
+        let changed = compare(&base, &head);
+        assert_eq!(changed.modified.len(), 2, "both bodies changed");
+        let helper_line = splice(&head, &changed.modified)
+            .lines()
+            .position(|line| line.contains("super::helper(), 1"))
+            .expect("the base body is spliced")
+            + 1;
+        let mut splices = BTreeMap::new();
+        splices.insert(String::from("src/x.rs"), (head, changed.modified));
+        (splices, helper_line)
+    }
+
+    /// The refusal rustc gives `narrowed`'s base body, at `helper_line`.
+    fn refusal(helper_line: usize) -> (i32, String) {
+        (
+            BUILD_FAILED,
+            format!(
+                "error[E0425]: cannot find function `helper`\n   --> src/x.rs:{helper_line}:24\n\
+                 error: could not compile `x`\n"
+            ),
+        )
+    }
+
+    /// A run in which `kept` passed.
+    fn kept_passes() -> (i32, String) {
+        (
+            0,
+            String::from("        PASS [   0.010s] batten::it tests::kept\n"),
+        )
+    }
+
+    /// The tests a union run was asked to run.
+    fn standing(still: &Splices) -> Vec<&str> {
+        still
+            .values()
+            .flat_map(|(_, modified)| modified.iter().map(|test| test.inner.as_str()))
+            .collect()
+    }
+
+    /// Each finding's key.
+    fn keys(findings: &[Finding]) -> Vec<&str> {
+        findings
+            .iter()
+            .map(|finding| finding.key.as_str())
+            .collect()
+    }
+
+    /// A journal at `name`'s scratch directory, its base, build and tree fixed.
+    fn journal(name: &str) -> Journal {
+        Journal {
+            dir: crate::scratch::scratch(name).join("journal"),
+            base: String::from("base"),
+            build: Some(String::from("build")),
+            tree: String::from("tree"),
+            deps: BTreeMap::new(),
+        }
+    }
+
+    /// A tree for the judge seam to splice into.
+    fn judged_tree(name: &str) -> PathBuf {
+        let tree = crate::scratch::scratch(name);
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        tree
+    }
+
+    /// Judge both fixtures to the end into `journal`: `narrowed` charged,
+    /// `kept` passed, in the two runs that takes.
+    fn judge_all(tree: &Path, journal: &Journal) {
+        let (splices, helper_line) = two_modified(KEPT_BASE);
+        let runs = std::cell::Cell::new(0);
+        let run = |_: &Splices| {
+            runs.set(runs.get() + 1);
+            Some(if runs.get() == 1 {
+                refusal(helper_line)
+            } else {
+                kept_passes()
+            })
+        };
+        let findings = resume(tree, &splices, journal, &run).unwrap();
+        assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
+        assert_eq!(runs.get(), 2, "a charge, then the rebuild without it");
+    }
+
+    /// Fails by: a verdict journaled only at the end of a run (a stopped run
+    /// keeps nothing, and the resume charges `narrowed` again), or a journaled
+    /// test run again.
+    #[test]
+    fn a_stopped_replay_resumes_by_running_only_the_rest() {
+        let (splices, helper_line) = two_modified(KEPT_BASE);
+        let tree = judged_tree("replay-stopped");
+        let journal = journal("replay-stopped-journal");
+        let runs = std::cell::Cell::new(0);
+        // THE LAP STOPS AFTER THE CHARGE: the rebuild never reports.
+        let stopped = |_: &Splices| {
+            runs.set(runs.get() + 1);
+            (runs.get() == 1).then(|| refusal(helper_line))
+        };
+        assert!(
+            resume(&tree, &splices, &journal, &stopped).is_err(),
+            "a rebuild that never reported measured nothing"
+        );
+        assert_eq!(runs.get(), 2);
+        let resumed = std::cell::Cell::new(0);
+        let rest = |still: &Splices| {
+            resumed.set(resumed.get() + 1);
+            assert_eq!(
+                standing(still),
+                ["tests::kept"],
+                "only the unjudged test runs"
+            );
+            Some(kept_passes())
+        };
+        let findings = resume(&tree, &splices, &journal, &rest).unwrap();
+        assert_eq!(
+            keys(&findings),
+            ["src/x.rs::tests::narrowed"],
+            "the charge is read back"
+        );
+        assert_eq!(resumed.get(), 1);
+    }
+
+    /// Fails by: a verdict not journaled, or one journaled under a key that
+    /// moves between two runs over the same HEAD and base.
+    #[test]
+    fn an_unchanged_head_and_base_rerun_nothing() {
+        let tree = judged_tree("replay-unchanged");
+        let journal = journal("replay-unchanged-journal");
+        judge_all(&tree, &journal);
+        let (splices, _) = two_modified(KEPT_BASE);
+        let runs = std::cell::Cell::new(0);
+        let none = |_: &Splices| {
+            runs.set(runs.get() + 1);
+            None::<(i32, String)>
+        };
+        let findings = resume(&tree, &splices, &journal, &none).unwrap();
+        assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
+        assert_eq!(runs.get(), 0, "every verdict is read back");
+        assert!(!journal.lacks_any(&splices));
+    }
+
+    /// Fails by: a key that does not see the base body (the stale pass read
+    /// back), or one that moves every test's key with one body.
+    #[test]
+    fn a_changed_base_body_reruns_only_its_test() {
+        let tree = judged_tree("replay-moved-body");
+        let journal = journal("replay-moved-body-journal");
+        judge_all(&tree, &journal);
+        let (splices, _) = two_modified("assert_eq!(1, 1);\n        assert_eq!(4, 4);");
+        let runs = std::cell::Cell::new(0);
+        let run = |still: &Splices| {
+            runs.set(runs.get() + 1);
+            assert_eq!(standing(still), ["tests::kept"], "only the moved body runs");
+            Some(kept_passes())
+        };
+        let findings = resume(&tree, &splices, &journal, &run).unwrap();
+        assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
+        assert_eq!(runs.get(), 1);
+    }
+
+    /// Fails by: a journal key that holds across a moved base commit, build,
+    /// body, test or (for a test with no dependency key) HEAD tree; one that a
+    /// tree move its dependency key does not see moves; or an entry kept
+    /// where the build cannot be read.
+    #[test]
+    fn a_journal_key_moves_with_what_decides_the_verdict() {
+        let (splices, _) = two_modified(KEPT_BASE);
+        let (path, (_, modified)) = splices.iter().next().unwrap();
+        let with = |base: &str, build: Option<&str>, tree: &str, dep: bool| Journal {
+            dir: PathBuf::from("journal"),
+            base: base.to_owned(),
+            build: build.map(str::to_owned),
+            tree: tree.to_owned(),
+            deps: dep
+                .then(|| (format!("{path}::{}", modified[0].inner), String::from("d")))
+                .into_iter()
+                .collect(),
+        };
+        let key = |journal: &Journal, test: &Modified| journal.key(path, test);
+        let one = key(&with("b", Some("c"), "t", false), &modified[0]);
+        assert!(one.is_some());
+        assert_eq!(one, key(&with("b", Some("c"), "t", false), &modified[0]));
+        for moved in [
+            key(&with("b2", Some("c"), "t", false), &modified[0]),
+            key(&with("b", Some("c2"), "t", false), &modified[0]),
+            key(&with("b", Some("c"), "t2", false), &modified[0]),
+            key(&with("b", Some("c"), "t", false), &modified[1]),
+            key(&with("b", Some("c"), "t", true), &modified[0]),
+        ] {
+            assert_ne!(one, moved);
+        }
+        let mut rebased = modified[0].clone();
+        rebased.base_body.push(' ');
+        assert_ne!(one, key(&with("b", Some("c"), "t", false), &rebased));
+        assert_eq!(
+            key(&with("b", Some("c"), "t", true), &modified[0]),
+            key(&with("b", Some("c"), "t2", true), &modified[0]),
+            "a tree move the dependency key does not see reruns nothing"
+        );
+        assert_eq!(key(&with("b", None, "t", false), &modified[0]), None);
+    }
+
+    /// Fails by: a union journal key that holds across a moved base commit,
+    /// HEAD tree, build, build variable or spliced body (a pass of another
+    /// spliced tree read back), or one that moves between two runs over the
+    /// same of all of them.
+    #[test]
+    fn a_union_journal_key_moves_with_what_the_union_builds() {
+        let (splices, _) = two_modified(KEPT_BASE);
+        let (moved, _) = two_modified("assert_eq!(1, 1);\n        assert_eq!(4, 4);");
+        let one = union_key("b", "t", "c", "f", &splices);
+        assert_eq!(one, union_key("b", "t", "c", "f", &splices));
+        for other in [
+            union_key("b2", "t", "c", "f", &splices),
+            union_key("b", "t2", "c", "f", &splices),
+            union_key("b", "t", "c2", "f", &splices),
+            union_key("b", "t", "c", "f2", &splices),
+            union_key("b", "t", "c", "f", &moved),
+        ] {
+            assert_ne!(one, other);
+        }
+        assert!(
+            journal("replay-union-key").union(&splices).is_some(),
+            "a readable build keys the union"
+        );
+        let unbuilt = Journal {
+            build: None,
+            ..journal("replay-union-unbuilt")
+        };
+        assert_eq!(unbuilt.union(&splices), None, "no build, no journal");
+    }
+
+    /// Fails by: a base body that names something its head body does not read
+    /// as covered by the head body's key, or a file's module path misread.
+    #[test]
+    fn a_base_body_is_covered_only_where_it_names_nothing_new() {
+        let head = names("{ let four = super::add(2, 2); assert_eq!(four, 4); }").unwrap();
+        let covered = |body: &str| names(body).unwrap().is_subset(&head);
+        assert!(covered("{ assert_eq!(super::add(2, 2), 5); }"));
+        assert!(!covered("{ assert_eq!(super::sub(2, 2), 0); }"));
+        assert!(!covered("{ let _ = include_str!(\"other.json\"); }"));
+        assert_eq!(module_of(&["lib.rs"], "lib").as_deref(), Some(""));
+        assert_eq!(module_of(&["a", "mod.rs"], "lib").as_deref(), Some("a"));
+        assert_eq!(module_of(&["a", "b.rs"], "lib").as_deref(), Some("a::b"));
+        assert_eq!(module_of(&["main.rs"], "main").as_deref(), Some(""));
+        assert_eq!(module_of(&["step.rs"], "main").as_deref(), Some("step"));
+        assert_eq!(module_of(&["notes.txt"], "lib"), None);
     }
 
     #[test]

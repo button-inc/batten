@@ -61,10 +61,12 @@ const RECORD: &str = "task-argv";
 /// answer — could-not-look rather than a best-effort read, because a field this
 /// build interprets differently is worse than a field it does not have.
 ///
-/// 2 since step 14: the record carries every task's BODY beside its argv, so
-/// a record written before it — which has no bodies — does not answer rather
-/// than answering that no task runs anything.
-const SCHEMA: u32 = 2;
+/// NOT BUMPED FOR AN ADDED FIELD (step 17): every task's BODY rides beside its
+/// argv as an optional field, and a record written before it — which has
+/// none — answers task existence as before while its bodies are
+/// could-not-look, never "no task runs anything". A bump would have refused
+/// the whole record to every reader, the released engine's included.
+const SCHEMA: u32 = 1;
 
 /// The largest record this will read.
 ///
@@ -113,9 +115,10 @@ struct Record {
     configs: Vec<PathBuf>,
     /// The answer.
     tasks: BTreeMap<String, Option<Vec<String>>>,
-    /// Every task's body lines ([`TaskBodies`]).
+    /// Every task's body lines ([`TaskBodies`]); absent from a record written
+    /// before step 14, whose bodies are then could-not-look.
     #[serde(default)]
-    bodies: BTreeMap<String, Vec<String>>,
+    bodies: Option<BTreeMap<String, Vec<String>>>,
     /// The keyed files' stat identity when `key` was derived
     /// ([`crate::pinned::stamped`]); absent from a record written before
     /// CLOUD-2440, which is then believed only by its key.
@@ -155,15 +158,21 @@ pub fn cached(root: &Path) -> TaskFacts {
 /// [`cached`], under the same refusals.
 #[must_use]
 pub fn cached_bodies(root: &Path) -> TaskBodies {
-    read(root).map_or(Look::CouldNotLook, |record| Look::Is(record.bodies))
+    read(root).map_or(Look::CouldNotLook, |record| answers(record).1)
 }
 
 /// [`cached`] and [`cached_bodies`] from one read of the record.
 #[must_use]
 pub fn cached_with_bodies(root: &Path) -> (TaskFacts, TaskBodies) {
-    read(root).map_or((Look::CouldNotLook, Look::CouldNotLook), |record| {
-        (Look::Is(record.tasks), Look::Is(record.bodies))
-    })
+    read(root).map_or((Look::CouldNotLook, Look::CouldNotLook), answers)
+}
+
+/// What a record that stands answers: its tasks, and its bodies where it
+/// carries them — could-not-look where it does not, which leaves
+/// `input.call["task-programs"]` null and every guard reading it closed.
+fn answers(record: Record) -> (TaskFacts, TaskBodies) {
+    let bodies = record.bodies.map_or(Look::CouldNotLook, Look::Is);
+    (Look::Is(record.tasks), bodies)
 }
 
 /// The record, when it is about the manifest as it stands; `None` for every
@@ -290,7 +299,7 @@ fn write(
         key,
         configs: configs.to_vec(),
         tasks: tasks.clone(),
-        bodies: bodies.clone(),
+        bodies: Some(bodies.clone()),
         stamps,
     };
     let Ok(body) = serde_json::to_string(&record) else {
@@ -512,6 +521,30 @@ mod tests {
         }
     }
 
+    /// Fails by: a record written before bodies existed refused whole (every
+    /// reader of a released engine's receipt losing task existence), or read
+    /// as bodies that run nothing (`task-programs` an empty list, so a guard
+    /// following a `mise run` finds nothing to refuse).
+    #[test]
+    fn a_record_without_bodies_answers_tasks_and_leaves_task_programs_null() {
+        let record: Record = serde_json::from_str(
+            r#"{"schema":1,"generator":"batten@0.0.0","key":"k","configs":[],
+                "tasks":{"lint":["cargo","clippy"],"ci":null}}"#,
+        )
+        .expect("a record without bodies still parses");
+        assert_eq!(record.schema, SCHEMA, "an added field is no new shape");
+        let (tasks, bodies) = answers(record);
+        let Look::Is(tasks) = tasks else {
+            panic!("task existence still answers");
+        };
+        assert!(tasks.contains_key("lint") && tasks.contains_key("ci"));
+        assert_eq!(bodies, Look::CouldNotLook);
+        assert_eq!(
+            crate::hook::task_programs("mise run lint", &bodies),
+            serde_json::Value::Null
+        );
+    }
+
     #[test]
     fn a_single_command_task_yields_its_argv() {
         let tasks = named(&table("[tasks]\nlint = \"cargo clippy --all\"\n"));
@@ -603,7 +636,7 @@ mod tests {
                 key: crate::pinned::key(configs).unwrap(),
                 configs: configs.to_vec(),
                 tasks: BTreeMap::from([(name, None)]),
-                bodies: BTreeMap::new(),
+                bodies: Some(BTreeMap::new()),
                 // None: the caller's manifest yields no stamp, so `record` writes
                 // none either and the sized body is the one it writes.
                 stamps: crate::pinned::Stamps::new(),

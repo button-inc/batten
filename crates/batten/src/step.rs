@@ -42,6 +42,15 @@
 //! cache and must not be declared; `--arg` is the one door for a value outside
 //! the tree, and only where the caller can compute the whole of it.
 //!
+//! ONE TOOL LINE IS THE ENGINE'S OWN, AND ANSWERED IN-PROCESS (step 17):
+//! [`INPUTS_DIGEST`], the digest of the out-of-tree state `enforce --half tree`
+//! reads. Spawned, it cost a `cargo run` build check and a policy load on every
+//! lap, for a value this binary computes directly. A tool line rather than a
+//! new row key, because the released engine reads this authority too and a
+//! row it does not know would refuse the whole file; an engine without the
+//! in-process answer spawns the line, and one that cannot answer it has no key
+//! and runs the step.
+//!
 //! # Fail closed, everywhere
 //!
 //! A key that cannot be computed — an authority that will not load, an
@@ -231,8 +240,7 @@ fn material(
         lines.push(format!("command {}", serde_json::to_string(command).ok()?));
     }
     for tool in &row.tools {
-        let (code, said) =
-            crate::exec::piped_argv(root, tool, "", crate::exec::Diagnostics::Drop, &[])?;
+        let (code, said) = tool_said(root, tool)?;
         let said = said.trim();
         if code != 0 || said.is_empty() {
             return None;
@@ -271,6 +279,25 @@ fn material(
     lines.push(String::from("inputs"));
     lines.extend(entries.into_values());
     Some(lines.join("\n"))
+}
+
+/// The tool line the cache answers in-process rather than spawning: the
+/// digest `enforce --half tree --inputs-digest` prints, by the same function
+/// ([`crate::tree_inputs_digest_in`]).
+pub const INPUTS_DIGEST: [&str; 5] = ["batten", "enforce", "--half", "tree", "--inputs-digest"];
+
+/// What `tool` says run in `root`, as its exit code and stdout: answered
+/// in-process for [`INPUTS_DIGEST`] (a digest that cannot be taken is a
+/// non-zero code, so no key), spawned through the placed boundary for every
+/// other line. `None` where it could not be spawned.
+fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
+    if tool.iter().map(String::as_str).eq(INPUTS_DIGEST) {
+        return Some(
+            crate::tree_inputs_digest_in(root)
+                .map_or_else(|_| (1, String::new()), |said| (0, said)),
+        );
+    }
+    crate::exec::piped_argv(root, tool, "", crate::exec::Diagnostics::Drop, &[])
 }
 
 /// A free-form value as one JSON string, or the value itself where it cannot be
@@ -577,5 +604,40 @@ mod tests {
         );
         assert_eq!(material(&root, &row(silent), &[], None), None);
         assert_eq!(material(&root, &row(fails), &[], None), None);
+    }
+
+    /// Fails by: the engine's own digest line spawned rather than answered
+    /// in-process (a build and a policy load per lap), answered with anything
+    /// but `--inputs-digest`'s own digest, or a key that holds when the
+    /// out-of-tree state it digests moves.
+    #[test]
+    fn the_inputs_digest_line_is_answered_in_process() {
+        let root = crate::scratch::scratch("step-inputs-digest");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let native: Vec<String> = INPUTS_DIGEST
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        let digest = crate::tree_inputs_digest_in(&root).unwrap();
+        assert_eq!(tool_said(&root, &native), Some((0, digest.clone())));
+        let row = Step {
+            id: String::from("s"),
+            inputs: vec![String::from("input")],
+            tools: vec![native],
+        };
+        let held = material(&root, &row, &[], None).expect("the line keys the step");
+        assert!(held.contains(&digest), "keyed on the in-process digest");
+        std::fs::write(
+            root.join(crate::resolve::LOCAL_CONFIG_FILE),
+            "version = 1\n",
+        )
+        .unwrap();
+        assert_ne!(
+            material(&root, &row, &[], None),
+            Some(held),
+            "a moved local config moves the key"
+        );
     }
 }
