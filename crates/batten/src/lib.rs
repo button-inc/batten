@@ -26357,10 +26357,41 @@ fn write_records_for(
     // whole table was a quarter of a `PostToolUse`. `recorder::pattern_ids`
     // brings the Ready grammar's ids along when a row asks for it, so the
     // grammar below resolves exactly when it is needed and not otherwise.
-    let selected: Vec<&crate::recorder::Declared> = recorders
+    //
+    // TWO PHASES, because a tool name selects far more than a call: every
+    // shell command arrives as one tool. Phase one compiles only the rows'
+    // input SELECTORS and asks which rows this call is about; phase two
+    // compiles what those rows read. `append_all` re-asks selection against
+    // the phase-two table, where a row phase one dropped finds its selector
+    // absent and is not selected again — the same answer, by the same test.
+    let by_tool: Vec<&crate::recorder::Declared> = recorders
         .iter()
         .filter(|row| rules::selects_tool_name(&row.tool, raw_tool))
         .collect();
+    let selectors: std::collections::BTreeSet<String> = by_tool
+        .iter()
+        .flat_map(|row| row.requires_input_matching.values().cloned())
+        .collect();
+    let selecting = policy.compiled_patterns_named(&selectors);
+    let probe = crate::recorder::Context {
+        result: &result,
+        input,
+        programs: policy.declared_programs(),
+        patterns: &selecting,
+        grammar: None,
+        root,
+        branch: Some(&branch),
+        now: 0,
+    };
+    let selected: Vec<&crate::recorder::Declared> = by_tool
+        .into_iter()
+        .filter(|row| {
+            crate::recorder::outcome(row, &probe) != crate::recorder::Outcome::NotSelected
+        })
+        .collect();
+    if selected.is_empty() {
+        return;
+    }
     let patterns = policy.compiled_patterns_named(&crate::recorder::pattern_ids(&selected));
     // RESOLVED ONCE, AND A FAILURE IS `None` RATHER THAN A RETURN. A consumer
     // declaring no column that asks this authority has no use for a grammar, and
@@ -27249,13 +27280,14 @@ fn capture_budget() -> Option<crate::config_model::CaptureConfig> {
     if let CaptureRead::Read(kept) = HookLoads::capture() {
         return kept;
     }
+    // THROUGH `config::load`, so a warm call decodes the validated parse the
+    // cross-process cache holds rather than parsing the TOML (2026-11-15: the
+    // one remaining parse was still a third of a `PostToolUse`). Tolerant as
+    // before: an authority that will not load leaves the engine's defaults.
     let read = || {
-        let text = crate::fsio::read_to_string(
-            hook_session_home().join(crate::config_model::CONFIG_FILE),
-        )
-        .ok()?;
-        let parsed: crate::config_model::Config = toml::from_str(&text).ok()?;
-        parsed.capture
+        config::load(&hook_session_home().join(crate::config_model::CONFIG_FILE))
+            .ok()?
+            .capture
     };
     let answer = read();
     HookLoads::keep_capture(answer.clone());
