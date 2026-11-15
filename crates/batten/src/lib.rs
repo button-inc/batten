@@ -22911,6 +22911,13 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // ([`call_anchor`], CLOUD-2779), and `call:<head>` for a record spent
     // before that.
     let root = hook_authority_root();
+    // NO RECORD, NO ADMISSION: `admitted` answers none for an empty store, so
+    // the HEAD and the epoch it would be asked under are not resolved for it.
+    // A shortcut with the same answer, so it carries no mutant: the cost gate
+    // is `perf-assert`, and `holds_any`'s own case pins what it reads.
+    if !admission::holds_any(root) {
+        return Ok(decision);
+    }
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
     };
