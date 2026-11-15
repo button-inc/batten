@@ -10180,7 +10180,7 @@ no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the 
 rule = "source carry unsafe"
 path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
-expires = "2026-11-14"
+expires = "2027-02-14"
 
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
