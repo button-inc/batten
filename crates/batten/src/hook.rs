@@ -10006,7 +10006,7 @@ fn entry_tasks(
 /// A SEPARATE KEY, NOT MORE `programs`: a task's body is the sanctioned
 /// spelling of what it runs, so a module that refuses a bare `cargo clippy`
 /// must not refuse `mise run lint` for containing one.
-fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) -> Value {
+pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) -> Value {
     let crate::facts::Look::Is(bodies) = bodies else {
         return Value::Null;
     };
