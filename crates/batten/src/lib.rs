@@ -28586,13 +28586,19 @@ struct LintReport<'a> {
 /// pointers are relative to the anchor and every subdirectory resolves the same
 /// one.
 fn anchor() -> PathBuf {
-    let here = PathBuf::from(".");
+    anchor_at(Path::new("."))
+}
+
+/// [`anchor`] as resolved from the directory `here` rather than the working
+/// directory, so an in-process caller resolves what a child spawned in `here`
+/// would.
+fn anchor_at(here: &Path) -> PathBuf {
     if here.join(config::CONFIG_FILE).is_file() {
-        return here;
+        return here.to_path_buf();
     }
     // The worktree's own authority before the repository's (CLOUD-2532): from a
     // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
-    config::authority_root(&here).unwrap_or(here)
+    config::authority_root(here).unwrap_or_else(|_| here.to_path_buf())
 }
 
 /// Filter `findings` against this checkout's baseline, and fold what drifted
@@ -28637,6 +28643,17 @@ fn run_inputs_digest(flags: &cli::EnforceFlags, out: &mut dyn Write) -> Result<E
     let root = anchor();
     writeln!(out, "{}", tree_inputs_digest(&root)?)?;
     Ok(ExitCode::Success)
+}
+
+/// The digest `enforce --half tree --inputs-digest` prints when run in `dir`,
+/// taken in-process: what the `[[step]]` cache keys that tool line on without
+/// spawning a build and a policy load for it (step 17, `crate::step`).
+///
+/// # Errors
+///
+/// As [`tree_inputs_digest`].
+pub(crate) fn tree_inputs_digest_in(dir: &Path) -> Result<String> {
+    tree_inputs_digest(&anchor_at(dir))
 }
 
 /// The digest [`run_inputs_digest`] prints.

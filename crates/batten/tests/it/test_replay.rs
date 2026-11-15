@@ -259,3 +259,50 @@ fn a_replay_builds_where_the_prune_can_reach_it() {
         "no build tree is left under the state directory"
     );
 }
+
+/// CRASH-ONLY: each verdict is journaled the moment it is read, so a rerun over
+/// the same HEAD and base reads every one back and builds nothing. The build
+/// tree is removed between the runs; a rerun that judged anything would
+/// rebuild it, and one that read nothing back would not name the test again.
+#[test]
+fn a_rerun_over_the_same_head_and_base_reads_every_verdict_back() {
+    let (dir, base) = repo("replay-journaled");
+    narrowed(&dir);
+    let first = replay(&dir, &base);
+    assert_eq!(first.status.code(), Some(2), "{}", text(&first));
+    let built = dir.join("target").join("replay");
+    assert!(built.is_dir(), "the first run builds: {}", text(&first));
+    std::fs::remove_dir_all(&built).unwrap();
+    let second = replay(&dir, &base);
+    assert_eq!(second.status.code(), Some(2), "{}", text(&second));
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&first.stdout),
+        "the journaled verdict reads as the judged one"
+    );
+    assert!(
+        !built.exists(),
+        "every verdict was journaled, so nothing was built"
+    );
+}
+
+/// The kept tree is HEAD's: a HEAD that moves rematerialises it, and the test
+/// whose base body is unchanged but whose HEAD moved is judged again, here to
+/// a different verdict.
+#[test]
+fn a_moved_head_judges_again() {
+    let (dir, base) = repo("replay-moved-head");
+    narrowed(&dir);
+    let first = replay(&dir, &base);
+    assert_eq!(first.status.code(), Some(2), "{}", text(&first));
+    head(
+        &dir,
+        &BASE.replace(
+            "assert_eq!(super::add(2, 2), 4);",
+            "assert!(super::add(2, 2) > 3);",
+        ),
+    );
+    let second = replay(&dir, &base);
+    assert!(second.status.success(), "{}", text(&second));
+    assert!(second.stdout.is_empty(), "{}", text(&second));
+}
