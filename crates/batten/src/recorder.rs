@@ -1029,6 +1029,57 @@ fn validate_shape(
     Ok(())
 }
 
+/// The `[[pattern]]` ids `rows` can read while they are evaluated, the Ready
+/// grammar's among them where a row asks an authority that needs it.
+///
+/// WHAT LETS A CALL COMPILE ONLY THE PATTERNS IT USES. Compiling the whole
+/// table for every call a row selects was a quarter of a `PostToolUse` on this
+/// repository's table (2026-11-15). The walk is over the rows' serialised form,
+/// so a [`Value`] variant added later that names a pattern under `section`'s
+/// keys is found without this function being taught it; an id it misses is a
+/// column recording could-not-look, never a wrong token.
+#[must_use]
+pub fn pattern_ids(rows: &[&Declared]) -> std::collections::BTreeSet<String> {
+    fn walk(value: &serde_json::Value, ids: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if let Some(section) = fields.get("section") {
+                    for key in ["label", "select"] {
+                        if let Some(id) = section.get(key).and_then(serde_json::Value::as_str) {
+                            ids.insert(id.to_owned());
+                        }
+                    }
+                }
+                if let Some(ask) = fields
+                    .get("authority")
+                    .and_then(|authority| authority.get("ask"))
+                    .and_then(serde_json::Value::as_str)
+                    && matches!(ask, "ready" | "closing-keys")
+                {
+                    ids.extend(
+                        crate::ready::REQUIRED_PATTERNS
+                            .iter()
+                            .map(|id| (*id).to_owned()),
+                    );
+                }
+                for nested in fields.values() {
+                    walk(nested, ids);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, ids)),
+            _ => {}
+        }
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for row in rows {
+        ids.extend(row.requires_input_matching.values().cloned());
+        if let Ok(serialised) = serde_json::to_value(row) {
+            walk(&serialised, &mut ids);
+        }
+    }
+    ids
+}
+
 /// Every id one expression names, checked against what the config declares.
 fn validate_value(
     recorder: &str,
@@ -1335,6 +1386,44 @@ mod outcome_tests {
             requires_recorded: None,
             columns: Vec::new(),
         }
+    }
+
+    /// Fails by: a pattern a selected row reads left uncompiled — its column
+    /// would record could-not-look — or the Ready grammar's ids missing for a
+    /// row that asks it.
+    #[test]
+    fn a_rows_pattern_ids_are_every_one_it_can_read() {
+        let mut row = declared(&[], &[("command", "fetch")]);
+        let column: Column = serde_json::from_value(serde_json::json!({
+            "name": "c",
+            "value": {"section": {"from": {"result": "body"}, "label": "lab", "select": "sel"}},
+        }))
+        .expect("a test literal parses");
+        row.columns.push(column);
+        let ids = pattern_ids(&[&row]);
+        let expected: std::collections::BTreeSet<String> = ["fetch", "lab", "sel"]
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect();
+        assert_eq!(ids, expected);
+
+        let mut asking = declared(&[], &[]);
+        asking.columns.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "r",
+                "value": {"authority": {"ask": "ready", "stdin": {"result": "body"},
+                                        "read": {"status": {"0": "ready"}}}},
+            }))
+            .expect("a test literal parses"),
+        );
+        let asked = pattern_ids(&[&asking]);
+        for id in crate::ready::REQUIRED_PATTERNS {
+            assert!(asked.contains(*id), "{id} is compiled for a Ready column");
+        }
+        assert!(
+            pattern_ids(&[&declared(&[], &[])]).is_empty(),
+            "a row naming no pattern compiles none"
+        );
     }
 
     /// CLOUD-1126's three-valued read, over the two arms that used to be one.

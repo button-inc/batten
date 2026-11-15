@@ -20959,7 +20959,10 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
     };
-    let Ok((epoch, _)) = epoch::describe(root, None) else {
+    // THE CACHED EPOCH, which is byte-identical to the cold one or a bug
+    // (CLOUD-232). The cold read hashed every tracked policy file on every
+    // refused tool call: 53% of a refused `PreToolUse`, measured 2026-11-15.
+    let Ok((epoch, _)) = epoch::describe_cached(root, None) else {
         return Ok(decision);
     };
     let anchor = admission::Anchor::Call { head }.token();
@@ -24829,7 +24832,15 @@ fn write_records_for(
     let Ok(Some(branch)) = git::current_branch(root) else {
         return;
     };
-    let patterns = policy.compiled_patterns();
+    // ONLY THE PATTERNS THE SELECTED ROWS CAN READ (2026-11-15): compiling the
+    // whole table was a quarter of a `PostToolUse`. `recorder::pattern_ids`
+    // brings the Ready grammar's ids along when a row asks for it, so the
+    // grammar below resolves exactly when it is needed and not otherwise.
+    let selected: Vec<&crate::recorder::Declared> = recorders
+        .iter()
+        .filter(|row| rules::selects_tool_name(&row.tool, raw_tool))
+        .collect();
+    let patterns = policy.compiled_patterns_named(&crate::recorder::pattern_ids(&selected));
     // RESOLVED ONCE, AND A FAILURE IS `None` RATHER THAN A RETURN. A consumer
     // declaring no column that asks this authority has no use for a grammar, and
     // refusing to write its records because a vocabulary it never asked for is
@@ -25642,10 +25653,31 @@ fn collect_before_admitting(
 /// Read separately from the policy load below, and deliberately tolerant: a
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
+///
+/// ONCE PER HOOK CALL. A `PostToolUse` asks for it up to three times, and each
+/// read parsed the whole authority: on this repository's 962 KB `batten.toml`
+/// that was a third of the call (2026-11-15). The answer is kept in the call's
+/// [`HookLoads`] scope, so it dies with the call like every other memo there.
+//MUTANT capture-budget-reparsed|s@^    if let CaptureRead::Read(kept) = HookLoads::capture() {$@    if let CaptureRead::Read(kept) = CaptureRead::Unread {@|a_post_tool_call_reads_the_capture_bound_once
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
-    let parsed: config::Config = toml::from_str(&text).ok()?;
-    parsed.capture
+    if let CaptureRead::Read(kept) = HookLoads::capture() {
+        return kept;
+    }
+    let read = || {
+        let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
+        let parsed: config::Config = toml::from_str(&text).ok()?;
+        parsed.capture
+    };
+    let answer = read();
+    HookLoads::keep_capture(answer.clone());
+    CAPTURE_PARSES.with(|count| count.set(count.get() + 1));
+    answer
+}
+
+thread_local! {
+    /// How many times this thread parsed the authority for the capture bound:
+    /// what a case reads to hold the parse to once per call.
+    static CAPTURE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The directory `batten hook` reads its authority from (CLOUD-824).
@@ -25816,6 +25848,18 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
 struct HookLoads {
     resolved: Vec<((PathBuf, Overrides), std::rc::Rc<resolve::Resolved>)>,
     loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
+    /// [`capture_budget`]'s answer, once it has been read in this scope.
+    capture: CaptureRead,
+}
+
+/// Whether this hook call has read the capture bound yet, and what it read.
+/// An enum rather than a nested `Option`, so "not read yet" and "read, and the
+/// authority declares none" are two names rather than two depths of `None`.
+#[derive(Clone, Default)]
+enum CaptureRead {
+    #[default]
+    Unread,
+    Read(Option<capture::CaptureConfig>),
 }
 
 thread_local! {
@@ -25839,9 +25883,29 @@ impl HookLoads {
             *cell.borrow_mut() = Some(Self {
                 resolved: Vec::new(),
                 loaded: Vec::new(),
+                capture: CaptureRead::Unread,
             });
         });
         HookLoadScope
+    }
+
+    /// The capture bound as this scope holds it; [`CaptureRead::Unread`]
+    /// outside a scope.
+    fn capture() -> CaptureRead {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map_or(CaptureRead::Unread, |loads| loads.capture.clone())
+        })
+    }
+
+    /// Keep the capture bound for the rest of the scope; outside one, nothing.
+    fn keep_capture(answer: Option<capture::CaptureConfig>) {
+        HOOK_LOADS.with(|cell| {
+            if let Some(loads) = cell.borrow_mut().as_mut() {
+                loads.capture = CaptureRead::Read(answer);
+            }
+        });
     }
 
     fn recall(here: &Path, overrides: &Overrides, harness: hook::Harness) -> Option<HookConfig> {
@@ -30758,6 +30822,19 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: each of a post-tool call's three asks for the capture bound
+    /// parsing the whole authority again — a third of the call on a large one.
+    #[test]
+    fn a_post_tool_call_reads_the_capture_bound_once() {
+        let parses = || CAPTURE_PARSES.with(std::cell::Cell::get);
+        let _scope = HookLoads::scope();
+        let before = parses();
+        let first = capture_budget();
+        assert_eq!(capture_budget(), first);
+        assert_eq!(capture_budget(), first);
+        assert_eq!(parses() - before, 1, "one parse for the call");
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
