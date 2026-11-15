@@ -135,6 +135,8 @@ fn the_release_rules_are_clean_one_release_ahead() {
         batten::policy::Vocabulary::from(&config),
         &scratch,
         rules::RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: batten::policy::ModuleChecks::RunOverSelection,
             scope: &rules::Scope::Tree,
             surface: batten::facts::Surface::Check,

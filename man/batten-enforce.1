@@ -4,7 +4,7 @@
 .SH NAME
 batten\-enforce \- Run every configured rule, including kinds that execute a configured command
 .SH SYNOPSIS
-\fBbatten enforce\fR [\fB\-\-rule\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten enforce\fR [\fB\-\-rule\fR] [\fB\-\-half\fR] [\fB\-\-keyed\-base\fR] [\fB\-\-inputs\-digest\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run every configured rule, including kinds that execute a configured command
 .SH OPTIONS
@@ -12,8 +12,27 @@ Run every configured rule, including kinds that execute a configured command
 \fB\-\-rule\fR \fI<rule>\fR
 Run only the declared rules with these ids (repeatable)
 .TP
+\fB\-\-half\fR
+Judge only the tree half (receipt\-keyed on the index) or the live half of the rows
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+tree: Rows whose verdict is a function of the indexed tree alone
+.IP \(bu 2
+live: Every other row, and any row whose half cannot be established
+.RE
+.TP
+\fB\-\-keyed\-base\fR \fI<keyed_base>\fR
+A ref whose merge base the tree half\*(Aqs receipt keys, admitting ratchets against it (repeatable)
+.TP
+\fB\-\-inputs\-digest\fR
+With \-\-half tree: print a digest of the out\-of\-tree state that half reads, and judge nothing
+.TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)

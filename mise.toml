@@ -3686,19 +3686,34 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # installed is a fault of the environment, not a verdict about the tree, and `1` is
 # already what the engine emits for "a `command` rule whose binary cannot run".
 #
-# NO RECEIPT ANY MORE, AND SO NO CAPTURE (CLOUD-843). The capture-and-re-exit
-# above existed so a receipt could be written after a zero exit. The receipt is
-# gone because it was never sound: `enforce` reads state no pathspec names — the
-# record stores under the git directory (`input.tree.records`), captures, the
-# forge's recorded answers — so a record flipping to a deny value with no
-# tracked change hit a tree-keyed receipt and skipped the gate. A `[[step]]` row
-# keys index entries, tool answers and arguments only, so this step has no row.
-# `enforce` is the chain's LAST entry, so its code is the task's with nothing
-# after it to replace one; `provision apply` runs first, and an array entry
-# that fails stops the task.
+# NO CAPTURE (CLOUD-843). The capture-and-re-exit above existed so a receipt
+# could be written after a zero exit, and a WHOLE-RUN receipt was never sound:
+# `enforce` reads state no pathspec names — the record stores under the git
+# directory (`input.tree.records`), captures, the forge's recorded answers — so
+# a record flipping to a deny value with no tracked change hit a tree-keyed
+# receipt and skipped the gate.
+#
+# SO THE RUN IS SPLIT, AND ONLY THE HALF A KEY CAN COVER IS RECEIPTED (step 13a).
+# `enforce --half tree` judges the rows whose verdict is a function of the
+# indexed tree alone — `rules::Rule::half` decides, and anything it cannot
+# establish is live — under `[[step]] enforce-tree`, which keys index entries,
+# the toolchain, the merge base with `origin/main` (what a `--keyed-base` ratchet
+# counts against), `HEAD^{tree}`, the UTC date (waivers lapse by date) and
+# `enforce --half tree --inputs-digest`, the engine's digest of the out-of-tree
+# state the half still reads — the store baseline and admissions above all. A hit
+# skips the half. `enforce --half live` then judges every other row, and the
+# ledger, budgets, transcript, judges and sinks, unreceipted, every time. Each
+# half applies the baseline entries of its own rows. Under `CI` the step cache is
+# off, so CI judges both halves in full.
+#
+# Each entry's code stops the chain on a non-zero exit, so a tree-half `2`
+# stops before the live half and is the task's code; `enforce --half live` is
+# the LAST entry, so a clean tree half leaves the task's code to it with nothing
+# after it to replace one. `provision apply` runs first.
 run = [
   "cargo run --quiet -p batten -- provision apply",
-  "cargo run --quiet -p batten -- enforce",
+  "cargo run --quiet -p batten -- step run enforce-tree -- cargo run --quiet -p batten -- enforce --half tree --keyed-base origin/main",
+  "cargo run --quiet -p batten -- enforce --half live",
 ]
 
 [tasks.policy-budget]

@@ -360,13 +360,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
         Some(Command::Check(flags)) => run_check(&flags, mode, &overrides, out, err),
+        Some(Command::Enforce(flags)) if flags.inputs_digest => run_inputs_digest(&flags, out),
         Some(Command::Enforce(flags)) => run_rules(
             out,
             err,
             mode,
             &overrides,
             rules::run_all_over,
-            RunRequest::spawning(flags.json, &flags.rule),
+            RunRequest::spawning(flags.json, &flags.rule).split(flags.half, &flags.keyed_base),
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, mode, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
@@ -3613,6 +3614,8 @@ fn run_baseline(
         policy::Vocabulary::from(&config),
         &root,
         rules::RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: policy::ModuleChecks::Run,
             scope: &rules::Scope::Tree,
             // A TREE walk, so the read surface — the same answer the sibling
@@ -10729,6 +10732,8 @@ fn admission_anchor(
         },
         root,
         rules::RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: policy::ModuleChecks::RunOverSelection,
             scope: &rules::Scope::Tree,
             // A TREE verb, so the read surface: this re-runs one declared rule
@@ -25028,6 +25033,8 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
         vocabulary,
         root,
         rules::RunOptions {
+            half: None,
+            keyed_bases: &[],
             // OVER THE SELECTION, for the mint's reason (CLOUD-1571): one row
             // run alone leaves every other row's class unraised, and `Run`'s
             // registry equality refused the scan over that, so this rung was
@@ -28441,16 +28448,131 @@ fn anchor() -> PathBuf {
 ///
 /// A checkout with no bound store, or no baseline in it, returns `findings`
 /// untouched.
+/// `enforce --half tree --inputs-digest` (step 13a): one blake3 line over
+/// exactly the out-of-tree state the tree half reads, so a `[[step]]` row naming
+/// it as a tool keys that state too.
+///
+/// What the tree half reads beside the index, each framed by a label and a
+/// length so no two inputs can run together: the stored baseline's bytes; every
+/// admission record in the store, by name; the admission blocks
+/// `apply_admissions` reads off `HEAD` and `HEAD^2`; the secret-identity key a
+/// `secrets` row fingerprints with; `batten.local.toml`; and each setting's
+/// environment variable. An absent input hashes as `none`, never as empty.
+///
+/// # Errors
+///
+/// A [`error::UsageError`] (exit `1`) without `--half tree`; an I/O failure
+/// resolving the store as an internal error (exit `3`).
+fn run_inputs_digest(flags: &cli::EnforceFlags, out: &mut dyn Write) -> Result<ExitCode> {
+    if flags.half != Some(rules::Half::Tree) {
+        return Err(error::UsageError::raise(
+            "`--inputs-digest` keys the tree half's receipt and takes `--half tree`",
+        ));
+    }
+    let root = anchor();
+    writeln!(out, "{}", tree_inputs_digest(&root)?)?;
+    Ok(ExitCode::Success)
+}
+
+/// The digest [`run_inputs_digest`] prints.
+fn tree_inputs_digest(root: &Path) -> Result<String> {
+    fn frame(hasher: &mut blake3::Hasher, label: &str, bytes: Option<&[u8]>) {
+        hasher.update(label.as_bytes());
+        hasher.update(b"\0");
+        match bytes {
+            Some(bytes) => {
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
+            None => {
+                hasher.update(b"none");
+            }
+        }
+        hasher.update(b"\n");
+    }
+    let read = |path: Option<PathBuf>| path.and_then(|path| fsio::read(path).ok());
+    let mut hasher = blake3::Hasher::new();
+    frame(
+        &mut hasher,
+        "baseline",
+        read(baseline::path(root)?).as_deref(),
+    );
+    let mut records: Vec<(String, Vec<u8>)> = admission::store_dir(root)
+        .ok()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            Some((name, fsio::read(entry.path()).ok()?))
+        })
+        .collect();
+    records.sort();
+    frame(
+        &mut hasher,
+        "admissions",
+        Some(&(records.len() as u64).to_le_bytes()),
+    );
+    for (name, bytes) in &records {
+        frame(&mut hasher, &format!("admission {name}"), Some(bytes));
+    }
+    for rev in ["HEAD", "HEAD^2"] {
+        let blocks = git::commit_record(root, rev).ok().map(|record| {
+            let mut text = String::new();
+            for block in admission::blocks(&record.body) {
+                text.push_str(&block.claimed);
+                text.push('\t');
+                text.push_str(&admission::canonical(&block.binding));
+                text.push('\n');
+            }
+            text
+        });
+        frame(
+            &mut hasher,
+            &format!("blocks {rev}"),
+            blocks.as_deref().map(str::as_bytes),
+        );
+    }
+    frame(
+        &mut hasher,
+        "secret-key",
+        read(secrets::key_path(root).ok()).as_deref(),
+    );
+    frame(
+        &mut hasher,
+        resolve::LOCAL_CONFIG_FILE,
+        read(Some(root.join(resolve::LOCAL_CONFIG_FILE))).as_deref(),
+    );
+    for name in resolve::SETTINGS.iter().filter_map(|setting| setting.env) {
+        let value = std::env::var_os(name);
+        frame(
+            &mut hasher,
+            name,
+            value.as_ref().map(|value| value.as_encoded_bytes()),
+        );
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 fn apply_baseline(
     findings: Vec<rules::Finding>,
     scan: &rules::Scan,
     root: &Path,
+    // The tree half's judged rows (step 13a): only their entries apply there.
+    judged: Option<&std::collections::BTreeSet<&str>>,
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<Vec<rules::Finding>> {
-    let Some(recorded) = baseline::load(root)? else {
+    let Some(mut recorded) = baseline::load(root)? else {
         return Ok(findings);
     };
+    // A split `enforce` holds each half to its own rows' entries (step 13a).
+    recorded.entries.retain(|entry| {
+        !scan.other_half.contains(&entry.rule)
+            && judged.is_none_or(|rows| rows.contains(entry.rule.as_str()))
+    });
     let (mut kept, drifted) = baseline::apply(findings, &recorded, &scan.not_evaluated);
     kept.extend(drifted.iter().filter_map(baseline::Drifted::finding));
 
@@ -29226,6 +29348,10 @@ struct RunRequest<'a> {
     /// and orthogonal: `--rule` narrows WHICH ROWS run, this narrows WHICH FILES
     /// they are selected against.
     scope: CheckScope<'a>,
+    /// Which half of a split `enforce` to judge (step 13a); `None` is every row.
+    half: Option<rules::Half>,
+    /// The refs the tree half's receipt keys the merge base of (`--keyed-base`).
+    keyed_bases: &'a [String],
 }
 
 impl<'a> RunRequest<'a> {
@@ -29236,6 +29362,8 @@ impl<'a> RunRequest<'a> {
             json,
             only,
             scope,
+            half: None,
+            keyed_bases: &[],
         }
     }
 
@@ -29269,6 +29397,17 @@ impl<'a> RunRequest<'a> {
             json,
             only,
             scope: CheckScope::Tree,
+            half: None,
+            keyed_bases: &[],
+        }
+    }
+
+    /// This request narrowed to one half of a split `enforce` (step 13a).
+    const fn split(self, half: Option<rules::Half>, keyed_bases: &'a [String]) -> RunRequest<'a> {
+        RunRequest {
+            half,
+            keyed_bases,
+            ..self
         }
     }
 }
@@ -29547,7 +29686,20 @@ fn run_rules(
         json,
         only,
         scope,
+        half,
+        keyed_bases,
     } = request;
+    // THE TREE HALF IS RECEIPTED (step 13a), so everything it reads must be
+    // keyed. A global override reshapes the authority or the verdict from
+    // outside the index, and `--config-from` reads a ref — refused rather than
+    // silently judged and then cached.
+    if half == Some(rules::Half::Tree) && *overrides != Overrides::default() {
+        return Err(error::UsageError::raise(
+            "`enforce --half tree` takes no global override (`--strictness`, `--fail-on-warning`, \
+             `--config-from`, `--config-in`): its verdict is receipted on the tree alone; run the \
+             live half or an unsplit `enforce` instead",
+        ));
+    }
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
     // setting comes off the same resolution, so one §8 chain decides both.
@@ -29573,8 +29725,15 @@ fn run_rules(
         records: &config.records,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;
+    // The ledger, budgets, transcript, judges and sinks read state outside the
+    // tree, so they run where the receipt does not reach (CLOUD-1186). The
+    // baseline and admissions run in BOTH halves: the tree half's receipt keys
+    // them through `enforce --half tree --inputs-digest` (step 13a).
+    let live = half != Some(rules::Half::Tree);
     let scope = scope.resolve(&root)?;
     let opts = rules::RunOptions {
+        half,
+        keyed_bases,
         checks,
         scope: &scope,
         // `check` and `enforce` are the TREE verbs, which is the surface both
@@ -29588,7 +29747,9 @@ fn run_rules(
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
     report_rule_costs(mode, err)?;
-    perform_requested_sinks(surface, &root, &scan);
+    if live {
+        perform_requested_sinks(surface, &root, &scan);
+    }
     let mut findings = scan.findings.clone();
 
     // Declared budgets are gates, evaluated here rather than only under `policy
@@ -29623,9 +29784,9 @@ fn run_rules(
     // conduct, so a narrowed run failing on it is the "reason it did not ask
     // about" this comment already refuses. The ledger is the security property;
     // the budget is not.
-    if only.is_empty() {
+    if live && only.is_empty() {
         findings.extend(engine_side_findings(&root, &config)?);
-    } else if surface == Surface::Spawning {
+    } else if live && surface == Surface::Spawning {
         findings.extend(ledger_findings(&root, &config)?);
     }
 
@@ -29645,18 +29806,24 @@ fn run_rules(
     // block either. Refusing also defended nothing — `Absent` already yields the
     // same silence at `Success`, so anyone wanting those rules quiet deletes the
     // file rather than tearing a byte of it.
-    let capability = transcript::resolve(
-        &root,
-        config
-            .transcript
-            .as_ref()
-            .and_then(|declared| declared.path.as_deref()),
-        config
-            .transcript
-            .as_ref()
-            .and_then(|declared| declared.harness),
-    );
-    report_transcript_capability(&capability, mode, err)?;
+    let capability = if live {
+        transcript::resolve(
+            &root,
+            config
+                .transcript
+                .as_ref()
+                .and_then(|declared| declared.path.as_deref()),
+            config
+                .transcript
+                .as_ref()
+                .and_then(|declared| declared.harness),
+        )
+    } else {
+        transcript::Capability::Unconfigured
+    };
+    if live {
+        report_transcript_capability(&capability, mode, err)?;
+    }
 
     // The first rule to consume the stream (CLOUD-267), which is what widens the
     // seam the comment above left open. It joins NEITHER `findings` nor
@@ -29676,7 +29843,7 @@ fn run_rules(
     // nothing to say about a key. Only the surface that reconciles can report an
     // orphan (CLOUD-311).
     let mut custody_orphaned = false;
-    if surface == Surface::Spawning {
+    if live && surface == Surface::Spawning {
         let raised = run_judges(err, mode, &config, &root)?;
         register_advisories(&raised, err)?;
         // The enforce surface's own findings, journalled from where they already
@@ -29687,7 +29854,16 @@ fn run_rules(
     }
 
     // The baseline filter (CLOUD-67), immediately before the waiver filter.
-    let findings = apply_baseline(findings, &scan, &root, mode, err)?;
+    // Each half applies the baseline entries of the rows it judged (step 13a):
+    // an entry of the other half's rows is neither applied nor reported stale.
+    let judged: Option<std::collections::BTreeSet<&str>> = (!live).then(|| {
+        selected
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .filter(|id| !scan.other_half.contains(*id))
+            .collect()
+    });
+    let findings = apply_baseline(findings, &scan, &root, judged.as_ref(), mode, err)?;
 
     // The admission filter (CLOUD-1120), between the two — see its own doc. It
     // reads `base_ref`, bound once at the top: this used to rebind the identical

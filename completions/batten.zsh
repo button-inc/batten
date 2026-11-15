@@ -183,6 +183,9 @@ trace\:"Add everything"))' \
 (enforce)
 _arguments "${_arguments_options[@]}" : \
 '*--rule=[Run only the declared rules with these ids (repeatable)]:rule:_default' \
+'--half=[Judge only the tree half (receipt-keyed on the index) or the live half of the rows]: :((tree\:"Rows whose verdict is a function of the indexed tree alone"
+live\:"Every other row, and any row whose half cannot be established"))' \
+'*--keyed-base=[A ref whose merge base the tree half'\''s receipt keys, admitting ratchets against it (repeatable)]:keyed_base:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -194,6 +197,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--inputs-digest[With --half tree\: print a digest of the out-of-tree state that half reads, and judge nothing]' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
