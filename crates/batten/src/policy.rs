@@ -4061,7 +4061,7 @@ pub fn call_input_schema() -> Result<String> {
                     // undefined path that denies nothing — the same load-bearing
                     // line the `facts` object below carries, for the same reason.
                     "segments": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. For the SPAN's structure -- its terminator, its input redirection, its raw text. A PROGRAM is anchored on `programs`, not on `words[0]`, which is the first word and not the first program (CLOUD-1382).",
                         "items": {
                             "type": "object",
@@ -4151,6 +4151,8 @@ pub fn call_input_schema() -> Result<String> {
 /// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
 /// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
 ///   past its own value-taking options, and the words before it.
+/// * a program's `via`, `unread`, `nested` and `tasks`, and the call's
+///   `task-programs` (step 14).
 fn extend_call_schema(document: &mut serde_json::Value) {
     let forge = serde_json::json!({
         "type": ["object", "null"],
@@ -4210,6 +4212,44 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         program.insert(
             "global-options".to_owned(),
             serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        // Step 14: how the entry was reached, whether its text parsed, the
+        // verb after the subcommand, and the tasks a `mise` starts.
+        program.insert(
+            "via".to_owned(),
+            serde_json::json!({"type": ["string", "null"], "enum": [null, "script", "cargo run", "step run", "exec", "task"]}),
+        );
+        program.insert("unread".to_owned(), serde_json::json!({"type": "boolean"}));
+        program.insert(
+            "nested".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "tasks".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+    }
+    // Step 14: every program the call's tasks reach, each a `programs` entry
+    // carrying the `task` whose body ran it; `null` where the task receipt
+    // could not be read.
+    let entry = document
+        .pointer("/properties/call/properties/programs/items")
+        .cloned();
+    if let (Some(mut entry), Some(call)) = (
+        entry,
+        document
+            .pointer_mut("/properties/call/properties")
+            .and_then(serde_json::Value::as_object_mut),
+    ) {
+        if let Some(properties) = entry
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert("task".to_owned(), serde_json::json!({"type": "string"}));
+        }
+        call.insert(
+            "task-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry}),
         );
     }
 }

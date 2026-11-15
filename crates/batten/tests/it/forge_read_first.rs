@@ -92,7 +92,12 @@ fn a_forge_call_is_handed_its_memory() {
         bash("gh pr view 1"),
         bash("cd /tmp && mise exec -- gh api repos/o/r"),
         bash("git push origin HEAD"),
+        // Through the engine's subcommand and task readings (step 14): a global
+        // option before the verb, and the other spellings of starting `land`.
+        bash("git -C /tmp push origin HEAD"),
         bash("mise run land"),
+        bash("mise r land"),
+        bash("mise -C /tmp run -- land"),
         tool("mcp__github__get_me"),
         tool("mcp__claude-code-remote__add_repo"),
     ] {

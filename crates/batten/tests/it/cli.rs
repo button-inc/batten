@@ -4133,7 +4133,12 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // is unchanged and still worth pinning: `mise run` is not blanket-refused
     // here. A rule that denied it outright would take the backgrounded form too,
     // and this is where that would surface.
-    for command in ["mise exec -- cargo test -p batten", "mise run test:cargo"] {
+    // A FILTERED run and a task that reaches no land stage (step 14): the whole
+    // suite and `test:cargo` are `gate run twice`'s, refused in any posture.
+    for command in [
+        "mise exec -- cargo test -p batten forced_push",
+        "mise run lint:clippy",
+    ] {
         let output = run_hook_in(&root, "exit-code", &claude_payload_backgrounded(command));
         assert_eq!(
             output.status.code(),
