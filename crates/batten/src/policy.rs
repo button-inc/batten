@@ -4208,7 +4208,7 @@ pub fn call_input_schema() -> Result<String> {
 /// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
 ///   past its own value-taking options, and the words before it.
 /// * a program's `via`, `unread`, `nested` and `tasks`, and the call's
-///   `task-programs` (step 14).
+///   `task-programs` (step 14) and `step-programs` (step 21).
 fn extend_call_schema(document: &mut serde_json::Value) {
     let forge = serde_json::json!({
         "type": ["object", "null"],
@@ -4273,9 +4273,13 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         // verb after the subcommand, and the tasks a `mise` starts.
         program.insert(
             "via".to_owned(),
-            serde_json::json!({"type": ["string", "null"], "enum": [null, "script", "cargo run", "step run", "exec", "task"]}),
+            serde_json::json!({"type": ["string", "null"], "enum": [null, "script", "cargo run", "step run", "ci step", "exec", "task"]}),
         );
         program.insert("unread".to_owned(), serde_json::json!({"type": "boolean"}));
+        program.insert(
+            "receipted".to_owned(),
+            serde_json::json!({"type": "boolean"}),
+        );
         program.insert(
             "nested".to_owned(),
             serde_json::json!({"type": ["string", "null"]}),
@@ -4305,6 +4309,10 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         }
         call.insert(
             "task-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry.clone()}),
+        );
+        call.insert(
+            "step-programs".to_owned(),
             serde_json::json!({"type": ["array", "null"], "items": entry}),
         );
     }
