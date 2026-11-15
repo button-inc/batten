@@ -263,6 +263,11 @@ fn a_spelling_another_row_owns_is_still_refused() {
         ("cargo test --workspace", true),
         ("cargo +stable test", true),
         ("cargo nextest run -p batten", true),
+        ("cargo clippy", false),
+        (
+            "env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets",
+            true,
+        ),
     ]
     .iter()
     .filter_map(|(command, background)| {
@@ -278,6 +283,37 @@ fn a_spelling_another_row_owns_is_still_refused() {
 }
 
 /// The sanctioned lap: `mise run land`, backgrounded.
+/// What a `[[step]]` receipts, run outside that step: re-execution the lap pays
+/// again, with nothing kept (step 21). The set is derived from the committed
+/// manifest's `step run` lines, so each row names a program a step runs today.
+#[test]
+fn a_receipted_steps_program_run_outside_it_is_refused() {
+    all_refused(&[
+        (
+            "mise exec -- cargo clippy -q -p batten --all-targets -- -D warnings",
+            true,
+        ),
+        ("mise exec -- cargo clippy --workspace", true),
+        (
+            "mise exec -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets",
+            true,
+        ),
+        ("bash -c 'cargo clippy --all-targets'", true),
+        ("mise exec -- cargo deny check", true),
+        (
+            "mise exec -- cargo check --workspace --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl",
+            true,
+        ),
+        (
+            "mise exec -- cargo run --quiet -p batten -- policy test",
+            true,
+        ),
+        ("batten semver check", true),
+        ("batten hk drift", false),
+        ("mise exec -- cargo run -q -p batten -- perf gate", true),
+    ]);
+}
+
 #[test]
 fn a_backgrounded_land_is_allowed() {
     none_refused(&[("mise run land", true)]);
@@ -300,16 +336,17 @@ fn the_development_forms_stay_allowed() {
         ("mise exec -- cargo nextest run -p batten --test it", true),
         ("mise exec -- cargo test --test=it", true),
         ("batten check --rule x", false),
-        (
-            "mise exec -- cargo run --quiet -p batten -- policy test",
-            true,
-        ),
         ("cat enforce", false),
         ("grep -n enforce batten.toml", false),
         ("echo 'batten enforce'", false),
         ("bash -c 'echo batten enforce'", false),
+        // Another target or profile than any step's is development.
+        ("mise exec -- cargo check -p batten", true),
+        ("mise exec -- cargo build --release -p batten", true),
+        ("mise exec -- cargo fmt --all", true),
+        // The program through its own step writes the receipt the lap hits.
         (
-            "mise exec -- cargo clippy -q -p batten --all-targets -- -D warnings",
+            "mise exec -- cargo run -q -p batten -- step run lint:clippy -- cargo clippy --all-targets",
             true,
         ),
         // Tasks that reach no stage program are not refused for sitting in
