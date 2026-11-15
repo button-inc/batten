@@ -2083,6 +2083,9 @@ const MATCHER_NARROWS: &str = "hook-wiring-matcher-narrows";
 const COMMAND_DRIFT: &str = "hook-wiring-command-drift";
 /// The harness declares a wiring file and the checkout has none.
 const FILE_MISSING: &str = "hook-wiring-file-missing";
+/// The live session is rooted above this checkout, and its root's project
+/// surface does not register batten (CLOUD-2751).
+const ROOT_UNREGISTERED: &str = "hook-wiring-root-unregistered";
 /// A batten registration sits on a MERGED surface as well as the committed one
 /// (CLOUD-525).
 ///
@@ -2619,10 +2622,23 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
     let declared = resolved.and_then(|resolved| resolved.wiring);
-    let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
+    let mut harnesses: Vec<HarnessWiring> = hook::Harness::ALL
         .iter()
         .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
         .collect();
+    let unregistered = root_unregistered(wiring::harness_root(), dir);
+    if let Some(claude) = harnesses
+        .iter_mut()
+        .find(|harness| harness.harness == hook::Harness::ClaudeCode.as_str())
+    {
+        for event in unregistered {
+            claude.findings.push(WiringFinding {
+                event,
+                reason: ROOT_UNREGISTERED,
+            });
+            claude.ok = false;
+        }
+    }
     WiringReport {
         version: config::VERSION,
         ok: harnesses.iter().all(|harness| harness.ok),
@@ -2652,6 +2668,29 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
             })
             .unwrap_or_default(),
     }
+}
+
+/// The events the live harness's root lacks batten on, when that root is a
+/// strict ancestor of `dir` (CLOUD-2751).
+///
+/// **THE ROOT THE HOST ACTUALLY LOADS, NOT THE DIRECTORY ASKED FROM.** Measured
+/// 2026-11-14: from inside the clone this verb printed five `ok` lines and exited
+/// 0 while the session, rooted at the parent, had no hook loaded at all. A
+/// session rooted above a checkout reads only its root's project surface, so that
+/// is the file the diagnosis has to read. Empty when no harness root resolves,
+/// when the root is the directory itself or below it (the committed surface
+/// answers then), or when the root registers every event.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT root-surface-unread|s@^    if !(root != dir \&\& dir.starts_with(\&root)) {$@    if true {@|a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_it
+fn root_unregistered(root: Option<PathBuf>, dir: &Path) -> Vec<String> {
+    let Some(root) = root.map(|root| crate::git::canonical(&root)) else {
+        return Vec::new();
+    };
+    let dir = crate::git::canonical(dir);
+    if !(root != dir && dir.starts_with(&root)) {
+        return Vec::new();
+    }
+    wiring::register_root(&root, true).map_or_else(|_| Vec::new(), |(events, _)| events)
 }
 
 /// One session's own declared-open work, as `doctor session` renders it.

@@ -1480,3 +1480,43 @@ fn the_gap_record_holds_no_argument_text() {
     assert!(!stored.contains("tools/x.py"), "nor any operand: {stored}");
     assert!(!gaps(&dir).contains(secret));
 }
+
+/// A live process standing in for the harness `CLAUDE_PID` names, with `dir` as
+/// its working directory: a hook blocked reading a payload it has not been sent.
+fn harness_in(dir: &std::path::Path) -> std::process::Child {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command.spawn().expect("a stand-in harness process")
+}
+
+#[test]
+fn a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_it() {
+    // CLOUD-2751, measured 2026-11-14: from inside the clone this verb read the
+    // clone's own surface and passed while the session, rooted at the parent,
+    // had no hook loaded at all. The root the host loads is the one to read.
+    let root = common::scratch_outside_tree("batten-doctor-e2e", "root-unregistered");
+    let clone = root.join("clone");
+    std::fs::create_dir_all(&clone).expect("the clone");
+    common::init_repo(&clone);
+    common::write(&clone, "batten.toml", "version = 1\n");
+    let mut harness = harness_in(&root);
+    let output = batten()
+        .current_dir(&clone)
+        .args(["doctor", "hooks"])
+        .env("CLAUDE_PID", harness.id().to_string())
+        .output()
+        .expect("run batten doctor hooks");
+    drop(harness.stdin.take());
+    let _ = harness.wait();
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("hook-wiring-root-unregistered"),
+        "the unregistered root is named: {}",
+        stdout(&output)
+    );
+}

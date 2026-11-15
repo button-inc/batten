@@ -9118,29 +9118,21 @@ fn run_wiring(
 /// Whatever [`wiring::register`] could not write.
 fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     let repo = git::canonical(hook_authority_root());
-    let roots = match std::env::var("CLAUDE_PID")
-        .ok()
-        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
-    {
-        Some(root) => vec![root],
-        // Only where the environment says the home is disposable: that is the
-        // container a setup script provisions, and the only place a write would
-        // be allowed anyway. A developer machine or a CI runner outside a
-        // session owes nothing, as before — reporting a registration nobody may
-        // write would turn every `startup` there red over a non-defect.
-        None if crate::environment::disposable() => {
-            candidate_session_roots(&repo, std::env::var_os("HOME").map(PathBuf::from))
-        }
-        None => {
-            output::message(
-                mode,
-                output::Verbosity::Normal,
-                err,
-                "wiring register: no session root resolves, so no registration is owed",
-            )?;
-            return Ok(ExitCode::Success);
-        }
-    };
+    let roots = register_roots(
+        wiring::harness_root(),
+        crate::environment::disposable(),
+        &repo,
+        std::env::var_os("HOME").map(PathBuf::from),
+    );
+    if roots.is_empty() {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "wiring register: no session root resolves, so no registration is owed",
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let mut owed = false;
     for root in &roots {
         let done = wiring::register(root, &repo, check)?;
@@ -9172,6 +9164,39 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
+}
+
+/// Every root `wiring register` registers: the live root, and — in a
+/// disposable environment, with or without a live session — every root a
+/// session could later be rooted at above `repo` (CLOUD-2751).
+///
+/// **THE UNION, BECAUSE THE ROOT MOVES.** A one-repository session is rooted IN
+/// the clone, so its live root owes nothing; it then attaches a second
+/// repository, and after the next restart the platform roots it at the parent,
+/// where no `SessionStart` runs again before every hook is gone. Measured
+/// 2026-11-14: five hours unmediated. The one `SessionStart` that does run, the
+/// first, is therefore where the parent's registration has to be written. A
+/// machine not declared disposable gets the live root alone, as before: nothing
+/// above it may be written there, so nothing above it is owed.
+//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+//MUTANT register-live-root-only|s@^    if !disposable {$@    if !disposable \x7c\x7c !roots.is_empty() {@|a_session_rooted_at_the_clone_still_registers_the_roots_above_it
+//MUTANT register-roots-undeclared|s@^    if !disposable {$@    if false {@|a_real_machine_inside_a_session_writes_nothing_above_its_root
+fn register_roots(
+    live: Option<PathBuf>,
+    disposable: bool,
+    repo: &Path,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = live.into_iter().collect();
+    if !disposable {
+        return roots;
+    }
+    for root in candidate_session_roots(repo, home) {
+        if !roots.iter().any(|held| git::canonical(held) == root) {
+            roots.push(root);
+        }
+    }
+    roots
 }
 
 /// Every directory a session could be rooted at above `repo` without loading

@@ -502,6 +502,15 @@ fn prune_siblings(
 // OWN project surface loads only for sessions rooted there, so it is the one
 // place a registration reaches the parent session and nothing else.
 
+/// The working directory of the harness process `CLAUDE_PID` names, when one
+/// resolves: the root the live session loads its project hooks from.
+#[must_use]
+pub fn harness_root() -> Option<PathBuf> {
+    std::env::var("CLAUDE_PID")
+        .ok()
+        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+}
+
 /// What one [`register`] did, or would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[non_exhaustive]
