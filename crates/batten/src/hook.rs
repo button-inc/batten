@@ -3829,7 +3829,7 @@ pub enum Decision {
     /// Only the `silent` posture reaches here. A `retry` repair is a
     /// [`Decision::Deny`] carrying [`crate::verdict::Native::CallRetryNow`],
     /// because the call as made did not happen; reporting that as an allow is
-    /// exactly the swap `//MUTANT retry-reports-silent` exists to catch.
+    /// exactly the swap this arm's tests exist to catch.
     ///
     /// **A repair that FAILED never reaches here either.** The boundary falls
     /// back to the original class's ordinary refusal, so "the tree was repaired"
@@ -6691,10 +6691,9 @@ fn marker_present(marker: &str) -> bool {
 
 /// Where a branch-keyed marker lives.
 ///
-/// Named rather than inlined so the `//MUTANT` rows below can anchor on one line,
-/// which is also what keeps the `.exists()` — the entire decision — from being
-/// buried inside a builder chain no row could swap without touching the path
-/// derivation too.
+/// Named rather than inlined, which keeps the `.exists()` — the entire decision
+/// — from being buried inside a builder chain a mutant could not swap without
+/// touching the path derivation too.
 fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::path::PathBuf {
     git_dir
         .join("batten-receipts")

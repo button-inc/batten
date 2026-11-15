@@ -1109,11 +1109,7 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
             // decides the call and admits the one repair verb (CLOUD-2116);
             // a second fall-through here was that rule spelled twice, and it
             // made `run`'s copy unreachable by any case.
-            // VERIFIED AGAINST THE ROW'S OWN DIGEST when it lists one for this
-            // platform (CLOUD-2595 §2b), the consumer's pin rather than the
-            // release's manifest.
-            let pinned = || engine::followed_digest(&text);
-            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?
+            engine::pinned_release(&cache, &releases_repository(), tag)?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
@@ -1888,11 +1884,10 @@ fn sync_artifacts(
 }
 
 /// `text` with every batten declaration brought to release `tag` (CLOUD-2279):
-/// each `[[provision]] name = "batten"` row's `version`, its URLs with the
-/// version substituted, and each `sha256` from the release's `SHA256SUMS`; and
-/// the `engine` key's release alias, only where the config still declares the
-/// key (CLOUD-2595: the row is the pin, and a config that dropped the key is
-/// never given one back). `min_batten_version` is retired and no longer moved.
+/// the `engine` pin, set at the head of the file; and each `[[provision]] name =
+/// "batten"` row's `version`, its URLs with the version substituted, and each
+/// `sha256` from the release's `SHA256SUMS`. `min_batten_version` is retired and
+/// no longer moved.
 ///
 /// `sums` is asked for only when a provision row needs a digest; the caller
 /// owns the one fetch it stands for.
@@ -1943,15 +1938,11 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             }
         }
     }
-    let synced = doc.to_string();
-    if engine::top_level(&synced, "engine").is_none() {
-        return Ok(synced);
-    }
     let pin = engine::Pin {
         release: Some(format!("v{bare}")),
         source: None,
     };
-    Ok(engine::rewrite(&synced, &pin))
+    Ok(engine::rewrite(&doc.to_string(), &pin))
 }
 
 /// The repository releases are fetched from: `BATTEN_RELEASES`, the
@@ -2106,12 +2097,12 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let code = install_wanted(want, root, &repository, out)?;
     // THE BOOTSTRAP'S LAST STEP PINS WHAT IT INSTALLED (CLOUD-2595 §2c). The
     // public `install.sh` ends in this verb; a checkout that pinned nothing gains
-    // the row for the engine now running, so the next engine to read the file is
+    // the pin for the engine now running, so the next engine to read the file is
     // that one, whatever the installer bakes later.
     if installs_itself
         && code == ExitCode::Success
         && let Some(root) = adopt_at
-        && let Ok(Some(tag)) = adopt_engine_row(&root, &Overrides::default())
+        && let Ok(Some(tag)) = adopt_engine_key(&root, &Overrides::default())
     {
         writeln!(std::io::stderr(), "{}", adopted_line(&tag))?;
     }
@@ -2206,7 +2197,7 @@ fn place_download(
     let (target, bytes) = engine::chosen_build(
         &engine::running_target(),
         bytes,
-        |gnu| engine::fetch_release_for(repository, &tag, gnu, None).ok(),
+        |gnu| engine::fetch_release_for(repository, &tag, gnu).ok(),
         |candidate| runs_here(&dest, candidate),
     );
     let binary = dest.join(dist::binary_file(env!("CARGO_PKG_NAME"), &target));
@@ -2450,21 +2441,7 @@ fn engine_pin(
             )));
         }
     };
-    // ONE WRITER (CLOUD-2595). A release pin over a config that declares the
-    // batten row moves the ROW — version, URLs and digests, the release's own —
-    // through the same rewrite `engine update` makes; the `engine` key moves with
-    // it only where it is still declared. A release with no published
-    // `SHA256SUMS` has no bytes the row could pin, so that refuses.
-    let rewritten = match (&pin.release, engine::row_release(&text)) {
-        (Some(tag), Some(_)) => {
-            let cache = state::repo_state_dir(root)?;
-            let repository = releases_repository();
-            sync_declarations(&text, tag, &|| {
-                engine::pinned_sums(&cache, &repository, tag)
-            })?
-        }
-        _ => engine::rewrite(&text, &pin),
-    };
+    let rewritten = engine::rewrite(&text, &pin);
     if rewritten == text {
         return Ok(ExitCode::Success);
     }
@@ -2492,17 +2469,6 @@ fn engine_pin(
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&config_path)?;
-    // ONE DECLARATION (CLOUD-2595). The batten row IS the pin, so the only copy
-    // left to disagree is the `engine` key's release alias; a floor no longer
-    // exists to sit above it.
-    if let Some((key, row)) = engine::row_disagreement(&text) {
-        writeln!(
-            out,
-            "{} engine pins {key} and the batten provision row pins {row}; the row is the pin",
-            config_path.display()
-        )?;
-        return Ok(ExitCode::Violation);
-    }
     let tag = match engine::declared(&text).map(engine::Pin::kind) {
         None => return Ok(ExitCode::Success),
         Some(engine::PinKind::Release(tag)) => tag,
@@ -2513,12 +2479,17 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let tag = tag.as_str();
-    // EVERY OTHER BATTEN DECLARATION AGREES WITH THE PIN (CLOUD-2595): a second
-    // batten row a merge left behind, or a `min_batten_version` the followed
-    // engine would refuse itself under. Judged before anything is fetched.
-    let disagreeing = engine::gate_disagreements(&text, tag);
-    for (line, what) in &disagreeing {
-        writeln!(out, "{}:{line} {what}", config_path.display())?;
+    // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
+    // fetched: a batten provision row on another release, or a floor above the
+    // pin, is a config that names two engines. Each finding names the move that
+    // clears it, since `engine update` moves rows but never lowers a floor.
+    let disagreeing = engine::disagreements(&text, tag);
+    for (line, what, remedy) in &disagreeing {
+        writeln!(
+            out,
+            "{}:{line} {what} disagrees with engine pin {tag}; {remedy}",
+            config_path.display()
+        )?;
     }
     if !disagreeing.is_empty() {
         return Ok(ExitCode::Violation);
@@ -2548,8 +2519,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let binary =
-        engine::pinned_release(&cache, &repository, tag, || engine::followed_digest(&text))?;
+    let binary = engine::pinned_release(&cache, &repository, tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
@@ -3371,10 +3341,10 @@ fn run_init(
     match init::apply(Path::new("."), dry_run)? {
         init::Outcome::Created => {
             writeln!(out, "{}", config::CONFIG_FILE)?;
-            // THE STARTER IS WRITTEN PINNED (CLOUD-2595 §2c): the same row the
+            // THE STARTER IS WRITTEN PINNED (CLOUD-2595 §2c): the same key the
             // Gradle-style write adds, for the engine that wrote it. Offline, or
             // on a build no release publishes, it stays unpinned and says so.
-            match adopt_engine_row(Path::new("."), &Overrides::default()) {
+            match adopt_engine_key(Path::new("."), &Overrides::default()) {
                 Ok(Some(tag)) => {
                     output::message(mode, Verbosity::Normal, err, &adopted_line(&tag))?;
                 }
@@ -7982,7 +7952,7 @@ fn run_claim_race(
 /// and `authored_log` falls back to the wider range by itself when the
 /// exported base is stale or unwound.
 ///
-/// # What holds each arm, since no `//MUTANT` row can
+/// # What holds each arm, since no hand-rolled Rust row can
 ///
 /// A declared row here would be swept by nothing: `MUTANT_RUNNERS` gives every
 /// Rust source to `cargo mutants --in-diff`, and `mutant:changed` says so in as
@@ -20876,10 +20846,8 @@ impl Follow<'_> {
 /// **One body, because there is one invariant.** Both hand-offs reached this
 /// same fifteen lines — publish the one-hop mark, pipe the payload, test the
 /// code against the §7 table, and write ONLY for an answer the table names —
-/// and each carried its own `//MUTANT` row over its own copy of the decide
-/// line. Those two rows were one mutant: `substitute` applies a script per line
-/// across the whole file, so either row mutated both copies, and neither proved
-/// its own site. A rule ships with ITS mechanism, and this is the mechanism.
+/// in two copies of the decide line, which no single mutant could prove apart.
+/// A rule ships with ITS mechanism, and this is the mechanism.
 ///
 /// What stays with each caller is its RESOLUTION, which is genuinely two
 /// questions: the follow is handed a target resolved from the working
@@ -20971,7 +20939,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
     // Falling through costs nothing: nothing ran, so the refusal floor below
     // still decides the call over the envelope, which decoded fine.
     //
-    // NO `//MUTANT` ROW, STATED RATHER THAN OMITTED. The case wants a spool that
+    // NO CASE HOLDS THIS ARM, STATED RATHER THAN OMITTED. It wants a spool that
     // stops reading between `read_payload` writing it and `decode_payload`
     // reading it, in one process, after `follow_to_pinned` already read it —
     // which no fixture here can stage. The honest close is `decode_payload` not
@@ -21956,7 +21924,7 @@ fn adopt_engine_pin(
     if !here.join(config::CONFIG_FILE).exists() {
         return;
     }
-    if let Ok(Some(tag)) = adopt_engine_row(here, overrides) {
+    if let Ok(Some(tag)) = adopt_engine_key(here, overrides) {
         advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Advisory,
             adopted_line(&tag),
@@ -21965,18 +21933,15 @@ fn adopt_engine_pin(
 }
 
 /// The record a written pin is reported by: `batten note call fix silent at
-/// batten.toml provision.batten (pinned <tag>)`.
+/// batten.toml engine (pinned <tag>)`.
 fn adopted_line(tag: &str) -> String {
     let head = refusal::head(refusal::Severity::Note, verdict::Native::CallFixSilent.id());
-    format!(
-        "{head} at {} provision.batten (pinned {tag})",
-        config::CONFIG_FILE
-    )
+    format!("{head} at {} engine (pinned {tag})", config::CONFIG_FILE)
 }
 
-/// Append this engine's own batten row to `root`'s `batten.toml` when the file
-/// pins nothing and LOADS (CLOUD-2595 §2c): the release written, or `None` where
-/// nothing was.
+/// Pin this engine's own release into `root`'s `batten.toml`, as the `engine`
+/// key under `version`, when the file pins nothing and LOADS (CLOUD-2595 §2c):
+/// the release written, or `None` where nothing was.
 ///
 /// **A config that fails to load is never written.** The load is the predicate:
 /// the owner's ruling is that a later engine finding a toml without a pin adds
@@ -21985,13 +21950,13 @@ fn adopted_line(tag: &str) -> String {
 ///
 /// Never under `--config-from` (the ref, not the working tree, is the authority
 /// then) or `CI` (a checkout CI builds is not one to dirty), and silent when the
-/// release's `SHA256SUMS` cannot be read: an unpublished or local build has no
-/// bytes to pin, and the next clean load tries again.
+/// release's `SHA256SUMS` cannot be read: an unpublished or local build is no
+/// release a follow could fetch, and the next clean load tries again.
 ///
 /// # Errors
 ///
 /// A config that fails to load, or a write that fails.
-fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
+fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
     // An override names ANOTHER authority than `root`'s file, so a clean load
     // under it says nothing about the bytes this would write.
     if overrides.config_from.is_some()
@@ -22012,10 +21977,10 @@ fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>
     let tag = engine::release();
     let cache = state::repo_state_dir(root)?;
     let repository = releases_repository();
-    let Ok(sums) = engine::pinned_sums(&cache, &repository, &tag) else {
+    if engine::pinned_sums(&cache, &repository, &tag).is_err() {
         return Ok(None);
-    };
-    let Some(adopted) = engine::adopted(&text, &repository, &tag, &sums) else {
+    }
+    let Some(adopted) = engine::adopted(&text, &tag) else {
         return Ok(None);
     };
     durable::replace(&path, adopted)?;
@@ -28752,7 +28717,7 @@ fn run_release_verify(
 /// Whether the forge positively sighted that no release carries `tag`
 /// (CLOUD-2518): `release_state::read_found`'s `Found::Absent`, the tag read
 /// 404 and an answered list without it. A function of its own so the guard
-/// that asks it fits the one line its `//MUTANT` rows rewrite.
+/// that asks it is one line a mutant can swap.
 fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
     release_state::read_found(slug, tag, get) == Ok(release_state::Found::Absent)
 }

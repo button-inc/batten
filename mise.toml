@@ -1760,7 +1760,7 @@ description = "Gate: measure this branch against its merge base and refuse a reg
 # there is no pipeline: `perf::gate` holds the outcome as a value and matches on
 # it, so a skip and a failed measurement are different variants rather than two
 # readings of one byte stream.
-run = "cargo run --quiet -p batten -- perf gate"
+run = "cargo run --quiet -p batten -- step run perf-gate -- cargo run --quiet -p batten -- perf gate"
 
 [tasks."perf-seed"]
 description = "Effect: build the perf pair's arm profile and stage it under target/perf/base-seed, which perf.yml saves as every pull request's base-arm seed"
@@ -2021,7 +2021,7 @@ description = "Gate: run every registered policy module's and enabled preset's o
 #
 # ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
 # whose exit code a one-command task already is.
-run = "cargo run --quiet -p batten -- policy test"
+run = "cargo run --quiet -p batten -- step run policy-test -- cargo run --quiet -p batten -- policy test"
 
 # The repository SBOM (CLOUD-262) and the binary SBOM (CLOUD-263), retired onto
 # `batten sbom` under CLOUD-843. The derivation — syft's scan, the identity
@@ -5005,7 +5005,7 @@ description = "Gate: no vendor authorship, branding or session links in BASE_SHA
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "cargo run --quiet -p batten -- step run commit-attribution -- cargo run --quiet -p batten -- attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks."commit:precheck"]
 description = "Run both commit-msg gates over a drafted message file BEFORE `git commit`, so a subject or attribution refusal never costs the pre-commit suite"
@@ -5066,7 +5066,7 @@ description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the conv
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "cargo run --quiet -p batten -- step run commit-check -- cargo run --quiet -p batten -- commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits and names the issue it serves"

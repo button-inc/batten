@@ -144,7 +144,7 @@ fn aged_dir(dir: &Path, age: u64) {
 /// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
 /// `incremental` sat outside every pass while 865 units freed 159MB. A stale
 /// crate cache goes; one written inside the working set — the edit loop's own —
-/// stays while a live build has used it. `#MUTANT incremental-unranked` leaves both.
+/// stays while a live build has used it. A mutant that skips ranking it leaves both.
 #[test]
 fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     let root = common::scratch("collect-incremental");
@@ -173,8 +173,8 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
 
 /// TEST SCRATCH IS RANKED TOO: cargo's `CARGO_TARGET_TMPDIR` held 4.1GB of
 /// fixtures on #1132 that nothing removed until the next run's setup. A stale
-/// fixture goes; a running suite's fresh one stays. `#MUTANT scratch-unranked`
-/// leaves both.
+/// fixture goes; a running suite's fresh one stays. A mutant that skips ranking
+/// scratch leaves both.
 #[test]
 fn a_stale_test_scratch_entry_is_collected() {
     let root = common::scratch("collect-scratch");
@@ -250,8 +250,8 @@ fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
 
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
 /// a suite's fixture tree under `tmp/` carries units of any age, and the entry
-/// that holds them is what a live build's root judges. `#MUTANT scratch-unit-ranked`
-/// collects the nested unit.
+/// that holds them is what a live build's root judges. A mutant ranking the unit
+/// itself collects the nested unit.
 #[test]
 fn a_build_inside_fresh_scratch_is_never_collected() {
     let root = common::scratch("collect-nested-scratch");
@@ -269,8 +269,8 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
 
 /// A NESTED BUILD TREE'S SCRATCH IS RANKED LIKE THE CHECKOUT'S (CLOUD-2286):
 /// measured on #1132, `target/replay/tmp` held 555 MB of fixtures that no pass
-/// could see, because only `target/tmp` was scratch. `#MUTANT
-/// nested-scratch-unseen` leaves the stale fixture.
+/// could see, because only `target/tmp` was scratch. A mutant that misses nested
+/// scratch leaves the stale fixture.
 #[test]
 fn a_nested_build_trees_stale_scratch_is_collected() {
     let root = common::scratch("collect-nested-build-scratch");
@@ -300,8 +300,8 @@ fn a_nested_build_trees_stale_scratch_is_collected() {
 /// measured on #1132, `target/mutate` held 511 MB idle since the day before
 /// while a lap removed the dependencies of the profiles the next lap built.
 /// An idle copy goes before a built profile's older-looking unit; a copy a
-/// running sweep just wrote stays whole. `#MUTANT staged-copy-unranked` takes
-/// the dependency instead.
+/// running sweep just wrote stays whole. A mutant that skips ranking the copy
+/// takes the dependency instead.
 #[test]
 fn an_idle_staged_copy_goes_before_a_built_profiles_units() {
     let root = common::scratch("collect-staged-copy");
@@ -1303,8 +1303,8 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
 /// refused. Here the case holds `target/debug/.cargo-lock` and a live process
 /// (this one) holds a singleton: the step blocks on the build lock, the case
 /// lets go once the first pass has reported, and the second pass admits. With
-/// no singleton the same volume refuses as before. `#MUTANT singleton-unwaited`
-/// refuses both.
+/// no singleton the same volume refuses as before. A mutant that does not wait
+/// on the singleton refuses both.
 #[test]
 fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     use std::io::BufRead as _;

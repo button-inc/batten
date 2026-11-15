@@ -106,7 +106,7 @@ fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     );
 }
 
-/// `#MUTANT linear-shallow-trusted` reddens here: a shallow clone's truncated
+/// A mutant trusting a shallow clone reddens here: its truncated
 /// history is refused as could-not-look, never read as an ancestry answer.
 #[test]
 fn a_shallow_clone_is_could_not_look_and_names_the_remedy() {
@@ -123,7 +123,7 @@ fn a_shallow_clone_is_could_not_look_and_names_the_remedy() {
     assert!(said(&out).contains("--unshallow"), "{}", said(&out));
 }
 
-/// `#MUTANT linear-fetch-failure-trusted` reddens here. The remote is an address
+/// A mutant trusting a failed fetch reddens here. The remote is an address
 /// nothing listens on, so the fetch cannot complete without touching a network,
 /// and the verb must not fall back to whatever tracking ref the clone holds —
 /// the stale-main false green the retired body's `set -e` history records.
