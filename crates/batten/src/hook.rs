@@ -4423,6 +4423,22 @@ impl Policy {
         crate::pattern::compiled(&self.patterns)
     }
 
+    /// [`Policy::compiled_patterns`] for the ids in `wanted` alone, through the
+    /// same compiler: a row's column then reads the same matcher either way.
+    #[must_use]
+    pub fn compiled_patterns_named(
+        &self,
+        wanted: &std::collections::BTreeSet<String>,
+    ) -> std::collections::BTreeMap<String, regex::Regex> {
+        let named: Vec<crate::pattern::NamedPattern> = self
+            .patterns
+            .iter()
+            .filter(|pattern| wanted.contains(&pattern.id))
+            .cloned()
+            .collect();
+        crate::pattern::compiled(&named)
+    }
+
     /// The programs a `[[recorder]]` may run, by id.
     ///
     /// Held beside the recorders rather than resolved per row, because

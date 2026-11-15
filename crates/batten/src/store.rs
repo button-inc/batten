@@ -475,6 +475,18 @@ fn write_marker(common_dir: &str, id: &StoreId) -> Result<()> {
         .with_context(|| format!("write the store marker {}", path.display()))
 }
 
+/// Make the marker name `id`, writing it only where it does not already.
+///
+/// DECIDED FROM WHAT IS THERE: a marker already naming this store is the state
+/// the write would produce. A synced replace of it on every `Stop` was the
+/// hook's one `fsync` that nothing needed (2026-11-15).
+fn refresh_marker(common_dir: &str, id: &StoreId) -> Result<()> {
+    if read_marker(common_dir).as_ref() == Some(id) {
+        return Ok(());
+    }
+    write_marker(common_dir, id)
+}
+
 /// The store id this repository's marker names, if any.
 fn read_marker(common_dir: &str) -> Option<StoreId> {
     let text = crate::fsio::read_to_string(Path::new(common_dir).join(MARKER_FILE)).ok()?;
@@ -983,14 +995,7 @@ pub fn commit(opened: Opened) -> Result<Bound> {
             // the first time takes this arm with no migration to record, and
             // without an unconditional write it would never get the pointer that
             // makes the *next* move survivable.
-            //
-            // DECIDED FROM WHAT IS THERE: a marker already naming this store is
-            // the state the write would produce, so it is not written again. A
-            // synced replace of it on every `Stop` was the hook's one `fsync`
-            // that nothing needed (2026-11-15).
-            if read_marker(&observed.common_dir).as_ref() != Some(&record.id) {
-                write_marker(&observed.common_dir, &record.id)?;
-            }
+            refresh_marker(&observed.common_dir, &record.id)?;
             if migrations.is_empty() {
                 return Ok(Bound {
                     record,
