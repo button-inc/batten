@@ -3471,7 +3471,7 @@ fn no_verb_emits_content_it_merely_read() {
 /// Every column an `Echoes` verb declares, and every column a canary is seeded
 /// in, is a capped string leaf of the derived config schema (CLOUD-1643).
 ///
-/// `#MUTANT echo-column-unresolved` reddens here: an invented column has no
+/// A mutant leaving an echoed column unresolved reddens here: an invented column has no
 /// leaf, so the case consults the schema rather than accepting any string.
 #[test]
 fn every_echo_declaration_resolves_to_capped_config_leaves() {
@@ -3525,7 +3525,7 @@ fn every_echo_declaration_resolves_to_capped_config_leaves() {
 
 /// The corpus seeds every `TEXT_CENSUS` path, or names why not (CLOUD-1643).
 ///
-/// `#MUTANT prose-column-unseeded` reddens here.
+/// A mutant leaving a prose column unseeded reddens here.
 #[test]
 fn the_corpus_seeds_every_prose_column() {
     use std::collections::BTreeSet;
@@ -3558,7 +3558,7 @@ fn the_corpus_seeds_every_prose_column() {
 /// The protected-mutation arm of `policy explain`, which the sweep's single
 /// census entry never reaches (CLOUD-1643).
 ///
-/// `#MUTANT redirect-arm-undeclared` reddens here.
+/// A mutant leaving the redirect arm undeclared reddens here.
 #[test]
 fn the_protected_mutation_arm_echoes_only_its_declared_columns() {
     let corpus = Corpus::build("pointer-only-protected-mutation-arm", false);

@@ -3479,7 +3479,7 @@ mod tests {
     fn a_rule_id_is_accepted_in_three_spellings_and_stored_in_one() {
         // THE POINT OF NORMALISING RATHER THAN PICKING ONE SPELLING: a rule id
         // reaches this from a `[[rule]] id`, a module's `"rule":` literal, a
-        // `//MUTANT` row and a `policy rule` argument, and those surfaces do not
+        // mutation row and a `policy rule` argument, and those surfaces do not
         // share a house style. Accepting all three at the boundary and storing
         // one is what keeps the id ONE name — two spellings of an id would be
         // the same two-names-for-one-thing this row removes, a level down.

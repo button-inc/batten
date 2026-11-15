@@ -179,7 +179,7 @@ fn a_result_too_large_to_hold_reaches_the_model_as_a_pointer() {
 /// spills it at the bound, so its pointer carries the stored leaf's handle
 /// beside the view's lines. Measured by the row's cold read: a spill floor of a
 /// million tokens held every result between the bound and ~4 MB whole, and
-/// that path's pointer carried no handle. `#MUTANT spill-floor-restored`.
+/// that path's pointer carried no handle.
 #[test]
 fn a_result_over_the_bound_is_spilled_not_held() {
     let dir = repo("result-bound-spilled-at-bound");
@@ -198,7 +198,7 @@ fn a_result_over_the_bound_is_spilled_not_held() {
 
 /// A RAISED BOUND KEEPS A SPILLED RESULT WHOLE (CLOUD-2224): the read spills at
 /// the default, before the authority is known, so a result within a raised
-/// bound is left to the host as it sent it. `#MUTANT raised-bound-ignored`.
+/// bound is left to the host as it sent it.
 #[test]
 fn a_raised_bound_keeps_a_spilled_result_whole() {
     let dir = common::Fixture::at(common::scratch("result-bound-raised").join("repo"))
@@ -375,7 +375,7 @@ fn recorded_digests(dir: &Path) -> Vec<String> {
 
 /// A SPILLED RESULT IS RECORDED (CLOUD-2397): the leaf stored from its spill
 /// file is named by a call row, so eviction ranks it rather than keeping it past
-/// every tracker read. `#MUTANT spill-unrecorded`.
+/// every tracker read.
 #[test]
 fn a_spilled_result_is_recorded() {
     let dir = repo("result-bound-spill-recorded");
@@ -406,7 +406,6 @@ fn a_spilled_result_is_recorded() {
 /// lowered token bound is stored as its JSON, and a row names that capture.
 /// Under the 2000-token spill floor, so it is held rather than spilled, and a
 /// string, so the stored JSON is not the bytes `capture_response` keeps.
-/// `#MUTANT bound-unrecorded`.
 #[test]
 fn a_bounded_result_is_recorded() {
     let dir = common::Fixture::at(common::scratch("result-bound-bound-recorded").join("repo"))
@@ -478,7 +477,7 @@ fn evict_beside_a_read(name: &str, age: std::time::Duration) -> (bool, bool) {
 /// A CAPTURE NO ROW NAMES IS EVICTED FIRST (CLOUD-2397): nothing can select it,
 /// so it must not outlive a tracker read a gate resolves. Measured: 76 row-less
 /// records held the 8 MiB budget, and every tracker read stored after them was
-/// evicted at once. `#MUTANT unrecorded-evicted-last`.
+/// evicted at once.
 #[test]
 fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
     let past_grace = batten::capture::UNRECORDED_GRACE * 2;
@@ -490,7 +489,6 @@ fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
 /// A CAPTURE STILL BEING RECORDED IS NOT AN ORPHAN (CLOUD-2397): a writer stores
 /// the blob before it appends the row, so a concurrent eviction sees a fresh
 /// record no row names yet, and must not take it first.
-/// `#MUTANT in-flight-evicted-first`.
 #[test]
 fn a_capture_still_being_recorded_is_not_evicted_as_an_orphan() {
     let (row_less, read) = evict_beside_a_read("result-bound-in-flight", std::time::Duration::ZERO);
@@ -501,7 +499,6 @@ fn a_capture_still_being_recorded_is_not_evicted_as_an_orphan() {
 /// THE CALL THAT STORES A RESPONSE NEVER EVICTS IT (CLOUD-2302): its row is the
 /// newest, so it ranks last, but a budget the store cannot meet without it took
 /// it in the same call, and the `capture show` a reader runs next found nothing.
-/// `#MUTANT kept-digest-evicted`.
 #[test]
 fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
     let dir = common::Fixture::at(common::scratch("result-bound-keep").join("repo"))

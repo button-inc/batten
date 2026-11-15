@@ -615,6 +615,41 @@ fn a_rule_switched_off_is_a_smell() {
 }
 
 #[test]
+fn a_pin_below_another_key_is_invalid_and_still_loads() {
+    // The pin heads the file, after only `version`: below any other key the file
+    // is refused by name and line, never by a load error, so the engine that
+    // must read the pin to follow it still can.
+    let pin = format!(
+        "engine = {{ release = \"v{}\" }}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let dir = repo_with_config(
+        "lint-pin-buried",
+        &format!("version = 1\nunlanded = [\"x\"]\n{pin}"),
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:3 engine-pin-out-of-order\nconfig-lint: 1 smell(s)\n"
+    );
+    let show = common::run(&dir, &["config", "show"]);
+    assert!(
+        show.status.success(),
+        "a buried pin still loads: {}",
+        stdout(&show)
+    );
+    let headed = repo_with_config(
+        "lint-pin-headed",
+        &format!("version = 1\n{pin}unlanded = [\"x\"]\n"),
+    );
+    assert!(
+        !stdout(&lint(&headed, &[])).contains("engine-pin-out-of-order"),
+        "a pin under `version` is in order"
+    );
+}
+
+#[test]
 fn every_empty_set_is_reported_and_the_output_is_byte_stable() {
     let dir = repo_with_config(
         "lint-all-empty",

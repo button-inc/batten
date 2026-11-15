@@ -59,7 +59,7 @@ fn resolves(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
-/// `#MUTANT installed-batten-visible` and `#MUTANT batten-directory-kept` redden
+/// Mutants that leave `batten` visible, or keep its directory, redden
 /// here: linking `batten` into the shadow, or keeping its directory, makes it
 /// resolvable again.
 #[test]

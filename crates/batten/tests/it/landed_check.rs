@@ -366,7 +366,7 @@ fn a_header_line_in_the_evidence_does_not_stop_the_sweep() {
 /// not be written before the flag existed, which is exactly why the predicate's
 /// own tier could not catch it.
 ///
-/// SHOWN ABLE TO FAIL: `#MUTANT claimed-arm-unread` empties the arm, and
+/// SHOWN ABLE TO FAIL: a mutant emptying the claimed arm reddens it, and
 /// without it this row is not drained by anything else — the merged evidence
 /// deliberately names a DIFFERENT key.
 #[test]
@@ -481,7 +481,7 @@ fn a_sweep_with_the_claimed_arm_is_quiet_about_it() {
 /// CLOUD-1127, were declined in the body of the pull request that landed the
 /// module and advanced to Done by a release the next morning.
 ///
-/// SHOWN ABLE TO FAIL: `#MUTANT done-not-advanced` drops Done from the set.
+/// SHOWN ABLE TO FAIL: a mutant dropping Done from the set reddens it.
 #[test]
 fn a_declined_key_released_to_done_is_refused() {
     let dir = evidence(

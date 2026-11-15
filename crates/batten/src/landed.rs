@@ -1203,8 +1203,8 @@ mod tests {
     /// it. Both arms are asserted because either alone passes over a predicate
     /// that never fires.
     ///
-    /// SHOWN ABLE TO FAIL: `#MUTANT abandoned-ignores-bound` neuters the
-    /// comparison, and the second arm below is what goes red.
+    /// SHOWN ABLE TO FAIL: a mutant neutering the bound's comparison turns the
+    /// second arm below red.
     #[test]
     fn the_idle_bound_is_exclusive_at_exactly_the_threshold() {
         assert!(
@@ -1224,8 +1224,8 @@ mod tests {
     /// request", never "no attachments", so a row carrying a design document is
     /// still an abandoned claim.
     ///
-    /// SHOWN ABLE TO FAIL: `#MUTANT abandoned-ignores-pr` drops the rescue, and
-    /// the first arm goes red.
+    /// SHOWN ABLE TO FAIL: a mutant dropping the PR rescue turns the first arm
+    /// red.
     #[test]
     fn only_a_pull_request_attachment_rescues_a_claim() {
         let mut with_pr = claim("CLOUD-1", "2026-08-01");
