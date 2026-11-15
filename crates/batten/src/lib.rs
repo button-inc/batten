@@ -19959,7 +19959,7 @@ fn dispatch_envelope(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    let (policy, waivers, pruning) = if adjudicable {
+    let ((policy, waivers, pruning), floored) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
         let handoff = Handoff::new(raw, ran);
@@ -19968,7 +19968,10 @@ fn dispatch_envelope(
             Err(code) => return Ok(HookDispatch::undenied(code)),
         }
     } else {
-        (hook::Policy::declaring_nothing(harness), Vec::new(), None)
+        (
+            (hook::Policy::declaring_nothing(harness), Vec::new(), None),
+            false,
+        )
     };
     // THE DISK COLLECTOR, BEFORE THE VERDICT (CLOUD-2197): one free-space read
     // above the declared minimum; below it, a bounded collection, then admit.
@@ -20098,7 +20101,15 @@ fn dispatch_envelope(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, raw, overrides, &mut advice);
+    //
+    // NOT ON THE FLOOR (#1276): see `hook_config_or_floor` for why a floored
+    // call's handlers are not consulted.
+    let handled = if floored {
+        None
+    } else {
+        config_write_breaks(&envelope, overrides, harness)
+            .or_else(|| dispatch_handlers(&envelope, raw, overrides, &mut advice))
+    };
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -20710,6 +20721,13 @@ type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
 /// The hook's config, or the floor over a config that will not load: a read
 /// and the repair write pass with no rules, and everything else is refused
 /// (CLOUD-1842, CLOUD-1917). `Err` carries the exit the call ends with.
+///
+/// The `bool` is whether the floor answered. **A floored call dispatches no
+/// handler** (#1276): the handler table resolves apart from the policy, so a
+/// row naming a missing module left the table readable while the policy was
+/// not, and `filed-row-settled` refused the floor's own repair write. A
+/// declaration that could not be enforced cannot be half-enforced by its
+/// handlers either.
 fn hook_config_or_floor(
     overrides: &Overrides,
     harness: hook::Harness,
@@ -20718,9 +20736,9 @@ fn hook_config_or_floor(
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<Result<HookConfig, ExitCode>> {
+) -> Result<Result<(HookConfig, bool), ExitCode>> {
     match load_hook_config(overrides, harness) {
-        Ok(loaded) => Ok(Ok(loaded)),
+        Ok(loaded) => Ok(Ok((loaded, false))),
         // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
         // was guarded to a parse failure alone, and every other fault — a
         // validator refusing a row, a skewed version — fell to
@@ -20742,15 +20760,87 @@ fn hook_config_or_floor(
                 // repair write reach the file that is faulting — the
                 // protected gate is not SUPPRESSED here, it has no table.
                 Ok(Ok((
-                    hook::Policy::declaring_nothing(harness),
-                    Vec::new(),
-                    None,
+                    (hook::Policy::declaring_nothing(harness), Vec::new(), None),
+                    true,
                 )))
             } else {
                 deny_unadjudicable(harness, envelope, &unreadable, mode, out, err).map(Err)
             }
         }
     }
+}
+
+/// The id a write that would leave the config unloadable is refused under.
+const CONFIG_WRITE_UNLOADABLE: &str = "config-write-unloadable";
+
+/// Refuse a write of the config authority whose landed text would not load
+/// (#1276), judged before it lands.
+///
+/// **The floor is a recovery, never a state to walk into.** Measured on #1276:
+/// rows naming modules not yet written left the config unloadable, every later
+/// call was refused, and the session could not get back. So the text this write
+/// lands is loaded exactly as the hook loads its own config — the same
+/// `resolve` with only layer 1 moved (`config_in`, a scratch directory holding
+/// that text), then the same `Policy::from_resolved` against this repository's
+/// modules — and a failure refuses the write.
+///
+/// `None` admits: the call writes something else, the config is judged from a
+/// ref or another directory already, or the landed text could not be looked at.
+/// Could-not-look admits because the floor still recovers whatever lands.
+fn config_write_breaks(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    harness: hook::Harness,
+) -> Option<hook::Decision> {
+    if envelope.writes.as_deref() != Some(config::CONFIG_FILE)
+        || overrides.config_from.is_some()
+        || overrides.config_in.is_some()
+    {
+        return None;
+    }
+    let root = hook_authority_root();
+    let crate::facts::Look::Is(landed) = hook::prospective_facts(root, envelope) else {
+        return None;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let scratch = std::env::temp_dir().join(format!(
+        "batten-config-probe-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch).ok()?;
+    let probe = scratch.join(config::CONFIG_FILE);
+    let loaded = durable::replace(&probe, landed.as_bytes()).ok().map(|()| {
+        let mut moved = overrides.clone();
+        moved.config_in = Some(scratch.to_string_lossy().into_owned());
+        resolve::resolve(root, &moved)
+            .and_then(|resolved| hook::Policy::from_resolved(&resolved, harness, root, None))
+    });
+    let _removed = std::fs::remove_dir_all(&scratch);
+    let refused = loaded?.err()?;
+    // The cause, never the source excerpt (rule 4): the same filter the
+    // unloadable refusal applies to the same kind of error.
+    let pointer = refused
+        .to_string()
+        .lines()
+        .filter(|line| !is_source_excerpt(line))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(hook::Decision::Deny(
+        Refusal::new(
+            CONFIG_WRITE_UNLOADABLE,
+            format!("this write would leave the config unable to load: {pointer}"),
+            Fix::Run(
+                "write the module a row names before the row, use only declared vocabulary, \
+                 and land the whole config change in one write"
+                    .to_owned(),
+            ),
+        )
+        .at(config::CONFIG_FILE),
+    ))
 }
 
 /// What the load-fault handoff needs that is not already in the envelope: the
