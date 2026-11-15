@@ -91,6 +91,91 @@ fn a_setup_run_never_registers_on_the_user_level_surface() {
     );
 }
 
+/// A live process whose working directory is `dir`, standing in for the harness
+/// `CLAUDE_PID` names: a hook blocked reading a payload it has not been sent.
+/// Dropping the returned child's stdin ends it.
+fn harness_in(dir: &Path) -> std::process::Child {
+    let mut command = common::batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command.spawn().expect("a stand-in harness process")
+}
+
+fn register_in_session(
+    home: &Path,
+    repo: &Path,
+    environment: &str,
+    harness: &std::process::Child,
+    args: &[&str],
+) -> Output {
+    common::batten()
+        .current_dir(repo)
+        .args([&["wiring", "register"], args].concat())
+        .at_home(home)
+        .env("BATTEN_ENVIRONMENT", environment)
+        .env("CLAUDE_PID", harness.id().to_string())
+        .output()
+        .expect("the binary runs")
+}
+
+fn end(mut harness: std::process::Child) {
+    drop(harness.stdin.take());
+    let _ = harness.wait();
+}
+
+#[test]
+fn a_session_rooted_at_the_clone_still_registers_the_roots_above_it() {
+    // THE REGRESSION (CLOUD-2751). A one-repository session is rooted IN the
+    // clone, so its live root owed nothing; it then attached a second
+    // repository, the restart rooted it at the parent, and no hook ran again.
+    let (home, repo) = layout("wiring-register-live-clone");
+    let harness = harness_in(&repo);
+    let done = register_in_session(&home, &repo, "disposable", &harness, &[]);
+    end(harness);
+    assert_eq!(done.status.code(), Some(0), "{}", stderr(&done));
+    let parent = repo.parent().expect("the clone's parent");
+    let text = std::fs::read_to_string(parent.join(".claude/settings.json"))
+        .unwrap_or_else(|error| panic!("the parent is registered: {error}: {}", stderr(&done)));
+    let document: serde_json::Value = serde_json::from_str(&text).expect("a JSON surface");
+    assert_eq!(
+        document["hooks"].as_object().map(serde_json::Map::len),
+        Some(8),
+        "all eight events"
+    );
+    assert!(
+        !home.join(".claude/settings.json").exists(),
+        "and still nothing at $HOME"
+    );
+}
+
+#[test]
+fn a_real_machine_inside_a_session_writes_nothing_above_its_root() {
+    let (home, repo) = layout("wiring-register-live-real");
+    let harness = harness_in(&repo);
+    let check = register_in_session(&home, &repo, "", &harness, &["--check"]);
+    let done = register_in_session(&home, &repo, "", &harness, &[]);
+    end(harness);
+    assert_eq!(check.status.code(), Some(0), "{}", stderr(&check));
+    let parent = repo.parent().expect("the clone's parent");
+    let owed_at_parent = format!(" owed at {}", parent.display());
+    assert!(
+        !stderr(&check)
+            .lines()
+            .any(|line| line.ends_with(&owed_at_parent)),
+        "no directory above the live root is owed: {}",
+        stderr(&check)
+    );
+    assert_eq!(done.status.code(), Some(0), "{}", stderr(&done));
+    assert!(
+        !registers_batten(parent),
+        "nothing is written above the root"
+    );
+}
+
 #[test]
 fn a_machine_not_declared_disposable_owes_nothing_outside_a_session() {
     // A developer's laptop or a CI runner: nothing may be written there, so
