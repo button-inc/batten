@@ -18099,8 +18099,10 @@ tools = [
 # UTC date a waiver lapses on, and `--inputs-digest`: the engine's own digest of
 # the out-of-tree state the half still reads (the store baseline, admissions and
 # HEAD's admission blocks, the secret-identity key, `batten.local.toml`, the
-# settings' environment). Every live row runs in `enforce --half live`,
-# unreceipted.
+# settings' environment). That line is spelled `batten enforce --half tree
+# --inputs-digest` because the step cache answers exactly that argv in-process
+# (step 17): spawned as a `cargo run`, it cost a build check and a policy load
+# every lap. Every live row runs in `enforce --half live`, unreceipted.
 [[step]]
 id = "enforce-tree"
 inputs = ["."]
@@ -18110,7 +18112,7 @@ tools = [
   ["git", "merge-base", "HEAD", "origin/main"],
   ["git", "rev-parse", "HEAD^{tree}"],
   ["date", "-u", "+%F"],
-  ["cargo", "run", "--quiet", "-p", "batten", "--", "enforce", "--half", "tree", "--inputs-digest"],
+  ["batten", "enforce", "--half", "tree", "--inputs-digest"],
 ]
 
 # THE STEPS A LAP USED TO RE-RUN WHOLE (#1276): each judged the same bytes to the

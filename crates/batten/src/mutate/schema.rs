@@ -2243,6 +2243,15 @@ fn ids_by_value<T: AsRef<str>>(
     ids
 }
 
+/// The live tree a sweep verifies carried records over, for each to take its
+/// selection digest there ([`retest_carried`]): the snapshot's root, the
+/// checkout's content ids ([`resource_ids`]) and the [`Format`] it is read in.
+pub type Over<'a> = (
+    &'a std::path::Path,
+    &'a std::collections::BTreeMap<String, String>,
+    &'a Format,
+);
+
 /// The digests a carried case's dependencies would have on this rendering.
 pub type Recompute<'r> = dyn Fn(
         &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -2262,6 +2271,11 @@ pub type Recompute<'r> = dyn Fn(
 /// that test, not the suite. A record not yet sealed (a run killed mid-suite)
 /// is kept only over the tree it was recorded on, whose ids it is written in.
 ///
+/// A CARRY IS A VERIFICATION, SO IT BACKFILLS SELECTION: with `over`, every
+/// record carried takes its selection digest over the live tree it was just
+/// verified on ([`retest_carried`]), so any sweep, an all-carry one included,
+/// leaves `test:cargo` a digest for every case it kept.
+///
 /// # Errors
 ///
 /// The directory cannot be read, cleared or written.
@@ -2269,7 +2283,7 @@ fn carry_forward(
     base: &std::path::Path,
     inputs: &str,
     identity: &Identity<'_>,
-    recompute: &Recompute<'_>,
+    (recompute, over): (&Recompute<'_>, Option<Over<'_>>),
 ) -> anyhow::Result<(usize, usize)> {
     std::fs::create_dir_all(base)?;
     let same_tree = crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs);
@@ -2337,16 +2351,80 @@ fn carry_forward(
         }
     }
     let now = recompute(&executed, &read);
-    let mut carried_count = 0;
+    let mut kept: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
     for (dir, case, record) in candidates {
         if now.get(&case) == Some(&record.digest) {
-            carried_count += 1;
+            let touched = read.get(&case).cloned();
+            kept.push((dir, case, (record.functions, touched)));
         } else {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
+    // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves the
+    // record to the suite's build key, and never fails the carry.
+    if let Some(over) = over {
+        let _ = retest_carried(base, &kept, over);
+    }
     crate::durable::replace(base.join(TREE), inputs)?;
-    Ok((carried_count, resumed))
+    Ok((kept.len(), resumed))
+}
+
+/// Write the selection digest ([`TESTED`]) of every record of `carried` over
+/// the live tree `over` names, wherever it holds none or holds one read in the
+/// same [`Format`]; how many hold one now. A record holding a digest read in
+/// another format keeps it: that digest is compared only in its own format.
+///
+/// SOUND AS A CARRY IS: [`carry_forward`] keeps a record only where every
+/// function it ran still exists by digest and its dependency digest over this
+/// tree is the one it was sealed with, so what it ran is what this tree runs,
+/// and the digest taken here is the one `test:cargo` recomputes on it. A pass
+/// is never read under a digest no run passed under: the suite's passes are
+/// keyed on the digest itself.
+///
+/// # Errors
+///
+/// The tree cannot be indexed, or a digest cannot be written.
+fn retest_carried(
+    base: &std::path::Path,
+    carried: &[(std::path::PathBuf, Case, Ran)],
+    (root, resources, format): Over<'_>,
+) -> anyhow::Result<usize> {
+    let key = format.key();
+    let due: Vec<&(std::path::PathBuf, Case, Ran)> = carried
+        .iter()
+        .filter(|(dir, _, _)| {
+            crate::fsio::read_to_string(dir.join(TESTED))
+                .ok()
+                .is_none_or(|held| {
+                    held.trim_end()
+                        .split_once('\t')
+                        .is_none_or(|(read_in, _)| read_in == key)
+                })
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(0);
+    }
+    format.store(base)?;
+    let index = dependency_index(root, format)?;
+    let cases: std::collections::BTreeMap<Case, Ran> = due
+        .iter()
+        .map(|(_, case, ran)| (case.clone(), ran.clone()))
+        .collect();
+    let digests = test_digests(root, &index, &format.dirs, &cases, resources);
+    let mut written = 0;
+    for (dir, case, _) in due {
+        let Some(Some(digest)) = digests.get(case) else {
+            continue;
+        };
+        let line = format!("{key}\t{digest}");
+        let held = crate::fsio::read_to_string(dir.join(TESTED)).ok();
+        if held.as_deref().map(str::trim_end) != Some(line.as_str()) {
+            crate::durable::replace(dir.join(TESTED), &line)?;
+        }
+        written += 1;
+    }
+    Ok(written)
 }
 
 /// Whether a case recorded at `dir` finished and passed: the one record a
@@ -2741,7 +2819,7 @@ pub fn record_reach(
     target: &std::path::Path,
     state: &std::path::Path,
     packages: &BTreeSet<&str>,
-    (identity, recompute): (&Identity<'_>, &Recompute<'_>),
+    (identity, recompute, over): (&Identity<'_>, &Recompute<'_>, Option<Over<'_>>),
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<(Reach, bool)> {
     let base = state.join("reach");
@@ -2753,7 +2831,7 @@ pub fn record_reach(
         reach.tree = inputs;
         return Ok((reach, true));
     }
-    let (carried, resumed) = carry_forward(&base, &inputs, identity, recompute)?;
+    let (carried, resumed) = carry_forward(&base, &inputs, identity, (recompute, over))?;
     write_listed(&base, identity)?;
     writeln!(
         out,
@@ -4105,8 +4183,14 @@ fn reached(
             format: Some(format.clone()),
         })?,
     )?;
-    let (reach, passed) =
-        record_reach(work, target, state, &packages, (identity, &recompute), out)?;
+    let (reach, passed) = record_reach(
+        work,
+        target,
+        state,
+        &packages,
+        (identity, &recompute, Some((root, ids.0, format))),
+        out,
+    )?;
     let mut recorded = reach.executed.clone();
     for case in reach.sites.values().flatten() {
         recorded.entry(case.clone()).or_default();
@@ -4126,7 +4210,7 @@ fn reached(
         passed,
     )?;
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
-    // record to the suite's binary key, and never fails the sweep.
+    // record to the suite's build key, and never fails the sweep.
     match seal_tested(&base, root, ids.0, format) {
         Ok(taken) => writeln!(
             out,
@@ -4790,9 +4874,9 @@ pub fn sealed_cases(base: &std::path::Path) -> Vec<Sealed> {
 /// and has none yet, over the snapshot at `root` with the checkout content
 /// ids `resources`, in `format`; how many it took.
 ///
-/// TAKEN ONCE, WHERE THE RECORD WAS MADE: a carried record keeps the digest
-/// of its own tree, so a later head is compared with the tree its functions
-/// were read on, never with a tree a looser carry let it reach.
+/// TAKEN ONCE HERE, WHERE THE RECORD WAS MADE: a record made on another tree
+/// takes its digest only where a carry verified it ([`retest_carried`]), over
+/// the tree that carry verified it on.
 ///
 /// # Errors
 ///
@@ -5085,6 +5169,100 @@ mod tests {
         );
     }
 
+    /// Fails by: a sweep that carries every record leaving one without a
+    /// selection digest (selection never backfilled, so `test:cargo` selects
+    /// nothing until a record is re-recorded), a digest other than the one the
+    /// live tree gives, or a record's digest read in another format rewritten.
+    #[test]
+    fn an_all_carry_sweep_leaves_every_record_with_a_selection_digest() {
+        use std::fmt::Write as _;
+        let (root, format) = selection_tree("schema-carry-tested", SELECTED, "");
+        let index = dependency_index(&root, &format).unwrap();
+        let base = crate::scratch::scratch("schema-carry-tested-base");
+        std::fs::write(base.join(TREE), "t0").unwrap();
+        let probes: Vec<String> = ["run", "helper", "checks"]
+            .iter()
+            .flat_map(|name| index.digests_of(name))
+            .collect();
+        let mut depends = String::from("Dsame\n");
+        for digest in &probes {
+            let _ = writeln!(depends, "F{digest}");
+        }
+        for (dir, tested) in [
+            ("bare", None),
+            ("stale", Some(format!("{}\tstale", format.key()))),
+            ("foreign", Some(String::from("other\tkept"))),
+        ] {
+            let dir = base.join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("case"), "tests::checks\tfix").unwrap();
+            std::fs::write(dir.join(OVER), "t0").unwrap();
+            std::fs::write(dir.join(DONE), "0").unwrap();
+            std::fs::write(dir.join(READ), "").unwrap();
+            std::fs::write(dir.join(DEPENDS), &depends).unwrap();
+            if let Some(tested) = tested {
+                std::fs::write(dir.join(TESTED), tested).unwrap();
+            }
+        }
+        let fns = std::collections::BTreeMap::new();
+        let classic = BTreeSet::new();
+        let identity = Identity {
+            probes: &probes,
+            sites: &[],
+            mutant_fns: &fns,
+            classic: &classic,
+        };
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        let none = std::collections::BTreeMap::new();
+        assert_eq!(
+            carry_forward(
+                &base,
+                "t1",
+                &identity,
+                (&same, Some((&root, &none, &format)))
+            )
+            .unwrap(),
+            (3, 0),
+            "every record carries"
+        );
+        let live = test_digests(
+            &root,
+            &index,
+            &format.dirs,
+            &[(
+                (String::from("tests::checks"), String::from("fix")),
+                (probes.iter().cloned().collect(), Some(BTreeSet::new())),
+            )]
+            .into(),
+            &none,
+        )
+        .into_values()
+        .next()
+        .flatten()
+        .expect("the live tree gives the case a digest");
+        let want = format!("{}\t{live}", format.key());
+        for (dir, held) in [("bare", &want), ("stale", &want)] {
+            assert_eq!(
+                std::fs::read_to_string(base.join(dir).join(TESTED)).unwrap(),
+                *held,
+                "{dir}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(base.join("foreign").join(TESTED)).unwrap(),
+            "other\tkept",
+            "a digest read in another format is that format's"
+        );
+        assert_eq!(Format::load(&base, &format.key()), Some(format.clone()));
+        assert_eq!(sealed_cases(&base).len(), 3, "every record is sealed");
+    }
+
     #[test]
     fn a_journaled_verdict_outranks_the_line_before_it_and_a_torn_line_is_dropped() {
         let loaded = load_verdicts(
@@ -5162,7 +5340,7 @@ mod tests {
             std::collections::BTreeMap::new()
         };
         assert_eq!(
-            carry_forward(&base, "tree-1", &no_identity(), &none).unwrap(),
+            carry_forward(&base, "tree-1", &no_identity(), (&none, None)).unwrap(),
             (0, 1)
         );
         assert!(base.join("a").exists());
@@ -5171,7 +5349,7 @@ mod tests {
             "run again"
         );
         assert_eq!(
-            carry_forward(&base, "tree-2", &no_identity(), &none).unwrap(),
+            carry_forward(&base, "tree-2", &no_identity(), (&none, None)).unwrap(),
             (0, 0)
         );
         assert!(
@@ -5245,7 +5423,7 @@ mod tests {
                     .collect()
             };
         assert_eq!(
-            carry_forward(&base, "tree-2", &identity, &recompute).unwrap(),
+            carry_forward(&base, "tree-2", &identity, (&recompute, None)).unwrap(),
             (1, 0)
         );
         assert!(base.join("kept").exists());
@@ -5450,7 +5628,7 @@ mod tests {
                 digests.clone()
             };
         assert_eq!(
-            carry_forward(&by_recorder, "tree-2", &identity, &recompute).unwrap(),
+            carry_forward(&by_recorder, "tree-2", &identity, (&recompute, None)).unwrap(),
             (1, 0),
             "the recorder's seal carries to a new tree"
         );
