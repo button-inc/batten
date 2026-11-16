@@ -131,6 +131,15 @@ pub enum CeilingUnit {
     /// boundary and reaches [`crate::hook::adjudicate`] as a fact — never opened
     /// from inside the decision, which stays pure.
     TrackedArtifacts,
+    /// How many attributes in a Rust file escape the lint [`Rule::pattern`]
+    /// names: each `#[expect(..)]` or `#[allow(..)]` whose list carries it, read
+    /// off the parsed syntax tree by [`crate::codemod::lint_escapes`] (#1276).
+    ///
+    /// **A RATCHET'S FILE MEASURE, never a call ceiling.** Counted over a glob
+    /// against a base, it makes an inventory of escapes (a spawn census) a
+    /// number that may only fall: whatever `main` carries is the baseline, so
+    /// no site needs approving, and a branch that adds one has to retire one.
+    LintEscapes,
 }
 
 /// The columns a [`RuleKind::Shape`] row may carry.
@@ -4445,6 +4454,15 @@ impl Rule {
                 self.id
             )));
         }
+        // A lint count measures a file, not a call: it has nothing to read on an
+        // envelope.
+        if self.counts == Some(CeilingUnit::LintEscapes) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `lint_escapes` is a ratchet's file measure; a per-call ceiling \
+                 counts `tokens` or `tracked_artifacts`",
+                self.id
+            )));
+        }
         // A rewrite table only means something to the unit that resolves paths.
         // On a token ceiling it would load, rewrite nothing, and read as a
         // narrowing — the inert-coverage failure this whole surface refuses.
@@ -6128,10 +6146,22 @@ impl Rule {
             return Ok(());
         }
         if let Some(unit) = self.counts {
+            // A LINT COUNT NAMES ITS LINT IN `pattern`, and is the one measure
+            // that takes it: the lint is the counter's subject, not a token.
+            if unit == CeilingUnit::LintEscapes {
+                if self.pattern.is_none() || self.regex.is_some() {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: `counts = \"lint_escapes\"` names its lint in `pattern` \
+                         (`clippy::disallowed_types`), and takes no `regex`",
+                        self.id
+                    )));
+                }
+                return Ok(());
+            }
             if unit != CeilingUnit::Tokens {
                 return Err(UsageError::raise(format!(
-                    "rule {}: a ratchet counts `tokens` or a literal; `counts = {unit:?}` \
-                     measures a call, not a file",
+                    "rule {}: a ratchet counts `tokens`, `lint_escapes` or a literal; \
+                     `counts = {unit:?}` measures a call, not a file",
                     self.id
                 )));
             }
@@ -11087,13 +11117,21 @@ fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + 
     // NEITHER A LITERAL NOR AN EXPRESSION IS THE TOKEN MEASURE: `validate`
     // admits exactly one of the three, and refuses any ratchet `counts` but
     // `tokens` (`validate_ratchet_measure`).
-    Ok(
-        move |text: &str| match (&expression, rule.pattern.as_deref()) {
+    // Or a lint's escapes, read off the parsed syntax (#1276): `pattern` names
+    // the lint, and the count is of attributes, never of text.
+    let lint = (rule.counts == Some(CeilingUnit::LintEscapes))
+        .then(|| rule.pattern.as_deref())
+        .flatten();
+    Ok(move |text: &str| {
+        if let Some(lint) = lint {
+            return crate::codemod::lint_escapes(text, crate::codemod::Edition::E2024, lint);
+        }
+        match (&expression, rule.pattern.as_deref()) {
             (Some(expression), _) => expression.find_iter(text).count(),
             (None, Some(pattern)) => text.matches(pattern).count(),
             (None, None) => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
-        },
-    )
+        }
+    })
 }
 
 /// One ratchet row a mediated write would move the banned way (CLOUD-2692).

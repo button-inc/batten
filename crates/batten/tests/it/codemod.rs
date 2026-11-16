@@ -337,3 +337,37 @@ fn a_call_is_rewritten_by_what_its_own_chain_called() {
         "each call's own chain, in call order, and nothing across a `let`"
     );
 }
+
+/// Fails by: a doc line, a string, or a lint sharing the prefix counted as an
+/// escape; a list naming the lint twice counted twice; an `allow`, an inner
+/// attribute, or an escape among other lints missed; or another attribute
+/// (`cfg`) counted. Built to break a text count: the decoys come first.
+#[test]
+fn lint_escapes_counts_the_attributes_that_name_the_lint_and_nothing_else() {
+    let source = "\
+//! Names clippy::disallowed_types in prose.
+#![allow(clippy::disallowed_types)]
+/// `#[expect(clippy::disallowed_types)]` in a doc line.
+const S: &str = \"#[expect(clippy::disallowed_types)]\";
+#[expect(clippy::disallowed_types_x)]
+fn prefix() {}
+#[expect(
+    clippy::disallowed_types,
+    reason = \"stays: one\"
+)]
+fn one() {}
+#[allow(clippy::pedantic, clippy :: disallowed_types, clippy::disallowed_types)]
+fn two() {}
+#[cfg(clippy::disallowed_types)]
+fn not_an_escape() {}
+";
+    assert_eq!(
+        codemod::lint_escapes(source, Edition::E2024, "clippy::disallowed_types"),
+        3,
+        "the inner allow, `one` and `two`"
+    );
+    assert_eq!(
+        codemod::lint_escapes(source, Edition::E2024, "clippy::disallowed_types_x"),
+        1
+    );
+}
