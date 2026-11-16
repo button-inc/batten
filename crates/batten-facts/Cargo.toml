@@ -24,6 +24,7 @@ json5.workspace = true
 proc-macro2.workspace = true
 batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
 blake3.workspace = true
+crc32fast.workspace = true
 regex.workspace = true
 schemars.workspace = true
 serde.workspace = true

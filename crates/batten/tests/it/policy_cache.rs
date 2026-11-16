@@ -151,7 +151,9 @@ fn a_warm_load_from_the_working_directory_compiles_no_engine() {
 
 /// CLOUD-2315: inside one hook call's scope each rule of a bundle is evaluated
 /// ONCE per input, however often it is asked — and the answers are the ones an
-/// unscoped evaluation gives. Outside the scope nothing is memoised.
+/// unscoped evaluation gives. Outside the scope nothing is memoised. A rule is
+/// evaluated with its family and no other, so a call asking only `deny` never
+/// runs the grant's rules.
 #[test]
 fn one_call_evaluates_each_rule_once() {
     let root = root_with("once", ANSWERS_EVERY_RULE);
@@ -163,10 +165,12 @@ fn one_call_evaluates_each_rule_once() {
     for (input, expected) in CALLS.iter().zip(&unscoped) {
         let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}");
+        // TWO, one per family asked: the adjudication, then the grant, whose
+        // two rules share theirs. A `PostToolUse` asks only the first.
         assert_eq!(
             policy::bytecode_evaluations() - before,
-            1,
-            "deny, preapprove and rewrite share one evaluation: {input}"
+            2,
+            "deny is one evaluation, and preapprove and rewrite share a second: {input}"
         );
         let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}, asked again");

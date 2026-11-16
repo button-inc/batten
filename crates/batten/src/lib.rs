@@ -19874,7 +19874,7 @@ fn receipt_facts(
 /// `bypass_env` — every ruleset until one opts in — collects an empty set, reads
 /// no environment variable, and clones no policy. This runs on the hottest path
 /// in the binary, so that is a requirement rather than a nicety.
-fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
+fn without_set_hatches(policy: &hook::Policy) -> std::borrow::Cow<'_, hook::Policy> {
     let set: std::collections::BTreeSet<String> = policy
         .declared_hatches()
         .into_iter()
@@ -19882,11 +19882,12 @@ fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
         .map(std::borrow::ToOwned::to_owned)
         .collect();
     if set.is_empty() {
-        return policy;
+        return std::borrow::Cow::Borrowed(policy);
     }
     // The row is REMOVED rather than its refusal suppressed, so the rows behind
-    // it still fire. See `hook::Policy::without_hatched`.
-    policy.without_hatched(&set)
+    // it still fire. See `hook::Policy::without_hatched`. The one path that
+    // pays a copy of the policy, and only with a hatch set.
+    std::borrow::Cow::Owned(policy.clone().without_hatched(&set))
 }
 
 /// What a host that does not emit this event is told, split out of [`run_hook`]
@@ -20461,7 +20462,7 @@ fn dispatch_envelope(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    let ((policy, waivers, pruning), floored) = if adjudicable {
+    let (loaded, floored) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
         let handoff = Handoff::new(raw, ran);
@@ -20470,8 +20471,11 @@ fn dispatch_envelope(
             Err(code) => return Ok(HookDispatch::undenied(code)),
         }
     } else {
-        (nothing_to_judge(harness), false)
+        (std::rc::Rc::new(nothing_to_judge(harness)), false)
     };
+    // BORROWED FROM THE CALL'S ONE LOAD, never cloned out of it: the memo
+    // holds the same `Rc` its table readers share.
+    let (policy, waivers, pruning) = (&loaded.0, &loaded.1, &loaded.2);
     // THE DISK COLLECTOR, BEFORE THE VERDICT (CLOUD-2197): one free-space read
     // above the declared minimum; below it, a bounded collection, then admit.
     collect_before_admitting(&envelope, pruning.as_ref(), &mut advice, err);
@@ -20522,7 +20526,7 @@ fn dispatch_envelope(
     let waived = if waivers.is_empty() {
         waiver::Live::new()
     } else {
-        waiver::live(&waivers, waiver::today()?)
+        waiver::live(waivers, waiver::today()?)
     };
     // The declared side effects (CLOUD-91), fired BEFORE the decision is written
     // and structurally unable to reach it: `action::fire` returns nothing, so
@@ -21233,7 +21237,7 @@ fn hook_config_or_floor(
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<Result<(HookConfig, bool), ExitCode>> {
+) -> Result<Result<(std::rc::Rc<HookConfig>, bool), ExitCode>> {
     match load_hook_config(overrides, harness) {
         Ok(loaded) => Ok(Ok((loaded, false))),
         // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
@@ -21257,7 +21261,7 @@ fn hook_config_or_floor(
                 // repair write reach the file that is faulting — the
                 // protected gate is not SUPPRESSED here, it has no table.
                 Ok(Ok((
-                    (hook::Policy::declaring_nothing(harness), Vec::new(), None),
+                    std::rc::Rc::new((hook::Policy::declaring_nothing(harness), Vec::new(), None)),
                     true,
                 )))
             } else {
@@ -23893,7 +23897,7 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 
 /// Spawn the `[[hook.action]]` rows declared for this envelope's event.
 ///
-/// Reads config on its **own** path rather than reusing [`load_policy`]'s
+/// Reads config on its **own** path rather than reusing [`load_hook_config`]'s
 /// result, because the two answer different questions: the policy is the
 /// mediated-call rule set and is deliberately not loaded for a bypassed or
 /// nothing-to-judge call, while the action table is keyed on the event alone.
@@ -26952,7 +26956,7 @@ fn replay_mints(overrides: &Overrides, pending: &background::Pending, raw: &serd
         return;
     }
     let result = facts::payload_in(raw).unwrap_or(serde_json::Value::Null);
-    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     mint_with_policy(&policy, &pending.tool, &pending.input, &result);
@@ -27293,10 +27297,13 @@ fn capture_budget() -> Option<crate::config_model::CaptureConfig> {
     // cross-process cache holds rather than parsing the TOML (2026-11-15: the
     // one remaining parse was still a third of a `PostToolUse`). Tolerant as
     // before: an authority that will not load leaves the engine's defaults.
+    // SHARED, so the one table is read off the remembered parse rather than a
+    // clone of the whole authority made and dropped to keep it.
     let read = || {
-        config::load(&hook_session_home().join(crate::config_model::CONFIG_FILE))
+        config::load_shared(&hook_session_home().join(crate::config_model::CONFIG_FILE))
             .ok()?
             .capture
+            .clone()
     };
     let answer = read();
     HookLoads::keep_capture(answer.clone());
@@ -27520,13 +27527,6 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
     }
 }
 
-fn load_policy(
-    overrides: &Overrides,
-    harness: crate::config_model::Harness,
-) -> Result<(hook::Policy, Vec<crate::config_model::Waiver>)> {
-    load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
-}
-
 /// The policy for a reader of its DECLARED TABLES alone — facts, mints,
 /// recorders, patterns, programs — which no harness changes: whatever load
 /// this call already made, for any harness, else one made for
@@ -27538,24 +27538,37 @@ fn load_policy(
 /// and all — to read tables it already held.
 //MUTANT tables-reader-ignores-the-call-harness|s@^    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);$@    let harness = hook::Harness::ExitCode;@|a_tables_reader_first_in_a_call_loads_for_the_calls_harness
 //MUTANT tables-reader-loads-again|s@^    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {$@    if let Some(held) = None::<hook::Policy> {@|a_tables_reader_takes_the_load_the_call_already_made
-fn load_policy_tables(overrides: &Overrides) -> Result<hook::Policy> {
+fn load_policy_tables(overrides: &Overrides) -> Result<SharedPolicy> {
     if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {
-        return Ok(held);
+        return Ok(SharedPolicy(held));
     }
     // UNDER THE CALL'S OWN HARNESS where the scope knows it: the post-tool
     // readers run before the call's own load, so loading for `ExitCode` here
     // built one policy and the call then built a second for its harness.
     let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);
-    load_policy(overrides, harness).map(|(policy, _)| policy)
+    load_hook_config(overrides, harness).map(SharedPolicy)
 }
 
-/// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
-/// collector's band costs the pre-tool path nothing beyond the load it already
-/// pays (CLOUD-2197).
+/// A policy a hook call already loaded, shared rather than cloned: what a
+/// reader of its declared tables borrows.
+struct SharedPolicy(std::rc::Rc<HookConfig>);
+
+impl std::ops::Deref for SharedPolicy {
+    type Target = hook::Policy;
+
+    fn deref(&self) -> &hook::Policy {
+        &self.0.0
+    }
+}
+
+/// The mediated-call policy and its waivers, with the `[prune]` table the same
+/// resolve read, so the disk collector's band costs the pre-tool path nothing
+/// beyond the load it already pays (CLOUD-2197). Shared behind an `Rc` with the
+/// call's other readers, never cloned per reader.
 fn load_hook_config(
     overrides: &Overrides,
     harness: crate::config_model::Harness,
-) -> Result<HookConfig> {
+) -> Result<std::rc::Rc<HookConfig>> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
@@ -27575,7 +27588,11 @@ fn load_hook_config(
     // and the mode modules alone load, so auto mode grants and plan mode refuses
     // writes wherever the session's shell happens to stand.
     if overrides.config_from.is_none() && !here.join(crate::config_model::CONFIG_FILE).exists() {
-        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));
+        return Ok(std::rc::Rc::new((
+            hook::Policy::mode_default(harness)?,
+            Vec::new(),
+            None,
+        )));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
     // `Policy` is what `adjudicate` decides against and is resolved without a
@@ -27588,7 +27605,7 @@ fn load_hook_config(
     let resolved = HookLoads::resolve(here, overrides)?;
     let policy =
         hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
-    let loaded = (policy, resolved.waivers.clone(), resolved.prune.clone());
+    let loaded = std::rc::Rc::new((policy, resolved.waivers.clone(), resolved.prune.clone()));
     HookLoads::keep(here, overrides, harness, &loaded);
     Ok(loaded)
 }
@@ -27618,9 +27635,11 @@ fn load_hook_config(
 /// allocated (dhat, CLOUD-2315).
 struct HookLoads {
     resolved: Vec<((PathBuf, Overrides), std::rc::Rc<resolve::Resolved>)>,
+    /// Behind an `Rc` for the resolve's reason: a recall deep-cloned the whole
+    /// policy, and a `PostToolUse` recalled it three times.
     loaded: Vec<(
         (PathBuf, Overrides, crate::config_model::Harness),
-        HookConfig,
+        std::rc::Rc<HookConfig>,
     )>,
     /// [`capture_budget`]'s answer, once it has been read in this scope.
     capture: CaptureRead,
@@ -27649,19 +27668,18 @@ struct HookLoadScope;
 
 impl Drop for HookLoadScope {
     fn drop(&mut self) {
-        HOOK_LOADS.with(|cell| *cell.borrow_mut() = None);
+        // CLOSED, NOT FREED. The scope ends as the hook call returns and the
+        // process exits behind it, and walking the call's policy, resolve and
+        // config to free them element by element was ~2% of a warm call's
+        // instructions (callgrind, 2026-11-16) spent on memory the exit returns
+        // whole. The memo is still gone: nothing can read it after this.
+        HOOK_LOADS.with(|cell| std::mem::forget(cell.borrow_mut().take()));
     }
 }
 
 impl HookLoads {
-    /// Open the memo for the life of the returned guard, for no harness in
-    /// particular: a case's scope. A hook call opens [`HookLoads::scope_for`].
-    #[cfg(test)]
-    fn scope() -> HookLoadScope {
-        Self::open(None)
-    }
-
-    /// [`HookLoads::scope`] for a call made by `harness`.
+    /// Open the memo for the life of the returned guard, for a call made by
+    /// `harness`. A case opens one for no harness with [`HookLoads::open`].
     fn scope_for(harness: hook::Harness) -> HookLoadScope {
         Self::open(Some(harness))
     }
@@ -27706,7 +27724,7 @@ impl HookLoads {
         here: &Path,
         overrides: &Overrides,
         harness: crate::config_model::Harness,
-    ) -> Option<HookConfig> {
+    ) -> Option<std::rc::Rc<HookConfig>> {
         HOOK_LOADS.with(|cell| {
             cell.borrow().as_ref().and_then(|loads| {
                 loads
@@ -27715,21 +27733,21 @@ impl HookLoads {
                     .find(|((root, held, host), _)| {
                         root == here && held == overrides && *host == harness
                     })
-                    .map(|(_, loaded)| loaded.clone())
+                    .map(|(_, loaded)| std::rc::Rc::clone(loaded))
             })
         })
     }
 
     /// Any policy this scope loaded for `here` under `overrides`, whichever
     /// harness it was loaded for: [`load_policy_tables`]'s reading.
-    fn recall_any(here: &Path, overrides: &Overrides) -> Option<hook::Policy> {
+    fn recall_any(here: &Path, overrides: &Overrides) -> Option<std::rc::Rc<HookConfig>> {
         HOOK_LOADS.with(|cell| {
             cell.borrow().as_ref().and_then(|loads| {
                 loads
                     .loaded
                     .iter()
                     .find(|((root, held, _), _)| root == here && held == overrides)
-                    .map(|(_, (policy, _, _))| policy.clone())
+                    .map(|(_, loaded)| std::rc::Rc::clone(loaded))
             })
         })
     }
@@ -27765,13 +27783,13 @@ impl HookLoads {
         here: &Path,
         overrides: &Overrides,
         harness: crate::config_model::Harness,
-        loaded: &HookConfig,
+        loaded: &std::rc::Rc<HookConfig>,
     ) {
         HOOK_LOADS.with(|cell| {
             if let Some(loads) = cell.borrow_mut().as_mut() {
                 loads.loaded.push((
                     (here.to_path_buf(), overrides.clone(), harness),
-                    loaded.clone(),
+                    std::rc::Rc::clone(loaded),
                 ));
             }
         });
@@ -27781,7 +27799,7 @@ impl HookLoads {
 /// Resolve the `exec` output predicates for this run (CLOUD-117).
 ///
 /// **Absent authority declares no patterns, and is not an error** — the same
-/// reading [`load_policy`] gives the mediated-call policy, and for the same
+/// reading [`load_hook_config`] gives the mediated-call policy, and for the same
 /// reason. `batten exec` is a wrapper a caller puts in front of arbitrary
 /// commands, most of them in directories that are not Batten repositories;
 /// refusing there would make the wrapper the reason ordinary work stops.
@@ -32871,7 +32889,8 @@ pub fn land_ready_owes(
         }
     }
     resolved.rules = kept;
-    let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
+    let built = hook::Policy::from_resolved(&resolved, harness, root, None)?;
+    let policy = without_set_hatches(&built);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
     let raw = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -33206,7 +33225,7 @@ mod tests {
     /// second time because the call loaded it for another harness.
     #[test]
     fn a_tables_reader_takes_the_load_the_call_already_made() {
-        let _scope = HookLoads::scope();
+        let _scope = HookLoads::open(None);
         let overrides = Overrides::default();
         let Ok(_) = load_hook_config(&overrides, hook::Harness::ClaudeCode) else {
             return; // no authority here to load; nothing to share
@@ -33242,7 +33261,7 @@ mod tests {
     #[test]
     fn a_post_tool_call_reads_the_capture_bound_once() {
         let parses = || CAPTURE_PARSES.with(std::cell::Cell::get);
-        let _scope = HookLoads::scope();
+        let _scope = HookLoads::open(None);
         let before = parses();
         let first = capture_budget();
         assert_eq!(capture_budget(), first);
