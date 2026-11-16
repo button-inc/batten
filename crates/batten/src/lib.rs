@@ -21397,7 +21397,11 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
     };
-    let Ok((epoch, _)) = epoch::describe(root, None) else {
+    // CACHED (#1276): a hook call's deny reached this every time, and the cold
+    // `describe` re-read and fingerprinted the whole tracked surface each call,
+    // measured at 61% of a warm `wired` call's instructions. The cached value is
+    // byte-identical or a bug (`describe_cached`).
+    let Ok((epoch, _)) = epoch::describe_cached(root, None) else {
         return Ok(decision);
     };
     let anchor = admission::Anchor::Call { head }.token();
@@ -21588,7 +21592,7 @@ fn protected_escape(
     }
     let situation = git::head_commit(&root)
         .ok()
-        .zip(epoch::describe(&root, None).ok());
+        .zip(epoch::describe_cached(&root, None).ok());
     let mut unnamed = Vec::new();
     for changed_path in changed {
         let admitted = match &situation {
@@ -28945,7 +28949,7 @@ fn apply_admissions(
     // The HEAD term is gone from this path (CLOUD-1125): a tree finding is
     // anchored by its own fingerprint, which no commit enters. `epoch` still
     // resolves here, and could-not-look still admits nothing.
-    let Ok((epoch, _)) = epoch::describe(root, config_from) else {
+    let Ok((epoch, _)) = epoch::describe_cached(root, config_from) else {
         return Ok(findings);
     };
     // THE COMMIT'S OWN COPY (CLOUD-1674). The store is the spending host's and

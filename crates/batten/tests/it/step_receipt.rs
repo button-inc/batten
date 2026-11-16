@@ -774,3 +774,53 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
 }
+
+/// The seconds a `stage <step> <how> <seconds>` line on stderr reports.
+fn stage_seconds(err: &str, step: &str, how: &str) -> Option<f64> {
+    let prefix = format!("stage {step} {how} ");
+    err.lines()
+        .find_map(|line| line.strip_prefix(&prefix)?.trim().parse().ok())
+}
+
+/// Fails by: a run's wall time not written onto its receipt, or the `stage`
+/// line reporting something other than the time the command took (CLOUD-2776).
+#[test]
+fn a_step_record_carries_its_wall_time() {
+    // `sh` and `sleep`: a unix contract, compiled everywhere.
+    if !cfg!(unix) {
+        return;
+    }
+    let repo = Repo::new("wall-time");
+    let out = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let body = read(&repo.receipts()[0]);
+    let millis: u64 = body
+        .split_whitespace()
+        .find_map(|field| field.strip_suffix("ms")?.parse().ok())
+        .unwrap_or_else(|| panic!("the receipt carries its run's time: {body}"));
+    assert!(millis >= 300, "the run slept 300ms: {body}");
+    let said = stage_seconds(&common::stderr(&out), "mystep", "ran")
+        .unwrap_or_else(|| panic!("a stage line: {}", common::stderr(&out)));
+    assert!(said >= 0.3, "{said}");
+}
+
+/// Fails by: a hit reporting its own few milliseconds, which makes a resumed
+/// lap look faster than the work it stands for, or reporting nothing.
+#[test]
+fn a_hit_reports_the_recorded_runs_time_not_its_own() {
+    if !cfg!(unix) {
+        return;
+    }
+    let repo = Repo::new("hit-time");
+    let first = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", common::stderr(&first));
+    let hit = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    let err = common::stderr(&hit);
+    assert!(
+        stage_seconds(&err, "mystep", "ran").is_none(),
+        "a hit runs nothing: {err}"
+    );
+    let said =
+        stage_seconds(&err, "mystep", "hit").unwrap_or_else(|| panic!("a hit's stage line: {err}"));
+    assert!(said >= 0.3, "the hit reports the recorded run: {err}");
+}

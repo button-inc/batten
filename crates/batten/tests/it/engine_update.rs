@@ -26,7 +26,7 @@
 #![cfg(unix)]
 
 use crate::common;
-use batten::stream::StreamedChild as _;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
