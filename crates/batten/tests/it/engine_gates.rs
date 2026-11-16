@@ -37,7 +37,7 @@ fn run(dir: &Path, args: &[&str]) -> Output {
         .state_dir(&data_dir(dir))
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -146,7 +146,7 @@ fn a_pin_naming_a_draft_is_never_waited_on() {
         .args(["engine", "gate"])
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(!output.status.success(), "{}", text(&output));
     assert!(!text(&output).contains("waited"), "{}", text(&output));
@@ -167,7 +167,7 @@ fn a_cached_pin_is_judged_without_asking_about_drafts() {
         .args(["engine", "gate"])
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(output.status.success(), "{}", text(&output));
     assert!(!text(&output).contains("draft"), "{}", text(&output));

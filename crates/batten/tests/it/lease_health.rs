@@ -101,7 +101,7 @@ fn check(dir: &Path) -> (i32, String, String) {
     let output = batten()
         .args(["lease", "check"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten lease check");
     (
         output.status.code().expect("exit code"),

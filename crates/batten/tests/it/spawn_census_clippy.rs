@@ -52,6 +52,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,7 +113,7 @@ fn toy_clippy(cargo: &Path, dir: &Path) -> (bool, String) {
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("CARGO_BUILD_RUSTFLAGS")
         .env_remove("CLIPPY_CONF_DIR")
-        .output()
+        .streamed_output()
         .expect("cargo clippy runs");
     let said = format!(
         "{}{}",

@@ -1565,15 +1565,12 @@ pub fn build(
     skip.extend(handed.iter().copied());
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip, &unprobed)?;
-        // CARGO'S PROGRESS STREAMS, its JSON is read: a schema build runs for
-        // minutes, and a captured stderr left the lap silent for all of them.
-        let ran = super::spawn_as(
+        let ran = super::spawn(
             work,
             super::Program::Cargo,
             &args,
             &env,
             super::runner_bound(),
-            super::Said::Progress,
         )?;
         if ran.passed() {
             writeln!(

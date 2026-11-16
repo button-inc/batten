@@ -1928,19 +1928,14 @@ fn spawn(
 /// Where a spawned program's output goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Said {
-    /// Into [`Ran::output`], read once it has exited.
+    /// Into [`Ran::output`] for the caller to read once it has exited, and to
+    /// this process's stderr as it is written ([`pump_into`]).
     Captured,
     /// Straight to this process's stderr, as it is written, for a runner whose
     /// verdict is a file it writes (cargo-mutants' `mutants.out`): measured on
     /// #1132, capturing it left fifteen shards' logs silent for 111 minutes and
     /// lost every mutant they judged when their bound stopped them.
     Streamed,
-    /// Stdout into [`Ran::stdout`] for a caller that parses it, stderr straight
-    /// to this process's stderr as it is written: a build whose machine output
-    /// is the answer and whose human progress is cargo's own stderr. Measured on
-    /// #1276: the schema build ran 485s with both captured, and the lap showed
-    /// nothing from `known from earlier runs` until the build ended.
-    Progress,
 }
 
 fn spawn_as(
@@ -2002,12 +1997,14 @@ fn spawn_as(
     // ITS OWN GROUP, ENDED WHOLE — see `wait_bounded`, which records why the
     // direct child alone left every hung suite's test binary alive under init.
     //
-    // FILES RATHER THAN PIPES, because nothing reads them until the child is
-    // gone. A pipe holds 64 KiB and then blocks its writer, so a chatty failure
-    // would deadlock against a reader that is waiting for the exit — the one
-    // hazard `.output()` avoided by reading both pipes concurrently. A file has
-    // no such bound, and the watchdog above is what makes waiting-then-reading
-    // safe rather than merely tidy.
+    // PIPES, PUMPED AS THEY ARE WRITTEN (#1276). Each captured stream is read by
+    // its own thread through `exec::pump`, which writes every chunk to this
+    // process's stderr and to the capture file before reading the next: the
+    // output is visible while the child runs, the file still holds all of it
+    // for the caller to parse, and a blocked sink stalls the child's write
+    // rather than growing a buffer. Both pipes drain concurrently, so the 64 KiB
+    // deadlock a wait-then-read had is not reachable. It replaced files read at
+    // exit, which left a 485 s schema build showing nothing.
     let capture = std::env::temp_dir().join(format!(
         "batten-mutate-{}-{}",
         std::process::id(),
@@ -2021,21 +2018,15 @@ fn spawn_as(
     })?;
     let out_path = capture.join("stdout");
     let err_path = capture.join("stderr");
-    if said == Said::Streamed {
-        command.stdout(std::process::Stdio::from(std::io::stderr()));
-    } else {
-        command.stdout(std::process::Stdio::from(
-            fs::File::create(&out_path) // stream: a child's stdout sink
-                .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
-        ));
-    }
-    if said == Said::Captured {
-        command.stderr(std::process::Stdio::from(
-            fs::File::create(&err_path) // stream: a child's stderr sink
-                .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
-        ));
-    } else {
-        command.stderr(std::process::Stdio::from(std::io::stderr()));
+    match said {
+        Said::Streamed => {
+            command.stdout(std::process::Stdio::from(std::io::stderr()));
+            command.stderr(std::process::Stdio::from(std::io::stderr()));
+        }
+        Said::Captured => {
+            command.stdout(std::process::Stdio::piped());
+            command.stderr(std::process::Stdio::piped());
+        }
     }
     // A GROUP OF ITS OWN, AND THE SWEEP FORWARDS WHAT IT IS SENT. Leading a group
     // is what lets the teardown reach the suite's grandchildren; it also takes the
@@ -2044,11 +2035,21 @@ fn spawn_as(
     // `exec::Forwarding::arm`'s stated reason, and hands those signals on.
     crate::exec::lead_group(&mut command);
     let forwarding = crate::exec::Forwarding::arm(crate::exec::GroupDecision::OWNED)?;
-    let child = command
+    let mut child = command
         .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
     forwarding.adopt(child.id())?;
+    let pumps = [
+        child.stdout.take().map(|pipe| pump_into(pipe, &out_path)),
+        child.stderr.take().map(|pipe| pump_into(pipe, &err_path)),
+    ];
     let waited = wait_bounded(child, bound);
+    // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
+    // pipe's last writer has exited and its pump reaches EOF. The deadline is
+    // for a writer that left the group; what it pumped is in the file either way.
+    for pumping in pumps.into_iter().flatten().flatten() {
+        let _ = pumping.finished(crate::exec::PIPE_DRAIN_TIMEOUT);
+    }
     // A signal outranks the row: the sweep was asked to stop, so it stops, with
     // the signal's own status rather than a verdict on a suite it interrupted.
     let forwarded = forwarding.finish();
@@ -2073,6 +2074,19 @@ fn spawn_as(
     } else {
         ran
     })
+}
+
+/// Pump `pipe` into `path` and this process's stderr ([`crate::stream`]).
+fn pump_into<R: std::io::Read + Send + 'static>(
+    pipe: R,
+    path: &Path,
+) -> Result<crate::stream::Pumping> {
+    let file = fs::File::create(path) // stream: a child's captured stream
+        .with_context(|| format!("mutate: could not open {}", path.display()))?;
+    Ok(crate::stream::spawn_pump(
+        pipe,
+        vec![Box::new(std::io::stderr()), Box::new(file)],
+    ))
 }
 
 /// Wait for `child` until `bound`, end its whole process group, then reap it,
@@ -6559,28 +6573,26 @@ mod tests {
     /// job could write, so the job is observed through a fifo instead: the suite
     /// opens its write end and the job inherits it, and the read reaches its end
     /// only once every writer — the job included — is gone.
-    /// Fails by: `Progress` capturing stderr (the schema build silent again for
-    /// its whole run), dropping stdout (the build's JSON unparsed), or `Captured`
-    /// streaming what it must keep.
+    /// Fails by: a captured stream lost (the caller's parse reads nothing), or
+    /// stdout and stderr crossed. The live half is [`super::pump_into`]'s and is
+    /// asserted in `exec`'s pump case: a chunk reaches every sink before the
+    /// next is read.
     #[test]
-    fn progress_reads_stdout_and_streams_stderr() {
-        let dir = crate::scratch::scratch("mutate-said-progress");
+    fn a_captured_run_keeps_both_streams_while_pumping_them() {
+        let dir = crate::scratch::scratch("mutate-said-captured");
         let bound = std::time::Duration::from_secs(60);
-        let both = [String::from("-c"), String::from("echo out; echo err >&2")];
-        let progress = spawn_as(
-            &dir,
-            Program::Suite("sh"),
-            &both,
-            &[],
-            bound,
-            Said::Progress,
-        )
-        .expect("sh runs");
-        assert_eq!(progress.stdout, "out\n");
-        assert!(!progress.output.contains("err"), "{}", progress.output);
-        let captured = spawn(&dir, Program::Suite("sh"), &both, &[], bound).expect("sh runs");
-        assert_eq!(captured.stdout, "out\n");
-        assert!(captured.output.contains("err"), "{}", captured.output);
+        let chatty = [
+            String::from("-c"),
+            // Past one pipe's 64 KiB on each stream: a wait-then-read deadlocks.
+            String::from(
+                "head -c 200000 /dev/zero | tr '\\0' o; echo; head -c 200000 /dev/zero | tr '\\0' e >&2",
+            ),
+        ];
+        let ran = spawn(&dir, Program::Suite("sh"), &chatty, &[], bound).expect("sh runs");
+        assert_eq!(ran.outcome, Outcome::Passed, "the run is not deadlocked");
+        assert_eq!(ran.stdout.trim_end().len(), 200_000);
+        assert!(!ran.stdout.contains('e'));
+        assert_eq!(ran.output.matches('e').count(), 200_000);
     }
 
     #[test]

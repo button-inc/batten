@@ -43,6 +43,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -185,7 +186,7 @@ fn task(dir: &Path, verb: &str, pr: &str, stdin: &str, host: &HostEnv<'_>) -> Ou
         .take()
         .expect("stdin")
         .write_all(stdin.as_bytes());
-    child.wait_with_output().expect("run the verb")
+    child.streamed_wait().expect("run the verb")
 }
 
 fn in_session(session: &str) -> HostEnv<'_> {

@@ -112,6 +112,7 @@ rustls-pki-types.workspace = true
 tokio.workspace = true
 compio.workspace = true
 batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
+batten-stream = { path = "../batten-stream", version = "=0.0.220" }
 tower-service.workspace = true
 webpki-roots.workspace = true
 clap.workspace = true
@@ -209,6 +210,9 @@ regex-automata = { version = "0.4", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+# `exec`'s drain cases construct a pump's state instead of racing one
+# (CLOUD-2059); `seam` exposes that constructor to test builds only.
+batten-stream = { path = "../batten-stream", version = "=0.0.220", features = ["seam"] }
 # CLOUD-2224: the bench times the regex the DFA replaced, and the two runtime
 # vocabularies the compile-time table replaced; `o200k`'s anti-drift case and
 # the vocabulary check (CLOUD-1284 arm 4) count against tiktoken-rs.

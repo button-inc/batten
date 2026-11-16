@@ -293,7 +293,7 @@ fn the_retired_variable_no_longer_decides_anything() {
         .args(["claim", "race"])
         .current_dir(&dir)
         .env("BATTEN_CLAIM_RACE_BYPASS", "1")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         (plain.status.code(), stdout(&plain)),
@@ -1073,7 +1073,7 @@ fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Outpu
         .args(["claim", "race"])
         .current_dir(repo)
         .env("BATTEN_REST_FIXTURE", forge)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -1089,7 +1089,7 @@ fn raced_speculating(
         .current_dir(repo)
         .env("BATTEN_REST_FIXTURE", forge)
         .env("BATTEN_SPEC_BASE", base)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

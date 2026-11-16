@@ -242,7 +242,7 @@ pub(crate) fn record(dir: &Path, records: &str) {
 pub(crate) fn findings(dir: &Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    let outcome = command.output().expect("run batten check");
+    let outcome = command.streamed_output().expect("run batten check");
 
     // A NON-VERDICT EXIT IS NOT AN EMPTY ANSWER, and reading it as one is how this
     // file went green over a dead gate (CLOUD-1321). `check` exits 0 clean and 2

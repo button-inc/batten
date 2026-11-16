@@ -28,6 +28,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -76,7 +77,7 @@ fn hook_from(dir: &Path) -> Output {
         .expect("piped stdin")
         .write_all(banned_payload().as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Whether this run refused the call, read through both channels a host reads.
@@ -322,7 +323,7 @@ fn hook_in_session(dir: &Path, session: &str) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 #[test]
@@ -451,7 +452,7 @@ fn hook_call(
         .expect("piped stdin")
         .write_all(payload.to_string().as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 fn bash(process_cwd: &Path, cwd: &Path, session: &str, command: &str) -> Output {

@@ -153,7 +153,11 @@ fn batten(dir: &Path, args: &[&str]) -> Output {
         .env("PATH", path)
         .env("FIXTURE", dir)
         .stdin(Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::stream::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("run batten")
 }
 

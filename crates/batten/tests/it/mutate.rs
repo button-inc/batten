@@ -111,6 +111,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -283,7 +284,7 @@ fn run_with(
         // row reaches nextest proves an undeclared
         // inherited profile does not reach the sweep's nextest runs.
         .env("NEXTEST_PROFILE", "ci")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
@@ -316,7 +317,7 @@ fn a_malformed_shard_is_refused_before_the_sweep() {
         .env("MUTANT_GATES", "nope")
         .env("MUTANT_TASKS", "mise.toml")
         .env(batten::mutate::SHARD, "two/four")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let err = stderr(&answer);
     assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
@@ -340,7 +341,7 @@ fn a_malformed_shard_is_refused_before_the_registered_runner() {
         .env("MUTANT_RUNNER", "cargo-mutants")
         .env("MUTANT_CHANGED_SINCE", "HEAD")
         .env(batten::mutate::SHARD, "two/four")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let err = stderr(&answer);
     assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
@@ -375,7 +376,7 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
         // `cargo test`, whose freshness check is part of the bound even though
         // the build itself is paid beforehand under the build bound.
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
 
     // THE BOUND FIRED, READ FROM WHAT THE SWEEP RECORDED RATHER THAN FROM A
@@ -443,7 +444,7 @@ fn a_mutation_whose_sed_times_out_is_not_unappliable() {
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
         .env("PATH", path)
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(0), "the row applied: {out}");
@@ -526,7 +527,11 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
                 .arg(&copy)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
-                .output()
+                .streamed_output_keeping(batten::stream::Keep {
+                    stdin: true,
+                    stdout: false,
+                    stderr: true,
+                })
                 .expect("`sed` is the oracle this case compares against");
             let sed = String::from_utf8_lossy(&out.stdout).into_owned();
             if batten::mutate::substitute(&text, &row.script).as_deref() != Some(sed.as_str()) {
@@ -810,7 +815,7 @@ fn survivors_of(note: &Path) -> Vec<u32> {
 fn gone(pid: u32) -> bool {
     let answer = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
+        .streamed_output()
         .expect("run ps");
     let state = String::from_utf8_lossy(&answer.stdout);
     let state = state.trim();
@@ -923,7 +928,7 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
         // made a warm `cargo test` on a loaded host the thing being measured
         // (CLOUD-2059).
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "120")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let code = answer.status.code().unwrap_or(-1);
     let out = stdout(&answer);
@@ -1102,7 +1107,7 @@ fn an_unnamed_manifest_resolves_no_task_gate() {
         .current_dir(&root)
         .env("MUTANT_GATES", "task-a")
         .env_remove("MUTANT_TASKS")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(3), "{out}");
@@ -1587,7 +1592,7 @@ fn narrowed_sweep(root: &Path, gates: &str, base: &str) -> common::Batten {
 
 /// Run `command` to its exit, as `(code, stdout, stderr)`.
 fn answered(command: &mut common::Batten) -> (i32, String, String) {
-    let answer = command.output().expect("run batten mutate");
+    let answer = command.streamed_output().expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
         stdout(&answer),
@@ -1968,7 +1973,7 @@ fn sweep_registered(
         Some(runner) => command.env("MUTANT_RUNNER", runner),
         None => command.env_remove("MUTANT_RUNNER"),
     };
-    let answer = command.output().expect("run batten mutate");
+    let answer = command.streamed_output().expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
         stdout(&answer),
@@ -2041,7 +2046,7 @@ fn cargo_mutants_is_never_spawned_by_the_sweep() {
         .env("MUTANT_TASKS", "mise.toml")
         .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
         .env("MUTANT_RUNNER", "cargo-mutants")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
     assert_eq!(answer.status.code(), Some(1), "the usage code: {out}{err}");
@@ -2075,7 +2080,7 @@ fn a_row_in_a_source_cargo_mutants_owns_is_refused() {
             .env("MUTANT_GATES", "toy,other,src/owned.rs")
             .env("MUTANT_TASKS", "mise.toml")
             .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
-            .output()
+            .streamed_output()
             .expect("run batten mutate");
         let (out, err) = (stdout(&answer), stderr(&answer));
         assert_eq!(answer.status.code(), Some(2), "{verb}: {out}{err}");
@@ -2382,7 +2387,7 @@ fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings()
         .env("NEXTEST_PROFILE", "ci")
         .env("NEXTEST_RETRIES", "3")
         .env("NEXTEST_STATUS_LEVEL", "none")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
     assert_eq!(answer.status.code(), Some(0), "{out}{err}");
@@ -2413,7 +2418,7 @@ fn a_declared_cargo_row_without_nextest_reads_one_runner_absent() {
         )
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
     assert_eq!(answer.status.code(), Some(3), "{out}{err}");
@@ -2607,7 +2612,7 @@ fn sweep_with(root: &Path, gate: &str, bin: &Path) -> (i32, String, String) {
             "PATH",
             std::env::join_paths(entries).expect("join the stub onto PATH"),
         )
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
@@ -2956,7 +2961,7 @@ fn a_harness_missing_from_path_did_not_run_and_the_sweep_still_reports() {
         .current_dir(&root)
         .env("MUTANT_GATES", TOFU.subject)
         .env("PATH", &empty)
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(3), "{out}{}", stderr(&answer));
@@ -3059,7 +3064,7 @@ fn a_preset_outside_the_declared_directory_is_no_subject() {
         .env("MUTANT_GATES", "nothing")
         .env("MUTANT_TASKS", "mise.toml")
         .env("MUTANT_PRESETS", "presets")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert!(!out.contains("some-preset"), "{out}");
@@ -3307,7 +3312,7 @@ fn consumer_census(root: &Path, gates: Option<&str>) -> (i32, String, String) {
     };
     let answer = command
         .env_remove("MUTANT_TASKS")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),

@@ -380,7 +380,7 @@ fn the_materialized_fixture_validates_against_the_derived_schema() {
     let dir = materialize("schema");
     let output = common::batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     let schema: serde_json::Value =

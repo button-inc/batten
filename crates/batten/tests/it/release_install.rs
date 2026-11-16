@@ -114,7 +114,9 @@ fn fixture(name: &str, workflow: &str) -> PathBuf {
 fn run(repo: &Path) -> Output {
     let mut command = batten();
     command.current_dir(repo).args(["release", "install"]);
-    command.output().expect("run batten release install")
+    command
+        .streamed_output()
+        .expect("run batten release install")
 }
 
 #[test]

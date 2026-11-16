@@ -182,7 +182,7 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
         .args(["perf", "measure"])
         .current_dir(&repo)
         .env("PATH", path)
-        .output()
+        .streamed_output()
         .expect("run perf measure");
     assert!(
         !output.status.success(),
@@ -636,7 +636,7 @@ fn perf(
     for (key, value) in env {
         command.env(key, value);
     }
-    command.output().expect("run batten perf")
+    command.streamed_output().expect("run batten perf")
 }
 
 /// Commit a change to the crate source on top of the base, and answer with

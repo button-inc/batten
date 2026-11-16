@@ -149,7 +149,7 @@ fn a_caller_suppressing_steps_does_not_drift_the_contract() {
         .args(["hk", "drift"])
         .current_dir(&root)
         .env(hk::CALLER_SKIP, "sbom-check,batten-check")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         code(&output),

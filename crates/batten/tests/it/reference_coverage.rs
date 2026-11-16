@@ -73,7 +73,7 @@ use common::batten;
 fn spec_flag_ids() -> BTreeSet<String> {
     let output = batten()
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .expect("run batten spec --format json");
     assert_eq!(
         output.status.code(),
@@ -113,7 +113,7 @@ fn collect_flag_ids(node: &serde_json::Value, into: &mut BTreeSet<String>) {
 fn rendered_reference() -> String {
     let output = batten()
         .args(["generate", "markdown"])
-        .output()
+        .streamed_output()
         .expect("run batten generate markdown");
     assert_eq!(
         output.status.code(),
@@ -300,7 +300,7 @@ fn rendering_the_reference_leaves_nothing_behind_in_the_tree_it_judges() {
     let output = batten()
         .args(["generate", "markdown"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten generate markdown");
     assert_eq!(output.status.code(), Some(0));
     assert!(!output.stdout.is_empty(), "the render went to stdout");
@@ -324,7 +324,7 @@ fn a_render_that_did_not_happen_is_never_read_as_coverage() {
     // clean tree.
     let output = batten()
         .args(["generate", "markdown", "--no-such-flag"])
-        .output()
+        .streamed_output()
         .expect("run batten generate markdown with a bad flag");
     assert_ne!(
         output.status.code(),

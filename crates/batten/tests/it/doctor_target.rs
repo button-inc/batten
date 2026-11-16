@@ -129,7 +129,7 @@ fn the_verb_is_declared_and_takes_a_triple() {
     let output = batten()
         .args(["doctor", "target", "--help"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor target --help");
 
     assert!(output.status.success(), "the sub-verb resolves");
@@ -150,7 +150,7 @@ fn a_triple_rustup_cannot_install_is_one_pointer_line_and_never_the_spew() {
     let output = batten()
         .args(["doctor", "target", UNREAL])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor target");
 
     // Could-not-look is a legitimate answer here: a host with no rustup at all

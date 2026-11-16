@@ -48,6 +48,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -825,7 +826,7 @@ fn a_capture_notice_is_a_classed_finding() {
             .unwrap()
             .write_all(value.to_string().as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap()
+        child.streamed_wait().unwrap()
     };
     let unreadable = serde_json::json!({
         "hook_event_name": "PostToolUse",

@@ -77,7 +77,12 @@ fn it_stays_a_check_never_a_build() {
     let build = regex::Regex::new(r"cargo (build|test|run)").expect("a valid expression");
     let commands = common::task_commands("cross-check");
     assert!(!commands.is_empty(), "[tasks.cross-check] runs nothing");
+    // The engine's own launcher is not the gate: a body spells batten through
+    // `{{vars.batten}}`, rendered as `cargo run … --` when `BATTEN_BIN` is
+    // unset, and what this pins is the command the step then runs.
+    let launcher = common::rendered("{{vars.batten}}");
     for command in commands {
+        let command = command.replace(&launcher, "batten");
         assert!(
             !build.is_match(&command),
             "cross-check builds rather than checks: {command}"

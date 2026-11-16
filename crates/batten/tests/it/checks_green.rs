@@ -72,6 +72,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::io::Write;
 use std::process::Stdio;
@@ -103,7 +104,7 @@ fn green(reading: &str, args: &[&str]) -> (i32, String, String) {
         .expect("stdin is piped")
         .write_all(reading.as_bytes())
         .expect("the reading reaches the child");
-    let output = child.wait_with_output().expect("the child answers");
+    let output = child.streamed_wait().expect("the child answers");
     (
         output.status.code().expect("the child exited normally"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -397,7 +398,7 @@ fn fetched(forge: &std::path::Path) -> std::process::Output {
         .args(["checks", "green", "--sha", FETCH_SHA, "--repo", FETCH_REPO])
         .args(roster())
         .env("BATTEN_REST_FIXTURE", forge)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

@@ -1216,7 +1216,22 @@ impl Spool {
         crate::durable::replace(&self.watermark_path, format!("{}\n", self.written))
             .with_context(|| format!("publish the watermark {}", self.watermark_path.display()))
     }
+}
 
+/// A spool is a [`crate::stream::pump`] sink: each chunk is one [`Spool::commit`],
+/// appended and published before the pump reads the next.
+impl Write for Spool {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.commit(bytes).map_err(std::io::Error::other)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Spool {
     /// A second handle on the same spool, without truncating it.
     ///
     /// For the one case that needs it: a drain that hit its deadline leaves the

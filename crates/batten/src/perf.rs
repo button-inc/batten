@@ -68,6 +68,7 @@
 //! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
 //! looking for `^arm=`, never by a second exit code.
 
+use crate::stream::Streamed as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -1031,7 +1032,7 @@ fn mediation_verb(bin: &Path) -> Result<String> {
     let mut command = std::process::Command::new(bin);
     let output = command
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .with_context(|| format!("perf-pair: could not ask {} for its surface", bin.display()))?;
     if !output.status.success() {
         bail!(
@@ -3668,7 +3669,7 @@ mod tests {
                 ])
                 .args(args)
                 .current_dir(&repo)
-                .output()
+                .streamed_output()
                 .expect("git");
             assert!(out.status.success(), "git {args:?}");
             String::from_utf8(out.stdout)
@@ -3731,7 +3732,7 @@ mod tests {
                 ])
                 .args(args)
                 .current_dir(&repo)
-                .output()
+                .streamed_output()
                 .expect("git");
             assert!(out.status.success(), "git {args:?}");
             String::from_utf8(out.stdout)

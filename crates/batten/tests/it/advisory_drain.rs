@@ -20,6 +20,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -79,7 +80,7 @@ fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
         .expect("write the payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// [`hook`] with extra arguments ahead of the verb — the §3 ladder flags, which
@@ -102,7 +103,7 @@ fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
         .expect("write the payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Run any `batten` subcommand against the fixture's state home.
@@ -112,7 +113,7 @@ fn state_cmd(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -189,7 +190,7 @@ fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
         .expect("write the payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// The `(scan, resultId)` watermark from the one session record under `home` that
@@ -766,7 +767,7 @@ fn a_warm_fork_resumes_from_its_parents_watermark() {
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION", "child")
         .env("BATTEN_SESSION_PARENT", "parent")
-        .output()
+        .streamed_output()
         .expect("run batten state record");
     assert_eq!(observed.status.code(), Some(0));
 

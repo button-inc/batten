@@ -56,6 +56,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
@@ -640,7 +641,7 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
     drop(lock);
     let rest: Vec<String> = said.map_while(Result::ok).collect();
     let out = child
-        .wait_with_output()
+        .streamed_wait()
         .expect("the decide finishes once released");
     let both = format!(
         "{}{}",

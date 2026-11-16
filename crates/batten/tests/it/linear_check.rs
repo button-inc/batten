@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -37,7 +38,7 @@ fn linear(dir: &Path) -> Output {
     common::batten()
         .args(["land", "linear", "main"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten land linear")
 }
 
@@ -98,7 +99,7 @@ fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     let clone = clone(&dir, &origin, "naive", false);
     common::git_in(&clone, &["fetch", "-q", "origin", "main"]);
     let resolved = common::git_command(&clone, &["rev-parse", "origin/main"])
-        .output()
+        .streamed_output()
         .expect("git rev-parse");
     assert!(
         !resolved.status.success(),

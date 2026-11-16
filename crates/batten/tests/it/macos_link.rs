@@ -49,6 +49,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
@@ -426,7 +427,7 @@ fn the_repo_as_it_stands_has_no_sdk_requiring_dependency() {
             "aarch64-apple-darwin",
         ])
         .current_dir("../..")
-        .output()
+        .streamed_output()
         .expect("cargo metadata runs");
     assert!(metadata.status.success(), "the macOS graph resolves");
 

@@ -179,7 +179,7 @@ fn produce(dir: &Path, knobs: &[(&str, &str)]) -> Output {
     for (name, value) in knobs {
         command.env(name, value);
     }
-    command.output().expect("run the producer")
+    command.streamed_output().expect("run the producer")
 }
 
 fn said(output: &Output) -> String {
@@ -450,7 +450,12 @@ fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
         for (name, value) in knobs {
             command.env(name, value);
         }
-        let out = command.output().expect("run one entry");
+        let out = command
+            .streamed_output_keeping(batten::stream::Keep {
+                stdin: true,
+                ..batten::stream::Keep::NONE
+            })
+            .expect("run one entry");
         let failed = !out.status.success();
         last = Some(out);
         if failed {

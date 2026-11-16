@@ -41,6 +41,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -317,7 +318,7 @@ fn the_declared_environment_variable_actually_reads() {
                 .as_mut()
                 .expect("stdin is piped")
                 .write_all(payload().as_bytes())?;
-            child.wait_with_output()
+            child.streamed_wait()
         })
         .expect("run batten");
 

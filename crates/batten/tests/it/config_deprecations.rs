@@ -92,7 +92,7 @@ fn latest_release_tag(root: &Path) -> Option<String> {
 fn derived_schema() -> Vec<u8> {
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     output.stdout
@@ -103,7 +103,7 @@ fn deprecations(root: &Path, against: &str) -> (i32, String) {
     let output = batten()
         .args(["config", "deprecations", against])
         .current_dir(root)
-        .output()
+        .streamed_output()
         .expect("run batten config deprecations");
     let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
     said.push_str(&String::from_utf8_lossy(&output.stderr));

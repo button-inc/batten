@@ -93,7 +93,7 @@ fn select(dir: &Path, base: &str) -> (Option<i32>, String, String) {
     let output = batten()
         .args(["ci", "suites", "--base", base])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci suites");
     (
         output.status.code(),

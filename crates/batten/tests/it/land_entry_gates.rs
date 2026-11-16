@@ -110,7 +110,7 @@ fn lap(dir: &std::path::Path, gates: &str) -> (i32, String, String) {
         // be reported as a hang rather than as the miss it is.
         .env("LAND_MAX_LAPS", "1")
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     (
         output.status.code().expect("the child exited normally"),

@@ -54,7 +54,7 @@ use common::{Fixture, at_root, batten};
 fn derived_schema() -> serde_json::Value {
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     serde_json::from_slice(&output.stdout).expect("the schema is JSON")
@@ -96,7 +96,7 @@ fn the_committed_schema_is_the_one_the_binary_derives() {
         .expect("read the committed schema");
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(
         committed.as_bytes(),
@@ -111,12 +111,12 @@ fn the_schema_is_byte_stable_across_runs() {
     // fail at random and teach everyone to re-run it until it passed.
     let first = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .unwrap()
         .stdout;
     let second = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .unwrap()
         .stdout;
     assert_eq!(first, second, "the derived schema was not byte-stable");
@@ -223,7 +223,7 @@ fn generate_schema_writes_no_file() {
     let output = batten()
         .args(["generate", "schema"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
@@ -337,7 +337,7 @@ fn every_verb_that_reads_config_reports_a_too_old_build() {
         let output = batten()
             .args(args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .unwrap_or_else(|error| {
                 panic!(
                     "run batten {args:?}: {error}; working directory present: {}, program present: {}",
@@ -434,7 +434,7 @@ fn the_schema_cannot_express_per_kind_requirements() {
 fn derived_override_schema() -> serde_json::Value {
     let output = batten()
         .args(["generate", "schema", "--surface", "override"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface override");
     assert_eq!(output.status.code(), Some(0));
     serde_json::from_slice(&output.stdout).expect("the override schema is JSON")
@@ -458,7 +458,7 @@ fn the_committed_override_schema_is_the_one_the_binary_derives() {
         .expect("read the committed override schema");
     let output = batten()
         .args(["generate", "schema", "--surface", "override"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface override");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
@@ -835,7 +835,7 @@ const SURFACES: [(&str, &str); 2] = [
 fn derived_for(surface: &str) -> Vec<u8> {
     let output = batten()
         .args(["generate", "schema", "--surface", surface])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface");
     assert_eq!(output.status.code(), Some(0));
     output.stdout
