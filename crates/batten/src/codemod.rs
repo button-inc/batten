@@ -229,6 +229,70 @@ pub fn redirect_calls(
     Ok(edited)
 }
 
+/// How many attributes in `source` escape `lint`: each `#[expect(..)]` or
+/// `#[allow(..)]` (outer or inner) whose lint list names it, read off the parsed
+/// syntax tree (#1276).
+///
+/// One per attribute, however many times its list repeats the lint. A comment,
+/// a string, a doc line naming the lint, and a different lint sharing a prefix
+/// (`clippy::disallowed_types_x`) are not escapes, because only an attribute's
+/// own token tree is read and each entry is compared whole. A file the parser
+/// rejects is counted over the tree it still builds: the count is the ratchet's
+/// question, and a partial file is the author's to fix, not a reason to count
+/// nothing.
+#[must_use]
+pub fn lint_escapes(source: &str, edition: Edition, lint: &str) -> usize {
+    let wanted: String = lint.split_whitespace().collect();
+    SourceFile::parse(source, edition.parser())
+        .syntax_node()
+        .descendants()
+        .filter_map(ast::TokenTreeMeta::cast)
+        .filter(|meta| {
+            meta.syntax()
+                .parent()
+                .is_some_and(|parent| ast::Attr::can_cast(parent.kind()))
+        })
+        .filter(|meta| {
+            meta.path().is_some_and(|path| {
+                matches!(
+                    path.syntax().text().to_string().as_str(),
+                    "expect" | "allow"
+                )
+            })
+        })
+        .filter(|meta| {
+            let Some(tree) = meta.token_tree() else {
+                return false;
+            };
+            // The list's entries at its own depth, each the run of its
+            // non-trivia tokens between commas; the outer parentheses are the
+            // tree's first and last tokens.
+            let mut entries = vec![String::new()];
+            for child in tree.syntax().children_with_tokens() {
+                match child {
+                    ra_ap_syntax::NodeOrToken::Token(token) => {
+                        let text = token.text();
+                        if token.kind().is_trivia() || text == "(" || text == ")" {
+                            continue;
+                        }
+                        if text == "," {
+                            entries.push(String::new());
+                        } else if let Some(entry) = entries.last_mut() {
+                            entry.push_str(text);
+                        }
+                    }
+                    ra_ap_syntax::NodeOrToken::Node(node) => {
+                        if let Some(entry) = entries.last_mut() {
+                            entry.push_str(&node.text().to_string());
+                        }
+                    }
+                }
+            }
+            entries.iter().any(|entry| *entry == wanted)
+        })
+        .count()
+}
+
 /// Put `item` (a whole `use …;` line) in scope at the top of the file, once.
 ///
 /// A rename to a trait method needs the trait imported wherever the rename
