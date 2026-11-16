@@ -429,6 +429,12 @@ fn replay(
         return resume(&tree, splices, &journal, &|_| None);
     }
     place_tree(root, &state, &tree, &head, after)?;
+    // A REPLAYED BODY RUNS IN A REPOSITORY, AS ITS HEAD FORM DOES. A bare file
+    // tree failed every test that asks git anything — `batten exec` refused "not
+    // inside a git repository" — so the base body's failure measured the tree,
+    // not the expectation: measured on #1276, fifteen refusals, each one's HEAD
+    // body failing there identically.
+    crate::gitwrite::borrow_repository(root, &tree)?;
     // THE BUILD LIVES UNDER THE CHECKOUT'S `target/`, THE TREE OUTSIDE IT (CLOUD-2196).
     // CLOUD-2096 moved the tree out because a checkout's scans walk it; the build
     // cache went with it, and there no reclaim could reach it: measured on #1132,
