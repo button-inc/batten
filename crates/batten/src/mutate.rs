@@ -3686,7 +3686,22 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 /// is the row, its source and its suite, so a change elsewhere in what the case
 /// exercises does not invalidate it. CI starts with no record, which keeps the
 /// full sweep the confirmation.
-const CAUGHT_RECORD: &str = "caught.tsv";
+const CAUGHT_RECORD: &str = "rows.tsv";
+
+/// Where a sweep's verdict records live: the repository's STATE directory,
+/// never the build root (#1276).
+///
+/// **A RECORD IN `target/` IS SCRATCH.** The collector takes `target/mutate`
+/// whole as an idle staged copy (`collect.rs`'s `STAGED`), so the caught rows a
+/// killed lap had recorded — 292 of 351 on #1276 — survived the crash and were
+/// then deleted by the next lap's collection, and the sweep judged all of them
+/// again. The state directory is what the schema's own verdict journal already
+/// uses. Falls back to the build root only where no state directory resolves.
+fn record_dir(root: &Path) -> PathBuf {
+    crate::state::repo_state_dir(root)
+        .map(|state| state.join("mutate"))
+        .unwrap_or_else(|_| target_dir(root))
+}
 
 /// A row's key: its script, the bytes it mutates, and its suite's CODE, the
 /// non-comment remainder [`crate::git::without_comments`] reads, so a comment
@@ -3705,17 +3720,61 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     crate::provision::digest(&material)
 }
 
-/// The keys recorded caught; an unreadable record is an empty one.
+/// The keys recorded caught; an unreadable record is an empty one. A line is a
+/// bare key (a change's pass, or a row recorded before #1276) or a row's
+/// `key<TAB>verdict` ([`record_row`]); only `caught` answers here.
 fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
+    recorded_rows(record)
+        .into_iter()
+        .filter(|(_, verdict)| *verdict == Verdict::Caught)
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Every row verdict recorded, the latest per key: `caught`, or `survived`
+/// with the case it wanted. A bare key is a caught one.
+fn recorded_rows(record: &Path) -> std::collections::HashMap<String, Verdict> {
     crate::fsio::read_to_string(record)
-        .map(|text| text.lines().map(str::to_owned).collect())
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let mut columns = line.split('\t');
+                    let key = columns.next().filter(|key| !key.is_empty())?;
+                    let verdict = match (columns.next(), columns.next()) {
+                        (None | Some("caught"), _) => Verdict::Caught,
+                        (Some("survived"), Some(want)) => Verdict::Survived {
+                            want: want.to_owned(),
+                        },
+                        _ => return None,
+                    };
+                    Some((key.to_owned(), verdict))
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// Append one caught key, whole-line so a torn tail never fuses two keys. Best
 /// effort: a key not recorded is a row run again.
 fn record_caught(record: &Path, key: &str) {
-    let _ = crate::durable::append_whole_lines(record, &format!("{key}\n"));
+    record_row(record, key, &Verdict::Caught);
+}
+
+/// Append a row's verdict under its key, when it is one the key decides:
+/// `caught` or `survived`. A could-not-look verdict (a timeout, a suite that
+/// did not run) says nothing about the row and is judged again.
+fn record_row(record: &Path, key: &str, verdict: &Verdict) {
+    let line = match verdict {
+        Verdict::Caught => format!("{key}\tcaught\n"),
+        Verdict::Survived { want } if !want.contains(['\t', '\n']) => {
+            format!("{key}\tsurvived\t{want}\n")
+        }
+        _ => return,
+    };
+    if let Some(parent) = record.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = crate::durable::append_whole_lines(record, &line);
 }
 
 /// Where a sweep records a change it saw pass whole: `target/mutate-passed.tsv`,
@@ -3823,15 +3882,15 @@ impl ChangePass {
         if self.inputs.key().as_deref() != Some(self.key.as_str()) {
             return;
         }
-        let _ = fs::create_dir_all(target_dir(&self.inputs.root));
         record_caught(&self.inputs.record_path(), &self.key);
     }
 }
 
 impl ChangeInputs {
-    /// Where the pass record lives: [`PASSED_RECORD`] in [`target_dir`].
+    /// Where the pass record lives: [`PASSED_RECORD`] in [`record_dir`], the
+    /// state directory, so a target cleanup does not take it (#1276).
     fn record_path(&self) -> PathBuf {
-        target_dir(&self.root).join(PASSED_RECORD)
+        record_dir(&self.root).join(PASSED_RECORD)
     }
 
     /// The key of the tree as it stands now.
@@ -4296,27 +4355,38 @@ pub fn sweep_shard(
             gates,
         });
     }
-    let record = work.join(CAUGHT_RECORD);
-    let caught = recorded_caught(&record);
+    let record = record_dir(root).join(CAUGHT_RECORD);
+    let recorded = recorded_rows(&record);
+    let caught: std::collections::HashSet<String> = recorded
+        .iter()
+        .filter(|(_, verdict)| **verdict == Verdict::Caught)
+        .map(|(key, _)| key.clone())
+        .collect();
     let mut staged = Staged::new(root, work)?;
     let prebuilt = build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;
     for (name, gate, row) in mine {
         declared += 1;
         let key = row_key(root, gate, row);
-        if caught.contains(&key) {
+        if let Some(verdict) = recorded.get(&key) {
             let _ = writeln!(
                 progress,
-                "mutate sweep: row {declared}/{total} {name} {} caught (recorded) 0s",
+                "mutate sweep: row {declared}/{total} {name} {} {verdict} (recorded) 0s",
                 row.slug
             );
+            if verdict.is_finding() {
+                findings.push(Finding {
+                    gate: name.clone(),
+                    slug: Some(row.slug.clone()),
+                    verdict: verdict.clone(),
+                    owner: gate.owner.clone(),
+                });
+            }
             continue;
         }
         let started = std::time::Instant::now();
         let verdict = judge_row(root, &mut staged, gate, row, prebuilt.as_ref())?;
-        if verdict == Verdict::Caught {
-            record_caught(&record, &key);
-        }
+        record_row(&record, &key, &verdict);
         let _ = writeln!(
             progress,
             "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
@@ -6230,6 +6300,50 @@ mod tests {
         root
     }
 
+    /// Fails by: a survivor not kept (judged again after a crash), a timeout
+    /// kept (an environment's answer replayed as the row's), a record written
+    /// back under `target/` where the collector takes it, or a pre-#1276 bare
+    /// key no longer read as caught.
+    #[test]
+    fn a_row_verdict_the_key_decides_survives_in_the_state_dir() {
+        let root = fixture("row-record");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let dir = record_dir(&root);
+        assert!(
+            !dir.starts_with(target_dir(&root)),
+            "{} is under the build root",
+            dir.display()
+        );
+        let record = fixture("row-record-file").join(CAUGHT_RECORD);
+        fs::write(&record, "old-bare-key\n").expect("a pre-#1276 record");
+        record_row(&record, "k-caught", &Verdict::Caught);
+        record_row(
+            &record,
+            "k-survived",
+            &Verdict::Survived {
+                want: String::from("case_a"),
+            },
+        );
+        record_row(&record, "k-timeout", &Verdict::SuiteTimedOut { seconds: 9 });
+        let rows = recorded_rows(&record);
+        assert_eq!(rows.get("old-bare-key"), Some(&Verdict::Caught));
+        assert_eq!(rows.get("k-caught"), Some(&Verdict::Caught));
+        assert_eq!(
+            rows.get("k-survived"),
+            Some(&Verdict::Survived {
+                want: String::from("case_a")
+            })
+        );
+        assert!(!rows.contains_key("k-timeout"), "a timeout is judged again");
+        assert_eq!(
+            recorded_caught(&record),
+            ["old-bare-key", "k-caught"]
+                .map(String::from)
+                .into_iter()
+                .collect()
+        );
+    }
+
     /// Write `text` at `path` under `root`, its directories included.
     fn put(root: &Path, path: &str, text: &str) {
         let file = root.join(path);
@@ -6407,7 +6521,9 @@ mod tests {
             .iter()
             .map(|row| row_key(&root, &gate, row))
             .collect();
-        fs::write(work.join(CAUGHT_RECORD), keys.join("\n")).expect("record every row caught");
+        let record = record_dir(&root).join(CAUGHT_RECORD);
+        fs::create_dir_all(record.parent().expect("a parent")).expect("the record's directory");
+        fs::write(&record, keys.join("\n")).expect("record every row caught");
         let names = [
             "zz-missing",
             "probe",
