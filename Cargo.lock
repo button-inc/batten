@@ -160,6 +160,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "crc32fast",
  "etcetera",
  "fancy-regex 0.17.0",
  "flate2",

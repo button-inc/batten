@@ -4264,7 +4264,7 @@ impl IdentityMemo {
         if let Some(body) = entry
             .as_ref()
             .and_then(|(path, key)| crate::cache::read(path, key))
-            && let Ok(body) = String::from_utf8(body)
+            && let Ok(body) = std::str::from_utf8(&body)
         {
             for line in body.lines() {
                 // A line that is not a well-formed identity is not remembered,
