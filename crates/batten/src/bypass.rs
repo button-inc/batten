@@ -296,7 +296,9 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             // Already read above, from the decision and the failed result it
             // is derived from (CLOUD-2141); reading it again would count one
             // refusal twice.
-            | Event::Refused { .. } => {}
+            | Event::Refused { .. }
+            // Token usage is a count, not a bypass (CLOUD-415).
+            | Event::Usage { .. } => {}
         }
     }
     found.into_values().collect()

@@ -1,0 +1,1 @@
+../../../skills/plan-check/SKILL.md

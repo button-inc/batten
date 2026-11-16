@@ -220,7 +220,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         id: "turn finish unmet",
         why: Some("A stop is a completion claim, and the turn's facts say the work is not landed"),
         act: &[
-            "finish what the line names; for unlanded work run `mise run land`",
+            "finish what the line names: run the command it gives, backgrounded; for unlanded work that is `mise run land`",
             "or file what blocks it on its tracker row",
         ],
         dont: &[
@@ -1488,6 +1488,21 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
             "re-run `batten ready lint` on the edited body",
         ],
         dont: &["move the issue to Todo while a clause fails"],
+    },
+    VendoredDoc {
+        id: "plan grade refused",
+        why: Some("A plan whose shape fails holds every write that needs its receipt"),
+        act: &[
+            "edit the plan at the line the subject names (`batten plan path` prints where it is)",
+            "record the plan's steps with `batten record plan`, then re-run `batten plan lint`",
+        ],
+        dont: &["write the `plan-check` receipt by hand"],
+    },
+    VendoredDoc {
+        id: "plan declare partial",
+        why: Some("A table no plan can satisfy is a gate that never opens"),
+        act: &["declare at least three sections in `[plan]`, the validation section last"],
+        dont: &["delete the table to make the config load"],
     },
     VendoredDoc {
         id: "issue grade partial",

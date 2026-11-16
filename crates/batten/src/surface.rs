@@ -4219,6 +4219,67 @@ pub const SURFACE: &[CommandDecl] = &[
             ),
         ],
     },
+    // The second sanctioned waiter (CLOUD-2759), beside `call` rather than under a
+    // noun of its own: a noun with one verb is the defect recorded below. It polls
+    // a declared method through `call`'s client and exits when the declared
+    // reduction changes, so a caller backgrounds it and acts on its exit — the
+    // rule every timer refusal states, given something to background when the
+    // thing awaited is not local.
+    //
+    // `Unclassified` and no data channel, on `mcp call`'s reasoning: its reads are
+    // a server's answers, and it may take a singleton lock in the clone.
+    // unreached: "mcp wait" CLOUD-2759 an agent's own blocking read between turns, invoked by the session and not by a task, workflow or hook
+    CommandDecl {
+        path: "mcp wait",
+        id: "mcp.wait",
+        about: "Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            FlagDecl::positional(
+                "server",
+                "The server to dispatch to, as a `[[mcp.source]]` names it",
+            ),
+            FlagDecl::positional(
+                "method",
+                "The method to poll; it must have a `[[mcp.result]]` row",
+            ),
+            FlagDecl {
+                value: ValueDecl::StrMany,
+                ..FlagDecl::positional_optional(
+                    "params",
+                    "One JSON argument object per subject; the wait ends when any one's reduction changes",
+                )
+            },
+            FlagDecl::valued("interval", "interval", "Seconds between polls (default 30)"),
+            FlagDecl::valued(
+                "evict_after",
+                "evict-after",
+                "The host's cache-eviction limit in seconds; absent, the wait ends only on a change",
+            ),
+            FlagDecl::valued(
+                "buffer",
+                "buffer",
+                "Seconds subtracted from the eviction limit (default 60)",
+            ),
+            FlagDecl::valued(
+                "singleton",
+                "singleton",
+                "Hold the clone's singleton lock of this name while waiting",
+            ),
+            FlagDecl::valued(
+                "each_receipt",
+                "each-receipt",
+                "Read one subject per receipt minted under this name, listed again on every poll",
+            ),
+            FlagDecl::valued(
+                "arg",
+                "arg",
+                "The argument key each receipt's suffix is passed as, with --each-receipt",
+            ),
+        ],
+    },
     // The spawn ledger and the launch, ported off `mise-tasks/serena-mcp.sh`
     // under CLOUD-1753 (CLOUD-714 is the defect it exists for).
     //
@@ -5715,6 +5776,45 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[ISSUE, JSON],
+    },
+    // The `plan` noun (CLOUD-2766): the front of the plan chain `plan cover
+    // partial` closes at landing. UNCLASSIFIED, for `hk`'s reason: one arm writes
+    // a receipt and the other only reads.
+    CommandDecl {
+        path: "plan",
+        id: "plan",
+        about: "Whether the branch's plan has the shape a checked plan has",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // WRITE: a pass appends the branch's `plan-check` receipt and consumes the
+    // declared prerequisite. It proves the shape and that the skill was asked
+    // for, never that an isolated reader wrote the verdict line.
+    //
+    // NO DATA CHANNEL, for `landed check`'s reason: a `-J` verb must emit its
+    // document unconditionally, and this verb's usage arms — no `[plan]` table,
+    // a detached HEAD — have no document to emit. Each finding is one pointer.
+    // unreached: "plan lint" CLOUD-2766 run by a session after it writes its plan; the config row that holds writes until its receipt exists is a sibling row
+    CommandDecl {
+        path: "plan lint",
+        id: "plan.lint",
+        about: "Refuse a branch plan that fails a checkable clause, or write its receipt",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // unreached: "plan path" CLOUD-2766 run by a session to learn where to write its plan, never by a task
+    CommandDecl {
+        path: "plan path",
+        id: "plan.path",
+        about: "Print where this branch's plan file is, creating nothing",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
     },
     // The `checks` noun (CLOUD-1143), ported off `mise-tasks/checks-green.sh`.
     CommandDecl {
@@ -9036,6 +9136,22 @@ mod tests {
             );
         }
         assert!(!data_channel_for("no such path"));
+    }
+
+    /// `mcp wait` takes one argument object per subject, so its `params`
+    /// positional repeats; a single `Str` would keep only the last subject.
+    #[test]
+    fn mcp_wait_takes_every_subject() {
+        let wait = SURFACE
+            .iter()
+            .find(|decl| decl.path == "mcp wait")
+            .expect("mcp wait is declared");
+        let params = wait
+            .flags
+            .iter()
+            .find(|flag| flag.id == "params")
+            .expect("params is declared");
+        assert!(matches!(params.value, ValueDecl::StrMany), "{params:?}");
     }
 
     #[test]

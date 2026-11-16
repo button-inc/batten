@@ -1082,7 +1082,8 @@ fn own_commit_count(main: &str) -> Option<usize> {
 /// a branch name routinely does; nothing else in a branch name needs escaping
 /// here. `tests::the_branch_receipt_filename_matches_the_minting_task` is what
 /// stops the two halves drifting.
-fn branch_receipt_name(check: &str, branch: &str) -> String {
+#[must_use]
+pub fn branch_receipt_name(check: &str, branch: &str) -> String {
     format!("{check}.{}", branch.replace('/', "-"))
 }
 

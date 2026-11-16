@@ -274,7 +274,9 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
             | Event::SessionBoundary
             | Event::AssistantText
             // A hook refusing a call claims nothing about being done (CLOUD-2141).
-            | Event::Refused { .. } => {}
+            | Event::Refused { .. }
+            // Token usage claims nothing about being done (CLOUD-415).
+            | Event::Usage { .. } => {}
         }
     }
     latest

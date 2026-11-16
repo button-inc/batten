@@ -204,7 +204,9 @@ pub fn scan(stream: &Stream, memory_root: &str) -> Vec<Detection> {
             | Event::SessionBoundary
             | Event::AssistantText
             // A refusal is the host's answer, not the agent writing (CLOUD-2141).
-            | Event::Refused { .. } => {}
+            | Event::Refused { .. }
+            // Token usage is the host's count, not the agent writing (CLOUD-415).
+            | Event::Usage { .. } => {}
         }
     }
     detections

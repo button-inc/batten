@@ -1051,6 +1051,38 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
 /// Code's `2` and the class on stderr. The third passes, because one forced
 /// continuation is the bound, and `stop_hook_active: false` on every Stop is
 /// what the host sends when reminders interleave (anthropics/claude-code#54360).
+/// CLOUD-2761: with an unlanded branch AND a `[[stop.hold]]` whose receipt has
+/// no holder, the Stop the unlanded rung refuses carries its refusal and not the
+/// hold's. One Stop, at most one refusal.
+#[test]
+fn the_unlanded_refusal_goes_first() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-and-hold");
+    let config = fs::read_to_string(repo.join("batten.toml")).expect("the fixture config");
+    fs::write(
+        repo.join("batten.toml"),
+        format!(
+            "{config}\n[[stop.hold]]\nid = \"children\"\nwhile_receipt = \"child\"\n\
+             unless_singleton = \"fleet-wait\"\nstart = [\"mise\", \"run\", \"fleet-wait\"]\n"
+        ),
+    )
+    .expect("add a hold");
+    fs::create_dir_all(repo.join(".git/batten-receipts")).expect("a receipt store");
+    fs::write(repo.join(".git/batten-receipts/child.a"), "").expect("a receipt");
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let _ = stop();
+    let second = stop();
+    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert_eq!(second.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("commit ship missing"),
+        "the unlanded refusal: {stderr}"
+    );
+    assert!(
+        !stderr.contains("hold children"),
+        "and not the hold's: {stderr}"
+    );
+}
+
 #[test]
 fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
     let (repo, home) = unlanded_fixture("stop-unlanded-refused");

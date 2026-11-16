@@ -45,6 +45,7 @@ gate against one host.
 | claude-code | `Write`                        | refused               |
 | cursor      | `write`                        | **allowed**           |
 | gemini-cli  | `WriteFile`                    | **allowed**           |
+| gemini-cli  | `replace` (CLOUD-2744)         | unread until 2026-11  |
 | copilot-cli | `StrReplaceEditor`             | **allowed**           |
 | codex-cli   | `NotebookEdit`                 | refused               |
 

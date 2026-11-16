@@ -67,7 +67,7 @@ declared_modules := {
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
-	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
+	"output", "pattern", "plan", "policy", "prompt_cache", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
 	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",

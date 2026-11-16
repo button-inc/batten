@@ -502,6 +502,22 @@ fn prune_siblings(
 // OWN project surface loads only for sessions rooted there, so it is the one
 // place a registration reaches the parent session and nothing else.
 
+/// The working directory of the harness process `CLAUDE_PID` names, when one
+/// resolves: the root the live session loads its project hooks from.
+///
+/// Read through the binary only, since the variable is the process's: the
+/// doctor suite holds a session rooted above an unregistered clone (the root
+/// must be read) and one above a registered clone (the root, not the clone's
+/// own directory, must be read).
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT harness-root-unread|s@^    std::env::var("CLAUDE_PID")$@    std::env::var("CLAUDE_PID_UNREAD")@|a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_it
+#[must_use]
+pub fn harness_root() -> Option<PathBuf> {
+    std::env::var("CLAUDE_PID")
+        .ok()
+        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+}
+
 /// What one [`register`] did, or would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[non_exhaustive]
@@ -535,37 +551,58 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     };
     let (root, repo) = (git::canonical(root), git::canonical(repo));
     out.above = repo != root && repo.starts_with(&root);
-    let harness = hook::Harness::ClaudeCode;
-    let (true, Some(wiring)) = (out.above, harness.wiring()) else {
+    if !out.above {
         return Ok(out);
+    }
+    (out.events, out.written) = register_root(&root, check || !out.authoritative)?;
+    Ok(out)
+}
+
+/// Register batten on the project surface of `root` itself, with no test of
+/// where a repository sits or whether the environment is disposable
+/// (CLOUD-2752).
+///
+/// The writer [`register`] gates, pulled out for `batten startup --repair` run
+/// where no config exists: that run IS the consent to write there, so neither of
+/// [`register`]'s tests applies. Returns the events the surface lacked batten on
+/// and whether it was rewritten — never under `check`.
+///
+/// # Errors
+///
+/// When the surface parsed and cannot be written back.
+pub fn register_root(root: &Path, check: bool) -> Result<(Vec<String>, bool)> {
+    let harness = hook::Harness::ClaudeCode;
+    let Some(wiring) = harness.wiring() else {
+        return Ok((Vec::new(), false));
     };
     let surface = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
     };
     let path = root.join(surface);
     let mut document = match std::fs::read_to_string(&path) {
+        // A surface that parses to no object is left alone by `add_missing`.
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(document) if document.is_object() => document,
-            _ => return Ok(out),
+            Ok(document) => document,
+            Err(_) => return Ok((Vec::new(), false)),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             serde_json::Value::Object(serde_json::Map::new())
         }
-        Err(_) => return Ok(out),
+        Err(_) => return Ok((Vec::new(), false)),
     };
     let spellings: Vec<&str> = wiring
         .registrations(harness)
         .into_iter()
         .map(|(_, spelling)| spelling)
         .collect();
-    out.events = add_missing(
+    let events = add_missing(
         &mut document,
         wiring.file,
         &spellings,
         &hook::wiring_command(harness),
     );
-    if out.events.is_empty() || check || !out.authoritative {
-        return Ok(out);
+    if events.is_empty() || check {
+        return Ok((events, false));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -578,8 +615,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         format!("{}\n", serde_json::to_string_pretty(&document)?),
     )?;
     std::fs::rename(&staged, &path)?;
-    out.written = true;
-    Ok(out)
+    Ok((events, true))
 }
 
 /// Add batten's registration under every event in `spellings` that carries
@@ -1139,6 +1175,41 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         crate::scratch::scratch(&format!("wiring-{name}"))
+    }
+
+    /// The surface [`register_root`] writes under `root`, as the harness
+    /// declares it rather than spelled here (non-negotiable rule 1).
+    fn root_surface(root: &Path) -> PathBuf {
+        let wiring = hook::Harness::ClaudeCode
+            .wiring()
+            .expect("claude-code wires");
+        match wiring.file {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => root.join(path),
+        }
+    }
+
+    #[test]
+    fn a_root_surface_that_is_no_object_is_left_alone() {
+        let root = scratch("register-root-array");
+        let surface = root_surface(&root);
+        std::fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        std::fs::write(&surface, "[]\n").unwrap();
+        assert_eq!(register_root(&root, false).unwrap(), (Vec::new(), false));
+        assert_eq!(std::fs::read_to_string(&surface).unwrap(), "[]\n");
+    }
+
+    #[test]
+    fn a_root_surface_object_keeps_its_keys_and_gains_batten() {
+        let root = scratch("register-root-object");
+        let surface = root_surface(&root);
+        std::fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        std::fs::write(&surface, "{\"theirs\": 1}\n").unwrap();
+        let (events, written) = register_root(&root, false).unwrap();
+        assert!(!events.is_empty() && written);
+        let document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&surface).unwrap()).unwrap();
+        assert_eq!(document["theirs"], 1);
+        assert!(document["hooks"].is_object());
     }
 
     #[test]

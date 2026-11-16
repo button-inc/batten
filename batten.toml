@@ -10301,22 +10301,6 @@ no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the 
 # EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
 # floor becomes the new count on its own and this row suppresses nothing. It
 # exists to get one commit past the gate, not to stand.
-# The one residual false positive `no-secrets` finds on this tree, measured
-# before the rule landed rather than discovered by it: ripsecrets matches
-# `${GH_PAT}` in a `git config url."https://x-access-token:${GH_PAT}@…"` line as
-# a credential embedded in a URL. It is a shell expansion of an Actions secret
-# injected at runtime — the shape is real, the instance is not.
-#
-# A `[[waiver]]` and never `severity = "allow"`: switching the rule off would
-# suppress every future finding too, while this names one path, states why, and
-# LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
-# rather than inheriting a decision nobody remembers making.
-[[waiver]]
-rule = "source carry unsafe"
-path = ".github/workflows/release-plz.yml"
-reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
-expires = "2026-11-14"
-
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
@@ -11515,6 +11499,35 @@ per_page = 100
 max_pages = 1
 select = ["id", "path"]
 
+# Each workflow's recent successful runs, and each run's jobs with how long they
+# took (CLOUD-2746): the two queries `timeout-drift-record` names. Declared from
+# the shapes `crates/batten/tests/it/timeout_drift.rs` already exercises.
+#MUTANT-SUITE crates/batten/tests/it/forge_query.rs
+#MUTANT declared-row-deleted|s@^id = "drift-runs"$@id = "drift-runs-gone"@|every_task_query_id_is_declared
+[[forge.query]]
+id = "drift-runs"
+endpoint = "repos/{owner}/{repo}/actions/workflows/{workflow}/runs"
+rows = "workflow_runs"
+params = { status = "success" }
+per_page = 25
+max_pages = 1
+select = ["id", "path"]
+each = { query = "drift-workflows", field = "id", input = "workflow" }
+
+[[forge.query]]
+id = "drift-jobs"
+endpoint = "repos/{owner}/{repo}/actions/runs/{run}/jobs"
+rows = "jobs"
+per_page = 100
+max_pages = 1
+select = ["name", "conclusion"]
+each = { query = "drift-runs", field = "id", input = "run" }
+
+[[forge.query.span]]
+name = "seconds"
+from = "started_at"
+to = "completed_at"
+
 # `branch-age`: the remote's branches, the first hundred, as the retired GraphQL
 # read took them.
 [[forge.query]]
@@ -11523,6 +11536,22 @@ endpoint = "repos/{owner}/{repo}/branches"
 per_page = 100
 max_pages = 1
 select = ["name", "commit.sha"]
+
+# Each branch tip's committer date, as an age in days (CLOUD-2746): the query
+# `branch-age-record` names, from the shape `branch_age.rs` exercises.
+[[forge.query]]
+id = "branch-tips"
+endpoint = "repos/{owner}/{repo}/commits"
+params = { sha = "{tip}" }
+per_page = 1
+max_pages = 1
+select = ["commit.committer.date"]
+each = { query = "branch-heads", field = "commit.sha", input = "tip" }
+
+[[forge.query.span]]
+name = "age"
+from = "commit.committer.date"
+unit = "days"
 
 # Recently CLOSED pull requests and whether each merged, newest-created first —
 # the order `gh pr list` reads. The pulls endpoint has no merged-only state, so a
@@ -12335,6 +12364,12 @@ on = "pre-tool"
 # writes the timing line to stderr, which the door reads as a refusal's reason.
 run = ["env", "MISE_TASK_TIMINGS=0", "mise", "run", "-q", "filed-here:guard"]
 matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+# A WRITE OUTSIDE THE REPOSITORY IS NOT AN EDIT OF THE TREE (CLOUD-2756): a
+# scratch file under the temp directory or the harness's own settings is no
+# remedy this row guards, so it is skipped. The engine shipped the key in 0.0.217.
+#MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+#MUTANT filed-row-guard-leaves-the-tree|s@^tree_only = true$@tree_only = false@|the_committed_filed_row_handler_is_tree_only
+tree_only = true
 timeout_ms = 10000
 owner = "CLOUD-514"
 expires = "2027-02-28"
