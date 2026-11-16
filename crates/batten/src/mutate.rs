@@ -2433,6 +2433,15 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("CARGO_TARGET_DIR"),
             root.join(SUITE_TARGET).to_string_lossy().into_owned(),
         ),
+        // THE CHECKOUT'S BUILD DIRECTORY FOR EVERY INTERMEDIATE UNIT (#1276):
+        // a mutant build's dependencies hash as `target/debug`'s do, so they
+        // are reused, not compiled into this target a second time. What cargo
+        // uplifts still lands in `SUITE_TARGET`, never over the checkout's own
+        // binary, which is the isolation the paragraph above is about.
+        (
+            String::from("CARGO_BUILD_BUILD_DIR"),
+            root.join("target").to_string_lossy().into_owned(),
+        ),
         (
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
@@ -3953,7 +3962,8 @@ fn prebuilt_dir(root: &Path) -> PathBuf {
 }
 
 /// Every staged-tree path cargo recorded reading, and every directory a build
-/// script asked to be rerun over, under `target`.
+/// script asked to be rerun over, under the BUILD directory `target` (cargo's
+/// `build.build-dir`, where dep-info and build-script output live).
 ///
 /// Dep-info lists each input as its own `path:` line; a build script's
 /// `rerun-if-changed` is in its `output`. Both are read wholesale: a stale file
@@ -4087,7 +4097,12 @@ fn build_if_owed(
     let metadata = ["metadata", "--format-version", "1", "--no-deps"].map(String::from);
     record_document(root, staged, Program::Cargo, &metadata, &prebuilt.metadata)?;
     Some(Prebuilt {
-        embedded: embedded_paths(&root.join(SUITE_TARGET), staged.dir()),
+        // THE BUILD DIRECTORY, where cargo writes dep-info and build-script
+        // output (#1276): `suite_env` puts intermediates in the checkout's
+        // `target`, and only uplifts in `SUITE_TARGET`. Read from the uplift
+        // directory, no `.d` was found, every subject read as unembedded, and
+        // an embedded subject's mutation survived on reused binaries.
+        embedded: embedded_paths(&root.join("target"), staged.dir()),
         ..prebuilt
     })
 }
