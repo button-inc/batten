@@ -1466,14 +1466,19 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// does not choose the RELEASE that judges it (CLOUD-31), and a stale binary
 /// still follows the release the ref names. A source pin, the ref's as the
 /// tree's, is still followed to this checkout's own build, as it was before.
-fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
+fn pin_text(root: &Path, overrides: &Overrides) -> Option<std::sync::Arc<String>> {
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
     if let Some(judging_ref) = overrides.config_from.as_deref() {
-        return git::show(dir, judging_ref, crate::config_model::CONFIG_FILE).ok();
+        return git::show(dir, judging_ref, crate::config_model::CONFIG_FILE)
+            .ok()
+            .map(std::sync::Arc::new);
     }
-    config::read_text(&dir.join(crate::config_model::CONFIG_FILE))
+    // THE HEAD ALONE: the pin is a top-level key, read off the lines before the
+    // first table header (`engine::declared`), and reading the whole ~1 MB
+    // authority for it was most of an invocation's prologue (2026-11-16).
+    config::read_head(&dir.join(crate::config_model::CONFIG_FILE))
         .ok()
-        .map(|text| String::clone(&text))
+        .map(std::sync::Arc::new)
 }
 
 /// When this checkout pins an engine this binary is not, re-run this invocation
