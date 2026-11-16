@@ -447,10 +447,20 @@ fn replay(
         std::fs::remove_dir_all(&retired)
             .with_context(|| format!("test replay: retire {}", retired.display()))?;
     }
-    let published = [(
-        String::from("CARGO_TARGET_DIR"),
-        Some(target.to_string_lossy().into_owned()),
-    )];
+    // ITS OWN TARGET, THE CHECKOUT'S BUILD DIRECTORY (#1276), as `mutate`'s
+    // schema builds do (`cd84c43d`): what cargo uplifts stays under
+    // `target/replay`, and every dependency unit, which hashes as the
+    // checkout's own, is reused from `target` rather than built a second time.
+    let published = [
+        (
+            String::from("CARGO_TARGET_DIR"),
+            Some(target.to_string_lossy().into_owned()),
+        ),
+        (
+            String::from("CARGO_BUILD_BUILD_DIR"),
+            Some(root.join("target").to_string_lossy().into_owned()),
+        ),
+    ];
     // THE TOOL IS PROBED BEFORE ANY ANSWER IS READ. `cargo` exits 101 both for a
     // build that failed and for a subcommand it cannot find, so without this a
     // missing `nextest` reads as every base expectation broken — measured on the

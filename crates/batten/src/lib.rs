@@ -13546,7 +13546,7 @@ fn run_the_step(
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
-        land::Step::Push => run_land_push(root, url, branch, out)?,
+        land::Step::Push => run_land_push_verified(root, url, branch, out)?,
         land::Step::Wait => {
             let fresh_ready = ledger.take_fresh_ready();
             return run_land_wait(root, reference, branch, fresh_ready, out, err)
@@ -14531,7 +14531,34 @@ fn refuse_unread_red_head(
 
 /// `batten land push`: the branch to its own ref, under receive-pack's CAS.
 fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
-    match land::push(root, url, branch)? {
+    report_push(land::push(root, url, branch)?, branch, out)
+}
+
+/// The lap's push: the head its gate passed, never a `HEAD` committed while the
+/// gate ran (#1276), which is the next lap's to verify.
+fn run_land_push_verified(
+    root: &Path,
+    url: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let head = git::head_commit(root).ok();
+    let pushed = land::push_verified(root, url, branch)?;
+    if let land::Pushed::Landed(verified) = &pushed
+        && head.as_deref().is_some_and(|head| head != verified)
+    {
+        writeln!(
+            out,
+            "land: HEAD moved past the verified {} while the gate ran; the next lap verifies it",
+            short(verified)
+        )?;
+    }
+    report_push(pushed, branch, out)
+}
+
+/// What a push said, for both the hand-driven verb and the lap.
+fn report_push(pushed: land::Pushed, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    match pushed {
         land::Pushed::Landed(head) => {
             writeln!(out, "land: {branch} on the remote now reads {head}")?;
             Ok(ExitCode::Success)
@@ -15665,6 +15692,18 @@ fn spend_the_matrix(
         )?;
         return Ok(ExitCode::Internal);
     };
+    // ONLY A HEAD THE GATE PASSED IS READIED (#1276). The forge's head is
+    // whatever was pushed last, by this lap or by hand while it ran; readying
+    // a head no gate passed would spend a matrix on unverified work and let it
+    // land on CI alone. A different head laps, and the next lap verifies it.
+    if land::last_verified(root, branch).as_deref() != Some(head.as_str()) {
+        writeln!(
+            out,
+            "land: {branch}'s pull request is at {}, which no gate run passed; the next lap verifies it before any ready",
+            short(&head)
+        )?;
+        return Ok(ExitCode::Internal);
+    }
 
     // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
