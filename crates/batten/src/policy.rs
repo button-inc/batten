@@ -2144,6 +2144,100 @@ fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
     Some(out)
 }
 
+/// Every input a bundle's own cases hand it: the term of each
+/// `with input as <term>` modifier in its modules, evaluated by the interpreter
+/// in the module's package so its helpers resolve (#1276).
+///
+/// **THE PARITY CORPUS.** Bytecode and interpreter must decide alike, and a
+/// handful of fixed calls never reached the input that split them over an
+/// undefined helper (CLOUD-2696). A module's cases are exactly the inputs its
+/// author proved decisions over, so they are the inputs the two evaluators must
+/// agree on. A term that reads a variable local to a function body (a case
+/// helper's own parameters) does not stand alone and is not an input here.
+///
+/// `None` is could-not-look: a bundle with no interpreter, or an AST that will
+/// not serialize. Each input is a JSON document.
+#[must_use]
+pub fn case_inputs(bundle: &Bundle) -> Option<Vec<String>> {
+    let engine = bundle.evaluator.engine()?;
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut inputs = BTreeSet::new();
+    for policy in &policies {
+        let text = policy.get("source")?.get("contents")?.as_str()?;
+        let ast = policy.get("ast")?;
+        let package = reference_path(ast.get("package")?.get("refr")?)?;
+        let mut terms = Vec::new();
+        input_terms(ast, text, &mut terms);
+        for term in terms {
+            let mut probe = engine.clone();
+            let module =
+                format!("package {package}\n\nimport rego.v1\n\nbatten_case_input := {term}\n");
+            if probe
+                .add_policy(String::from("batten-case-input.rego"), module)
+                .is_err()
+            {
+                continue;
+            }
+            let Ok(results) = probe.eval_query(format!("data.{package}.batten_case_input"), false)
+            else {
+                continue;
+            };
+            let value = results
+                .result
+                .first()
+                .and_then(|result| result.expressions.first())
+                .map(|expression| expression.value.clone());
+            if let Some(value) = value.filter(|value| *value != regorus::Value::Undefined)
+                && let Ok(document) = value.to_json_str()
+            {
+                inputs.insert(document);
+            }
+        }
+    }
+    Some(inputs.into_iter().collect())
+}
+
+/// The source text of every `with input as <term>` term under `node`.
+fn input_terms(node: &serde_json::Value, text: &str, found: &mut Vec<String>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(mods) = map.get("with_mods").and_then(serde_json::Value::as_array) {
+                for modifier in mods {
+                    let names_input = modifier
+                        .get("refr")
+                        .and_then(reference_path)
+                        .is_some_and(|path| path == "input");
+                    if let Some(term) = modifier
+                        .get("as")
+                        .filter(|_| names_input)
+                        .and_then(|term| expr_text(term, text))
+                    {
+                        found.push(term.to_owned());
+                    }
+                }
+            }
+            for value in map.values() {
+                input_terms(value, text, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                input_terms(item, text, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An expression's own source text, by the span of its single variant.
+fn expr_text<'t>(expr: &serde_json::Value, text: &'t str) -> Option<&'t str> {
+    let span = expr.as_object()?.values().next()?.get("span")?;
+    let start = usize::try_from(span.get("start")?.as_u64()?).ok()?;
+    let end = usize::try_from(span.get("end")?.as_u64()?).ok()?;
+    text.get(start..end)
+}
+
 /// Every `:=` statement under `node`: the byte offset its statement ends at,
 /// with the guard that goes there.
 fn colon_assignments(node: &serde_json::Value, found: &mut Vec<(usize, String)>) {
