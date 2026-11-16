@@ -3658,47 +3658,26 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `base_key` reads; no production spawn"
-    )]
     fn a_commit_outside_the_crates_keeps_the_base_key() {
         let repo = perf_scratch("base-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .streamed_output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        // IN-CRATE, NO SPAWN (#1276): the fixture is commits, which `gitwrite`
+        // writes; shelling out to the host's `git` was a spawn for nothing.
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates")).expect("mkdir");
         std::fs::write(repo.join("crates/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("Cargo.toml"), "m").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        // Each commit names its WHOLE tree: `commit_paths` writes the tree from
+        // the paths it is handed, so a partial list would drop a file.
+        let first = commit(&["crates/lib.rs", "Cargo.toml"], "one");
         std::fs::write(repo.join("README"), "r").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&["crates/lib.rs", "Cargo.toml", "README"], "two");
         std::fs::write(repo.join("crates/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&["crates/lib.rs", "Cargo.toml", "README"], "three");
         let key = |sha: &str| base_key(&repo, sha).expect("key");
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
@@ -3721,48 +3700,24 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `binary_source_key` reads; no production spawn"
-    )]
     fn a_test_only_commit_keeps_the_binary_source_key() {
         let repo = perf_scratch("binary-source-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .streamed_output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates/batten/src")).expect("mkdir");
         std::fs::create_dir_all(repo.join("crates/batten/tests")).expect("mkdir");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        let tree = ["crates/batten/src/lib.rs", "crates/batten/tests/it.rs"];
+        let first = commit(&tree, "one");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t2").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&tree, "two");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&tree, "three");
         let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
         assert_ne!(
             base_key(&repo, &first).expect("key"),

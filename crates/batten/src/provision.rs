@@ -3450,24 +3450,6 @@ mod tests {
         assert_eq!(stale.stale_lines(), vec!["b 1.0 missing".to_owned()]);
     }
 
-    /// Run `git` in `dir`, hermetically, asserting it succeeded.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the fixture is built by the reference implementation, as `git.rs`'s own fixtures are"
-    )]
-    fn git(dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} in {}", dir.display());
-    }
-
     /// CLOUD-2532: from a linked worktree, the probe is declared by the
     /// WORKTREE's `batten.toml`, never the main checkout's. Measured: `land` →
     /// `verify` in a worktree reported `<main checkout>/batten.toml will not
@@ -3476,25 +3458,13 @@ mod tests {
     fn the_credential_declaration_in_a_worktree_is_the_worktrees() {
         let dir = scratch("credential-worktree");
         let main = dir.join("main");
-        let linked = dir.join("linked");
         fs::create_dir_all(&main).unwrap();
-        git(&main, &["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&main).unwrap();
         fs::write(main.join("README.md"), "base\n").unwrap();
-        git(&main, &["add", "-A"]);
-        git(&main, &["commit", "-q", "-m", "base"]);
+        crate::gitwrite::commit_paths(&main, &[String::from("README.md")], "base").unwrap();
         // The main checkout's authority will not load at all: an unknown key.
         fs::write(main.join("batten.toml"), "version = 1\nnot_a_key = true\n").unwrap();
-        git(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "own",
-                linked.to_str().unwrap(),
-            ],
-        );
+        let linked = crate::gitwrite::link_worktree(&main.join(".git"), &main, "own").unwrap();
         fs::write(
             linked.join("batten.toml"),
             "version = 1\n\n[credential]\nprobe_url = \"https://probe.invalid/\"\n",

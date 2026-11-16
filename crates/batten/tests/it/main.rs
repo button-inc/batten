@@ -450,6 +450,7 @@ mod sonar_gate;
 mod spawn_ceilings;
 mod spawn_census;
 mod spawn_census_clippy;
+mod spawn_count;
 mod spawn_factory;
 mod spawn_widening;
 mod staged_facts;
