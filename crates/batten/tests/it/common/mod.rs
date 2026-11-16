@@ -837,6 +837,14 @@ impl Batten {
         self.0.streamed_output()
     }
 
+    /// [`Batten::streamed_output`] under `main`'s name. Without it a body that
+    /// spells `.output()` derefs to `std`'s `Command::output`, which captures
+    /// without the pump and skips the refusal above — measured on #1276, where
+    /// the replayed base bodies of `harness_isolation` panicked on drop.
+    pub(crate) fn output(&mut self) -> std::io::Result<Output> {
+        self.streamed_output()
+    }
+
     /// [`batten::stream::Streamed::streamed_output_keeping`], refused first where
     /// it would fall through: the streams this door's own `stdin`/`stdout`/
     /// `stderr` set are kept, as `output` kept them.
