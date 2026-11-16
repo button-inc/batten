@@ -1621,6 +1621,51 @@ impl Pushed {
 /// resolve. A rejected update is [`Pushed::Raced`] rather than an error.
 pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    push_commit(root, remote, branch, head)
+}
+
+/// The head this branch's most recent gate run passed, or `None` when its
+/// most recent run did not pass or it has none (#1276).
+///
+/// **THE LATEST VERDICT, NOT THE LATEST PASS:** a head that passed and was
+/// then refused is not one to publish, so a refused or stalled run after a
+/// clean one answers `None`.
+#[must_use]
+pub fn last_verified(root: &Path, branch: &str) -> Option<String> {
+    let lines = branch_lap_lines(root, branch);
+    let latest = lines
+        .iter()
+        .rev()
+        .find(|line| line.starts_with("verify "))?;
+    let mut columns = latest.split_whitespace().skip(1);
+    match (columns.next(), columns.next()) {
+        (Some("clean"), Some(sha)) => Some(sha.to_owned()),
+        _ => None,
+    }
+}
+
+/// Push the head this lap's gate passed — never whatever `HEAD` is by the time
+/// the push runs (#1276).
+///
+/// A commit made while the gate ran is this clone's next lap's to verify. The
+/// lap used to push `HEAD`, so a commit made mid-gate was published, readied
+/// and spent a matrix on with no local verdict at all; pushing a draft while a
+/// lap runs is the workflow, so the lap is what must not move with it. A
+/// remote someone pushed past the verified head refuses the swap
+/// ([`Pushed::Raced`]), and the lap goes round again.
+///
+/// # Errors
+///
+/// No passing verdict on record for this branch, or [`push`]'s.
+pub fn push_verified(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
+    let verified = last_verified(root, branch).with_context(|| {
+        format!("land: {branch}'s latest gate run did not pass, so there is no head to push")
+    })?;
+    push_commit(root, remote, branch, verified)
+}
+
+/// Push `head` to `branch`'s own ref under receive-pack's compare-and-swap.
+fn push_commit(root: &Path, remote: &str, branch: &str, head: String) -> Result<Pushed> {
     let reference = format!("refs/heads/{branch}");
     let admit = |old: &str| admitted(root, branch, old, &head);
     let outcome = crate::lease::push(remote, root, &reference, &head, &admit)
@@ -5407,6 +5452,38 @@ mod tests {
     /// A remote this clone never saw is refused; one it pushed, or one a
     /// recorded replay of this head rewrote, is admitted. Only a well-formed
     /// line of the right kind admits.
+    #[test]
+    fn the_verified_head_is_the_latest_verdict_and_only_a_clean_one() {
+        let root = crate::scratch::scratch("land-verified");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let verified = |lines: &[String]| {
+            super::record_disk(&root, "work", lines).unwrap();
+            super::last_verified(&root, "work")
+        };
+        assert_eq!(super::last_verified(&root, "work"), None, "no run, no head");
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("aaa")).line()]).as_deref(),
+            Some("aaa")
+        );
+        // A push line between does not hide the verdict before it.
+        assert_eq!(
+            verified(&[String::from("push landed bbb -")]).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("ccc")).line()]).as_deref(),
+            Some("ccc"),
+            "a later pass supersedes an earlier one"
+        );
+        assert_eq!(
+            verified(&[String::from("verify refused ddd -")]),
+            None,
+            "a refusal after a pass leaves nothing to publish"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
         let root = crate::scratch::scratch("land-admit");
