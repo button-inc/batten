@@ -41,7 +41,7 @@ fn the_stream_recipe_moves_the_call_and_imports_its_trait_once() {
         CAPTURED
             .replacen(
                 "use std::process::Command;",
-                "use crate::stream::Streamed as _;\nuse std::process::Command;",
+                "use crate::exec::Streamed as _;\nuse std::process::Command;",
                 1
             )
             .replacen(
@@ -117,9 +117,46 @@ fn run() {
         edited,
         source.replacen(
             ".stderr(p).streamed_output()",
-            ".stderr(p).streamed_output_keeping(batten::stream::Keep { stdin: true, stdout: false, stderr: true })",
+            ".stderr(p).streamed_output_keeping(batten::exec::Keep { stdin: true, stdout: false, stderr: true })",
             1
         )
+    );
+    assert_eq!(
+        (recipe.apply)(&edited, "batten").unwrap(),
+        edited,
+        "idempotent"
+    );
+}
+
+/// Fails by: a moved item's path left on `stream`, a different item sharing
+/// the prefix (`StreamedX`, `stream::pump`) moved too, or a use alias or a
+/// struct literal's fields dropped.
+#[test]
+fn the_adapter_recipe_moves_exactly_the_three_items() {
+    let source = "\
+use batten::stream::Streamed as _;
+use batten::stream::StreamedChild as _;
+use batten::stream::pump;
+fn run() {
+    let k = batten::stream::Keep { stdin: true, ..batten::stream::Keep::NONE };
+    let s = \"batten::stream::Keep\";
+    let x = batten::stream::StreamedX;
+}
+";
+    let recipe = batten_codemods::named("stream-adapter-exec").expect("saved");
+    let edited = (recipe.apply)(source, "batten").unwrap();
+    assert_eq!(
+        edited,
+        "\
+use batten::exec::Streamed as _;
+use batten::exec::StreamedChild as _;
+use batten::stream::pump;
+fn run() {
+    let k = batten::exec::Keep { stdin: true, ..batten::exec::Keep::NONE };
+    let s = \"batten::stream::Keep\";
+    let x = batten::stream::StreamedX;
+}
+"
     );
     assert_eq!(
         (recipe.apply)(&edited, "batten").unwrap(),

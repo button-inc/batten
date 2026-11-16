@@ -382,6 +382,7 @@ fn record(
     step: &str,
     args: &[String],
     command: Option<&[String]>,
+    elapsed: Option<std::time::Duration>,
     said: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -411,9 +412,13 @@ fn record(
         )?;
         return Ok(ExitCode::Violation);
     }
-    let receipt = format!(
-        "{} {expected}\n",
-        crate::receipt::rfc3339_utc(crate::boundary_epoch())
+    // THE RUN'S WALL TIME RIDES THE RECEIPT (CLOUD-2776), between the stamp and
+    // the key, so a hit can say what the run it stands for cost. The key stays
+    // the last field, which is all `stored_key` reads.
+    let stamp = crate::receipt::rfc3339_utc(crate::boundary_epoch());
+    let receipt = elapsed.map_or_else(
+        || format!("{stamp} {expected}\n"),
+        |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
     );
     let written = git_dir
         .as_deref()
@@ -460,7 +465,7 @@ pub fn run_record(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    record(step, args, None, out, err)
+    record(step, args, None, None, out, err)
 }
 
 /// `batten step run <step> [--arg V]... -- <command...>`: the pair composed.
@@ -489,8 +494,16 @@ pub fn run_step(
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
     if answer.is_hit() {
+        // A HIT REPORTS THE RUN IT STANDS FOR (CLOUD-2776), never its own few
+        // milliseconds: a resumed lap must not look faster than the work was.
+        let recorded = crate::git::git_dir(Path::new("."))
+            .ok()
+            .and_then(|git_dir| crate::record::keyed_read(&git_dir, RECEIPTS, step))
+            .and_then(|body| recorded_millis(&body));
+        let _ = writeln!(err, "{}", stage_line(step, "hit", recorded));
         return Ok(ExitCode::Success);
     }
+    let started = std::time::Instant::now();
     // TEED, NOT ONLY CAPTURED (CLOUD-2091). `exec::run`'s default stores the
     // child's bytes and prints none of them, which is right for `batten exec` and
     // wrong here: a step is a gate whose reader is a log, and on a CI runner the
@@ -518,6 +531,7 @@ pub fn run_step(
     if let Some((_, root)) = &journaled {
         let _ = crate::mutate::resume::promote(root);
     }
+    let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && matches!(answer, Answer::Miss(_)) {
         // A record that refuses or fails here — the inputs moved while the
@@ -526,11 +540,40 @@ pub fn run_step(
         // `?`-propagated: a passing step stays a passing step.
         let mut recorded = Vec::new();
         let mut refused = Vec::new();
-        let _ = record(step, args, Some(command), &mut recorded, &mut refused);
+        let _ = record(
+            step,
+            args,
+            Some(command),
+            Some(elapsed),
+            &mut recorded,
+            &mut refused,
+        );
         let _ = err.write_all(&recorded);
         let _ = err.write_all(&refused);
     }
+    let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// The run time a receipt recorded: the `<n>ms` field of its first line, or
+/// `None` for a receipt written before it carried one.
+fn recorded_millis(body: &str) -> Option<u64> {
+    body.lines()
+        .next()?
+        .split_whitespace()
+        .find_map(|field| field.strip_suffix("ms")?.parse().ok())
+}
+
+/// `stage <step> <hit|ran> <seconds>`: one line per step, a count and never a
+/// payload (rule 4), so a lap's log answers what each stage cost (CLOUD-2776).
+/// A receipt too old to say is `-`.
+fn stage_line(step: &str, how: &str, millis: Option<u64>) -> String {
+    let seconds = millis.map_or_else(
+        || String::from("-"),
+        |millis| format!("{}.{:03}", millis / 1000, millis % 1000),
+    );
+    format!("stage {step} {how} {seconds}")
 }
 
 #[cfg(test)]
@@ -563,6 +606,20 @@ mod tests {
             !line.contains(&key),
             "a line carries a pointer, not the key: {line}"
         );
+    }
+
+    /// Fails by: a receipt's `<n>ms` field misread, a receipt written before it
+    /// carried one read as a time, or a stage line's seconds mis-rendered.
+    #[test]
+    fn a_stage_line_reads_the_recorded_run_and_renders_seconds() {
+        assert_eq!(
+            recorded_millis("2026-11-16T00:00:00Z 1250ms abc\n"),
+            Some(1250)
+        );
+        assert_eq!(recorded_millis("2026-11-16T00:00:00Z abc\n"), None);
+        assert_eq!(stage_line("s", "ran", Some(1250)), "stage s ran 1.250");
+        assert_eq!(stage_line("s", "ran", Some(7)), "stage s ran 0.007");
+        assert_eq!(stage_line("s", "hit", None), "stage s hit -");
     }
 
     #[test]

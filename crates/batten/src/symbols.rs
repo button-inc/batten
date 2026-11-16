@@ -78,7 +78,7 @@
 //! never stored, which is `secrets.rs`'s discipline of wrapping a span at the
 //! pipe rather than trusting every later caller not to print it.
 
-use crate::stream::Streamed as _;
+use crate::exec::Streamed as _;
 use std::path::Path;
 
 use crate::facts::Look;
@@ -245,7 +245,7 @@ fn version(root: &Path, launcher: &Launcher) -> Look<String> {
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .streamed_output_keeping(crate::stream::Keep {
+        .streamed_output_keeping(crate::exec::Keep {
             stdin: false,
             stdout: true,
             stderr: true,
@@ -303,7 +303,7 @@ pub fn resolve(root: &Path, launcher: &Launcher) -> Look<Resolved> {
         // stream would put output Batten never shaped onto Batten's own.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .streamed_output_keeping(crate::stream::Keep {
+        .streamed_output_keeping(crate::exec::Keep {
             stdin: false,
             stdout: true,
             stderr: true,

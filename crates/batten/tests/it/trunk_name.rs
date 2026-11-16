@@ -189,7 +189,7 @@ fn perf_record(dir: &Path) -> Output {
         .args(["perf", "record"])
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::stream::Keep {
+        .streamed_output_keeping(batten::exec::Keep {
             stdin: true,
             stdout: false,
             stderr: false,

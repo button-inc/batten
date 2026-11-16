@@ -4200,6 +4200,19 @@ pub fn call_input_schema() -> Result<String> {
     Ok(serde_json::to_string_pretty(&document)?)
 }
 
+/// Step 23 (#1276, CLOUD-2775): an interpreter's spawn whose argv is not a
+/// literal — reached but unreadable — names the file it came from and whether
+/// that file is tracked and clean. Absent on every other `programs` entry.
+fn opaque_reach_keys(program: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, kind) in [
+        ("opaque", "boolean"),
+        ("source", "string"),
+        ("trusted", "boolean"),
+    ] {
+        program.insert(key.to_owned(), serde_json::json!({ "type": kind }));
+    }
+}
+
 /// The keys `call_input_schema` adds after its `json!` document is built: one
 /// more key inline exceeds the macro's recursion limit.
 ///
@@ -4288,6 +4301,7 @@ fn extend_call_schema(document: &mut serde_json::Value) {
             "tasks".to_owned(),
             serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
         );
+        opaque_reach_keys(program);
     }
     // Step 14: every program the call's tasks reach, each a `programs` entry
     // carrying the `task` whose body ran it; `null` where the task receipt
