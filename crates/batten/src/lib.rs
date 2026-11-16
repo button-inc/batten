@@ -20988,11 +20988,11 @@ fn decode_payload(
     // A spilled payload is by definition one memory must not hold, so there the
     // handlers read the parsed value, each spilled leaf holding its marker.
     let raw = if streamed.spilled.is_empty() {
-        crate::fsio::read_to_string(&streamed.raw).unwrap_or_default()
+        streamed.raw.text().unwrap_or_default()
     } else {
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
-    let _ = std::fs::remove_file(&streamed.raw);
+    streamed.raw.discard();
     Ok(Some((raw, envelope, streamed.spilled, spool)))
 }
 
@@ -21466,7 +21466,7 @@ fn follow_to_pinned<'a>(
     // will not read hands the child nothing, so it falls through instead —
     // a child answering `0` over an empty document is not an answer about this
     // call, and NOTHING RAN, so the hand-off below is still owed its turn.
-    let Ok(raw) = crate::fsio::read_to_string(&payload.streamed.raw) else {
+    let Ok(raw) = payload.streamed.raw.text() else {
         return Ok(Follow::NOTHING);
     };
     let followed = hand_off(&target.root, &target.argv, &raw, out)?;
