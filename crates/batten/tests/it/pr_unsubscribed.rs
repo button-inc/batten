@@ -60,9 +60,11 @@ const TOKEN_ENV: &str = "CLAUDE_SESSION_INGRESS_TOKEN_FILE";
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run = parsed["tasks"]["pr-unsubscribed"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run = crate::common::rendered(
+        parsed["tasks"]["pr-unsubscribed"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
     let (_, argv) = run
         .split_once(" -- ")
         .expect("the task runs the engine with `cargo run ... --`");
