@@ -163,6 +163,14 @@ pub fn declare_for_process(dir: &Path) {
         forge: Option<crate::rest::Forge>,
     }
     let path = dir.join(CONFIG_FILE);
+    // THE PARSE OF EXACTLY THESE BYTES, WITHOUT READING THEM, where the stamp
+    // names them (2026-11-16): the read was most of this prologue's cost.
+    if let Some(config) = warm_config(&path, &path.to_string_lossy()) {
+        if let Some(forge) = config.forge.clone() {
+            crate::rest::declare(forge);
+        }
+        return;
+    }
     let Ok(text) = read_text(&path) else {
         return;
     };
@@ -3160,25 +3168,39 @@ fn parse_remembered_with(
 /// by `./batten.toml`, and keyed on the spelling the two missed each other and
 /// decoded the same 583 KB authority twice in one call.
 ///
-/// The text is held as the SAME `Arc` [`read_text`] handed out where it can be
-/// (CLOUD-2315), so a hook call no longer copies the 956 KB authority into the
-/// memo, and a later read of the same file matches by address before bytes.
+/// The bytes enter by their BLAKE3, which names them as the bytes would
+/// (2026-11-16): so the parse of a file whose digest is believed from its stamp
+/// ([`warm_config`]) is found without its text ever being read. The digest is
+/// the one [`read_text`] took where `text` is provably that read
+/// ([`held_digest`]), else one taken here.
 ///
-/// The `Config` is held as an `Arc` too, so a reader that only borrows it — the
+/// The `Config` is held as an `Arc`, so a reader that only borrows it — the
 /// resolve, a one-field read — shares the parse rather than cloning the whole
 /// authority out of the memo and dropping it again.
-type LastParse = Option<(std::sync::Arc<String>, String, std::sync::Arc<Config>)>;
+type LastParse = Option<(String, [u8; 32], std::sync::Arc<Config>)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
+
+/// What the memo and the parse cache key `text` from `source` by: the
+/// canonical source and the text's digest.
+fn text_key(text: &str, source: &str) -> (String, [u8; 32]) {
+    let named = canonical_source(source);
+    let digest =
+        held_digest(text, &named).unwrap_or_else(|| *blake3::hash(text.as_bytes()).as_bytes());
+    (named, digest)
+}
 
 /// The memo's parse, when it holds exactly `text` from `source`.
 fn remembered(text: &str, source: &str) -> Option<std::sync::Arc<Config>> {
-    let named = canonical_source(source);
+    let (named, digest) = text_key(text, source);
+    remembered_as(&named, &digest)
+}
+
+/// The memo's parse of the authority canonically `named` whose bytes digest to
+/// `digest`.
+fn remembered_as(named: &str, digest: &[u8; 32]) -> Option<std::sync::Arc<Config>> {
     let last = LAST.lock().ok()?;
-    let (remembered_text, remembered_source, config) = last.as_ref()?;
-    // The memo holds its `Arc` alive, so an equal address and length IS that
-    // allocation; anything else is compared by bytes.
-    let same_bytes = same_allocation(remembered_text, text) || **remembered_text == *text;
-    let same = same_bytes && *remembered_source == named;
+    let (held_named, held_digest, config) = last.as_ref()?;
+    let same = held_named == named && held_digest == digest;
     same.then(|| std::sync::Arc::clone(config))
 }
 
@@ -3189,10 +3211,84 @@ fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T)
 
 /// Keep `config` as the parse of `text` from `source`.
 fn remember(text: &str, source: &str, config: std::sync::Arc<Config>) {
-    let held = shared_text(text).unwrap_or_else(|| std::sync::Arc::new(text.to_owned()));
+    let (named, digest) = text_key(text, source);
+    remember_as(named, digest, config);
+}
+
+/// Keep `config` as the parse of the authority canonically `named` whose bytes
+/// digest to `digest`.
+fn remember_as(named: String, digest: [u8; 32], config: std::sync::Arc<Config>) {
     if let Ok(mut last) = LAST.lock() {
-        *last = Some((held, canonical_source(source), config));
+        *last = Some((named, digest, config));
     }
+}
+
+/// The parse of the authority at `path` read as `source`, WITHOUT READING ITS
+/// TEXT, where its digest is believed from its stamp and this process or the
+/// parse cache holds the parse of exactly those bytes (2026-11-16).
+///
+/// A hook call read the ~1 MB authority to key a parse it then answered from
+/// the cache: measured, the read alone was most of the 2 ms its prologue took.
+/// The digest [`read_text`] records is believed under git's racy rule — taken
+/// only of a file that held still and was not racily clean — so a stamp equal to
+/// the recorded one names the recorded bytes, and any later edit moves the
+/// change time past it. Unix only, for [`text_digest`]'s reason; off unless the
+/// parse cache is on. Anything not believed is `None`, and the caller reads.
+fn warm_config(path: &Path, source: &str) -> Option<std::sync::Arc<Config>> {
+    if !cfg!(unix) || !PERSIST_PARSES.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let named = canonical_source(source);
+    let stamp = crate::cache::stamp(path)?;
+    let digest = recorded_digest(&named, &stamp.fields)?;
+    if let Some(config) = remembered_as(&named, &digest) {
+        return Some(config);
+    }
+    let config = std::sync::Arc::new(read_cached_parse(
+        &entry_for(&named, "cfg")?,
+        &parse_cache_key_as(&named, &digest),
+    )?);
+    remember_as(named, digest, std::sync::Arc::clone(&config));
+    Some(config)
+}
+
+/// [`warm_config`] under every gate [`parse_shared`] applies: the engine pin,
+/// read off the file's head ([`read_head`]), the version floor, and the
+/// `[forge]` declaration.
+fn warm_parse(path: &Path, source: &str) -> Option<Result<std::sync::Arc<Config>>> {
+    let config = warm_config(path, source)?;
+    let gated = || -> Result<std::sync::Arc<Config>> {
+        crate::engine::check(&read_head(path)?, source, crate::engine::running_stamp)?;
+        check_min_version(&config, source)?;
+        if let Some(forge) = config.forge.clone() {
+            crate::rest::declare(forge);
+        }
+        Ok(std::sync::Arc::clone(&config))
+    };
+    Some(gated())
+}
+
+/// A config's top-level lines, up to its first table header: all of it a pin is
+/// read from ([`crate::engine::declared`] stops there), without the rest.
+///
+/// # Errors
+///
+/// As [`fs::read_to_string`].
+pub fn read_head(path: &Path) -> io::Result<String> {
+    use std::io::BufRead as _;
+    let mut reader = io::BufReader::new(fs::File::open(path)?);
+    let mut head = String::new();
+    loop {
+        let at = head.len();
+        if reader.read_line(&mut head)? == 0 {
+            break;
+        }
+        if head[at..].trim_start().starts_with('[') {
+            head.truncate(at);
+            break;
+        }
+    }
+    Ok(head)
 }
 
 /// Whether [`parse_remembered`] may answer from, and write to, the on-disk
@@ -3274,14 +3370,6 @@ fn declared_from_cache(text: &str, source: &str) -> bool {
         crate::rest::declare(forge);
     }
     true
-}
-
-/// The `Arc` [`read_text`] last handed out, when `text` IS it — same address,
-/// same length — so a memo can hold it instead of a copy.
-fn shared_text(text: &str) -> Option<std::sync::Arc<String>> {
-    let last = LAST_TEXT.lock().ok()?;
-    let (_, _, held) = last.as_ref()?;
-    same_allocation(held, text).then(|| std::sync::Arc::clone(held))
 }
 
 /// The digest [`read_text`] took of `text`, when `text` IS the allocation it
@@ -3466,10 +3554,14 @@ fn canonical_source(source: &str) -> String {
 /// [`read_text`] took where `text` is provably that read ([`held_digest`]),
 /// else one taken here (CLOUD-2608).
 fn parse_cache_key(text: &str, source: &str) -> String {
-    let named = canonical_source(source);
-    let digest =
-        held_digest(text, &named).unwrap_or_else(|| *blake3::hash(text.as_bytes()).as_bytes());
-    crate::cache::key(PARSE_CACHE_FORMAT, &[named.as_bytes(), &digest])
+    let (named, digest) = text_key(text, source);
+    parse_cache_key_as(&named, &digest)
+}
+
+/// [`parse_cache_key`] for the authority canonically `named` whose bytes digest
+/// to `digest`.
+fn parse_cache_key_as(named: &str, digest: &[u8; 32]) -> String {
+    crate::cache::key(PARSE_CACHE_FORMAT, &[named.as_bytes(), digest])
 }
 
 /// The cached `Config` at `path`, when it was written under exactly `key`.
@@ -3887,16 +3979,33 @@ fn default_rules() -> Vec<Rule> {
 /// carries an unknown key, or declares an unsupported version. A non-`NotFound`
 /// I/O failure propagates as an internal error (→ exit `3`).
 pub fn load(path: &Path) -> Result<Config> {
-    parse(&read(path)?, &path.display().to_string())
+    load_shared(path).map(std::sync::Arc::unwrap_or_clone)
 }
 
 /// [`load`], sharing the remembered parse: for a caller that only reads it.
+///
+/// THROUGH [`read_text`], so a load of the authority this process already read
+/// is the memo's text rather than a second read of the ~1 MB file: the
+/// `PostToolUse` capture bound read it again on every call (2026-11-16).
 ///
 /// # Errors
 ///
 /// As [`load`].
 pub fn load_shared(path: &Path) -> Result<std::sync::Arc<Config>> {
-    parse_shared(&read(path)?, &path.display().to_string())
+    if let Some(warm) = warm_parse(path, &path.display().to_string()) {
+        return warm;
+    }
+    let text = match read_text(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(UsageError::raise(format!(
+                "no config found at {}",
+                path.display()
+            )));
+        }
+        Err(err) => return Err(err.into()),
+    };
+    parse_shared(&text, &path.display().to_string())
 }
 
 /// Load the committed authority at `path`, or the compiled-in [`defaults`] when
@@ -3927,6 +4036,9 @@ pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
 /// [`load_authority`], sharing the remembered parse: for a caller that only
 /// reads it.
 fn load_authority_shared(path: &Path) -> Result<(std::sync::Arc<Config>, Authority)> {
+    if let Some(warm) = warm_parse(path, &path.display().to_string()) {
+        return warm.map(|config| (config, Authority::Present));
+    }
     match read_text(path) {
         Ok(text) => Ok((
             parse_shared(&text, &path.display().to_string())?,
@@ -4633,6 +4745,79 @@ mod tests {
         assert_eq!(held_digest(&text, &named), Some(expected));
     }
 
+    /// A believed authority whose parse the cache holds under `planted`, a digest
+    /// no hash of its bytes gives, with a `[forge]` table its text does not
+    /// carry: an answer carrying that table was read without the text.
+    fn planted_parse(name: &str) -> std::path::PathBuf {
+        let (path, named, later) = digested_authority(name);
+        read_at(&path, later);
+        let planted = [9_u8; 32];
+        let fields = crate::cache::stamp(&path).unwrap().fields;
+        record_digest(&named, &fields, &planted);
+        let parse = parse_ungated(
+            "version = 1\n\n[forge]\ncredential_names = [\"BATTEN_FORGE_WARM\"]\n",
+            "planted.toml",
+        )
+        .unwrap();
+        write_cached_parse(
+            &entry_for(&named, "cfg").unwrap(),
+            &parse_cache_key_as(&named, &planted),
+            &parse,
+        );
+        forget_reads();
+        *LAST.lock().unwrap() = None;
+        path
+    }
+
+    /// 2026-11-16: an authority whose digest its stamp names is answered from
+    /// the parse cache without reading its text — the planted parse comes back,
+    /// which no read of the file could give.
+    #[test]
+    fn a_believed_authority_loads_without_reading_its_text() {
+        let path = planted_parse("config-warm-load");
+        let loaded = load_shared(&path).unwrap();
+        let expected = cfg!(unix).then(|| vec![String::from("BATTEN_FORGE_WARM")]);
+        assert_eq!(
+            loaded
+                .forge
+                .as_ref()
+                .map(|forge| forge.credential_names.clone()),
+            expected
+        );
+    }
+
+    /// The prologue's `[forge]` read takes the same unread parse.
+    #[test]
+    fn a_believed_authority_declares_its_forge_without_reading_its_text() {
+        let path = planted_parse("config-warm-declare");
+        declare_for_process(path.parent().unwrap());
+        let expected = cfg!(unix).then(|| vec![String::from("BATTEN_FORGE_WARM")]);
+        assert_eq!(
+            crate::rest::declared().map(|forge| forge.credential_names.clone()),
+            expected
+        );
+    }
+
+    /// The head is the top-level lines and stops at the first table header,
+    /// where [`crate::engine::declared`] stops reading.
+    #[test]
+    fn a_configs_head_is_its_lines_before_the_first_table() {
+        let dir = crate::scratch::scratch("config-head");
+        let path = dir.join(CONFIG_FILE);
+        fs::write(
+            &path,
+            "version = 1\nengine = \"x\"\n  [forge]\nengine = \"y\"\n",
+        )
+        .unwrap();
+        assert_eq!(read_head(&path).unwrap(), "version = 1\nengine = \"x\"\n");
+        fs::write(&path, "version = 1\n").unwrap();
+        assert_eq!(
+            read_head(&path).unwrap(),
+            "version = 1\n",
+            "no table: all of it"
+        );
+    }
+
     /// An edit after the record moves the stamp, so the new bytes are hashed.
     #[test]
     fn an_edited_authority_is_hashed_again() {
@@ -4713,10 +4898,15 @@ mod tests {
         let dir = crate::scratch::scratch("config-read-once");
         let path = dir.join(CONFIG_FILE);
         fs::write(&path, "version = 1\n").unwrap();
-        let text = read_text(&path).unwrap();
-        assert!(shared_text(&text).is_some_and(|held| std::sync::Arc::ptr_eq(&held, &text)));
+        // Read an hour on, clear of the racy window a file just written is in.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_hours(1);
+        let text = read_at(&path, later);
         assert!(
-            shared_text("version = 1\n").is_none(),
+            std::sync::Arc::ptr_eq(&read_at(&path, later), &text),
+            "a second read of an unchanged file is the same text"
+        );
+        assert!(
+            !same_allocation(&text, "version = 1\n"),
             "equal bytes are not the allocation"
         );
         assert!(same_allocation(&text, &text));
