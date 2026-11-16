@@ -4614,7 +4614,13 @@ mod tests {
             pacing,
             None,
             &mut |_| Ok(status(if pauses.get() >= limit { "B" } else { "A" }, 0)),
-            &mut |_| pauses.set(pauses.get() + 1),
+            &mut |_| {
+                pauses.set(pauses.get() + 1);
+                assert!(
+                    pauses.get() <= limit.min(10_000),
+                    "the wait did not end on the change"
+                );
+            },
         );
         pauses.get()
     }
