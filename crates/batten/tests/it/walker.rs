@@ -140,7 +140,7 @@ fn a_run_from_a_subdirectory_matches_a_run_from_the_root() {
     let nested = batten()
         .args(["check"])
         .current_dir(dir.join("crates/deep/src"))
-        .output()
+        .streamed_output()
         .expect("run batten from a subdirectory");
 
     assert_eq!(root.status.code(), Some(2), "the root run finds it");

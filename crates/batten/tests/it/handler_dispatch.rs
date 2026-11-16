@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -105,7 +106,7 @@ impl Bench {
             .expect("stdin is piped")
             .write_all(payload.as_bytes())
             .expect("write stdin");
-        let outcome = child.wait_with_output().expect("wait for batten");
+        let outcome = child.streamed_wait().expect("wait for batten");
         // STDERR IS CARRIED because a door that REFUSED says so there, and a case
         // asserting only over stdout reports "the row did not select" for a call
         // the engine never adjudicated at all. Two different defects, one failure
@@ -320,7 +321,7 @@ expires = "2027-03-31"
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
         .expect("write stdin");
-    let outcome = child.wait_with_output().expect("wait for batten");
+    let outcome = child.streamed_wait().expect("wait for batten");
     let received = std::fs::read_to_string(&got).unwrap_or_else(|_| {
         panic!(
             "the handler ran: {}",

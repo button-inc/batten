@@ -55,6 +55,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -402,7 +403,7 @@ fn fix_selection(name: &str, config: &str) -> (bool, String) {
         .arg("eval")
         .arg(root.join("hk-fix-selection.pkl"))
         .current_dir(&root)
-        .output()
+        .streamed_output()
         .expect("pkl runs the predicate");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));

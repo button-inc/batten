@@ -152,7 +152,7 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
     let answer = common::batten()
         .args(["check", "--rule", "plan require missing"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let said = format!(
         "{}{}",

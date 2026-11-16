@@ -25,6 +25,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -63,7 +64,7 @@ fn record(root: &Path, body: &str) -> std::process::Output {
             .write_all(body.as_bytes())
             .expect("write the body");
     }
-    child.wait_with_output().expect("the verb terminates")
+    child.streamed_wait().expect("the verb terminates")
 }
 
 /// Read the record back through the engine's own path derivation.

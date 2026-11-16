@@ -114,7 +114,7 @@ fn check(repo: &Path) -> Output {
     batten()
         .current_dir(repo)
         .args(["check", "--rule", "grant check other"])
-        .output()
+        .streamed_output()
         .expect("run batten check")
 }
 

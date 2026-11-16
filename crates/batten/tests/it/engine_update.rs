@@ -26,6 +26,7 @@
 #![cfg(unix)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -234,7 +235,7 @@ fn run_from(
         .unwrap()
         .write_all(stdin.as_bytes())
         .unwrap();
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {

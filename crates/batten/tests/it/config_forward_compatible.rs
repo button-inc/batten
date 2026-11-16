@@ -124,7 +124,7 @@ fn the_dropped_row_is_named_rather_than_silently_discarded() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = format!(
         "{}{}",
@@ -156,7 +156,7 @@ fn a_config_this_build_understands_reports_nothing_dropped() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     // BOTH CHANNELS, because the report is written to stderr: asserting only
     // stdout here made this half unable to fail, which review caught. The
@@ -221,7 +221,7 @@ fn two_dropped_rows_in_one_section_report_distinct_pointers() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -347,7 +347,7 @@ reason = "an ordinary row whose pattern contains a triple quote"
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -426,7 +426,7 @@ fn a_key_in_a_plain_section_costs_the_key_not_the_file() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -451,7 +451,7 @@ fn the_rest_of_the_section_still_applies() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -505,7 +505,7 @@ fn a_multi_line_value_is_not_cut_in_half_by_an_equals_inside_it() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
@@ -543,7 +543,7 @@ fn a_bracketed_line_inside_an_array_is_not_read_as_a_header() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -599,7 +599,7 @@ fn a_newer_key_in_the_local_override_costs_the_row_not_the_resolution() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
@@ -634,7 +634,7 @@ fn the_report_never_tells_the_reader_to_install_an_older_release() {
     let out = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(

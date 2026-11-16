@@ -155,7 +155,7 @@ impl Repo {
         for (name, value) in env {
             command.env(name, value);
         }
-        command.output().expect("run batten")
+        command.streamed_output().expect("run batten")
     }
 
     /// `step check`, asserting the exit-0 contract and returning the first word.

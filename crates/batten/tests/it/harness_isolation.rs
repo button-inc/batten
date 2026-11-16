@@ -38,7 +38,7 @@ fn a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused() {
         let _ = common::batten()
             .arg("--version")
             .current_dir(&bare)
-            .output();
+            .streamed_output();
     })
     .is_err();
     assert_eq!(
@@ -60,7 +60,7 @@ fn a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs() {
     let refused = std::panic::catch_unwind(|| {
         let mut task = common::task_bash(&owned, "touch ran");
         task.current_dir(&bare);
-        let _ = task.output();
+        let _ = task.streamed_output();
     })
     .is_err();
     let falls = falls_through(&bare);
@@ -158,7 +158,10 @@ fn a_fall_through_is_refused_before_the_child_runs() {
     let bare = common::scratch("harness-isolation-before");
     let falls = falls_through(&bare);
     let attempt = std::panic::catch_unwind(|| {
-        let _ = common::batten().arg("init").current_dir(&bare).output();
+        let _ = common::batten()
+            .arg("init")
+            .current_dir(&bare)
+            .streamed_output();
     });
     assert_eq!(attempt.is_err(), falls, "the door refused the spawn");
     assert!(
@@ -178,7 +181,7 @@ fn a_spawn_in_its_own_repository_or_at_the_real_root_runs() {
         let output = common::batten()
             .arg("--version")
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten");
         assert!(output.status.success(), "{}", common::stderr(&output));
     }

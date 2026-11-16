@@ -15,6 +15,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
+use batten::stream::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,7 +74,7 @@ impl Env {
             .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
-            .output()
+            .streamed_output()
             .expect("run batten")
     }
 
@@ -698,7 +700,7 @@ fn a_subtree_entry_runs_its_binary_beside_its_files() {
         reason = "stays: the fixture IS a spawn of the cached binary, and only a real run shows it reads the files beside its own path (CLOUD-2682)"
     )]
     let ran = std::process::Command::new(env.entry().join("tree/bin/tool"))
-        .output()
+        .streamed_output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout), "payload\n");
     assert!(
@@ -828,7 +830,7 @@ fn a_subtree_entry_links_a_launcher_onto_path() {
         reason = "stays: the fixture IS a spawn of the linked launcher, and only a real run shows it reaches the tree through the kernel's `#!` handling (CLOUD-2682)"
     )]
     let ran = std::process::Command::new(dest.join("demo"))
-        .output()
+        .streamed_output()
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&ran.stdout),
@@ -1005,7 +1007,7 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
         .args(["provision", "apply"])
         .current_dir(&env.repo)
         .env("BATTEN_FETCH_TIMEOUT_MS", "750")
-        .output()
+        .streamed_output()
         .expect("run batten");
 
     assert_eq!(
@@ -1059,7 +1061,7 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
         .args(["provision", "apply"])
         .current_dir(&env.repo)
         .env("BATTEN_FETCH_TIMEOUT_MS", "1500")
-        .output()
+        .streamed_output()
         .expect("run batten");
 
     assert_eq!(output.status.code(), Some(3));
@@ -1194,7 +1196,7 @@ fn host_ca_configuration_reaches_the_fetch() {
             .env("SSL_CERT_FILE", ca)
             .args(["provision", "apply"])
             .current_dir(&env.repo)
-            .output()
+            .streamed_output()
             .expect("run batten")
     };
 
@@ -1335,7 +1337,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
         .env("DEMO_FALLBACK", "from-the-fallback")
         .env_remove("DEMO_PRIMARY")
         .env_remove("DEMO_TOKEN")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     let all = String::from_utf8_lossy(&ran.stdout);
@@ -1401,7 +1403,7 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
             .write_all(b"echo \"$0\"\n")
             .expect("hand bash its one command");
     }
-    let ran = child.wait_with_output().expect("wait for the shim");
+    let ran = child.streamed_wait().expect("wait for the shim");
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     assert_eq!(
         String::from_utf8_lossy(&ran.stdout).trim(),
@@ -1430,7 +1432,7 @@ fn the_prepend_adds_nothing_it_already_carries() {
     )]
     let ran = std::process::Command::new(dest.join(exe("demo")))
         .env("NO_PROXY", "api.example.invalid,localhost")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1462,7 +1464,7 @@ fn a_credential_no_source_carries_is_left_unset() {
         .env_remove("DEMO_PRIMARY")
         .env_remove("DEMO_FALLBACK")
         .env_remove("DEMO_TOKEN")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1636,7 +1638,7 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
             .env_remove("REQUESTS_CA_BUNDLE")
             .env("PROBE_SOURCE", "scoped")
             .env_remove("PROBE_SCOPED")
-            .output()
+            .streamed_output()
             .expect("run the launcher");
         String::from_utf8_lossy(&ran.stdout).into_owned()
     };
@@ -1688,7 +1690,7 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         .env_remove("REQUESTS_CA_BUNDLE")
         .env("PROBE_SOURCE", "scoped")
         .env_remove("PROBE_SCOPED")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1886,7 +1888,7 @@ fn launch(env: &Env, dest: &Path, rows: &str, vars: &[(&str, &str)]) -> Output {
     for (name, value) in vars {
         command.env(name, value);
     }
-    command.output().expect("run the launcher")
+    command.streamed_output().expect("run the launcher")
 }
 
 /// An `unset` row behind a declared credential, applied, and the launcher run

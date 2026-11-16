@@ -108,7 +108,7 @@ fn seed_wiring(dir: &Path) {
         .current_dir(dir)
         .env_remove("CLAUDE_PID")
         .env_remove("BATTEN_ENVIRONMENT")
-        .output()
+        .streamed_output()
         .expect("run batten wiring register --all");
     assert!(
         output.status.success(),
@@ -127,7 +127,7 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor")
 }
 
@@ -176,7 +176,7 @@ fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor mediator")
 }
 
@@ -218,7 +218,7 @@ fn doctor_hooks_counts_each_merged_surface_under_the_resolved_home() {
         .current_dir(&dir)
         .args(["doctor", "hooks", "-J"])
         .at_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten doctor hooks");
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&output)).expect("the report is JSON");
@@ -277,7 +277,7 @@ fn the_mediator_is_compared_against_the_build_this_tree_actually_writes() {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor mediator");
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
     assert_eq!(stdout(&output), "mediator ok\n");
@@ -926,7 +926,10 @@ fn a_passing_check_omits_the_reason_rather_than_nulling_it() {
 
 /// The table as the binary itself renders it, read out of `--help`.
 fn rendered_table() -> String {
-    let output = batten().arg("--help").output().expect("run batten --help");
+    let output = batten()
+        .arg("--help")
+        .streamed_output()
+        .expect("run batten --help");
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
@@ -977,7 +980,10 @@ const EXPECTED: [(i32, &str); 4] = [
 
 #[test]
 fn doctor_is_declared_read_in_the_spec() {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let doctor = spec["subcommands"]
         .as_array()
@@ -1014,7 +1020,7 @@ fn this_repository_is_healthy() {
     let output = batten()
         .args(["doctor", "--json"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the report is JSON");
@@ -1168,7 +1174,7 @@ fn egress(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress")
 }
 
@@ -1298,7 +1304,7 @@ fn the_data_channel_emits_a_document_even_when_unproxied() {
     }
     let json = command
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress -J");
     assert_eq!(json.status.code(), Some(0), "{json:?}");
     let parsed: serde_json::Value =
@@ -1320,7 +1326,7 @@ fn the_data_channel_names_the_failing_state() {
         .env("HTTPS_PROXY", "http://proxy:8080")
         .env("NO_PROXY", "api.github.com")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress -J");
     assert_eq!(json.status.code(), Some(1), "{json:?}");
     let parsed: serde_json::Value =
@@ -1343,7 +1349,7 @@ fn the_lowercase_spellings_are_honoured() {
         .env("https_proxy", "http://proxy:8080")
         .env("no_proxy", "localhost")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
@@ -1457,7 +1463,7 @@ fn gaps(dir: &Path) -> String {
     let outcome = batten()
         .args(["doctor", "gaps"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run");
     assert!(outcome.status.success(), "{}", common::stderr(&outcome));
     stdout(&outcome)
@@ -1563,6 +1569,6 @@ fn doctor_with_home(dir: &Path, home: &Path, extra: &[&str]) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor")
 }

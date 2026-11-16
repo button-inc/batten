@@ -76,7 +76,7 @@ fn check(dir: &std::path::Path) -> std::process::Output {
         .current_dir(dir)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten check")
 }
 
@@ -258,7 +258,7 @@ fn the_dropped_handler_is_named_and_its_neighbour_survives() {
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), stderr(&out));
     assert!(
@@ -322,7 +322,7 @@ this_key_does_not_exist_in_any_version = true
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), stderr(&out));
     assert!(

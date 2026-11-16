@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::cell::Cell;
 use std::fs;
@@ -60,7 +61,7 @@ impl Repo {
     /// fails loudly instead of quietly answering about the real batten
     /// checkout — which lives above this directory.
     fn git(&self, args: &[&str]) -> String {
-        let output = self.raw(args).output().expect("run git");
+        let output = self.raw(args).streamed_output().expect("run git");
         assert!(
             output.status.success(),
             "git {args:?} failed in {}: {}",

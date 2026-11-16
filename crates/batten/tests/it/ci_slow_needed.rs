@@ -64,7 +64,7 @@ fn a_live_path_needs_the_tier_and_is_named() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(output.status.code(), Some(0), "the tier is needed");
@@ -83,7 +83,7 @@ fn an_all_inert_diff_does_not_need_the_tier() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(
@@ -102,7 +102,7 @@ fn an_empty_diff_is_could_not_look_rather_than_a_clean_skip() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "HEAD"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(output.status.code(), Some(3), "could-not-look, not clean");
@@ -118,7 +118,7 @@ fn a_base_that_does_not_resolve_refuses_rather_than_guessing() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "no-such-rev"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_ne!(
@@ -141,7 +141,7 @@ fn a_head_carrying_the_checkouts_tree_answers_the_plain_question() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base", "--head", "HEAD"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(
@@ -160,7 +160,7 @@ fn a_head_the_checkout_is_not_standing_on_is_refused_rather_than_answered() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base", "--head", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(

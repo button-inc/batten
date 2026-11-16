@@ -218,7 +218,7 @@ fn each_layer_is_named_by_its_token_when_it_wins() {
         .args(["config", "show", "--json"])
         .current_dir(&bare)
         .env("BATTEN_STRICTNESS", "strict")
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let parsed: BTreeMap<String, Value> =
         serde_json::from_slice(&env_output.stdout).expect("one JSON object");
@@ -240,7 +240,7 @@ fn document_with_strictness_env(dir: &Path, value: &str) -> (Vec<u8>, BTreeMap<S
         .args(["config", "show", "--json"])
         .current_dir(dir)
         .env("BATTEN_STRICTNESS", value)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert_eq!(
         output.status.code(),

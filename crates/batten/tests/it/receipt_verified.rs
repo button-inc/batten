@@ -93,7 +93,7 @@ fn record(dir: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -106,7 +106,7 @@ fn verified(dir: &Path) -> (i32, String) {
     let output = batten()
         .args(["receipt", "verified"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt verified");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));

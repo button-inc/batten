@@ -70,6 +70,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -116,7 +117,7 @@ fn batten_in(dir: &Path, global: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", global)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -125,7 +126,7 @@ fn git_scoped(dir: &Path, global: &Path, args: &[&str]) -> String {
     let output = common::git_command(dir, args)
         .env("GIT_CONFIG_GLOBAL", global)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
+        .streamed_output()
         .expect("run git");
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
@@ -437,8 +438,8 @@ fn the_retired_conflict_reading_and_the_preset_agree_on_every_scope_pair() {
                 None => std::fs::write(&global, ""),
             }
             .expect("global config");
-            let _ =
-                common::git_command(&dir, &["config", "--unset-all", "commit.gpgsign"]).output();
+            let _ = common::git_command(&dir, &["config", "--unset-all", "commit.gpgsign"])
+                .streamed_output();
             if let Some(value) = local_value {
                 git_in(&dir, &["config", "commit.gpgsign", value]);
             }

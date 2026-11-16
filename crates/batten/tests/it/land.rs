@@ -181,7 +181,7 @@ fn check(repo: &Path) -> (i32, String, String) {
     let output = batten()
         .args(["check"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     (
         output.status.code().expect("exit code"),
@@ -463,7 +463,7 @@ fn land_verify(repo: &Path, command: &str) -> (i32, String, String) {
         .args(["land", "verify"])
         .env("LAND_VERIFY", command)
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -559,7 +559,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
     let registered = batten()
         .args(["task", "register", "land", task, "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("register the supervising task");
     assert!(registered.status.success(), "{}", stderr(&registered));
     // NO INHERITED GROUP OWNER: under `verify` this suite runs inside a mise
@@ -573,7 +573,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
         .env("LAND_SELF_STALL_BEATS", beats)
         .env("LAND_LOCK_HEARTBEAT", "1")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (output.status.code().expect("exit code"), stdout(&output))
 }
@@ -655,7 +655,7 @@ fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_VERIFY_RECEIPT", "verify")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -669,7 +669,7 @@ fn record_verify_receipt(repo: &Path) {
     let output = batten()
         .args(["receipt", "record", "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -766,7 +766,7 @@ fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_WORKFLOW", "fast-forward.yml")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land lap");
     (
         output.status.code().expect("exit code"),
@@ -845,7 +845,7 @@ fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
         // live pull request would be a test of the forge's availability.
         .env("PATH", "/nonexistent")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land fast-forward");
     (
         output.status.code().expect("exit code"),

@@ -389,7 +389,7 @@ fn check(repo: &Path, root: Option<&Path>) -> Output {
         // no such root, which is the permanent state of a CI runner.
         None => command.env_remove(ROOT_VAR),
     };
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 /// The finding lines a run rendered.
@@ -764,7 +764,7 @@ fn this_repository_is_wired_correctly() {
     let output = batten()
         .current_dir(at_root("."))
         .args(["check", "--rule", "hook wire missing"])
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert!(
         output.status.success(),
@@ -786,7 +786,7 @@ fn diagnosis(repo: &Path) -> String {
     let output = batten()
         .current_dir(repo)
         .args(["doctor", "hooks"])
-        .output()
+        .streamed_output()
         .expect("run batten doctor hooks");
     format!("{}{}", stdout(&output), stderr(&output))
 }
@@ -855,7 +855,7 @@ fn a_missing_surface_names_its_file_and_fix() {
         .env("HOME", &home)
         .env_remove("BATTEN_ENVIRONMENT")
         .env_remove("CLAUDE_PID")
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert!(seeded.status.success());
     std::fs::remove_file(repo.join(".cursor/hooks.json")).expect("the cursor surface was written");
@@ -866,7 +866,7 @@ fn a_missing_surface_names_its_file_and_fix() {
             .args(args)
             .env("HOME", &home)
             .env_remove("CLAUDE_PID")
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     let json = run(&["doctor", "hooks", "--json"]);
@@ -912,7 +912,7 @@ fn cursor_row(name: &str, body: &serde_json::Value) -> serde_json::Value {
         .args(["doctor", "hooks", "--json"])
         .env("HOME", &home)
         .env_remove("CLAUDE_PID")
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json parses");
     report["harnesses"]
@@ -968,7 +968,7 @@ fn a_flat_host_is_generated_flat() {
         let output = common::batten()
             .current_dir(common::at_root(""))
             .args(["generate", "hooks", "--harness", harness])
-            .output()
+            .streamed_output()
             .expect("the binary runs");
         serde_json::from_slice(&output.stdout).expect("generate hooks parses")
     };
