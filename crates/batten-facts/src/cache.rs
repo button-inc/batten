@@ -228,8 +228,8 @@ pub fn key(format: &str, inputs: &[&[u8]]) -> String {
 /// whether the entry answers this question at all, and the length and digest
 /// decide whether the bytes are the ones written.
 #[must_use]
-pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
-    let mut bytes = crate::fsio::read(path).ok()?;
+pub fn read(path: &Path, key: &str) -> Option<Body> {
+    let bytes = crate::fsio::read(path).ok()?;
     let (head, rest) = split_line(&bytes)?;
     if head != key.as_bytes() {
         return None;
@@ -238,11 +238,36 @@ pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
     if check != integrity(body).as_bytes() {
         return None;
     }
-    // The body is the read buffer's tail: hand it back in place rather than
-    // copying a whole entry on every hit.
     let at = bytes.len() - body.len();
-    bytes.drain(..at);
-    Some(bytes)
+    Some(Body { bytes, at })
+}
+
+/// An entry's body: the read buffer and where in it the body starts.
+///
+/// HANDED BACK IN PLACE, NEVER MOVED: draining the two header lines off the
+/// front moved every byte of the body down, a whole extra pass over the 300 KB
+/// parse entry and every `.rvm` on each hook call (callgrind, 2026-11-16).
+#[derive(Debug)]
+pub struct Body {
+    bytes: Vec<u8>,
+    at: usize,
+}
+
+impl Body {
+    /// The body as an owned buffer, for a reader that keeps it.
+    #[must_use]
+    pub fn into_vec(mut self) -> Vec<u8> {
+        self.bytes.drain(..self.at);
+        self.bytes
+    }
+}
+
+impl std::ops::Deref for Body {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.bytes.get(self.at..).unwrap_or_default()
+    }
 }
 
 /// Store `body` at `path` under `key`, atomically and unsynced.
@@ -262,9 +287,13 @@ pub fn write(path: &Path, key: &str, body: &[u8]) {
     let _ = crate::durable::replace_as(path, bytes, crate::durable::Persist::Atomic);
 }
 
-/// The length and digest a body is checked against on read.
+/// The length and checksum a body is checked against on read.
+///
+/// A CRC, not a cryptographic digest: this guards against a torn or corrupted
+/// write, which a CRC-32 catches, and never names the content — the key line
+/// does that. BLAKE3 here was ~5% of a warm hook call's instructions.
 fn integrity(body: &[u8]) -> String {
-    format!("{} {}", body.len(), blake3::hash(body).to_hex())
+    format!("{} crc32:{:08x}", body.len(), crc32fast::hash(body))
 }
 
 fn split_line(bytes: &[u8]) -> Option<(&[u8], &[u8])> {

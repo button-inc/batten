@@ -93,6 +93,13 @@ blake3 = { version = "1", default-features = false, features = ["std"] }
 # compiler snippet naming `TIMEOUT_MULTIPLIER` was filed a timeout. Read-only,
 # no dependencies of its own.
 roxmltree = "0.20"
+# The local cache's integrity check (`cache::read`), which guards a body against
+# a torn or corrupted write and is never an identity: the KEY line, a BLAKE3 over
+# the inputs, decides what an entry answers. A hook call checked ~600 KB of
+# entries per call, and BLAKE3 over them was ~5% of its instructions (callgrind,
+# 2026-11-16) for a property a CRC holds. Not a new supply-chain surface: the
+# lock already resolves it at this version through `flate2` and `gix`.
+crc32fast = "1"
 # The HTTP client (CLOUD-745), and it is NOT `reqwest` -- which that row names,
 # so the substitution is recorded there rather than made quietly here.
 #

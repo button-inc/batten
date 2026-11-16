@@ -2138,10 +2138,17 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             // what an unscoped call over its rules returns — could-not-look if
             // one of THEM faulted, else their members — so a sibling's fault
             // never reaches a verdict.
-            if let Some(answer) = Answers::recall(compiled, input, |held| select(held, rules)) {
+            let read = |held: &Evaluated| {
+                rules
+                    .iter()
+                    .all(|rule| held.asked.contains(*rule))
+                    .then(|| select(held, rules))
+            };
+            if let Some(Some(answer)) = Answers::recall(compiled, input, read) {
                 return answer;
             }
-            let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
+            let wanted = family(rules);
+            let evaluated = compiled.evaluate(&Answers::parsed(input)?, &wanted)?;
             let answer = select(&evaluated, rules);
             Answers::keep(compiled, input, evaluated);
             answer
@@ -2152,12 +2159,12 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// What an unscoped call over `rules` answers, read off a bundle's evaluation:
 /// could-not-look if one of them faulted, else their members.
 fn select(evaluated: &Evaluated, rules: &[&str]) -> Option<Answer> {
-    let (faulted, members) = evaluated;
-    if rules.iter().any(|rule| faulted.contains(*rule)) {
+    if rules.iter().any(|rule| evaluated.faulted.contains(*rule)) {
         return None;
     }
     Some(Answer::Members(
-        members
+        evaluated
+            .members
             .iter()
             .filter(|((_, rule), _)| rules.contains(&rule.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -2202,12 +2209,41 @@ type Asked = (
     Vec<(std::sync::Arc<Compiled>, Evaluated)>,
 );
 
-/// One program over one input, every rule evaluated: the rules that faulted, and
-/// what the rest defined.
-type Evaluated = (
-    BTreeSet<String>,
-    BTreeMap<(Vec<String>, String), regorus::Value>,
-);
+/// One program over one input: the rules evaluated so far, those of them that
+/// faulted, and what the rest defined.
+#[derive(Default)]
+struct Evaluated {
+    asked: BTreeSet<String>,
+    faulted: BTreeSet<String>,
+    members: BTreeMap<(Vec<String>, String), regorus::Value>,
+}
+
+/// The rules a call's asks come in, each evaluated together the first time any
+/// member is asked (2026-11-16): the adjudication, the grant, the declaration.
+///
+/// ONE VM PER FAMILY, NOT ONE PER CALL. A `PostToolUse` asks only the first
+/// family, and evaluating every rule at its first ask ran the grant rules too —
+/// measured, `claude_code_cloud`'s `preapprove` alone was a third of the Rego a
+/// warm call ran, on an event no grant can apply to. `rules` is asked at load
+/// and never by a call. The grant's two share a VM because a rewrite is only
+/// read beside a pre-approval.
+const FAMILIES: [&[&str]; 3] = [
+    &[DENY_RULE, VIOLATION_RULE],
+    &[PREAPPROVE_RULE, REWRITE_RULE],
+    &[RULES_RULE],
+];
+
+/// Every rule evaluated beside `rules`: the families they belong to, and any
+/// rule no family names.
+fn family(rules: &[&str]) -> BTreeSet<String> {
+    let mut wanted: BTreeSet<String> = rules.iter().map(|rule| (*rule).to_owned()).collect();
+    for members in FAMILIES {
+        if members.iter().any(|member| rules.contains(member)) {
+            wanted.extend(members.iter().map(|member| (*member).to_owned()));
+        }
+    }
+    wanted
+}
 
 thread_local! {
     static ANSWERS: std::cell::RefCell<Option<Answers>> = const { std::cell::RefCell::new(None) };
@@ -2230,7 +2266,9 @@ pub struct AnswerScope;
 
 impl Drop for AnswerScope {
     fn drop(&mut self) {
-        ANSWERS.with(|cell| *cell.borrow_mut() = None);
+        // Closed, not freed, for `HookLoadScope`'s reason: the call's answers
+        // are returned to the system whole when the process exits behind it.
+        ANSWERS.with(|cell| std::mem::forget(cell.borrow_mut().take()));
     }
 }
 
@@ -2294,9 +2332,19 @@ impl Answers {
             if let Some(answers) = cell.borrow_mut().as_mut()
                 && let Some(at) = answers.input_at(input)
             {
-                answers.inputs[at]
-                    .2
-                    .push((std::sync::Arc::clone(compiled), evaluated));
+                let held = &mut answers.inputs[at].2;
+                // A later family joins the evaluation already held for this
+                // program, so one entry answers every family it has run.
+                if let Some((_, kept)) = held
+                    .iter_mut()
+                    .find(|(program, _)| std::sync::Arc::ptr_eq(program, compiled))
+                {
+                    kept.asked.extend(evaluated.asked);
+                    kept.faulted.extend(evaluated.faulted);
+                    kept.members.extend(evaluated.members);
+                } else {
+                    held.push((std::sync::Arc::clone(compiled), evaluated));
+                }
             }
         });
     }
@@ -3447,30 +3495,44 @@ impl Compiled {
         Some(vm)
     }
 
-    /// Every entry evaluated in one VM, each rule's fault recorded against that
-    /// rule alone: a VM that faulted is replaced before the next entry runs, so
-    /// no rule's answer is read off a VM a sibling left mid-fault.
+    /// Every entry of the `wanted` rules evaluated in one VM, each rule's fault
+    /// recorded against that rule alone: a VM that faulted is replaced before
+    /// the next entry runs, so no rule's answer is read off a VM a sibling left
+    /// mid-fault. A bundle defining none of them builds no VM at all.
     ///
     /// No module can be written to reach this: regorus's VM reads an error in
     /// a rule body as undefined, and what still propagates is a resource limit
     /// (none is set) or the VM's own inconsistency. The record is what keeps a
     /// scoped answer equal to an unscoped one by construction if one does.
-    fn evaluate_all(&self, input: &regorus::Value) -> Option<Evaluated> {
+    fn evaluate(&self, input: &regorus::Value, wanted: &BTreeSet<String>) -> Option<Evaluated> {
+        let mut evaluated = Evaluated {
+            asked: wanted.clone(),
+            ..Evaluated::default()
+        };
+        let mut entries = self
+            .entries
+            .iter()
+            .filter(|(_, rule)| wanted.contains(rule))
+            .peekable();
+        if entries.peek().is_none() {
+            return Some(evaluated);
+        }
         let mut vm = self.vm(input)?;
-        let (mut faulted, mut members) = (BTreeSet::new(), BTreeMap::new());
-        for (package, rule) in &self.entries {
+        for (package, rule) in entries {
             match vm.execute_entry_point_by_name(&entry_point(package, rule)) {
                 Ok(regorus::Value::Undefined) => {}
                 Ok(value) => {
-                    members.insert((package.clone(), rule.clone()), value);
+                    evaluated
+                        .members
+                        .insert((package.clone(), rule.clone()), value);
                 }
                 Err(_) => {
-                    faulted.insert(rule.clone());
+                    evaluated.faulted.insert(rule.clone());
                     vm = self.vm(input)?;
                 }
             }
         }
-        Some((faulted, members))
+        Some(evaluated)
     }
 
     fn answer(&self, input: &regorus::Value, rules: &[&str]) -> Option<Answer> {
@@ -4245,11 +4307,29 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 pub fn registry_for(
     verdicts: &[crate::config_model::DeclaredVerdict],
 ) -> Result<Vec<crate::config_model::DeclaredVerdict>> {
-    let mut registry = verdicts.to_vec();
-    for entry in crate::config_check::verdict::vendored() {
-        registry.retain(|row| row.id != entry.id);
-        registry.push(entry);
-    }
+    let shipped = crate::config_check::verdict::vendored();
+    // ONE PASS, NOT ONE PER SHIPPED ROW: a `retain` over the whole registry for
+    // each shipped class was a quadratic 1.3M instructions on every hook call
+    // (callgrind, 2026-11-16). A consumer row a shipped one shadows is dropped,
+    // and a later shipped row of one id still replaces an earlier one.
+    let ids: BTreeSet<&str> = shipped.iter().map(|entry| entry.id.as_str()).collect();
+    let mut registry: Vec<_> = verdicts
+        .iter()
+        .filter(|row| !ids.contains(row.id.as_str()))
+        .cloned()
+        .collect();
+    let last: BTreeMap<&str, usize> = shipped
+        .iter()
+        .enumerate()
+        .map(|(at, entry)| (entry.id.as_str(), at))
+        .collect();
+    registry.extend(
+        shipped
+            .iter()
+            .enumerate()
+            .filter(|(at, entry)| last.get(entry.id.as_str()) == Some(at))
+            .map(|(_, entry)| entry.clone()),
+    );
     Ok(registry)
 }
 

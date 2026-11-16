@@ -251,7 +251,7 @@ fn cache_path(state: &Path) -> Option<PathBuf> {
 /// same timestamp tick, with every stamped field unchanged, so the entry cannot
 /// vouch for it.
 fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
-    let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
+    let body = String::from_utf8(crate::cache::read(path, key)?.into_vec()).ok()?;
     let (written, epoch) = body.split_once(' ')?;
     let (secs, nanos) = written.split_once('.')?;
     let written = std::time::Duration::new(secs.parse().ok()?, nanos.parse().ok()?);

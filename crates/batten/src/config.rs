@@ -88,6 +88,16 @@ use crate::config_model::Unresolvable;
 /// or an unsupported [`Config::version`]. These are bad *input*, not internal
 /// failures.
 pub fn parse(text: &str, source: &str) -> Result<Config> {
+    parse_shared(text, source).map(std::sync::Arc::unwrap_or_clone)
+}
+
+/// [`parse`], sharing the remembered parse rather than cloning it out: for a
+/// caller that only reads the `Config`.
+///
+/// # Errors
+///
+/// As [`parse`].
+pub fn parse_shared(text: &str, source: &str) -> Result<std::sync::Arc<Config>> {
     // THE PIN BEFORE THE PARSE (CLOUD-2061): a stale engine is named before a key
     // it cannot read gets the chance to fail the parse, so the refusal says which
     // engine to install rather than which field was unknown.
@@ -3108,7 +3118,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
 /// load-time report, [`check_min_version`]'s, stays outside so it is still made
 /// on every load. Only a success is kept: a refusal is re-derived, so its
 /// message is never a stale one.
-fn parse_remembered(text: &str, source: &str) -> Result<Config> {
+fn parse_remembered(text: &str, source: &str) -> Result<std::sync::Arc<Config>> {
     parse_remembered_with(
         text,
         source,
@@ -3118,7 +3128,11 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 
 /// [`parse_remembered`] with the on-disk parse cache switched by `persist`, so a
 /// case can switch it without the process-wide flag every other case reads.
-fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Config> {
+fn parse_remembered_with(
+    text: &str,
+    source: &str,
+    persist: bool,
+) -> Result<std::sync::Arc<Config>> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
     }
@@ -3142,7 +3156,8 @@ fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Conf
         }
         config
     };
-    remember(text, source, config.clone());
+    let config = std::sync::Arc::new(config);
+    remember(text, source, std::sync::Arc::clone(&config));
     Ok(config)
 }
 
@@ -3154,11 +3169,15 @@ fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Conf
 /// The text is held as the SAME `Arc` [`read_text`] handed out where it can be
 /// (CLOUD-2315), so a hook call no longer copies the 956 KB authority into the
 /// memo, and a later read of the same file matches by address before bytes.
-type LastParse = Option<(std::sync::Arc<String>, String, Config)>;
+///
+/// The `Config` is held as an `Arc` too, so a reader that only borrows it — the
+/// resolve, a one-field read — shares the parse rather than cloning the whole
+/// authority out of the memo and dropping it again.
+type LastParse = Option<(std::sync::Arc<String>, String, std::sync::Arc<Config>)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
-/// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
-fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
+/// The memo's parse, when it holds exactly `text` from `source`.
+fn remembered(text: &str, source: &str) -> Option<std::sync::Arc<Config>> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;
     let (remembered_text, remembered_source, config) = last.as_ref()?;
@@ -3166,15 +3185,16 @@ fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T)
     // allocation; anything else is compared by bytes.
     let same_bytes = same_allocation(remembered_text, text) || **remembered_text == *text;
     let same = same_bytes && *remembered_source == named;
-    same.then(|| with(config))
+    same.then(|| std::sync::Arc::clone(config))
 }
 
-fn remembered(text: &str, source: &str) -> Option<Config> {
-    with_remembered(text, source, Config::clone)
+/// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
+fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
+    remembered(text, source).map(|config| with(&config))
 }
 
-/// Keep `config`, moved in, as the parse of `text` from `source`.
-fn remember(text: &str, source: &str, config: Config) {
+/// Keep `config` as the parse of `text` from `source`.
+fn remember(text: &str, source: &str, config: std::sync::Arc<Config>) {
     let held = shared_text(text).unwrap_or_else(|| std::sync::Arc::new(text.to_owned()));
     if let Ok(mut last) = LAST.lock() {
         *last = Some((held, canonical_source(source), config));
@@ -3250,7 +3270,7 @@ fn declared_from_cache(text: &str, source: &str) -> bool {
     let forge = with_remembered(text, source, |config| config.forge.clone()).or_else(|| {
         let config = read_cached_parse(&parse_cache_path(source)?, &parse_cache_key(text, source))?;
         let forge = config.forge.clone();
-        remember(text, source, config);
+        remember(text, source, std::sync::Arc::new(config));
         Some(forge)
     });
     let Some(forge) = forge else {
@@ -3879,6 +3899,15 @@ pub fn load(path: &Path) -> Result<Config> {
     parse(&read(path)?, &path.display().to_string())
 }
 
+/// [`load`], sharing the remembered parse: for a caller that only reads it.
+///
+/// # Errors
+///
+/// As [`load`].
+pub fn load_shared(path: &Path) -> Result<std::sync::Arc<Config>> {
+    parse_shared(&read(path)?, &path.display().to_string())
+}
+
 /// Load the committed authority at `path`, or the compiled-in [`defaults`] when
 /// there is none (CLOUD-70).
 ///
@@ -3900,12 +3929,21 @@ pub fn load(path: &Path) -> Result<Config> {
 ///
 /// As [`load`], minus the missing-file case.
 pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
+    load_authority_shared(path)
+        .map(|(config, present)| (std::sync::Arc::unwrap_or_clone(config), present))
+}
+
+/// [`load_authority`], sharing the remembered parse: for a caller that only
+/// reads it.
+fn load_authority_shared(path: &Path) -> Result<(std::sync::Arc<Config>, Authority)> {
     match read_text(path) {
         Ok(text) => Ok((
-            parse(&text, &path.display().to_string())?,
+            parse_shared(&text, &path.display().to_string())?,
             Authority::Present,
         )),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((defaults(), Authority::Absent)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Ok((std::sync::Arc::new(defaults()), Authority::Absent))
+        }
         Err(err) => Err(err.into()),
     }
 }
@@ -4005,6 +4043,16 @@ pub fn authority_site(anchor: &Path, config_in: Option<&Path>) -> AuthoritySite 
 /// file is not there — the could-not-look answer §5 asks for, never a clean
 /// verdict — and otherwise exactly as [`load_authority`].
 pub fn load_site(site: &AuthoritySite) -> Result<(Config, Authority)> {
+    load_site_shared(site)
+        .map(|(config, present)| (std::sync::Arc::unwrap_or_clone(config), present))
+}
+
+/// [`load_site`], sharing the remembered parse: for a caller that only reads it.
+///
+/// # Errors
+///
+/// As [`load_site`].
+pub fn load_site_shared(site: &AuthoritySite) -> Result<(std::sync::Arc<Config>, Authority)> {
     if site.required && !site.path.is_file() {
         return Err(UsageError::raise(format!(
             "no {} in the named config directory ({}), so the committed authority \
@@ -4014,7 +4062,7 @@ pub fn load_site(site: &AuthoritySite) -> Result<(Config, Authority)> {
             site.path.parent().unwrap_or(&site.path).display()
         )));
     }
-    load_authority(&site.path)
+    load_authority_shared(&site.path)
 }
 
 /// Load an *override* layer, without the [`Config::min_batten_version`] gate.

@@ -1177,7 +1177,7 @@ fn authority(
     config_from: Option<&str>,
     config_in: Option<&str>,
 ) -> Result<(
-    crate::config_model::Config,
+    std::sync::Arc<crate::config_model::Config>,
     config::Authority,
     Option<crate::trust_pin::Loaded>,
 )> {
@@ -1190,7 +1190,9 @@ fn authority(
     let named = config_in.map(Path::new);
     let Some(reference) = config_from else {
         let site = config::authority_site(dir, named);
-        let (config, present) = config::load_site(&site)?;
+        // SHARED, NOT CLONED: every read below borrows the authority, so the
+        // remembered parse serves it without a copy of the whole `Config`.
+        let (config, present) = config::load_site_shared(&site)?;
         return Ok((config, present, None));
     };
     // Under both flags the ref is resolved in the NAMED repository. A scratch
@@ -1218,7 +1220,7 @@ fn authority(
         // read would be. The provenance travels beside the config rather than in
         // the precedence ladder, whose `Ord` IS §8's order.
         crate::trust_pin::Load::Loaded(loaded) => Ok((
-            loaded.config.clone(),
+            std::sync::Arc::new(loaded.config.clone()),
             config::Authority::Present,
             Some(*loaded),
         )),
@@ -1252,7 +1254,7 @@ pub(crate) fn committed(dir: &Path, overrides: &Overrides) -> Result<crate::conf
         overrides.config_from.as_deref(),
         overrides.config_in.as_deref(),
     )
-    .map(|(config, _, _)| config)
+    .map(|(config, _, _)| std::sync::Arc::unwrap_or_clone(config))
 }
 
 /// [`resolve`], with the env layer supplied by `env` so it is testable without
