@@ -304,6 +304,7 @@ dependencies = [
  "anyhow",
  "batten-fsio",
  "blake3",
+ "crc32fast",
  "hmac",
  "json5",
  "proc-macro2",
