@@ -1935,6 +1935,12 @@ enum Said {
     /// #1132, capturing it left fifteen shards' logs silent for 111 minutes and
     /// lost every mutant they judged when their bound stopped them.
     Streamed,
+    /// Stdout into [`Ran::stdout`] for a caller that parses it, stderr straight
+    /// to this process's stderr as it is written: a build whose machine output
+    /// is the answer and whose human progress is cargo's own stderr. Measured on
+    /// #1276: the schema build ran 485s with both captured, and the lap showed
+    /// nothing from `known from earlier runs` until the build ended.
+    Progress,
 }
 
 fn spawn_as(
@@ -2017,16 +2023,19 @@ fn spawn_as(
     let err_path = capture.join("stderr");
     if said == Said::Streamed {
         command.stdout(std::process::Stdio::from(std::io::stderr()));
-        command.stderr(std::process::Stdio::from(std::io::stderr()));
     } else {
         command.stdout(std::process::Stdio::from(
             fs::File::create(&out_path) // stream: a child's stdout sink
                 .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
         ));
+    }
+    if said == Said::Captured {
         command.stderr(std::process::Stdio::from(
             fs::File::create(&err_path) // stream: a child's stderr sink
                 .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
         ));
+    } else {
+        command.stderr(std::process::Stdio::from(std::io::stderr()));
     }
     // A GROUP OF ITS OWN, AND THE SWEEP FORWARDS WHAT IT IS SENT. Leading a group
     // is what lets the teardown reach the suite's grandchildren; it also takes the
@@ -6550,6 +6559,30 @@ mod tests {
     /// job could write, so the job is observed through a fifo instead: the suite
     /// opens its write end and the job inherits it, and the read reaches its end
     /// only once every writer — the job included — is gone.
+    /// Fails by: `Progress` capturing stderr (the schema build silent again for
+    /// its whole run), dropping stdout (the build's JSON unparsed), or `Captured`
+    /// streaming what it must keep.
+    #[test]
+    fn progress_reads_stdout_and_streams_stderr() {
+        let dir = crate::scratch::scratch("mutate-said-progress");
+        let bound = std::time::Duration::from_secs(60);
+        let both = [String::from("-c"), String::from("echo out; echo err >&2")];
+        let progress = spawn_as(
+            &dir,
+            Program::Suite("sh"),
+            &both,
+            &[],
+            bound,
+            Said::Progress,
+        )
+        .expect("sh runs");
+        assert_eq!(progress.stdout, "out\n");
+        assert!(!progress.output.contains("err"), "{}", progress.output);
+        let captured = spawn(&dir, Program::Suite("sh"), &both, &[], bound).expect("sh runs");
+        assert_eq!(captured.stdout, "out\n");
+        assert!(captured.output.contains("err"), "{}", captured.output);
+    }
+
     #[test]
     fn a_suite_that_exits_is_answered_with_its_status_and_its_group_is_ended() {
         // Only unix has the group to end; elsewhere the wait is waited out.
