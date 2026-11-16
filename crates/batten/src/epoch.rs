@@ -285,6 +285,168 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
     }
 }
 
+/// The epoch an admission for `rule`/`verdict` binds (CLOUD-2779).
+///
+/// **THE SURFACE THAT DECIDES THIS RULE, NOT THE WHOLE CONFIG.** The admission
+/// epoch used to be [`describe`]'s, so any `batten.toml` edit — a comment, a
+/// pattern only another module reads — unbound every outstanding admission for
+/// every rule. Measured on #1276: narrowing one `[[pattern]]` unbound four held
+/// admissions, the `filed-row-settled` handler then refused every Edit, and a
+/// landing lap refused in tier 1. The property the epoch exists for is
+/// [`crate::admission::Binding::epoch`]'s — an admission does not survive the
+/// policy change that would have made it unnecessary — and that is a change to
+/// what decides THIS rule.
+///
+/// The value covers [`describe`]'s tracked files, read the same way, except
+/// that `batten.toml` enters as a parsed projection ([`project`]): comments and
+/// layout dropped, and of the id-keyed rows only this rule's `[[rule]]`, the
+/// `[[verdict]]` rows naming this rule or verdict, and — when the rule has a
+/// module — every `[[pattern]]`, which a module may read by id. Every other
+/// table stays whole. The rule's module, which the surface does not track, and
+/// the engine version are added.
+///
+/// # Errors
+///
+/// As [`compute`], and a `batten.toml` that will not parse as TOML.
+pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -> Result<String> {
+    let config = authority(dir, base_ref)?;
+    let tracked = tracked_paths(&config)?;
+    let mut entries = Vec::new();
+    let mut module = None;
+    for path in &tracked {
+        let contents = read_tracked(dir, path, base_ref)?;
+        if path == crate::config::CONFIG_FILE {
+            let (projected, declared) = project(&contents, rule, verdict)?;
+            module = declared;
+            entries.push((path.clone(), projected));
+        } else {
+            entries.push((path.clone(), contents));
+        }
+    }
+    if let Some(module) = module {
+        let path = canonical_repo_path(&module)?;
+        let contents = read_tracked(dir, &path, base_ref)?;
+        entries.push((path, contents));
+    }
+    entries.push((
+        String::from("engine"),
+        env!("CARGO_PKG_VERSION").as_bytes().to_vec(),
+    ));
+    Ok(surface_fingerprint(&entries).to_hex())
+}
+
+/// [`for_rule`], served from the cache while [`describe_cached`]'s whole-surface
+/// epoch is unchanged: the per-rule value is a function of that surface, the
+/// rule's module and the engine, so an unchanged surface key with an unchanged
+/// module answers the same value. Cold under `--config-from`, as there.
+///
+/// # Errors
+///
+/// As [`for_rule`].
+pub fn for_rule_cached(
+    dir: &Path,
+    base_ref: Option<&str>,
+    rule: &str,
+    verdict: &str,
+) -> Result<String> {
+    if base_ref.is_some() {
+        return for_rule(dir, base_ref, rule, verdict);
+    }
+    let (surface, _) = describe_cached(dir, None)?;
+    let entry = state_dir(dir)
+        .as_deref()
+        .and_then(crate::cache::root_under)
+        .map(|root| {
+            let key = surface_fingerprint(&[
+                (String::from("surface"), surface.into_bytes()),
+                (String::from("rule"), rule.as_bytes().to_vec()),
+                (String::from("verdict"), verdict.as_bytes().to_vec()),
+                (
+                    String::from("engine"),
+                    env!("CARGO_PKG_VERSION").as_bytes().to_vec(),
+                ),
+            ])
+            .to_hex();
+            root.join("epoch-rule").join(key)
+        });
+    // THE MODULE IS NOT ON THE SURFACE, so a hit is only as good as the module
+    // being unchanged. The surface in the key fixes which module the rule
+    // names, so the entry stores that path and the module's digest, and a hit
+    // re-reads the module alone — never the config it was projected from.
+    if let Some(entry) = entry.as_deref()
+        && let Ok(stored) = crate::fsio::read_to_string(entry)
+        && let Some((value, rest)) = stored.split_once('\n')
+        && let Some((module, digest)) = rest.split_once('\n')
+        && module_digest(dir, (!module.is_empty()).then_some(module)) == digest
+    {
+        return Ok(value.to_owned());
+    }
+    let value = for_rule(dir, None, rule, verdict)?;
+    let module = crate::fsio::read(dir.join(crate::config::CONFIG_FILE))
+        .ok()
+        .and_then(|text| project(&text, rule, verdict).ok())
+        .and_then(|(_, module)| module);
+    if let Some(entry) = entry.as_deref()
+        && let Some(parent) = entry.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+    {
+        let text = format!(
+            "{value}\n{}\n{}",
+            module.as_deref().unwrap_or_default(),
+            module_digest(dir, module.as_deref())
+        );
+        let _ = crate::durable::replace(entry, text);
+    }
+    Ok(value)
+}
+
+/// The digest of the module at `module` in the working tree, or of nothing for
+/// a rule with none; an unreadable module digests as absent, which no stored
+/// digest of a present one equals.
+fn module_digest(dir: &Path, module: Option<&str>) -> String {
+    let bytes = module
+        .and_then(|module| crate::fsio::read(dir.join(module)).ok())
+        .unwrap_or_default();
+    surface_fingerprint(&[(String::from("module"), bytes)]).to_hex()
+}
+
+/// `batten.toml` reduced to what decides `rule`/`verdict`, and the rule's
+/// module path if it declares one. See [`for_rule`].
+fn project(contents: &[u8], rule: &str, verdict: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let text = std::str::from_utf8(contents)
+        .map_err(|err| UsageError::raise(format!("batten.toml is not UTF-8: {err}")))?;
+    let mut value: toml::Table = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("batten.toml will not parse: {err}")))?;
+    let id_is = |row: &toml::Value, ids: &[&str]| {
+        row.get("id")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|id| ids.contains(&id))
+    };
+    let mut module = None;
+    if let Some(toml::Value::Array(rows)) = value.get_mut("rule") {
+        rows.retain(|row| id_is(row, &[rule]));
+        // A `bundle` names a DIRECTORY of modules, which this projection does
+        // not enumerate: the whole config stays in, as before CLOUD-2779,
+        // rather than a narrower surface that could miss what decides it.
+        if rows.iter().any(|row| row.get("bundle").is_some()) {
+            return Ok((contents.to_vec(), None));
+        }
+        module = rows
+            .iter()
+            .find_map(|row| row.get("module").and_then(toml::Value::as_str))
+            .map(str::to_owned);
+    }
+    if let Some(toml::Value::Array(rows)) = value.get_mut("verdict") {
+        rows.retain(|row| id_is(row, &[rule, verdict]));
+    }
+    if module.is_none() {
+        value.remove("pattern");
+    }
+    let projected = serde_json::to_vec(&value)
+        .map_err(|err| UsageError::raise(format!("batten.toml will not project: {err}")))?;
+    Ok((projected, module))
+}
+
 /// One tracked file's bytes, from the working tree or from the base ref.
 ///
 /// A failure names the path: a refusal the reader cannot act on is barely
