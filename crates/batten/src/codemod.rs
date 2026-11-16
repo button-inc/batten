@@ -32,6 +32,7 @@
 
 use std::fmt;
 
+use ra_ap_syntax::ast::HasModuleItem as _;
 use ra_ap_syntax::syntax_editor::{SyntaxEdit, SyntaxEditor};
 use ra_ap_syntax::{AstNode as _, SourceFile, ast};
 
@@ -224,6 +225,199 @@ pub fn redirect_calls(
     let mut edited = source.to_owned();
     for range in ranges {
         edited.replace_range(range, to);
+    }
+    Ok(edited)
+}
+
+/// Put `item` (a whole `use …;` line) in scope at the top of the file, once.
+///
+/// A rename to a trait method needs the trait imported wherever the rename
+/// landed. Only TOP-LEVEL `use` items count: one inside an inline module, a
+/// comment or a string puts nothing in scope for the file, and is neither a
+/// match nor an insertion point. The line goes immediately before the first
+/// top-level `use`, or, in a file with none, before its first item, so inner
+/// attributes and `//!` docs stay first. A file already importing `item`,
+/// compared with whitespace removed, is returned unchanged.
+///
+/// # Errors
+///
+/// [`CouldNotLook`] when the parser reports any error over `source` under
+/// `edition`. The source is then not rewritten at all.
+pub fn ensure_use(source: &str, edition: Edition, item: &str) -> Result<String, CouldNotLook> {
+    let parse = SourceFile::parse(source, edition.parser());
+    let errors = parse.errors();
+    if !errors.is_empty() {
+        return Err(CouldNotLook {
+            errors: errors.len(),
+        });
+    }
+    let file = parse.tree();
+    let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+    let wanted = squeezed(item);
+    let items: Vec<ast::Item> = file.items().collect();
+    if items.iter().any(|top| {
+        matches!(top, ast::Item::Use(_)) && squeezed(&top.syntax().text().to_string()) == wanted
+    }) {
+        return Ok(source.to_owned());
+    }
+    let anchor = items
+        .iter()
+        .find(|top| matches!(top, ast::Item::Use(_)))
+        .or_else(|| items.first());
+    let at = anchor.map_or(source.len(), |top| {
+        usize::from(top.syntax().text_range().start())
+    });
+    let mut edited = source.to_owned();
+    edited.insert_str(at, &format!("{item}\n"));
+    Ok(edited)
+}
+
+/// Put `item` (a whole `use …;` line) in scope in EVERY module that calls
+/// `method`, once each: the innermost inline module around each call, or the
+/// file itself.
+///
+/// A file-level import is wrong both ways for a call inside an inline module.
+/// Where the module has its own imports and no `use super::*`, the file's import
+/// does not reach it; where the only calls sit in `#[cfg(test)] mod tests`, the
+/// file's import is unused in the library build and `-D warnings` refuses it.
+/// Measured on #1276: one of each in 198 rewritten files. So the import goes
+/// where the call is. In each such module the line lands before its first
+/// `use`, or before its first item, at that item's indentation; a module already
+/// importing `item` (whitespace removed) is left alone.
+///
+/// # Errors
+///
+/// [`CouldNotLook`] when the parser reports any error over `source` under
+/// `edition`. The source is then not rewritten at all.
+pub fn import_for_calls(
+    source: &str,
+    edition: Edition,
+    item: &str,
+    method: &str,
+) -> Result<String, CouldNotLook> {
+    let parse = SourceFile::parse(source, edition.parser());
+    let errors = parse.errors();
+    if !errors.is_empty() {
+        return Err(CouldNotLook {
+            errors: errors.len(),
+        });
+    }
+    let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+    let wanted = squeezed(item);
+    let root = parse.syntax_node();
+    // Each scope a call sits in, once: an inline module's item list, or the file.
+    let mut scopes: Vec<Vec<ast::Item>> = Vec::new();
+    let mut seen: Vec<usize> = Vec::new();
+    for call in root
+        .descendants()
+        .filter_map(ast::MethodCallExpr::cast)
+        .filter(|call| call.name_ref().is_some_and(|name| name.text() == method))
+    {
+        let module = call
+            .syntax()
+            .ancestors()
+            .filter_map(ast::Module::cast)
+            .find_map(|module| module.item_list());
+        let (key, items): (usize, Vec<ast::Item>) = match module {
+            Some(list) => (
+                usize::from(list.syntax().text_range().start()) + 1,
+                list.items().collect(),
+            ),
+            None => (0, parse.tree().items().collect()),
+        };
+        if !seen.contains(&key) {
+            seen.push(key);
+            scopes.push(items);
+        }
+    }
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    for items in scopes {
+        if items.iter().any(|held| {
+            matches!(held, ast::Item::Use(_))
+                && squeezed(&held.syntax().text().to_string()) == wanted
+        }) {
+            continue;
+        }
+        let Some(anchor) = items
+            .iter()
+            .find(|held| matches!(held, ast::Item::Use(_)))
+            .or_else(|| items.first())
+        else {
+            continue;
+        };
+        let at = usize::from(anchor.syntax().text_range().start());
+        let line_start = source[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        let indent: String = source[line_start..at]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect();
+        inserts.push((at, format!("{item}\n{indent}")));
+    }
+    inserts.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    let mut edited = source.to_owned();
+    for (at, text) in inserts {
+        edited.insert_str(at, &text);
+    }
+    Ok(edited)
+}
+
+/// Rewrite each call of `method` by what its receiver chain already called:
+/// `rewrite` is handed the chain's method names, nearest the call last, and
+/// answers the replacement for the call's own name and arguments, or `None`
+/// to leave it. `cmd.arg(x).stdout(p).output()` hands `["arg", "stdout"]`.
+///
+/// For a migration whose target depends on how the value was BUILT, which a
+/// rename cannot see: on #1276 `output`'s defaults applied only to the streams
+/// a chain had not set, and the chain is where that is written down. A chain
+/// broken by a `let` is not followed; the compiler, or a reading of the
+/// remainder, owns those.
+///
+/// # Errors
+///
+/// [`CouldNotLook`] when the parser reports any error over `source` under
+/// `edition`. The source is then not rewritten at all.
+pub fn rewrite_calls_by_chain(
+    source: &str,
+    edition: Edition,
+    method: &str,
+    rewrite: &dyn Fn(&[String]) -> Option<String>,
+) -> Result<String, CouldNotLook> {
+    let parse = SourceFile::parse(source, edition.parser());
+    let errors = parse.errors();
+    if !errors.is_empty() {
+        return Err(CouldNotLook {
+            errors: errors.len(),
+        });
+    }
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for call in parse
+        .syntax_node()
+        .descendants()
+        .filter_map(ast::MethodCallExpr::cast)
+    {
+        let Some(name) = call.name_ref().filter(|name| name.text() == method) else {
+            continue;
+        };
+        let mut chain = Vec::new();
+        let mut receiver = call.receiver();
+        while let Some(ast::Expr::MethodCallExpr(inner)) = receiver {
+            if let Some(called) = inner.name_ref() {
+                chain.push(called.text().to_string());
+            }
+            receiver = inner.receiver();
+        }
+        chain.reverse();
+        let Some(replacement) = rewrite(&chain) else {
+            continue;
+        };
+        let start = usize::from(name.syntax().text_range().start());
+        let end = usize::from(call.syntax().text_range().end());
+        edits.push((start..end, replacement));
+    }
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut edited = source.to_owned();
+    for (range, replacement) in edits {
+        edited.replace_range(range, &replacement);
     }
     Ok(edited)
 }
