@@ -124,7 +124,7 @@ fn a_module_decides_live_as_its_own_cases_say() {
     let tested = common::batten()
         .current_dir(&dir)
         .args(["policy", "test"])
-        .output()
+        .streamed_output()
         .expect("run policy test");
     assert!(
         String::from_utf8_lossy(&tested.stdout).contains("2 passed, 0 failed"),
@@ -164,7 +164,7 @@ fn a_module_outside_the_batten_namespace_is_refused_where_it_is_tested() {
     let tested = common::batten()
         .current_dir(&dir)
         .args(["policy", "test"])
-        .output()
+        .streamed_output()
         .expect("run policy test");
     let said = format!(
         "{}{}",

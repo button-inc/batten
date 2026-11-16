@@ -16,6 +16,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -54,7 +55,7 @@ fn commit_authored_by(dir: &Path, name: &str, email: &str, message: &str) -> Str
     let output = git_command(dir, &["commit", "-q", "--allow-empty", "-m", message])
         .env("GIT_AUTHOR_NAME", name)
         .env("GIT_AUTHOR_EMAIL", email)
-        .output()
+        .streamed_output()
         .expect("run git");
     assert!(output.status.success(), "{}", stderr(&output));
     git_in(dir, &["rev-parse", "HEAD"])
@@ -70,7 +71,7 @@ fn check_range(dir: &Path, base: &str, head: &str) -> Output {
     batten()
         .args(["attribution", "check", &format!("{base}..{head}")])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -137,7 +138,7 @@ fn a_denied_committer_is_refused_too() {
     )
     .env("GIT_COMMITTER_NAME", "Vendorbot")
     .env("GIT_COMMITTER_EMAIL", "bot@no-reply.example")
-    .output()
+    .streamed_output()
     .expect("run git");
     assert!(output.status.success(), "{}", stderr(&output));
     let head = git_in(&dir, &["rev-parse", "HEAD"]);
@@ -277,7 +278,7 @@ fn a_malformed_range_is_one() {
     let out = batten()
         .args(["attribution", "check", "not-a-range"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -290,7 +291,7 @@ fn neither_mode_is_one_rather_than_a_vacuous_pass() {
     let out = batten()
         .args(["attribution", "check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -302,7 +303,7 @@ fn both_modes_at_once_is_one() {
     let out = batten()
         .args(["attribution", "check", "HEAD..HEAD", "--message", "msg"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -357,7 +358,7 @@ fn message_mode_refuses_a_pending_message_before_the_commit_exists() {
     let out = batten()
         .args(["attribution", "check", "--message", "msg"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
@@ -375,7 +376,7 @@ fn message_mode_refuses_the_identity_git_is_about_to_stamp() {
         .current_dir(&dir)
         .env("GIT_AUTHOR_NAME", "Vendorbot")
         .env("GIT_AUTHOR_EMAIL", "bot@no-reply.example")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stdout(&out), "commit own refused pending author\n");
@@ -388,7 +389,7 @@ fn message_mode_passes_a_clean_pending_message() {
     let out = batten()
         .args(["attribution", "check", "--message", "msg"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(stdout(&out), "");
@@ -400,7 +401,7 @@ fn an_unreadable_message_file_is_one() {
     let out = batten()
         .args(["attribution", "check", "--message", "does-not-exist"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -423,7 +424,7 @@ fn json_is_emitted_for_a_clean_run_too() {
     let out = batten()
         .args(["attribution", "check", "--json", &format!("{base}..{head}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(0));
     let document: serde_json::Value =
@@ -446,7 +447,7 @@ fn json_carries_the_pointer_and_no_payload() {
     let out = batten()
         .args(["attribution", "check", "--json", &format!("{base}..{head}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
     let rendered = stdout(&out);
@@ -501,7 +502,7 @@ fn identity_with(dir: &Path, forge: &[(&str, u16, &str)], extra: &[(&str, &str)]
     for (var, value) in extra {
         command.env(var, value);
     }
-    command.output().expect("run batten")
+    command.streamed_output().expect("run batten")
 }
 
 /// The fixer with a forge that declines (401) and no owner.
@@ -515,7 +516,7 @@ fn identity(dir: &Path) -> Output {
 /// which is a legitimate answer here rather than a fixture failure.
 fn local(dir: &Path, key: &str) -> String {
     let output = git_command(dir, &["config", "--local", "--get", key])
-        .output()
+        .streamed_output()
         .expect("run git");
     String::from_utf8(output.stdout)
         .expect("git stdout is UTF-8")

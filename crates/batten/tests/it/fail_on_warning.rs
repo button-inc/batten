@@ -66,7 +66,7 @@ fn run(dir: &Path, args: &[&str], env: Option<&str>) -> Output {
         Some(value) => command.env("BATTEN_FAIL_ON_WARNING", value),
         None => command.env_remove("BATTEN_FAIL_ON_WARNING"),
     };
-    command.output().expect("run batten")
+    command.streamed_output().expect("run batten")
 }
 
 #[test]

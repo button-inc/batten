@@ -37,6 +37,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::fs;
 use std::io::Write as _;
@@ -149,7 +150,7 @@ fn hook(dir: &Path, payload: &str) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 fn stdout_of(output: &Output) -> String {

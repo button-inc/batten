@@ -41,6 +41,7 @@
 //! materialization and doc build as the only thing anyone exercises. [`Route`] is what the
 //! caller reports, so a green never hides which baseline produced it.
 
+use crate::stream::Streamed as _;
 use std::path::{Path, PathBuf};
 
 use crate::exit::ExitCode;
@@ -245,7 +246,11 @@ pub fn against_rev(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     })
     .ok()?;
     Some(Compared {
@@ -298,7 +303,11 @@ pub fn against_rustdoc(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     })
     .ok()?;
     Some(Compared {
@@ -342,7 +351,11 @@ pub fn toolchain(root: &Path) -> Option<String> {
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     })
     .ok()?;
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -493,7 +506,11 @@ pub fn baseline_rustdoc(
             .current_dir(&worktree)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     })
     .map_err(|err| format!("the baseline doc build could not be run: {err}"))?;
     if !built.status.success() {
@@ -590,7 +607,11 @@ pub fn current_rustdoc(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     })
     .map_err(|err| format!("the current doc build could not be run: {err}"))?;
     if !built.status.success() {

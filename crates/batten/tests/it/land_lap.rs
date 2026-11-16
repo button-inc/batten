@@ -648,7 +648,7 @@ fn a_lap_refuses_to_run_from_the_trunk() {
         .arg("lap")
         .arg("main")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     let said = String::from_utf8_lossy(&output.stderr);
 

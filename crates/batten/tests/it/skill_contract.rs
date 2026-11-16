@@ -96,7 +96,7 @@ const VENDORED: &str = ".claude/skills";
 fn declared_commands() -> (BTreeSet<String>, BTreeSet<String>) {
     let output = batten()
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .expect("run batten spec --format json");
     assert_eq!(
         output.status.code(),
@@ -133,7 +133,10 @@ fn collect_commands(
 
 /// The exit table as the binary renders it: `  <code>  <meaning>`.
 fn exit_table() -> Vec<(String, String)> {
-    let output = batten().arg("--help").output().expect("run batten --help");
+    let output = batten()
+        .arg("--help")
+        .streamed_output()
+        .expect("run batten --help");
     assert_eq!(
         output.status.code(),
         Some(0),

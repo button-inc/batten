@@ -242,7 +242,7 @@ fn lane_run(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
         .args(args)
         .current_dir(repo)
         .env("BATTEN_REST_FIXTURE", forge)
-        .output()
+        .streamed_output()
         .expect("run batten");
     (output.status.code(), stdout(&output), stderr(&output))
 }
@@ -655,7 +655,7 @@ fn a_repository_declaring_no_lane_says_so_rather_than_filing_against_defaults() 
     let output = batten()
         .args(["pr", "derive", "7"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         output.status.code(),

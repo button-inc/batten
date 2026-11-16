@@ -50,6 +50,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -332,7 +333,7 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
     // passing over nothing, on every shallow clone (CLOUD-2059).
     let root = root();
     let parent = common::git_command(&root, &["rev-parse", "HEAD~1"])
-        .output()
+        .streamed_output()
         .expect("run git");
     let parents = common::git_in(&root, &["cat-file", "-p", "HEAD"])
         .lines()

@@ -41,7 +41,7 @@ fn the_verb_reports_this_repositorys_gates_as_pointers() {
     let output = batten()
         .args(["show", "agent", "-J"])
         .current_dir(fixture.path())
-        .output()
+        .streamed_output()
         .expect("run show agent");
     assert!(output.status.success(), "show agent exits 0");
     let document: serde_json::Value =
@@ -75,7 +75,7 @@ fn an_unconfigured_repository_answers_rather_than_failing() {
     let output = batten()
         .args(["show", "agent", "-J"])
         .current_dir(fixture.path())
-        .output()
+        .streamed_output()
         .expect("run show agent");
     assert!(
         output.status.success(),
@@ -115,7 +115,7 @@ fn the_document_is_byte_stable_across_two_runs() {
         batten()
             .args(["show", "agent", "-J"])
             .current_dir(fixture.path())
-            .output()
+            .streamed_output()
             .expect("run show agent")
             .stdout
     };
@@ -164,7 +164,7 @@ fn the_verb_writes_no_file_and_leaves_the_tree_alone() {
     let output = batten()
         .args(["show", "agent"])
         .current_dir(fixture.path())
-        .output()
+        .streamed_output()
         .expect("run show agent");
     assert!(output.status.success());
     assert_eq!(
@@ -183,7 +183,7 @@ fn the_leaf_is_on_the_derived_read_only_allowlist() {
     let output = batten()
         .args(["spec", "--format", "json"])
         .current_dir(fixture.path())
-        .output()
+        .streamed_output()
         .expect("run spec");
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("one JSON document");
@@ -238,7 +238,7 @@ fn a_config_that_will_not_load_is_an_error_and_never_a_zero_gate_document() {
     let output = batten()
         .args(["show", "agent", "-J"])
         .current_dir(fixture.path())
-        .output()
+        .streamed_output()
         .expect("run show agent");
 
     assert!(

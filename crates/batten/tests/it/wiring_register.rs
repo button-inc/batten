@@ -43,7 +43,7 @@ fn register(home: &Path, repo: &Path, environment: &str, args: &[&str]) -> Outpu
         .at_home(home)
         .env("BATTEN_ENVIRONMENT", environment)
         .env_remove("CLAUDE_PID")
-        .output()
+        .streamed_output()
         .expect("the binary runs")
 }
 
@@ -122,7 +122,7 @@ fn register_all(home: &Path, repo: &Path, args: &[&str]) -> Output {
         .at_home(home)
         .env_remove("BATTEN_ENVIRONMENT")
         .env_remove("CLAUDE_PID")
-        .output()
+        .streamed_output()
         .expect("the binary runs")
 }
 
@@ -136,7 +136,7 @@ fn doctor_hooks(home: &Path, repo: &Path, pid: Option<u32>) -> Output {
     if let Some(pid) = pid {
         command.env("CLAUDE_PID", pid.to_string());
     }
-    command.output().expect("the binary runs")
+    command.streamed_output().expect("the binary runs")
 }
 
 /// The events map a wiring document carries, wherever its host keys it.
@@ -174,7 +174,7 @@ fn register_all_writes_every_committed_surface() {
         let generated = common::batten()
             .current_dir(&repo)
             .args(["generate", "hooks", "--harness", token])
-            .output()
+            .streamed_output()
             .expect("the binary runs");
         let generated: serde_json::Value =
             serde_json::from_slice(&generated.stdout).expect("generate hooks parses");
@@ -247,7 +247,7 @@ fn doctor_reads_the_live_session_root() {
         .at_home(&home)
         .env("BATTEN_ENVIRONMENT", "disposable")
         .env("CLAUDE_PID", pid.to_string())
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
 
@@ -255,7 +255,7 @@ fn doctor_reads_the_live_session_root() {
     let derived = common::batten()
         .current_dir(&repo)
         .args(["generate", "hooks", "--harness", "claude-code"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     let derived: serde_json::Value =
         serde_json::from_slice(&derived.stdout).expect("generate hooks parses");

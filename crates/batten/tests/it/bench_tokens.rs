@@ -88,7 +88,9 @@ fn check(root: &Path) -> Output {
     command
         .current_dir(root)
         .args(["bench", "tokens", "--check"]);
-    command.output().expect("run batten bench tokens --check")
+    command
+        .streamed_output()
+        .expect("run batten bench tokens --check")
 }
 
 /// THE REPRODUCTION, and it is the case that proves the port carries the

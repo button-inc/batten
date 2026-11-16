@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -866,7 +867,7 @@ fn the_smell_ids_are_the_same_names_the_check_delta_uses() {
     let checked = batten()
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let checked = String::from_utf8_lossy(&checked.stdout);
     assert!(
@@ -1114,7 +1115,10 @@ fn an_unknown_base_ref_is_a_usage_error() {
 fn config_lint_is_declared_read_in_the_spec() {
     // §5: the derived agent allowlist is `filter(effect == read)`, so a lint that
     // only inspects must say so or it is needlessly excluded.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let config = spec["subcommands"]
         .as_array()
@@ -1140,7 +1144,7 @@ fn this_repositorys_own_config_is_clean() {
         .args(["config", "lint"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config lint");
     assert_eq!(
         output.status.code(),
@@ -1196,7 +1200,7 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let check_out = String::from_utf8_lossy(&check.stdout).into_owned();
 
@@ -1769,7 +1773,7 @@ fn the_drift_report_is_byte_stable_and_reads_stdin() {
             payload.as_bytes(),
         )
         .expect("write payload");
-        child.wait_with_output().expect("run batten")
+        child.streamed_wait().expect("run batten")
     };
 
     let first = piped(&["-J"]);

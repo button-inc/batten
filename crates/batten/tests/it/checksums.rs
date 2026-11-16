@@ -99,7 +99,7 @@ fn run_sums(dir: &Path, forge: &Path, extra: &[&str]) -> Output {
         .env("GH_REPO", REPO)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

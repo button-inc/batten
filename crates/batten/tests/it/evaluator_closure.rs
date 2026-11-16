@@ -52,6 +52,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
@@ -474,7 +475,7 @@ fn the_repos_real_graph_is_clean_today() {
     let metadata = std::process::Command::new("cargo")
         .args(["metadata", "--locked", "--format-version", "1"])
         .current_dir("../..")
-        .output()
+        .streamed_output()
         .expect("cargo metadata runs");
     assert!(metadata.status.success(), "the lockfile is current");
 

@@ -507,7 +507,7 @@ fn record(dir: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -521,7 +521,7 @@ fn status(dir: &Path, args: &[&str]) -> (i32, String) {
         .args(["receipt", "status"])
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt status");
     (
         output.status.code().expect("exit code"),

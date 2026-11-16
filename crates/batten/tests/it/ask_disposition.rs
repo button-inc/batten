@@ -242,7 +242,7 @@ fn ask_on_a_tree_rule_is_a_usage_error() {
     let out = common::batten()
         .args(["check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         out.status.code(),
@@ -267,7 +267,7 @@ fn ask_without_a_reason_is_a_usage_error() {
     let out = common::batten()
         .args(["check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1), "exit 1, at load");
     let cause = stderr(&out);

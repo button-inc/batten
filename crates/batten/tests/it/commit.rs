@@ -53,7 +53,7 @@ fn check_range(dir: &Path, base: &str, head: &str) -> Output {
     batten()
         .args(["commit", "check", &format!("{base}..{head}")])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -62,7 +62,7 @@ fn check_message(dir: &Path, body: &str) -> Output {
     batten()
         .args(["commit", "check", "--message", "msg"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -255,7 +255,7 @@ fn a_malformed_range_is_one() {
     let out = batten()
         .args(["commit", "check", "not-a-range"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -268,7 +268,7 @@ fn neither_mode_is_one_rather_than_a_vacuous_pass() {
     let out = batten()
         .args(["commit", "check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -280,7 +280,7 @@ fn both_modes_at_once_is_one() {
     let out = batten()
         .args(["commit", "check", "HEAD..HEAD", "--message", "msg"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -291,7 +291,7 @@ fn an_unreadable_message_file_is_one() {
     let out = batten()
         .args(["commit", "check", "--message", "does-not-exist"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -345,7 +345,7 @@ fn json_is_emitted_for_a_clean_run_too() {
     let out = batten()
         .args(["commit", "check", "--json", &format!("{base}..{last}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(stdout(&out).trim(), "[]");
@@ -359,7 +359,7 @@ fn json_carries_the_pointer_and_no_payload() {
     let out = batten()
         .args(["commit", "check", "--json", &format!("{base}..{last}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
     let rendered = stdout(&out);

@@ -44,6 +44,8 @@
 // ported: "git-hook.bats::the gate's exit status is the hook's" crates/batten/tests/it/git_hook.rs subject:.claude/hooks/git-hook.sh
 
 use crate::common;
+use batten::stream::Streamed as _;
+use batten::stream::StreamedChild as _;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -120,7 +122,7 @@ impl Fixture {
         for (name, value) in env {
             command.env(name, value);
         }
-        command.output().expect("the hook runs")
+        command.streamed_output().expect("the hook runs")
     }
 
     /// Every call the stub recorded, one per line; empty when it was never run.
@@ -366,7 +368,7 @@ impl Dispatch {
             .unwrap()
             .write_all(stdin.as_bytes())
             .unwrap();
-        child.wait_with_output().expect("the link exits")
+        child.streamed_wait().expect("the link exits")
     }
 
     fn recorded(&self) -> String {
@@ -456,7 +458,7 @@ fn an_unknown_hook_git_key_refuses_the_config() {
     let output = common::batten()
         .current_dir(&fixture.dir)
         .arg("check")
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(output.status.code(), Some(1));
     assert!(

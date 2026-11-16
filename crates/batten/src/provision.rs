@@ -2194,7 +2194,7 @@ fn place(
         Kind::File { executable } => {
             // stream: an archive entry, committed by the staged tree's rename
             let mut out = fs::File::create(&target).context("write an archive file")?; // stream: tree rename
-            std::io::copy(reader, &mut out).context("write an archive file")?;
+            crate::stream::pump(reader, &mut [&mut out]).context("write an archive file")?;
             set_mode(&target, executable || rel.as_path() == bin)?;
         }
         Kind::Symlink(link) => {

@@ -216,7 +216,7 @@ fn fixture(name: &str, config: &str) -> PathBuf {
 fn check(dir: &Path) -> std::process::Output {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 #[test]

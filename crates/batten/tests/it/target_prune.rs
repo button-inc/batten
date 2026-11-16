@@ -197,7 +197,7 @@ fn prune(dir: &Path, free: &str, args: &[&str]) -> std::process::Output {
         .args(args)
         .env("TARGET_PRUNE_FREE_MB", free)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -320,7 +320,7 @@ fn the_followed_build_is_never_collected() {
         .env("TARGET_PRUNE_FREE_MB", FREE)
         .env("CARGO_TARGET_DIR", "redirected")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
 
     assert!(
@@ -1008,7 +1008,7 @@ fn target_is_a_noun_that_performs_no_default_action() {
     let output = batten()
         .arg("target")
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(
         !output.status.success(),

@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,7 +50,7 @@ fn exec(name: &str, args: &[&str]) -> (Output, PathBuf) {
     let output = common::batten()
         .args(args)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     (output, home)
 }
@@ -380,7 +381,7 @@ fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
                     data.display()
                 ),
             ])
-            .output()
+            .streamed_output()
             .expect("read the spool");
         let seen = String::from_utf8_lossy(&out.stdout).into_owned();
         if !seen.is_empty() || Instant::now() >= deadline {
@@ -609,7 +610,7 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
                 data.display()
             ),
         ])
-        .output()
+        .streamed_output()
         .expect("take the lock a dead writer held");
     assert!(
         taken.status.success(),

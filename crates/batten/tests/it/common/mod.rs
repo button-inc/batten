@@ -35,6 +35,8 @@
 // remainder is not dead code, it is another target's.
 #![allow(dead_code)]
 
+use batten::stream::Streamed as _;
+use batten::stream::StreamedChild as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[expect(
@@ -827,10 +829,24 @@ impl Batten {
         self
     }
 
-    /// [`std::process::Command::output`], refused first where it would fall through.
-    pub(crate) fn output(&mut self) -> std::io::Result<Output> {
+    /// [`batten::stream::Streamed::streamed_output`], refused first where it would
+    /// fall through: every stream of the binary under test through the one pump.
+    pub(crate) fn streamed_output(&mut self) -> std::io::Result<Output> {
+        use batten::stream::Streamed as _;
         self.refuse_fall_through();
-        self.0.output()
+        self.0.streamed_output()
+    }
+
+    /// [`batten::stream::Streamed::streamed_output_keeping`], refused first where
+    /// it would fall through: the streams this door's own `stdin`/`stdout`/
+    /// `stderr` set are kept, as `output` kept them.
+    pub(crate) fn streamed_output_keeping(
+        &mut self,
+        keep: batten::stream::Keep,
+    ) -> std::io::Result<Output> {
+        use batten::stream::Streamed as _;
+        self.refuse_fall_through();
+        self.0.streamed_output_keeping(keep)
     }
 
     /// [`std::process::Command::spawn`], refused first where it would fall through.
@@ -1251,7 +1267,7 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
         .take()
         .expect("piped stdin")
         .write_all(stdin.as_bytes());
-    child.wait_with_output().expect("run the producer")
+    child.streamed_wait().expect("run the producer")
 }
 
 /// Whether the committed authority declares the OWNER'S protected-path set.
@@ -1318,7 +1334,7 @@ pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
     let output = std::process::Command::new("mise")
         .args(["which", bin])
         .current_dir(at_root("."))
-        .output()
+        .streamed_output()
         .expect("run `mise which`");
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     assert!(
@@ -1533,7 +1549,7 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
     batten()
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -1810,7 +1826,7 @@ pub(crate) fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input:
         );
     }
     drop(stdin);
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 /// `output.stdout` as a `String`.
@@ -1997,7 +2013,7 @@ pub(crate) fn write(dir: &Path, path: &str, contents: &str) {
 /// `core.hooksPath` cannot break a fixture, and identity comes through `-c` so
 /// the fixture's own `.git/config` stays as bare as a fresh clone's.
 pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
-    let output = git_command(dir, args).output().expect("run git");
+    let output = git_command(dir, args).streamed_output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?} failed in {}: {}",
@@ -2986,8 +3002,20 @@ pub(crate) fn annotation_reason(attribute: &str) -> Option<String> {
 #[must_use]
 pub(crate) fn rust_sources() -> Vec<PathBuf> {
     let mut found = Vec::new();
-    for dir in ["crates/batten/src", "crates/batten/tests"] {
-        collect_rust(&at_root(dir), &mut found);
+    // EVERY CRATE'S SOURCES (#1276), not `batten`'s alone: a leaf split out
+    // of it (`batten-fsio`, `batten-stream`) carries the same code and must
+    // stay under the same census, or the split is a way out of every gate.
+    let crates = at_root("crates");
+    let mut members: Vec<PathBuf> = fs::read_dir(&crates)
+        .expect("the workspace's crates directory")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .collect();
+    members.sort();
+    for member in members {
+        for dir in ["src", "tests"] {
+            collect_rust(&member.join(dir), &mut found);
+        }
     }
     found.sort();
     assert!(
@@ -3113,7 +3141,7 @@ pub(crate) fn mint_ca_and_server_certificate(tls: &Path) {
         let run = Command::new("openssl")
             .args(args)
             .current_dir(tls)
-            .output()
+            .streamed_output()
             .expect("openssl is required for the TLS fixture");
         assert!(
             run.status.success(),

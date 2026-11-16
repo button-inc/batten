@@ -38,6 +38,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -252,7 +253,7 @@ fn superseded(name: &str) -> PathBuf {
     let recorded = batten()
         .current_dir(&dir)
         .args(["receipt", "record", "verify"])
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         recorded.status.success(),
@@ -322,7 +323,7 @@ fn a_superseded_receipt_is_refused_by_the_vendored_registry() {
             .write_all(write_payload("src/tracked.rs").as_bytes())
             .expect("write the payload");
     }
-    let output = child.wait_with_output().expect("collect the verdict");
+    let output = child.streamed_wait().expect("collect the verdict");
     assert_eq!(
         output.status.code(),
         Some(2),

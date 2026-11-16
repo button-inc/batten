@@ -60,7 +60,7 @@ impl Env {
             .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
-            .output()
+            .streamed_output()
             .expect("run batten")
     }
 

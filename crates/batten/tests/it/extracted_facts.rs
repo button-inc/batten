@@ -24,6 +24,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -255,7 +256,7 @@ fn adjudicate(dir: &Path, home: &Path, envelope: &serde_json::Value) -> std::pro
         sink.write_all(envelope.as_bytes())
             .expect("write the envelope");
     }
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Both channels of one run, as one pair.

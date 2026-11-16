@@ -20,6 +20,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -294,7 +295,7 @@ fn granted_under_the_preset_alone(name: &str, mode: &str, command: &str) -> bool
             .write_all(shell(mode, command).as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let outcome = child.streamed_wait().expect("run batten adjudicate");
     stdout(&outcome).contains(r#""permissionDecision":"allow""#)
 }
 
@@ -368,7 +369,7 @@ fn granted_at(dir: &Path, cwd: &Path, command: &str) -> bool {
             .write_all(payload.as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let outcome = child.streamed_wait().expect("run batten adjudicate");
     stdout(&outcome).contains(r#""permissionDecision":"allow""#)
 }
 

@@ -103,7 +103,7 @@ impl Repo {
             .args(&argv)
             .current_dir(&self.dir)
             .env("PATH", path)
-            .output()
+            .streamed_output()
             .expect("run lint:deno")
             .status
             .code()

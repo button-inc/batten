@@ -81,7 +81,7 @@ fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, S
         .args(args)
         .current_dir(repo)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten");
     (
         output.status.code().expect("exit code"),

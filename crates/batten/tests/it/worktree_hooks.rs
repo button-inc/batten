@@ -8,6 +8,7 @@
 //! itself spawns no git.
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -54,7 +55,7 @@ fn remove(dir: &Path, worktree: &Path) -> std::process::Output {
 /// Whether `reference` resolves in `dir`, asked of fixture-side git.
 fn resolves(dir: &Path, reference: &str) -> bool {
     common::git_command(dir, &["rev-parse", "--verify", "--quiet", reference])
-        .output()
+        .streamed_output()
         .expect("run git")
         .status
         .success()

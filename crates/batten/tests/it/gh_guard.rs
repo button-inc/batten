@@ -74,6 +74,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -398,7 +399,7 @@ fn decision_with_env(command: &str, key: &str, value: &str) -> String {
                     .as_mut()
                     .expect("stdin is piped")
                     .write_all(bash_payload(command).as_bytes())?;
-                child.wait_with_output()
+                child.streamed_wait()
             })
             .expect("the binary runs"),
     )
