@@ -6952,7 +6952,7 @@ mod tests {
         let lost = |entry: &str| {
             Weakening::new(
                 WeakeningKind::PlanObligationRemoved,
-                &format!("plan[{entry}]"),
+                format!("plan[{entry}]"),
                 "present",
                 "absent",
             )
