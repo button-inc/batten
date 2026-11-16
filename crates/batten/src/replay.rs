@@ -390,6 +390,16 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     let admitted = crate::lint::admissions(&smells, &ledger);
     let verdicts: Vec<crate::lint::Admission> = admitted.iter().map(|(_, a)| *a).collect();
     write_rows(&findings, &verdicts, json, out)?;
+    let kept = crate::state::repo_state_dir(root)?
+        .join("replay")
+        .join(BUILD_LOG);
+    if !json && kept.is_file() {
+        writeln!(
+            out,
+            "test replay: a union build failed; its compiler output is at {}",
+            kept.display()
+        )?;
+    }
     let refused = admitted
         .iter()
         .filter(|(_, admission)| admission.is_refused())
@@ -493,10 +503,25 @@ fn replay(
     let wrapped = journal
         .union(splices)
         .map(|key| (state.join("test-run"), key));
+    // A BUILD THAT FAILED KEEPS ITS COMPILER OUTPUT (#1276). The charging loop
+    // reads rustc's locations and dropped the rest, so 375 bodies were charged
+    // as non-compiling with no error anyone could read. Every failed union
+    // build is appended here, and `run` names the file.
+    let kept = state.join(BUILD_LOG);
+    let _ = std::fs::remove_file(&kept);
     resume(&tree, splices, &journal, &|still| {
-        run_union(&tree, still, &published, wrapped.as_ref())
+        let outcome = run_union(&tree, still, &published, wrapped.as_ref());
+        if let Some((code, output)) = outcome.as_ref()
+            && *code == BUILD_FAILED
+        {
+            let _ = crate::durable::append(&kept, output);
+        }
+        outcome
     })
 }
+
+/// Where a run's failed union builds keep their output, under `replay/`.
+const BUILD_LOG: &str = "build-failed.log";
 
 /// The file beside `replay/tree` naming the HEAD tree id it was materialised
 /// from; absent while no whole tree stands there.
