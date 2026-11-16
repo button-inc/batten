@@ -20,6 +20,12 @@ fn fixture(name: &str) -> std::path::PathBuf {
              scope = \"mediated_call\"\n\
              module = \"policy/admit-ask.rego\"\n\
              severity = \"deny\"\n\n\
+             [[pattern]]\n\
+             id = \"admit-asked\"\n\
+             regex = '(?i)\\badmit(s|ted|ting)?\\b'\n\n\
+             [[pattern]]\n\
+             id = \"finding-path\"\n\
+             regex = '[A-Za-z0-9_./-]+\\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?'\n\n\
              [[verdict]]\n\
              id = \"call ask loose\"\n\
              gloss = \"a question asks to admit a finding in words the ledger cannot bind\"\n\
