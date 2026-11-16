@@ -622,7 +622,7 @@ pub(crate) fn batten() -> Batten {
     // fails the fetch at once; a case that wants a release serves its own and
     // sets this after, as the engine suites do.
     command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
-    Batten(command)
+    Batten(command, batten::exec::Keep::NONE)
 }
 
 /// The case's own home, and the toolchain the developer's home holds pinned
@@ -713,7 +713,7 @@ pub(crate) fn homes(command: &Command) -> Vec<(String, PathBuf)> {
     clippy::disallowed_types,
     reason = "stays, and test-only: the door wraps the one spawn of the binary under test"
 )]
-pub(crate) struct Batten(Command);
+pub(crate) struct Batten(Command, batten::exec::Keep);
 
 #[expect(
     clippy::disallowed_types,
@@ -814,18 +814,21 @@ impl Batten {
     /// [`std::process::Command::stdin`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdin<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdin(cfg);
+        self.1.stdin = true;
         self
     }
 
     /// [`std::process::Command::stdout`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdout<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdout(cfg);
+        self.1.stdout = true;
         self
     }
 
     /// [`std::process::Command::stderr`], returning the door so a chain keeps its refusal.
     pub(crate) fn stderr<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stderr(cfg);
+        self.1.stderr = true;
         self
     }
 
@@ -841,8 +844,13 @@ impl Batten {
     /// spells `.output()` derefs to `std`'s `Command::output`, which captures
     /// without the pump and skips the refusal above — measured on #1276, where
     /// the replayed base bodies of `harness_isolation` panicked on drop.
+    ///
+    /// **`std`'s `output` KEEPS A STREAM ITS CALLER SET**, and only captures the
+    /// rest; this door records each one its own setters set, so the old
+    /// spelling keeps them too — a reader that hangs up stays the reader.
     pub(crate) fn output(&mut self) -> std::io::Result<Output> {
-        self.streamed_output()
+        let keep = self.1;
+        self.streamed_output_keeping(keep)
     }
 
     /// [`batten::stream::Streamed::streamed_output_keeping`], refused first where
@@ -1173,7 +1181,7 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> Batten {
     // so a fixture that is no repository of its own falls through to this
     // checkout here exactly as it would there. Returned as a `Batten`, the check
     // reads the final directory — a caller's later `current_dir` included.
-    Batten(command)
+    Batten(command, batten::exec::Keep::NONE)
 }
 
 /// `[tasks.<task>]` ready to run in `dir` under [`batten`]'s scrubbed
