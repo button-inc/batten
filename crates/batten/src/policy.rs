@@ -1036,7 +1036,7 @@ pub fn load(
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
+            let bundle = compile_for(root, &rule.id, &sources, data, (checks, Origin::Shipped))?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1075,7 +1075,7 @@ pub fn load(
         // one engine from N sources, which is the whole of CLOUD-837. The hot
         // path reads it from the bytecode cache when nothing it is a function
         // of has changed (CLOUD-2236).
-        let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
+        let bundle = compile_for(root, &rule.id, &sources, data, (checks, Origin::Tree))?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1198,7 +1198,7 @@ fn compile_for(
     id: &str,
     sources: &[(String, String)],
     (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
-    checks: ModuleChecks,
+    (checks, origin): (ModuleChecks, Origin),
 ) -> Result<Bundle> {
     if checks == ModuleChecks::SkipOnHotPath {
         let (text, digest) = pattern_text.get_or_init(|| {
@@ -1206,7 +1206,7 @@ fn compile_for(
             let digest = *blake3::hash(text.as_bytes()).as_bytes();
             (text, digest)
         });
-        compile_cached(root, id, sources, pattern_data, (text, digest))
+        compile_cached(root, id, sources, pattern_data, (text, digest), origin)
     } else {
         compile(id, sources, pattern_data)
     }
@@ -2080,8 +2080,9 @@ fn compile_cached(
     sources: &[(String, String)],
     data: &serde_json::Value,
     (text, digest): (&str, &[u8; 32]),
+    origin: Origin,
 ) -> Result<Bundle> {
-    let key = cache_key(id, sources, digest);
+    let key = cache_key(id, sources, digest, origin);
     let path = cache_path(root, id);
     if let Some(bundle) = path
         .as_deref()
@@ -2166,15 +2167,40 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
 //MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
-fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
-    let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
+fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32], origin: Origin) -> String {
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(3 + 2 * sources.len());
     fields.push(id.as_bytes());
+    fields.push(origin.tag());
     for (path, source) in sources {
         fields.push(path.as_bytes());
-        fields.push(source.as_bytes());
+        // A SHIPPED module's bytes are the binary's own, which the key already
+        // names by its build ID, so hashing them again on every call keys
+        // nothing the binary does not (2026-11-16). A tree module's are hashed.
+        if origin == Origin::Tree {
+            fields.push(source.as_bytes());
+        }
     }
     fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
+}
+
+/// Where a bundle's module sources came from, which decides what keys them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A preset's modules, compiled into this binary.
+    Shipped,
+    /// Modules read from the tree, or from a ref.
+    Tree,
+}
+
+impl Origin {
+    /// The field that keeps the two kinds of key apart.
+    const fn tag(self) -> &'static [u8] {
+        match self {
+            Self::Shipped => b"shipped",
+            Self::Tree => b"tree",
+        }
+    }
 }
 
 /// The data document as a `regorus::Value`, parsed once per distinct text
@@ -5014,9 +5040,22 @@ rules contains not_quoted\n";
             id,
             sources,
             (data, &text),
-            ModuleChecks::SkipOnHotPath,
+            (ModuleChecks::SkipOnHotPath, Origin::Tree),
         )
         .expect("the fixture loads")
+    }
+
+    /// A shipped module is keyed by its path and the binary, never its bytes,
+    /// which the binary fixes; a tree module's bytes are its key, and the two
+    /// kinds never share one.
+    #[test]
+    fn a_shipped_modules_key_is_its_path_and_a_tree_modules_its_bytes() {
+        let digest = [0_u8; 32];
+        let module = |text: &str| vec![("presets/p/m.rego".to_owned(), text.to_owned())];
+        let key = |text, origin| cache_key("row", &module(text), &digest, origin);
+        assert_eq!(key("a", Origin::Shipped), key("b", Origin::Shipped));
+        assert_ne!(key("a", Origin::Tree), key("b", Origin::Tree));
+        assert_ne!(key("a", Origin::Shipped), key("a", Origin::Tree));
     }
 
     #[test]
