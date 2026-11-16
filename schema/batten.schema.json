@@ -1257,6 +1257,11 @@
           "description": "How many **tracked** repository artifacts the projection names.\n\nThe reading manifest: path-shaped tokens intersected with the tracked set,\nplus resolvable memory references. Tracked is the whole of it — a spawn\nnaming a path this repository does not carry is naming nothing it can be\nmade to read, so it does not count, and a URL or a branch name drops out\nby construction rather than by an allowlist somebody has to tune.\n\n**This unit is the one that acquires.** It needs the tracked set, which is\na property of a checkout and not of the envelope, so it is resolved at the\nboundary and reaches [`crate::hook::adjudicate`] as a fact — never opened\nfrom inside the decision, which stays pure.",
           "type": "string",
           "const": "tracked_artifacts"
+        },
+        {
+          "description": "How many attributes in a Rust file escape the lint [`Rule::pattern`]\nnames: each `#[expect(..)]` or `#[allow(..)]` whose list carries it, read\noff the parsed syntax tree by [`crate::codemod::lint_escapes`] (#1276).\n\n**A RATCHET'S FILE MEASURE, never a call ceiling.** Counted over a glob\nagainst a base, it makes an inventory of escapes (a spawn census) a\nnumber that may only fall: whatever `main` carries is the baseline, so\nno site needs approving, and a branch that adds one has to retire one.",
+          "type": "string",
+          "const": "lint_escapes"
         }
       ]
     },
