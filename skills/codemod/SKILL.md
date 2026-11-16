@@ -27,14 +27,20 @@ the parser rejects is **could-not-look**, never silently skipped.
    and every decoy is kept byte-for-byte. A text replace must fail this test.
 2. **Add the primitive to `codemod.rs` if none fits.** Existing ones:
    `rename_method_calls` (method name), `redirect_calls` (call callee path,
-   including inside macro token trees). Pure: text in, text out.
-3. **Drive it with a throwaway example** (`crates/batten/examples/<name>.rs`)
-   that walks the tree once, applies every rewrite per file, writes only
-   changed files, and prints `files read, rewritten, refused` and nothing else.
-   Output is a count, never the diff.
+   including inside macro token trees), `ensure_use` (a top-level import,
+   once). Pure: text in, text out.
+3. **Write the migration as a RECIPE**, never a throwaway driver: a named entry
+   in `batten_codemods::RECIPES` (`crates/batten-codemods`, never released) (its edition, the files it skips, and an
+   `apply` built only from primitives). Every migration this repository runs
+   is kept: it is the shape of a codemod a consumer runs from a preset, and
+   the tree it already migrated is its regression test.
 4. **Run it backgrounded** through the pinned toolchain (`mise exec -- cargo
-run --release -q -p batten --example <name>`), then count what is left with
-   `Grep`. The remainder is the codemod's blind spot: read each one.
+run --release -q -p batten-codemods --example codemod -- <recipe>`), which walks the
+   tree once, writes only changed files and prints `files read, rewritten,
+refused` and nothing else. Then count what is left with `Grep`. The
+   remainder is the codemod's blind spot: read each one. **Run it a second
+   time: it must rewrite 0 files.** A recipe that is not idempotent on its own
+   output is not finished.
 5. **Clean the fallout mechanically.** `mise exec -- cargo clippy --fix
 --allow-dirty --workspace --all-targets` removes imports the rewrite
    orphaned, then `cargo fmt`. **Watch the cfg split**: clippy fixes the lib
@@ -43,7 +49,9 @@ run --release -q -p batten --example <name>`), then count what is left with
    **Exclude files with a second compilation context.** A file `build.rs`
    includes by `#[path]` (`mutation_markers.rs`) is compiled outside the crate,
    so a `crate::` path there is an edge the layering gate catches.
-6. **Delete the driver.** It is a one-shot; the primitive and its test stay.
+6. **Keep the recipe, and test it.** The primitive, the recipe and a test of
+   the recipe on a decoy fixture all stay; `batten-codemods`' `codemod` example is the one
+   driver every recipe shares.
 7. **Gate the regrowth.** A migration without a gate decays. Add a
    `non_increasing` ratchet row in `batten.toml` counting the retired shape
    over the migrated glob, so the next write that reintroduces it is refused
@@ -77,4 +85,6 @@ few, read them.
   show this.
 - **Trusting a zero without reading the remainder**: the grep's blind spots
   are the codemod's.
-- **Leaving the driver committed**, or landing without the ratchet row.
+- **A one-off driver deleted after its run**: the migration is lost, and the
+  next consumer making the same move writes it again. Save it as a recipe.
+- **Landing without the ratchet row.**
