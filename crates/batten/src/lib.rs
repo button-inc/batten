@@ -15164,9 +15164,15 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     else {
         return;
     };
-    let kept = collect::engine_kept();
     let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
-    let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
+    let _ = collect::collect_if_pressed(
+        &repo,
+        &pruning,
+        collect::engine_kept,
+        &mut free,
+        Some(deadline),
+        false,
+    );
 }
 
 fn run_land_verify(
@@ -27245,9 +27251,15 @@ fn collect_before_admitting(
     };
     let before = if trace { free().unwrap_or(0) } else { 0 };
     let collected = band.and_then(|prune| {
-        let kept = collect::engine_kept();
         let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
-        collect::collect_if_pressed(&repo, prune, &kept, &mut free, Some(deadline), false)
+        collect::collect_if_pressed(
+            &repo,
+            prune,
+            collect::engine_kept,
+            &mut free,
+            Some(deadline),
+            false,
+        )
     });
     if trace {
         let after = collected.as_ref().map_or(before, |done| done.free_after_mb);
@@ -32893,7 +32905,7 @@ pub fn land_ready_owes(
             kept.push(rule);
         }
     }
-    resolved.rules = kept;
+    resolved.rules = kept.into();
     let built = hook::Policy::from_resolved(&resolved, harness, root, None)?;
     let policy = without_set_hatches(&built);
     // BARE, so no branch name is ever spliced into a command line to be parsed.

@@ -149,8 +149,9 @@ pub struct Config {
     /// never conflates with severity's (CLOUD-61). Both disciplines are
     /// enforced at parse time: omission or conflation is a usage error here,
     /// never a value quietly assumed.
-    #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<Rule>,
+    #[serde(default, rename = "rule", skip_serializing_if = "Shared::is_empty")]
+    #[schemars(with = "Vec<Rule>")]
+    pub rules: Shared<Rule>,
     /// The paths policy applies to, as an **ordered include/exclude list**: a
     /// plain glob includes, a `!`-prefixed glob excludes, and an exclude beats
     /// an include (CLOUD-37). Absent or empty means the set is empty — nothing
@@ -843,6 +844,24 @@ impl<'a, T> IntoIterator for &'a Shared<T> {
     }
 }
 
+impl<'a, T: Clone> IntoIterator for &'a mut Shared<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::sync::Arc::make_mut(&mut self.0).iter_mut()
+    }
+}
+
+impl<T: Clone> IntoIterator for Shared<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::sync::Arc::unwrap_or_clone(self.0).into_iter()
+    }
+}
+
 impl<T: Serialize> Serialize for Shared<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
@@ -875,7 +894,7 @@ impl Config {
             strictness: None,
             fail_on_warning: None,
             update_notice: None,
-            rules: Vec::new(),
+            rules: Shared::default(),
             patterns: Vec::new(),
             traversals: Vec::new(),
             registers: Vec::new(),
