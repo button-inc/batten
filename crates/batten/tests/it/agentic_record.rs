@@ -185,7 +185,7 @@ fn repo(name: &str, trials: Option<&str>, method: Option<&str>) -> PathBuf {
 fn findings(dir: &std::path::Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    let outcome = command.output().expect("run batten check");
+    let outcome = command.streamed_output().expect("run batten check");
 
     // A NON-VERDICT EXIT IS NOT AN EMPTY ANSWER. `check` exits 0 clean and 2 on a
     // policy verdict; every other code is a statement about the INVOCATION — a

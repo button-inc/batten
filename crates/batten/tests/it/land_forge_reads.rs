@@ -53,7 +53,7 @@ fn fast_forward(dir: &std::path::Path) -> std::process::Output {
         .env("LAND_WORKFLOW", "land.yml")
         .env("BATTEN_REST_FIXTURE", dir)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

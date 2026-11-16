@@ -106,7 +106,7 @@ fn fetch(dir: &Path, forge: &Path, fanin: Option<&str>) -> Output {
     if let Some(fanin) = fanin {
         command.args(["--fanin", fanin]);
     }
-    command.output().expect("the compiled binary runs")
+    command.streamed_output().expect("the compiled binary runs")
 }
 
 /// The forge record for HEAD, or `None` where nothing was written.
@@ -226,7 +226,7 @@ fn validated(dir: &Path) -> (Output, Option<String>) {
     command
         .args(["record", "validate", "config-validator"])
         .current_dir(dir);
-    let out = command.output().expect("the compiled binary runs");
+    let out = command.streamed_output().expect("the compiled binary runs");
     let store = dir.join(".git").join("batten-tools");
     let body = std::fs::read_dir(&store).ok().and_then(|entries| {
         entries
@@ -375,6 +375,6 @@ fn a_qualifier_without_fetch_is_a_usage_error() {
     command
         .args(["record", "forge", "HEAD", "--fanin", "final"])
         .current_dir(&dir);
-    let refused = command.output().expect("the compiled binary runs");
+    let refused = command.streamed_output().expect("the compiled binary runs");
     assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
 }

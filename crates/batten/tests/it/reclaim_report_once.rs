@@ -55,7 +55,7 @@ fn census(repo: &Path, boot: &str, args: &[&str]) -> (Option<i32>, String, Strin
         .args(args)
         .current_dir(repo)
         .env("BATTEN_BOOT_TIME", boot)
-        .output()
+        .streamed_output()
         .expect("run the census");
     (
         out.status.code(),

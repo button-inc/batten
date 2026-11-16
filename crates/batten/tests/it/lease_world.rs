@@ -92,7 +92,7 @@ fn lease(dir: &Path, args: &[&str]) -> Output {
         .env_remove("GITHUB_SERVER_URL")
         .env_remove("LAND_LOCK_REMOTE")
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -288,7 +288,7 @@ fn a_ceiling_between_a_directory_and_its_repository_fences_the_walk() {
         if let Some(ceiling) = ceiling {
             command.env("GIT_CEILING_DIRECTORIES", ceiling);
         }
-        let _ = command.output().expect("the compiled binary runs");
+        let _ = command.streamed_output().expect("the compiled binary runs");
         std::fs::read_to_string(forge.join("args")).unwrap_or_default()
     };
     let open = asking(None);

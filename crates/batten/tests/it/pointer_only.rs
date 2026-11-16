@@ -59,6 +59,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -3173,7 +3174,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
     {
         panic!("write stdin: {error:?}");
     }
-    let output = child.wait_with_output().expect("await batten");
+    let output = child.streamed_wait().expect("await batten");
     Run {
         code: output.status.code(),
         stdout: output.stdout,

@@ -172,7 +172,7 @@ fn fixture(name: &str, env: Option<&str>) -> PathBuf {
 fn check(repo: &Path) -> Output {
     let mut command = batten();
     command.current_dir(repo).arg("check");
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 /// THE POSITIVE, and it is the shape this repository actually ships: the budget

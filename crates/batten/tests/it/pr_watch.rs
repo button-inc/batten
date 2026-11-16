@@ -178,7 +178,7 @@ impl Fixture {
             // (CLOUD-2059).
             .env("GH_REPO", "fixture/watched")
             .current_dir(&self.dir)
-            .output()
+            .streamed_output()
             .expect("the compiled binary runs");
         (
             output.status.code().expect("the child exited normally"),

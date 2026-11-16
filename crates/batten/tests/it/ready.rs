@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -2068,7 +2069,7 @@ fn seed_response(dir: &Path, home: &Path, document: &serde_json::Value) {
         .expect("piped stdin")
         .write_all(envelope.as_bytes())
         .expect("write the response");
-    let recorded = child.wait_with_output().expect("record the response");
+    let recorded = child.streamed_wait().expect("record the response");
     assert_eq!(
         recorded.status.code(),
         Some(0),
@@ -2146,7 +2147,7 @@ fn run_piped(command: &mut std::process::Command, input: &str) -> Output {
         .expect("piped stdin")
         .write_all(input.as_bytes())
         .expect("write stdin");
-    child.wait_with_output().expect("collect batten's output")
+    child.streamed_wait().expect("collect batten's output")
 }
 
 /// A clause label that lost its emphasis is STILL A CLAUSE (CLOUD-1330).

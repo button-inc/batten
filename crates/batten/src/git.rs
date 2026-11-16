@@ -6531,6 +6531,7 @@ pub fn pathspec_is_supported(spec: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use crate::stream::Streamed as _;
     use std::fs;
 
     use super::*;
@@ -8094,7 +8095,7 @@ mod tests {
         ] {
             command.env_remove(var);
         }
-        let output = command.output().expect("run git");
+        let output = command.streamed_output().expect("run git");
         assert!(
             output.status.success(),
             "git {args:?} failed in {}: {}",

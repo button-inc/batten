@@ -438,7 +438,7 @@ fn measure(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Outp
         .env("GH_REPO", SLUG)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -786,7 +786,7 @@ fn the_environment_names_the_window_when_no_flag_does() {
         .env("GH_REPO", SLUG)
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert_eq!(String::from_utf8_lossy(&measured.stdout), JOINED);
@@ -807,7 +807,7 @@ fn a_workflow_named_nowhere_is_a_usage_refusal() {
         .env_remove("LAND_CI_WORKFLOW")
         .env("GH_REPO", SLUG)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(refused.status.code(), Some(0), "{}", said(&refused));
     assert_ne!(refused.status.code(), Some(3), "{}", said(&refused));

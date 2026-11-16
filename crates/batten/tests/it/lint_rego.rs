@@ -45,6 +45,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -104,7 +105,7 @@ fn list_unformatted(opa: &Path) -> (bool, String) {
         .args(["fmt", "-l"])
         .args(tracked_modules())
         .current_dir(common::at_root("."))
-        .output()
+        .streamed_output()
         .expect("opa runs");
     (
         output.status.success(),

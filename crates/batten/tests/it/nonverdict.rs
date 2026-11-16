@@ -519,7 +519,7 @@ fn classify(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Out
         .env("CI_VERDICT_STEPS", VERDICT_STEPS)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -581,7 +581,7 @@ fn a_flag_outranks_the_environment_it_defaults_from() {
         .env("CI_VERDICT_STEPS", "Set up job")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert!(
@@ -620,7 +620,7 @@ fn the_vendored_route_runs_on_its_flags_alone() {
         .env("GH_REPO", "acme/widgets")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert!(
@@ -682,7 +682,7 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
         .env_remove("CI_REQUIRED_CHECKS")
         .env("GH_REPO", "acme/widgets")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(refused.status.code(), Some(0), "{}", said(&refused));
     assert_ne!(refused.status.code(), Some(3), "{}", said(&refused));
@@ -701,7 +701,7 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
         .env_remove("CI_VERDICT_STEPS")
         .env("GH_REPO", "acme/widgets")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(unspelled.status.code(), Some(0), "{}", said(&unspelled));
     assert_ne!(unspelled.status.code(), Some(3), "{}", said(&unspelled));

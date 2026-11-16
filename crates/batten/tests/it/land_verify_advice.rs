@@ -88,7 +88,7 @@ fn verify(dir: &std::path::Path, gate: &str) -> (i32, String) {
         .arg("verify")
         .env("LAND_VERIFY", gate)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     let mut both = String::from_utf8_lossy(&output.stdout).into_owned();
     both.push_str(&String::from_utf8_lossy(&output.stderr));

@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -1033,7 +1034,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
         .take()
         .expect("stdin is piped")
         .write_all(payload.as_bytes());
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 #[test]
@@ -1108,7 +1109,11 @@ fn a_step_run_build_is_watched() {
         .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::stream::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     let said = common::stderr(&ran);
     assert_eq!(
@@ -1151,7 +1156,11 @@ fn a_wrapped_compile_collects_under_pressure() {
             .arg(&out_dir)
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::stream::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs");
         let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
         (dir, ran, seen)
@@ -1216,7 +1225,11 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         .arg(dir.join("target/debug/deps"))
         .env("TARGET_PRUNE_FREE_MB", "5000")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::stream::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
     assert!(
@@ -1232,7 +1245,11 @@ fn the_wrapper_probe_answers_with_this_binary() {
     let probed = common::batten()
         .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::stream::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(probed.status.code(), Some(0), "{}", common::stderr(&probed));
     let path = String::from_utf8_lossy(&probed.stdout).trim().to_owned();
@@ -1249,7 +1266,11 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::stream::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs")
     };
     let stopped = sweep("5");
@@ -1280,7 +1301,7 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     let stopped = verify("5");
@@ -1327,7 +1348,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         command
     };
 
-    let alone = verify().output().expect("the binary runs");
+    let alone = verify().streamed_output().expect("the binary runs");
     let said = common::stderr(&alone);
     assert_eq!(alone.status.code(), Some(2), "{said}");
     assert!(!said.contains("disk-waited"), "{said}");

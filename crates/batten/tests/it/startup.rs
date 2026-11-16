@@ -44,7 +44,7 @@ fn startup(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .arg("startup")
         .args(args)
-        .output()
+        .streamed_output()
         .expect("the binary runs")
 }
 
@@ -221,7 +221,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     let bare = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(out_code(&bare), 1, "doctor never renders a policy verdict");
     assert_eq!(
@@ -244,7 +244,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     let healthy = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(out_code(&healthy), 0);
     assert_eq!(stdout(&healthy), "commit-gate ok\n");
@@ -303,7 +303,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     let out = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     let expected = if cfg!(unix) {
         // The mode bit is real here, so a 0644 hook is one git will skip.
@@ -421,7 +421,7 @@ fn a_malformed_row_is_refused_when_the_config_loads() {
     let elsewhere = batten()
         .current_dir(&dir)
         .arg("check")
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(elsewhere.status.code(), Some(1));
 }
@@ -449,7 +449,7 @@ fn wiring_gate(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .args(["wiring", "gate"])
         .args(args)
-        .output()
+        .streamed_output()
         .expect("the binary runs")
 }
 
@@ -488,7 +488,7 @@ fn wiring_gate_links_every_git_hook_to_the_running_batten() {
         batten()
             .current_dir(dir)
             .args(["doctor", "gate"])
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
@@ -639,7 +639,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
         batten()
             .current_dir(dir)
             .args(["doctor", "gate"])
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
@@ -648,7 +648,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
         let linked = batten()
             .current_dir(&dir)
             .args(["wiring", "gate", "hooks/gate.sh"])
-            .output()
+            .streamed_output()
             .expect("the binary runs");
         assert_eq!(
             out_code(&linked),
@@ -687,7 +687,7 @@ fn wiring_gate_refuses_a_body_the_repository_does_not_carry() {
     let refused = batten()
         .current_dir(&dir)
         .args(["wiring", "gate", "hooks/absent.sh"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(
         out_code(&refused),

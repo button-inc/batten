@@ -138,7 +138,7 @@ impl Session {
             .current_dir(&self.dir)
             .args(["mcp", "posture", "--settings", &settings, "--logs", &logs])
             .args(extra)
-            .output()
+            .streamed_output()
             .expect("run the posture check");
         (
             out.status.code(),

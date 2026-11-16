@@ -156,6 +156,7 @@ version = "0.0.220"
 dependencies = [
  "anyhow",
  "batten-fsio",
+ "batten-stream",
  "blake3",
  "bpe-openai",
  "clap",
@@ -220,11 +221,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "batten-codemods"
+version = "0.0.220"
+dependencies = [
+ "batten",
+]
+
+[[package]]
 name = "batten-fsio"
 version = "0.0.220"
 dependencies = [
  "compio",
 ]
+
+[[package]]
+name = "batten-stream"
+version = "0.0.220"
 
 [[package]]
 name = "bit-set"

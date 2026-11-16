@@ -1550,7 +1550,7 @@ fn materialise(
             ));
         }
         let mut bytes = Vec::new();
-        std::io::copy(&mut converted, &mut bytes)
+        crate::stream::pump(&mut converted, &mut [&mut bytes])
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not filter: {err}"))?;
         crate::durable::replace(&target, bytes)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;

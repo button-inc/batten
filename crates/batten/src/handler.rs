@@ -97,8 +97,6 @@ use std::path::Path;
     reason = "stays: a handler IS a program the operator declared in `[[hook.handler]]`, so there is no in-process form of it to prefer — the same standing `action` has (CLOUD-320)"
 )]
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
@@ -1007,12 +1005,20 @@ impl Payload {
     ///
     /// The write's, or a spool that cannot be opened.
     pub fn write_to(&self, sink: &mut dyn std::io::Write) -> std::io::Result<()> {
-        match self {
-            Payload::Text(text) => sink.write_all(text.as_bytes()),
-            Payload::Spooled(path) => {
-                std::io::copy(&mut std::fs::File::open(path)?, sink).map(drop)
-            }
-        }
+        crate::stream::pump(self.reader()?, &mut [sink])
+    }
+
+    /// The bytes as a stream: the text itself, or the spool file opened for
+    /// reading. Never read whole, so a spooled payload stays bounded.
+    ///
+    /// # Errors
+    ///
+    /// The spool file cannot be opened.
+    pub fn reader(&self) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        Ok(match self {
+            Payload::Text(text) => Box::new(std::io::Cursor::new(text.clone().into_bytes())),
+            Payload::Spooled(path) => Box::new(std::fs::File::open(path)?),
+        })
     }
 
     /// The bytes as text, for a reader that needs the whole document (the Stop
@@ -1104,15 +1110,12 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     // the handle at the end of the closure is that close.
     let bound = handler.timeout();
     let deadline = Instant::now() + bound;
-    let stdin_pipe = child.stdin.take();
-    let owned = payload.clone();
-    let (feed_tx, feed_done) = mpsc::channel();
-    drop(std::thread::spawn(move || {
-        if let Some(mut stdin) = stdin_pipe {
-            let _ = owned.write_to(&mut stdin);
-        }
-        let _ = feed_tx.send(());
-    }));
+    // The pump owns the stdin handle and drops it at EOF, which is the close.
+    let feed = child
+        .stdin
+        .take()
+        .zip(payload.reader().ok())
+        .map(|(stdin, source)| crate::stream::spawn_pump(source, vec![Box::new(stdin)]));
     let (out_buf, out_done) = drain(child.stdout.take());
     let (err_buf, err_done) = drain(child.stderr.take());
     let mut timed_out = false;
@@ -1167,9 +1170,9 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     // what `exec.rs::group_at_spawn` exists for, and is the right follow-up; it is
     // not what keeps the bound honest, and the bound is this module's promise.
     let grace = DRAIN_GRACE;
-    let _ = out_done.recv_timeout(grace);
-    let _ = err_done.recv_timeout(grace);
-    let _ = feed_done.recv_timeout(grace);
+    for pumping in [out_done, err_done].into_iter().flatten().chain(feed) {
+        let _ = pumping.finished(grace);
+    }
     let stdout = taken(&out_buf);
     let stderr = taken(&err_buf);
     if timed_out {
@@ -1181,41 +1184,23 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     interpret(status.code(), &stdout, &stderr)
 }
 
-/// Drain one child stream on its own thread, into a buffer the caller can read
-/// WITHOUT waiting for the thread to finish.
+/// Drain one child stream into a buffer the caller can read WITHOUT waiting
+/// for the pump to finish ([`crate::stream::spawn_pump`]).
 ///
-/// The shared buffer is the whole point, and it is `exec.rs`'s reasoning rather
-/// than a new one: *"a return value is only readable by a join that completes, so
-/// a deadline over a returned `Vec` could only ever store nothing."* A handler's
-/// pipe can outlive the handler — an orphaned grandchild keeps the write end open
-/// past a `SIGKILL` to its parent — so the caller must be able to take what
-/// arrived and walk away.
-///
-/// The channel says "EOF reached", so the caller can wait for a clean finish when
-/// there is one and stop waiting when there is not.
-fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = mpsc::channel();
-    let handle = Arc::clone(&buffer);
-    drop(std::thread::spawn(move || {
-        if let Some(mut stream) = stream {
-            let mut chunk = [0_u8; 8192];
-            loop {
-                let read = match stream.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(read) => read,
-                };
-                // Appended per chunk rather than at EOF, for the reason the
-                // shared buffer exists at all: a drain abandoned at the deadline
-                // must still have delivered everything it had already read.
-                if let Ok(mut seen) = handle.lock() {
-                    seen.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
-                }
-            }
-        }
-        let _ = tx.send(());
-    }));
-    (buffer, rx)
+/// The shared buffer is the whole point: a handler's pipe can outlive the
+/// handler — an orphaned grandchild keeps the write end open past a `SIGKILL`
+/// to its parent — so the caller must be able to take what arrived and walk
+/// away. An absent stream drains nothing and has no pump to wait for.
+fn drain(
+    stream: Option<impl Read + Send + 'static>,
+) -> (
+    crate::stream::Shared<Vec<u8>>,
+    Option<crate::stream::Pumping>,
+) {
+    let buffer = crate::stream::Shared::new(Vec::new());
+    let pumping =
+        stream.map(|stream| crate::stream::spawn_pump(stream, vec![Box::new(buffer.clone())]));
+    (buffer, pumping)
 }
 
 /// Read a drained buffer as a string, lossily.
@@ -1227,11 +1212,8 @@ fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mp
 /// A poisoned lock reads as empty for the same reason — the only writer is the
 /// drain thread above, so a poisoning means that thread panicked and there is no
 /// verdict to recover either way.
-fn taken(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
-    buffer.lock().map_or_else(
-        |_| String::new(),
-        |seen| String::from_utf8_lossy(&seen).trim().to_owned(),
-    )
+fn taken(buffer: &crate::stream::Shared<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&buffer.bytes()).trim().to_owned()
 }
 
 /// Read one handler's exit code and streams under the contract.

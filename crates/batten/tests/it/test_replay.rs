@@ -75,7 +75,7 @@ fn replay(dir: &Path, base: &str) -> Output {
         .env_remove("NEXTEST_PROFILE")
         .args(["test", "replay", "--base", base])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 

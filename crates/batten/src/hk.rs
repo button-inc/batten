@@ -58,6 +58,7 @@
 //! a step's command, its glob, its matched files, or a dump of either plan. The
 //! report is what a reader follows to the two files; it is not a copy of them.
 
+use crate::stream::Streamed as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -576,7 +577,11 @@ fn version(root: &Path) -> Look<String> {
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .streamed_output_keeping(crate::stream::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        });
     let Ok(output) = spawned else {
         return Look::CouldNotLook;
     };
@@ -624,7 +629,11 @@ fn plan(root: &Path, surface: &[&str], extra: &[String]) -> Look<serde_json::Val
         // never shaped onto Batten's own.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .streamed_output_keeping(crate::stream::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        });
     let Ok(output) = spawned else {
         return Look::CouldNotLook;
     };

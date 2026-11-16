@@ -55,7 +55,7 @@ fn batten(dir: &Path, args: &[&str]) -> Output {
         .env_remove("CI")
         .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -325,7 +325,7 @@ fn stepped_in(dir: &Path, home: &Path) -> (bool, Option<i32>) {
         .env_remove("CI")
         .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten");
     let said = format!("{}{}", stdout(&out), stderr(&out));
     (
@@ -368,7 +368,7 @@ fn a_baseline_added_or_removed_with_no_tracked_change_is_a_miss() {
             .current_dir(&dir)
             .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
             .env_remove("BATTEN_FAIL_ON_WARNING")
-            .output()
+            .streamed_output()
             .expect("run batten")
     };
     assert_eq!(code(&run(&["state", "adopt"])), Some(0));
@@ -430,7 +430,7 @@ fn a_baseline_entry_of_the_other_half_is_neither_applied_nor_stale() {
             .current_dir(&dir)
             .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
             .env_remove("BATTEN_FAIL_ON_WARNING")
-            .output()
+            .streamed_output()
             .expect("run batten")
     };
     assert_eq!(code(&run(&["state", "adopt"])), Some(0));

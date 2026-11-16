@@ -84,7 +84,7 @@ fn record(dir: &Path, write: bool) -> Output {
     }
     command
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten record suites")
 }
 

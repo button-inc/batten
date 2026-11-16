@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -104,7 +105,7 @@ fn hook(dir: &Path, tool: &str, input: &serde_json::Value) -> Output {
             .write_all(payload.as_bytes())
             .unwrap();
     }
-    child.wait_with_output().unwrap()
+    child.streamed_wait().unwrap()
 }
 
 /// The deny reason, or `None` when the call is not refused.

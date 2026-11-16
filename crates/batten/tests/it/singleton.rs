@@ -42,7 +42,7 @@ fn singleton(dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
-        .output()
+        .streamed_output()
         .expect("run batten singleton")
 }
 
@@ -96,7 +96,7 @@ fn the_refusal_names_the_holders_phase_when_the_registry_knows_it() {
         .args(["task", "register", "land", &live, "ci-wait(lap 1)"])
         .current_dir(&repo)
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
-        .output()
+        .streamed_output()
         .expect("register the holder");
     singleton(&repo, &["acquire", "land", &live]);
 

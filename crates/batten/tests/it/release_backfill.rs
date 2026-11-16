@@ -148,7 +148,7 @@ fn backfill(dir: &Path, forge: &Path, extra: &[&str]) -> Output {
         .env("GH_REPO", REPO)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -262,7 +262,7 @@ fn a_dry_run_prints_the_plan_in_order_and_asks_the_forge_nothing() {
         .env_remove("GH_REPO")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(out.status.code(), Some(0), "{}", said(&out));
     let text = stdout(&out);
@@ -349,7 +349,7 @@ fn no_forge_remote_is_could_not_look_and_dispatches_nothing() {
         .env_remove("GH_REPO")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(out.status.code(), Some(3), "{}", said(&out));
     assert_eq!(dispatched(&forge), 0);
