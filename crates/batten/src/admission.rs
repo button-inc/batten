@@ -892,6 +892,24 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         .find(|admission| !claimed.contains(admission)))
 }
 
+/// Whether the store holds any admission record at all.
+///
+/// [`admitted`] answers `None` for a store with none, so a caller that must
+/// first resolve the HEAD and the epoch to ask it can ask this instead and skip
+/// both: the same answer, without the work, on every denied call of a session
+/// that has never recorded an admission (2026-11-15).
+#[must_use]
+pub fn holds_any(repo_root: &Path) -> bool {
+    let Ok(dir) = store_dir(repo_root) else {
+        return false;
+    };
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+    })
+}
+
 /// The SPENT admission covering one finding, if the store holds it (CLOUD-1120).
 ///
 /// # Why this exists at all
@@ -1149,6 +1167,23 @@ mod tests {
             prev: None,
             author: "alec@button.is".to_owned(),
         }
+    }
+
+    /// Fails by: a store with a record read as empty — every admission would
+    /// then be skipped — or an empty one read as holding one.
+    #[test]
+    fn holds_any_is_whether_the_store_has_a_record() {
+        let dir = crate::scratch::scratch("admission-holds-any");
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(!holds_any(&repo), "no store directory");
+        let store = store_dir(&repo).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join(".lock"), "").unwrap();
+        assert!(!holds_any(&repo), "a lock is not a record");
+        std::fs::write(store.join("a.json"), "{}").unwrap();
+        assert!(holds_any(&repo), "a record");
     }
 
     #[test]

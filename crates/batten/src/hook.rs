@@ -410,6 +410,41 @@ impl Harness {
     }
 }
 
+/// Whether a host gives its agent a way to keep a process running across tool
+/// calls and to manage it, or that nobody has looked (CLOUD-2736).
+///
+/// [`TranscriptShape`]'s three-valued reading, for its reason: a gate that tells
+/// an agent to run something in the background may only refuse where the host
+/// is KNOWN to let the agent do that. An unsurveyed host is could-not-look, and
+/// there the engine advises and never denies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BackgroundFacility {
+    /// Read from this host's own documentation: it has one, or it has none.
+    Surveyed(bool),
+    /// Nobody has looked, carrying the row that OWES the survey.
+    Unsurveyed(&'static str),
+}
+
+impl Harness {
+    /// Whether this host has an agent-managed background facility.
+    ///
+    /// Claude Code's `Bash` tool takes `run_in_background`, reports the task's
+    /// exit to the agent, and lets the agent kill it. Every other host, the
+    /// neutral contract included, is owed by CLOUD-2732.
+    #[must_use]
+    pub const fn background_facility(self) -> BackgroundFacility {
+        match self {
+            Harness::ClaudeCode => BackgroundFacility::Surveyed(true),
+            Harness::CodexCli
+            | Harness::Cursor
+            | Harness::GeminiCli
+            | Harness::CopilotCli
+            | Harness::ExitCode => BackgroundFacility::Unsurveyed("CLOUD-2732"),
+        }
+    }
+}
+
 /// A transcript record grammar, named so a parser cannot be handed a host.
 ///
 /// **One variant is the point, not a placeholder.** [`crate::transcript`] parses
@@ -3954,6 +3989,22 @@ impl Policy {
     #[must_use]
     pub fn compiled_patterns(&self) -> std::collections::BTreeMap<String, regex::Regex> {
         crate::pattern::compiled(&self.patterns)
+    }
+
+    /// [`Policy::compiled_patterns`] for the ids in `wanted` alone, through the
+    /// same compiler: a row's column then reads the same matcher either way.
+    #[must_use]
+    pub fn compiled_patterns_named(
+        &self,
+        wanted: &std::collections::BTreeSet<String>,
+    ) -> std::collections::BTreeMap<String, regex::Regex> {
+        let named: Vec<crate::pattern::NamedPattern> = self
+            .patterns
+            .iter()
+            .filter(|pattern| wanted.contains(&pattern.id))
+            .cloned()
+            .collect();
+        crate::pattern::compiled(&named)
     }
 
     /// The programs a `[[recorder]]` may run, by id.

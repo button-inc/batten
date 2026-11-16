@@ -474,7 +474,8 @@ fn an_absent_closes_record_judges_nothing() {
 fn the_committed_row_is_the_one_these_cases_exercise() {
     let committed: Vec<Rule> = batten::config::load(&common::at_root("batten.toml"))
         .expect("the committed config loads")
-        .rules;
+        .rules
+        .to_vec();
     let declared = committed
         .iter()
         .find(|rule| rule.id == "test name undefined")

@@ -783,6 +783,30 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
 //MUTANT remember-ignored|s@^    if !remember \x7c\x7c !scope_open() {$@    if !scope_open() {@|a_write_is_never_served_from_the_memo
 //MUTANT open-key-ignores-cwd|s@^        cwd: std::env::current_dir().ok(),$@        cwd: None,@|a_read_from_another_working_directory_is_opened_again
 fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
+    let scoped = remember && scope_open();
+    // THE SAME QUESTION, ANSWERED BY THE SAME OPEN (2026-11-16): a hook call
+    // asked for one repository a dozen times, and each ask canonicalised its
+    // paths and walked discovery upward again — ~35 system calls apiece —
+    // before the memo was consulted at all. A question asked before in this
+    // scope, spelled the same from the same working directory, goes straight to
+    // the entry it found, which is still believed only while its files hold
+    // their bytes; one whose files moved is discovered afresh below.
+    let asked: Option<Asked> = scoped.then(|| {
+        (
+            dir.to_path_buf(),
+            ceilings.clone(),
+            std::env::current_dir().ok(),
+        )
+    });
+    if let Some(asked) = &asked
+        && let Some(repo) = with_opens(|opens| {
+            let key = opens.2.get(asked)?;
+            opens.get(key)
+        })
+        .flatten()
+    {
+        return Ok(repo);
+    }
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
         .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
@@ -798,10 +822,10 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
     // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
     // a second walk or the config reads a remembered entry would need.
-    if !remember || !scope_open() {
+    let Some(asked) = asked else {
         return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
             .map_err(|_| refused());
-    }
+    };
     let (found, trust) =
         gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
@@ -812,6 +836,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
         cwd: std::env::current_dir().ok(),
     };
     if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
+        let _ = with_opens(|opens| opens.2.insert(asked, key));
         return Ok(repo);
     }
     // READ BEFORE THE OPEN, so a file changed while gix parses it is remembered
@@ -822,6 +847,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     // Only the repository the key names: a `.git` made or removed between the
     // two walks would otherwise file another repository's handle under it.
     if repo.git_dir() == key.git_dir {
+        let _ = with_opens(|opens| opens.2.insert(asked, key.clone()));
         let _ = with_opens(|opens| opens.remember(key, &repo, read));
     }
     Ok(repo)
@@ -878,11 +904,17 @@ struct OpenKey {
 /// shape a source scan can tell from a read. A read that only needs an unshared
 /// handle takes [`open_fresh`], which spends nothing.
 ///
-/// `.0` is the remembered opens; `.1` is whether a write has spent the scope.
+/// `.0` is the remembered opens; `.1` is whether a write has spent the scope;
+/// `.2` is which entry each question asked in the scope found ([`Asked`]).
 /// A tuple rather than named fields so the memo's existing cases keep their
 /// base form (`test replay`).
 #[derive(Default)]
-struct Opens(BTreeMap<OpenKey, Opened>, bool);
+struct Opens(BTreeMap<OpenKey, Opened>, bool, BTreeMap<Asked, OpenKey>);
+
+/// One question an open was asked: the directory as the caller spelled it, the
+/// ceilings as given, and the working directory a relative spelling resolves
+/// against.
+type Asked = (PathBuf, Vec<PathBuf>, Option<PathBuf>);
 
 /// One remembered open: the repository, and the bytes its open read.
 struct Opened {
@@ -1015,6 +1047,7 @@ impl Opens {
     fn spend(&mut self) {
         self.0.clear();
         self.1 = true;
+        self.2.clear();
     }
 }
 
@@ -2413,6 +2446,127 @@ pub fn objects_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec
     // threaded through the recursion.
     out.retain(|object| !carried.contains(object.id.as_str()));
     Ok(out)
+}
+
+/// [`objects_to_send`]'s set as IDS alone, so a caller can read each body when
+/// it writes it rather than holding every one at once (CLOUD-2729).
+///
+/// The same set: the commits in `base..head`, then every tree and blob their
+/// trees reach, minus what `base`'s own tree reaches. Commits come first, in
+/// walk order; the rest is in id order, which a pack does not care about.
+///
+/// # Errors
+///
+/// As [`objects_to_send`].
+pub fn object_ids_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = repo.rev_parse_single(head).map_err(|_| refused())?;
+    let base_id = match base {
+        Some(base) => Some(repo.rev_parse_single(base).map_err(|_| refused())?.detach()),
+        None => None,
+    };
+    let mut walk = repo.rev_walk([head_id.detach()]);
+    if let Some(base_id) = base_id {
+        walk = walk.with_hidden([base_id]);
+    }
+    let walk = walk.all().map_err(|_| refused())?;
+
+    let mut carried = std::collections::BTreeSet::new();
+    if let Some(base_id) = base_id
+        && let Ok(commit) = repo.find_commit(base_id)
+        && let Ok(tree) = commit.tree()
+    {
+        collect_tree(&repo, tree.id().detach(), &mut carried, None);
+    }
+
+    let mut ids = Vec::new();
+    let mut reached = std::collections::BTreeSet::new();
+    for step in walk {
+        let Ok(info) = step else {
+            return Err(refused());
+        };
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        ids.push(info.id.to_string());
+        let tree_id = commit.tree_id().map_err(|_| refused())?.detach();
+        collect_tree(&repo, tree_id, &mut reached, None);
+    }
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// The ids a push of the one commit `head` adds when the remote already holds
+/// the commits `have` (CLOUD-2724): `head` itself, then every tree and blob its
+/// tree reaches, minus what the tree of each `have` commit that is present here
+/// reaches.
+///
+/// **No parent is walked.** `head` may name parents this repository does not
+/// hold — a rotation makes each archived session's tip a parent without
+/// fetching it — and the caller's claim is that the remote holds every one of
+/// them. A `have` id that is not here subtracts nothing, which errs toward
+/// sending.
+///
+/// # Errors
+///
+/// A usage error where `head` is not a commit this repository holds.
+pub fn commit_ids_to_send(dir: &Path, head: &str, have: &[String]) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let commit = repo.find_commit(head_id).map_err(|_| refused())?;
+    let mut carried = std::collections::BTreeSet::new();
+    for held in have {
+        if let Ok(id) = gix::ObjectId::from_hex(held.as_bytes())
+            && let Ok(held) = repo.find_commit(id)
+            && let Ok(tree) = held.tree_id()
+        {
+            collect_tree(&repo, tree.detach(), &mut carried, None);
+        }
+    }
+    let mut reached = std::collections::BTreeSet::new();
+    let tree = commit.tree_id().map_err(|_| refused())?.detach();
+    collect_tree(&repo, tree, &mut reached, None);
+    let mut ids = vec![head_id.to_string()];
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// One open repository to read objects out of by id, one at a time
+/// (CLOUD-2729).
+///
+/// A handle rather than a function taking a directory, because a streamed pack
+/// reads every object it sends and reopening the repository per object would
+/// cost a discovery each.
+#[allow(missing_debug_implementations)]
+pub struct ObjectReader(gix::Repository);
+
+impl ObjectReader {
+    /// Open the repository at `dir`.
+    ///
+    /// # Errors
+    ///
+    /// A directory that is not a repository.
+    pub fn open(dir: &Path) -> Result<Self> {
+        Ok(ObjectReader(open(dir)?))
+    }
+
+    /// The object `id`, payload and kind.
+    ///
+    /// # Errors
+    ///
+    /// An id that will not parse, or an object the odb cannot produce. A missing
+    /// object is an error rather than an omission, for [`objects_to_send`]'s
+    /// reason.
+    pub fn read(&self, id: &str) -> Result<RawObject> {
+        let missing = || anyhow::anyhow!("git: object {id} cannot be read from the repository");
+        let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| missing())?;
+        let object = self.0.find_object(named).map_err(|_| missing())?;
+        Ok(RawObject {
+            id: id.to_owned(),
+            kind: object.kind,
+            body: object.data.clone(),
+        })
+    }
 }
 
 /// Walk a tree, recording every tree and blob under it that `seen` does not carry.
@@ -4143,7 +4297,7 @@ impl IdentityMemo {
         if let Some(body) = entry
             .as_ref()
             .and_then(|(path, key)| crate::cache::read(path, key))
-            && let Ok(body) = String::from_utf8(body)
+            && let Ok(body) = std::str::from_utf8(&body)
         {
             for line in body.lines() {
                 // A line that is not a well-formed identity is not remembered,
@@ -6419,6 +6573,37 @@ mod tests {
             canonical(&other),
             "the second read came from the memo, not a fresh open"
         );
+    }
+
+    /// A question asked again in the scope goes straight to the entry it found,
+    /// with no second discovery: pointed at another repository's entry, the
+    /// answer is that repository's, which no walk from `dir` could reach.
+    #[test]
+    fn a_question_asked_twice_in_one_scope_is_not_discovered_again() {
+        let dir = crate::scratch::scratch("git-memo-asked");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-asked-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read dir");
+        open_upwards(&other, Vec::new()).expect("read other");
+        with_opens(|opens| {
+            let elsewhere = opens
+                .2
+                .iter()
+                .find(|((asked, _, _), _)| *asked == other)
+                .map(|(_, key)| key.clone())
+                .expect("other's question is remembered");
+            let mine = opens
+                .2
+                .iter_mut()
+                .find(|((asked, _, _), _)| *asked == dir)
+                .expect("dir's question is remembered");
+            *mine.1 = elsewhere;
+        })
+        .expect("a scope is open");
+        let again = open_upwards(&dir, Vec::new()).expect("dir again");
+        assert_eq!(tree(&again), canonical(&other));
     }
 
     /// A write is opened fresh even inside a scope: a remembered handle shares

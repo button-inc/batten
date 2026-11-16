@@ -494,7 +494,7 @@ pub struct Resolved {
     pub fail_on_warning: bool,
     /// The effective rule set: the committed rules plus any the local file adds.
     #[serde(rename = "rule")]
-    pub rules: Vec<Rule>,
+    pub rules: config::Shared<Rule>,
     /// The scope path set: the authority's list, plus any `!` excludes the
     /// local file added. Raise-only — see [`merge_local_scope`] for why a local
     /// include is refused rather than appended.
@@ -561,7 +561,7 @@ pub struct Resolved {
     /// what it MEANS changes. House style §8 admits raise-only overrides, and
     /// redefining a refusal is not one.
     #[serde(rename = "verdict")]
-    pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    pub verdicts: config::Shared<crate::verdict::DeclaredVerdict>,
     /// The `[vocabulary]` word lists (CLOUD-1638), carried for
     /// [`Resolved::verdicts`]' reason and layered the same way.
     ///
@@ -1173,7 +1173,7 @@ fn authority(
     config_from: Option<&str>,
     config_in: Option<&str>,
 ) -> Result<(
-    config::Config,
+    std::sync::Arc<config::Config>,
     config::Authority,
     Option<crate::trust::Loaded>,
 )> {
@@ -1186,7 +1186,9 @@ fn authority(
     let named = config_in.map(Path::new);
     let Some(reference) = config_from else {
         let site = config::authority_site(dir, named);
-        let (config, present) = config::load_site(&site)?;
+        // SHARED, NOT CLONED: every read below borrows the authority, so the
+        // remembered parse serves it without a copy of the whole `Config`.
+        let (config, present) = config::load_site_shared(&site)?;
         return Ok((config, present, None));
     };
     // Under both flags the ref is resolved in the NAMED repository. A scratch
@@ -1209,7 +1211,7 @@ fn authority(
         // read would be. The provenance travels beside the config rather than in
         // the precedence ladder, whose `Ord` IS §8's order.
         crate::trust::Load::Loaded(loaded) => Ok((
-            loaded.config.clone(),
+            std::sync::Arc::new(loaded.config.clone()),
             config::Authority::Present,
             Some(*loaded),
         )),
@@ -1243,7 +1245,7 @@ pub(crate) fn committed(dir: &Path, overrides: &Overrides) -> Result<config::Con
         overrides.config_from.as_deref(),
         overrides.config_in.as_deref(),
     )
-    .map(|(config, _, _)| config)
+    .map(|(config, _, _)| std::sync::Arc::unwrap_or_clone(config))
 }
 
 /// [`resolve`], with the env layer supplied by `env` so it is testable without
@@ -1432,7 +1434,7 @@ fn declared_by(present: config::Authority, declared: bool, origin: Origin) -> Co
 /// `merge_local_*` helpers and the rule loop — and none may have a committed row
 /// redefined by the local layer.
 struct Tables {
-    rules: Vec<Rule>,
+    rules: config::Shared<Rule>,
     rules_source: Contributors,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
     redirects: Vec<crate::redirect::Redirect>,

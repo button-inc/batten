@@ -496,6 +496,61 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// Off-box session state (CLOUD-2717).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Offbox {
+        /// The sub-verb selected.
+        command: OffboxCommand,
+    },
+}
+
+/// Subcommands of `offbox` (CLOUD-2717).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OffboxCommand {
+    /// Whether the state repository can be written from here (CLOUD-2718).
+    Status,
+    /// Snapshot one session and replace its ref on the state repository
+    /// (CLOUD-2720).
+    Push {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name, which selects the session source.
+        harness: String,
+        /// The transcript path the harness named, where it named one.
+        transcript: Option<String>,
+    },
+    /// Put a pushed snapshot back in a container that lacks it (CLOUD-2723).
+    Restore {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name.
+        harness: String,
+        /// The session this one continues, where it is named.
+        from: Option<String>,
+    },
+    /// One rotation pass over the state repository, or the workflow that runs
+    /// one on a schedule (CLOUD-2724).
+    Rotate {
+        /// The state repository's URL.
+        remote: Option<String>,
+        /// How many unchanged passes finish a session, as typed.
+        quiet_runs: Option<String>,
+        /// Print the workflow file and do nothing else.
+        print_workflow: bool,
+        /// Where the printed workflow downloads the install script from.
+        install_url: Option<String>,
+    },
+    /// Run the session's off-box daemon until it is killed (CLOUD-2721).
+    Run {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name, which selects the session source.
+        harness: String,
+        /// The transcript path the harness named, where it named one.
+        transcript: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -4015,6 +4070,35 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
+        "offbox" => offbox_of(matches).map(|command| Command::Offbox { command }),
+        _ => None,
+    }
+}
+
+fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
+    match matches.subcommand()? {
+        ("status", _) => Some(OffboxCommand::Status),
+        ("push", matches) => Some(OffboxCommand::Push {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            transcript: matches.get_one::<String>("transcript").cloned(),
+        }),
+        ("restore", matches) => Some(OffboxCommand::Restore {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            from: matches.get_one::<String>("from").cloned(),
+        }),
+        ("rotate", matches) => Some(OffboxCommand::Rotate {
+            remote: matches.get_one::<String>("remote").cloned(),
+            quiet_runs: matches.get_one::<String>("quiet_runs").cloned(),
+            print_workflow: flag(matches, "print_workflow"),
+            install_url: matches.get_one::<String>("install_url").cloned(),
+        }),
+        ("run", matches) => Some(OffboxCommand::Run {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            transcript: matches.get_one::<String>("transcript").cloned(),
+        }),
         _ => None,
     }
 }

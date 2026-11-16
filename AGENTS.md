@@ -195,4 +195,4 @@ scanner, AST linter, or reference monitor. Its threat model is honest error: the
 wrong entity, time, or completion signal. Adopt prior art; don't expand the core.
 **Amended (CLOUD-1260): also an MCP _client_** — it dispatches a declared method
 and returns a declared reduction, the tracker having been 73% of one session's
-tool output. No server (CLOUD-204).
+tool output. No server (CLOUD-204). **And (CLOUD-2717) an off-box state push.**

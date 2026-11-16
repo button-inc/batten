@@ -2986,6 +2986,140 @@ const SESSION: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--session <id>` on `offbox push`: whose snapshot it is.
+///
+/// Required, where [`SESSION`] is optional: a snapshot is keyed by its session,
+/// and one pushed under a shared key would have two sessions overwrite each
+/// other's ref.
+const OFFBOX_SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "The harness's own identifier for the session whose state is pushed",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--harness <name>` on `offbox push`: which session source reads the records.
+///
+/// A plain string, never the hook's `--harness` enum: a harness this build has
+/// no source for still has stores to push, and refusing its name would refuse
+/// those.
+const OFFBOX_HARNESS: FlagDecl = FlagDecl {
+    id: "harness",
+    long: Some("harness"),
+    short: None,
+    help: "The harness the session belongs to; it selects where the session's records are read from",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--transcript <path>` on `offbox push`: the path the harness named.
+const OFFBOX_TRANSCRIPT: FlagDecl = FlagDecl {
+    id: "transcript",
+    long: Some("transcript"),
+    short: None,
+    help: "The transcript path the harness named for this session, where it named one",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--from <predecessor id>` on `offbox restore`: the session this one
+/// continues, restored from when the session has no snapshot of its own.
+const OFFBOX_FROM: FlagDecl = FlagDecl {
+    id: "from",
+    long: Some("from"),
+    short: None,
+    help: "The session this one continues; its snapshot is restored when this session has none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--remote <url>` on `offbox rotate`: the state repository the pass rotates.
+///
+/// An argument, never read from the environment's switch: the job runs inside
+/// the state repository and names it by its own address.
+const OFFBOX_REMOTE: FlagDecl = FlagDecl {
+    id: "remote",
+    long: Some("remote"),
+    short: None,
+    help: "The state repository's URL, whose finished sessions are rotated into its archive",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--quiet-runs <n>` on `offbox rotate`: how many passes a ref goes unchanged
+/// before it is rotated.
+const OFFBOX_QUIET_RUNS: FlagDecl = FlagDecl {
+    id: "quiet_runs",
+    long: Some("quiet-runs"),
+    short: None,
+    help: "How many consecutive passes a session's branch must go unchanged before it is rotated (default 6)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--print-workflow` on `offbox rotate`: print the scheduled workflow and stop.
+const OFFBOX_PRINT_WORKFLOW: FlagDecl = FlagDecl {
+    id: "print_workflow",
+    long: Some("print-workflow"),
+    short: None,
+    help: "Print the workflow file that runs a pass on a schedule, and do nothing else",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--install-url <url>` on `offbox rotate --print-workflow`: where the
+/// workflow downloads the install script from.
+const OFFBOX_INSTALL_URL: FlagDecl = FlagDecl {
+    id: "install_url",
+    long: Some("install-url"),
+    short: None,
+    help: "The install script's URL, which the printed workflow downloads and runs for this version",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -8125,6 +8259,99 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[JSON, SLOW_BASE],
+    },
+    // Off-box session state (CLOUD-2717). The noun is `unclassified` for
+    // `capture`'s reason: the verbs that follow `status` push to a remote, and a
+    // consumer reading an allowlist entry as a prefix must not be handed them.
+    // unreached: "offbox" CLOUD-2721 a noun; the daemon row wires its verbs.
+    CommandDecl {
+        path: "offbox",
+        id: "offbox",
+        about: "Keep this session's state in a repository off this machine",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`: one discovery request, nothing written and no directory created
+    // (CLOUD-2718). `EXITS_STANDARD`, never a verdict — an unreachable state
+    // repository is a fact about the machine and denies nothing (ruling 12).
+    // unreached: "offbox status" CLOUD-2721 an agent runs it to read whether the
+    // state repository is attached; the daemon row reports the same from its
+    // status file, and nothing in the tree should probe a remote unasked.
+    CommandDecl {
+        path: "offbox status",
+        id: "offbox.status",
+        about: "Whether the state repository the environment names can be written from here",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // `write`: it commits in the session's local repository and replaces a ref
+    // on the state repository (CLOUD-2720). `EXITS_VERDICT`, the one verb of the
+    // noun that has one: exit 2 says the state is not off this machine yet — a
+    // lost race on every attempt, or the forge saying slow down.
+    // unreached: "offbox push" CLOUD-2721 a person or an acceptance step runs
+    // one push by hand; the daemon row calls the same function on its own beat.
+    CommandDecl {
+        path: "offbox push",
+        id: "offbox.push",
+        about: "Snapshot one session and make it the value of its ref on the state repository",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
+    },
+    // `write`: it holds a lock, writes its status file and pushes (CLOUD-2721).
+    // `EXITS_STANDARD`: it runs until it is killed, and the two ways it returns
+    // at all — the switch is off, or another daemon is running — are both 0.
+    // unreached: "offbox run" CLOUD-2736 the agent launches it through its
+    // harness's background facility, never anything in this tree; the hook row
+    // is what tells the agent to.
+    // `write`: it writes the restored stores and the restore record
+    // (CLOUD-2723). `EXITS_VERDICT` for `offbox push`'s reason: exit 2 is the
+    // forge saying slow down, with no answer reached.
+    // unreached: "offbox restore" CLOUD-2723 the daemon runs the same function
+    // on start; the verb is for a person, and for an acceptance step that
+    // restores into a container whose state was deleted.
+    CommandDecl {
+        path: "offbox restore",
+        id: "offbox.restore",
+        about: "Put a session's pushed snapshot back where it was read from, in a container that does not have it",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_FROM],
+    },
+    // `write`: one pass replaces the state repository's archive ref and removes
+    // the branches it archived, in one atomic push. Stdout carries one token,
+    // as its sibling verbs' does, or the workflow file under `--print-workflow`;
+    // neither is a JSON document, so this is no data-channel verb.
+    // unreached: "offbox rotate" CLOUD-2724 it runs from the workflow the verb
+    // itself prints, installed in the state repository and not in this one.
+    CommandDecl {
+        path: "offbox rotate",
+        id: "offbox.rotate",
+        about: "Rotate the state repository's finished sessions into its archive and remove their branches, discarding nothing",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            OFFBOX_REMOTE,
+            OFFBOX_QUIET_RUNS,
+            OFFBOX_PRINT_WORKFLOW,
+            OFFBOX_INSTALL_URL,
+        ],
+    },
+    CommandDecl {
+        path: "offbox run",
+        id: "offbox.run",
+        about: "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
     },
     CommandDecl {
         path: "artifacts",

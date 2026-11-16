@@ -1029,6 +1029,57 @@ fn validate_shape(
     Ok(())
 }
 
+/// The `[[pattern]]` ids `rows` can read while they are evaluated, the Ready
+/// grammar's among them where a row asks an authority that needs it.
+///
+/// WHAT LETS A CALL COMPILE ONLY THE PATTERNS IT USES. Compiling the whole
+/// table for every call a row selects was a quarter of a `PostToolUse` on this
+/// repository's table (2026-11-15). The walk is over the rows' serialised form,
+/// so a [`Value`] variant added later that names a pattern under `section`'s
+/// keys is found without this function being taught it; an id it misses is a
+/// column recording could-not-look, never a wrong token.
+#[must_use]
+pub fn pattern_ids(rows: &[&Declared]) -> std::collections::BTreeSet<String> {
+    fn walk(value: &serde_json::Value, ids: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if let Some(section) = fields.get("section") {
+                    for key in ["label", "select"] {
+                        if let Some(id) = section.get(key).and_then(serde_json::Value::as_str) {
+                            ids.insert(id.to_owned());
+                        }
+                    }
+                }
+                if let Some(ask) = fields
+                    .get("authority")
+                    .and_then(|authority| authority.get("ask"))
+                    .and_then(serde_json::Value::as_str)
+                    && matches!(ask, "ready" | "closing-keys")
+                {
+                    ids.extend(
+                        crate::ready::REQUIRED_PATTERNS
+                            .iter()
+                            .map(|id| (*id).to_owned()),
+                    );
+                }
+                for nested in fields.values() {
+                    walk(nested, ids);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, ids)),
+            _ => {}
+        }
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for row in rows {
+        ids.extend(row.requires_input_matching.values().cloned());
+        if let Ok(serialised) = serde_json::to_value(row) {
+            walk(&serialised, &mut ids);
+        }
+    }
+    ids
+}
+
 /// Every id one expression names, checked against what the config declares.
 fn validate_value(
     recorder: &str,
@@ -1197,12 +1248,51 @@ pub fn append_all(
 /// of what the call produced.
 #[must_use]
 pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(keyed_name("recorder-blocked", branch, claim))
+}
+
+/// The longest file name a keyed record is given whole. A file name may be 255
+/// bytes on the filesystems this runs on; the rest is room for a suffix a
+/// writer adds while it replaces the file.
+const NAME_WHOLE: usize = 200;
+
+/// The file name of a record keyed by `branch` and its `claim`:
+/// `<record>.<branch>.<claim>`, or `<record>.<branch>` unclaimed.
+///
+/// **A claim too long for a file name is named by its digest.** A claim is the
+/// branch's issue keys joined, and a branch carrying sixteen rows composed a
+/// name of 226 bytes, which the writer's temporary suffix took past 255: the
+/// write failed with "File name too long", the gate
+/// reading the record could not look, and `land` stopped on a branch that had
+/// done nothing wrong (measured on the CLOUD-2717 bundle). Past [`NAME_WHOLE`]
+/// bytes the claim is replaced by its first key, the count of the rest, and
+/// sixteen hex digits of its BLAKE3: still one name per claim, still under the
+/// `<record>.<branch>.` prefix, and a short claim's name is byte for byte what
+/// it was.
+//MUTANT-SUITE crates/batten/src/recorder.rs
+//MUTANT long-claim-named-whole|s@^    if whole.len() <= NAME_WHOLE {$@    if true {@|a_claim_too_long_for_a_file_name_is_named_by_its_digest
+fn keyed_name(record: &str, branch: &str, claim: Option<&str>) -> String {
     let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
-        None => format!("recorder-blocked.{branch}"),
+    let Some(claim) = claim else {
+        return format!("{record}.{branch}");
     };
-    git_dir.join("batten-receipts").join(name)
+    let whole = format!("{record}.{branch}.{claim}");
+    if whole.len() <= NAME_WHOLE {
+        return whole;
+    }
+    let digest = blake3::hash(claim.as_bytes()).to_hex();
+    let mut keys = claim.split('-');
+    // A key is `<TEAM>-<number>`, so the first key is the first two segments.
+    let first = [keys.next(), keys.next()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("-");
+    let first: String = first.chars().take(32).collect();
+    let rest = keys.count() / 2;
+    format!("{record}.{branch}.{first}-and-{rest}-{}", &digest[..16])
 }
 
 /// Where a branch-keyed record lives.
@@ -1229,12 +1319,9 @@ pub fn record_path(
     branch: &str,
     claim: Option<&str>,
 ) -> std::path::PathBuf {
-    let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("{record}.{branch}.{claim}"),
-        None => format!("{record}.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    git_dir
+        .join("batten-receipts")
+        .join(keyed_name(record, branch, claim))
 }
 
 /// Whether the snapshot already carries a line matching EVERY named column.
@@ -1299,6 +1386,44 @@ mod outcome_tests {
             requires_recorded: None,
             columns: Vec::new(),
         }
+    }
+
+    /// Fails by: a pattern a selected row reads left uncompiled — its column
+    /// would record could-not-look — or the Ready grammar's ids missing for a
+    /// row that asks it.
+    #[test]
+    fn a_rows_pattern_ids_are_every_one_it_can_read() {
+        let mut row = declared(&[], &[("command", "fetch")]);
+        let column: Column = serde_json::from_value(serde_json::json!({
+            "name": "c",
+            "value": {"section": {"from": {"result": "body"}, "label": "lab", "select": "sel"}},
+        }))
+        .expect("a test literal parses");
+        row.columns.push(column);
+        let ids = pattern_ids(&[&row]);
+        let expected: std::collections::BTreeSet<String> = ["fetch", "lab", "sel"]
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect();
+        assert_eq!(ids, expected);
+
+        let mut asking = declared(&[], &[]);
+        asking.columns.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "r",
+                "value": {"authority": {"ask": "ready", "stdin": {"result": "body"},
+                                        "read": {"status": {"0": "ready"}}}},
+            }))
+            .expect("a test literal parses"),
+        );
+        let asked = pattern_ids(&[&asking]);
+        for id in crate::ready::REQUIRED_PATTERNS {
+            assert!(asked.contains(*id), "{id} is compiled for a Ready column");
+        }
+        assert!(
+            pattern_ids(&[&declared(&[], &[])]).is_empty(),
+            "a row naming no pattern compiles none"
+        );
     }
 
     /// CLOUD-1126's three-valued read, over the two arms that used to be one.
@@ -1632,6 +1757,45 @@ mod outcome_tests {
         row.columns
             .push(column(program("gate", Read::Status(unparsed))));
         assert!(refused(row));
+    }
+
+    /// Fails by: a branch that carries many rows composing a file name the
+    /// filesystem refuses, so the record's gate cannot look; two long claims
+    /// sharing one name; or a short claim's name changing.
+    #[test]
+    fn a_claim_too_long_for_a_file_name_is_named_by_its_digest() {
+        let keys = |from: u32| {
+            (from..from + 16)
+                .map(|n| format!("CLOUD-{n}"))
+                .collect::<Vec<_>>()
+                .join("-")
+        };
+        let branch = "claude/offbox-session-state-bundle";
+        let (one, other) = (keys(2718), keys(3718));
+        // 226 bytes whole: under a file name's 255 on its own, and over it
+        // once the writer's temporary suffix is added.
+        assert_eq!(format!("pr-unsubscribed.{branch}.{one}").len(), 226);
+
+        let name = keyed_name("pr-unsubscribed", branch, Some(&one));
+
+        assert!(name.len() <= NAME_WHOLE, "{name}");
+        assert!(
+            name.starts_with(
+                "pr-unsubscribed.claude-offbox-session-state-bundle.CLOUD-2718-and-15-"
+            ),
+            "{name}"
+        );
+        assert_eq!(name, keyed_name("pr-unsubscribed", branch, Some(&one)));
+        assert_ne!(name, keyed_name("pr-unsubscribed", branch, Some(&other)));
+        // A claim that fits is named whole, as it always was.
+        assert_eq!(
+            keyed_name("rec", "a/b", Some("CLOUD-1-CLOUD-2")),
+            "rec.a-b.CLOUD-1-CLOUD-2"
+        );
+        // And the blocked channel takes the same name.
+        let blocked = blocked_path(Path::new("g"), branch, Some(&one));
+        let blocked = blocked.file_name().map_or(0, std::ffi::OsStr::len);
+        assert!((1..=NAME_WHOLE).contains(&blocked), "{blocked}");
     }
 
     /// Fails by: a path that does not fold the branch, drop the claim, or

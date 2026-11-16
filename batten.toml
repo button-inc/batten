@@ -10301,21 +10301,6 @@ no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the 
 # EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
 # floor becomes the new count on its own and this row suppresses nothing. It
 # exists to get one commit past the gate, not to stand.
-# The one residual false positive `no-secrets` finds on this tree, measured
-# before the rule landed rather than discovered by it: ripsecrets matches
-# `${GH_PAT}` in a `git config url."https://x-access-token:${GH_PAT}@…"` line as
-# a credential embedded in a URL. It is a shell expansion of an Actions secret
-# injected at runtime — the shape is real, the instance is not.
-#
-# A `[[waiver]]` and never `severity = "allow"`: switching the rule off would
-# suppress every future finding too, while this names one path, states why, and
-# LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
-# rather than inheriting a decision nobody remembers making.
-[[waiver]]
-rule = "source carry unsafe"
-path = ".github/workflows/release-plz.yml"
-reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
-expires = "2026-11-14"
 
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
@@ -13712,6 +13697,18 @@ id = "path measure late"
 gloss = "a measured invocation path is over the latency budget this repository publishes"
 class = """
 An absolute ceiling rather than a ratchet: 100ms is the Command Line Interface Guidelines' floor for a response that reads as instant, and the ceiling sitting ~20-30x over the measured value IS the tolerance band a shared runner's p95 needs. So this is not noise -- a path here is genuinely slower than the contract batten publishes for itself. Fix what got slower, or move the budget in `policy/perf-assert.rego` AND in README's Performance table together, which the `perf budget unpublished` class refuses to let you do by halves. Whether this commit is slower than the trunk is a different question with a different answer shape and is `perf-gate`'s.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/perf-assert.rego"
+
+[[verdict]]
+id = "hook measure late"
+gloss = "a hook arm's measured p50 is over the 10 ms target this repository publishes"
+class = """
+The target and the ceiling answer different questions: the p50 target is what a mediated call normally costs, the p95 budget is what it must never exceed. With only the ceiling gated a hook path could go from 3 ms to 90 ms and every gate stayed green, and an agent pays that on every tool call. So this fires on the ordinary cost, not on an outlier. Fix what got slower. A waiver is the owner's to grant, as a dated `[[waiver]]` row; moving the target means moving `targets` in `policy/perf-assert.rego` AND README's target column together.
 """
 
 [[verdict.route]]

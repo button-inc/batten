@@ -1080,6 +1080,7 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
         // (`fetch::get_direct`); a forge REST call is not that question, and
         // taking the direct route here would bypass the egress fence for every
         // read this module makes.
+        file: None,
         direct: false,
         credentials: &[],
     }])
@@ -1157,18 +1158,11 @@ fn backoff_from(response: &fetch::Response, now: u64) -> Option<u64> {
 /// without exercising the behaviour, which is coverage that has stopped testing
 /// the thing it names. Found in review.
 fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> {
+    let (retry_after, reset_at) = throttle_headers(header);
     // `Retry-After` FIRST, because a forge that states one has stated it about
     // this exact refusal. The reset instant below is a property of the window.
-    if let Some(seconds) = header("retry-after")
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-    {
+    if let Some(seconds) = retry_after.filter(|seconds| *seconds > 0) {
         return Some(seconds.min(MAX_BACKOFF));
-    }
-    // ONLY AT ZERO REMAINING. The reset instant rides every response, so reading
-    // it unconditionally would back off after each successful call.
-    if header("x-ratelimit-remaining").and_then(|raw| raw.trim().parse::<u64>().ok()) != Some(0) {
-        return None;
     }
     // **A CLOCK THAT DID NOT READ IS NOT AN INSTANT** (review of #848).
     // `now_unix` answers `0` when `SystemTime::now` fails, and `0` passes the
@@ -1180,10 +1174,36 @@ fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> 
     if now == 0 {
         return None;
     }
-    header("x-ratelimit-reset")
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
+    reset_at
         .filter(|reset| *reset > now)
         .map(|reset| (reset - now).min(MAX_BACKOFF))
+}
+
+/// The two throttle signals a response states, unjudged: `Retry-After` in
+/// seconds, and the `x-ratelimit-reset` epoch second (CLOUD-2729).
+///
+/// **RAW, AND THAT IS THE SPLIT.** [`backoff_of`] turns the pair into one wait
+/// against the caller's `now`, drops a zero and clamps. A caller that reads no
+/// clock — `lease`, which reports a throttle and leaves the waiting to whoever
+/// called it — needs the values as the forge gave them.
+///
+/// ONLY AT ZERO REMAINING is the reset returned. The reset instant rides every
+/// response, so reading it unconditionally would report a throttle after each
+/// successful call.
+pub(crate) fn throttle_headers(
+    header: impl Fn(&str) -> Option<String>,
+) -> (Option<u64>, Option<u64>) {
+    let number = |name: &str| header(name).and_then(|raw| raw.trim().parse::<u64>().ok());
+    let retry_after = number("retry-after");
+    let reset_at = (number("x-ratelimit-remaining") == Some(0))
+        .then(|| number("x-ratelimit-reset"))
+        .flatten();
+    (retry_after, reset_at)
+}
+
+/// Whether a response states zero remaining rate limit, whatever its reset.
+pub(crate) fn exhausted(header: impl Fn(&str) -> Option<String>) -> bool {
+    header("x-ratelimit-remaining").and_then(|raw| raw.trim().parse::<u64>().ok()) == Some(0)
 }
 
 #[cfg(test)]

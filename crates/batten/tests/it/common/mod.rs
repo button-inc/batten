@@ -367,6 +367,11 @@ fn declared_env_vars() -> Vec<&'static str> {
     names
 }
 
+/// Every AMBIENT variable that switches a feature on, removed from each spawned
+/// `batten` by name (CLOUD-2718). Named through the crate's own constants so a
+/// rename cannot leave the scrub behind.
+pub(crate) const AMBIENT_ENV_VARS: [&str; 1] = [batten::session::STATE_REPO_ENV];
+
 /// Every BYPASS variable, which the derivation above structurally cannot see
 /// (CLOUD-1227).
 ///
@@ -505,6 +510,14 @@ pub(crate) fn batten() -> Batten {
     // `declared_env_vars` by construction — the same shape as `BATTEN_BIN` below,
     // which is set explicitly for the same reason the derivation cannot see it.
     for name in bypass_env_vars() {
+        command.env_remove(name);
+    }
+    // NOR AN AMBIENT SWITCH (CLOUD-2718), `bypass_env_vars`' hole one class
+    // over: the off-box state repository is named by the environment and is
+    // deliberately not a surface flag, so the derivation cannot see it. A cloud
+    // environment sets it for every session, and a case that inherited it would
+    // probe a real remote from a fixture.
+    for name in AMBIENT_ENV_VARS {
         command.env_remove(name);
     }
     // NOR THE SWEEP'S OWN SELECTION. A registered runner runs this suite as its

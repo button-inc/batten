@@ -1657,6 +1657,53 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // One token out of four (CLOUD-2718). The corpus spawns it with the state
+    // repository variable removed, so it answers `off` and reads nothing.
+    Verb {
+        path: "offbox status",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // One token (CLOUD-2720), and `off` here for `offbox status`'s reason: the
+    // corpus spawns it with the state repository variable removed.
+    Verb {
+        path: "offbox push",
+        args: &["--session", "s", "--harness", "exit-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `off` (CLOUD-2723): with the variable removed nothing is looked for.
+    Verb {
+        path: "offbox restore",
+        args: &["--session", "s", "--harness", "exit-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The workflow file the verb prints (CLOUD-2724): Batten's own text, with
+    // the caller's install URL and this build's version in it. A pass itself
+    // answers one token and is exercised beside the code, over the stand-in.
+    Verb {
+        path: "offbox rotate",
+        args: &[
+            "--print-workflow",
+            "--install-url",
+            "https://example.test/install.sh",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "prints the workflow file that runs a rotation pass on a schedule",
+            Echoed::Surface,
+        ),
+    },
+    // `off`, and it returns: with the variable removed the daemon never starts
+    // (CLOUD-2721).
+    Verb {
+        path: "offbox run",
+        args: &["--session", "s", "--harness", "exit-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-843, retiring `gh-preflight`. The corpus declares no
     // `[[forge.probe]]` row, so this exercises the refusal that names the
     // missing table — a usage answer, never a probe, and the forge fixture the

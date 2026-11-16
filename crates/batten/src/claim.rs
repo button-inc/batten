@@ -518,6 +518,23 @@ pub fn stamp_session(receipts: &Path) -> std::io::Result<()> {
     crate::durable::replace(receipts.join(SESSION_STAMP), b"")
 }
 
+/// [`stamp_session`], dated `began` rather than now (CLOUD-2723).
+///
+/// For a stamp that was owed from the session's start and is paid later: the
+/// gate dates refinement against this file's mtime, so it must carry the
+/// moment the session began and not the moment the debt was settled.
+///
+/// # Errors
+///
+/// As [`stamp_session`], and a file whose time will not set.
+pub fn stamp_session_at(receipts: &Path, began: std::time::SystemTime) -> std::io::Result<()> {
+    stamp_session(receipts)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(receipts.join(SESSION_STAMP))?
+        .set_modified(began)
+}
+
 /// The prefix `[[mint]] issue-read` writes one file per issue key under.
 const READ_RECEIPT_PREFIX: &str = "issue-read.";
 

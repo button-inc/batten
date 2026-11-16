@@ -252,7 +252,7 @@ fn cache_path(state: &Path) -> Option<PathBuf> {
 /// vouch for it.
 //MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\x7cstamp\x7c stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
 fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
-    let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
+    let body = String::from_utf8(crate::cache::read(path, key)?.into_vec()).ok()?;
     let (written, epoch) = body.split_once(' ')?;
     let (secs, nanos) = written.split_once('.')?;
     let written = std::time::Duration::new(secs.parse().ok()?, nanos.parse().ok()?);

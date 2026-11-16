@@ -1036,7 +1036,7 @@ pub fn load(
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
+            let bundle = compile_for(root, &rule.id, &sources, data, (checks, Origin::Shipped))?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1075,7 +1075,7 @@ pub fn load(
         // one engine from N sources, which is the whole of CLOUD-837. The hot
         // path reads it from the bytecode cache when nothing it is a function
         // of has changed (CLOUD-2236).
-        let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
+        let bundle = compile_for(root, &rule.id, &sources, data, (checks, Origin::Tree))?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1198,7 +1198,7 @@ fn compile_for(
     id: &str,
     sources: &[(String, String)],
     (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
-    checks: ModuleChecks,
+    (checks, origin): (ModuleChecks, Origin),
 ) -> Result<Bundle> {
     if checks == ModuleChecks::SkipOnHotPath {
         let (text, digest) = pattern_text.get_or_init(|| {
@@ -1206,7 +1206,7 @@ fn compile_for(
             let digest = *blake3::hash(text.as_bytes()).as_bytes();
             (text, digest)
         });
-        compile_cached(root, id, sources, pattern_data, (text, digest))
+        compile_cached(root, id, sources, pattern_data, (text, digest), origin)
     } else {
         compile(id, sources, pattern_data)
     }
@@ -1793,7 +1793,8 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
+//MUTANT answer-memo-never-recalled|s@^            if let Some(Some(answer)) = Answers::recall(compiled, input, read) {$@            if let Some(Some(answer)) = None::<Option<Option<Answer>>> {@|one_call_evaluates_each_rule_once
+//MUTANT every-family-evaluated-at-once|s@^            let wanted = family(rules);$@            let wanted: BTreeSet<String> = ANSWERED_RULES.iter().map(\x7crule\x7c (*rule).to_owned()).collect();@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -1811,10 +1812,17 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             // what an unscoped call over its rules returns — could-not-look if
             // one of THEM faulted, else their members — so a sibling's fault
             // never reaches a verdict.
-            if let Some(answer) = Answers::recall(compiled, input, |held| select(held, rules)) {
+            let read = |held: &Evaluated| {
+                rules
+                    .iter()
+                    .all(|rule| held.asked.contains(*rule))
+                    .then(|| select(held, rules))
+            };
+            if let Some(Some(answer)) = Answers::recall(compiled, input, read) {
                 return answer;
             }
-            let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
+            let wanted = family(rules);
+            let evaluated = compiled.evaluate(&Answers::parsed(input)?, &wanted)?;
             let answer = select(&evaluated, rules);
             Answers::keep(compiled, input, evaluated);
             answer
@@ -1825,12 +1833,12 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// What an unscoped call over `rules` answers, read off a bundle's evaluation:
 /// could-not-look if one of them faulted, else their members.
 fn select(evaluated: &Evaluated, rules: &[&str]) -> Option<Answer> {
-    let (faulted, members) = evaluated;
-    if rules.iter().any(|rule| faulted.contains(*rule)) {
+    if rules.iter().any(|rule| evaluated.faulted.contains(*rule)) {
         return None;
     }
     Some(Answer::Members(
-        members
+        evaluated
+            .members
             .iter()
             .filter(|((_, rule), _)| rules.contains(&rule.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -1875,12 +1883,41 @@ type Asked = (
     Vec<(std::sync::Arc<Compiled>, Evaluated)>,
 );
 
-/// One program over one input, every rule evaluated: the rules that faulted, and
-/// what the rest defined.
-type Evaluated = (
-    BTreeSet<String>,
-    BTreeMap<(Vec<String>, String), regorus::Value>,
-);
+/// One program over one input: the rules evaluated so far, those of them that
+/// faulted, and what the rest defined.
+#[derive(Default)]
+struct Evaluated {
+    asked: BTreeSet<String>,
+    faulted: BTreeSet<String>,
+    members: BTreeMap<(Vec<String>, String), regorus::Value>,
+}
+
+/// The rules a call's asks come in, each evaluated together the first time any
+/// member is asked (2026-11-16): the adjudication, the grant, the declaration.
+///
+/// ONE VM PER FAMILY, NOT ONE PER CALL. A `PostToolUse` asks only the first
+/// family, and evaluating every rule at its first ask ran the grant rules too —
+/// measured, `claude_code_cloud`'s `preapprove` alone was a third of the Rego a
+/// warm call ran, on an event no grant can apply to. `rules` is asked at load
+/// and never by a call. The grant's two share a VM because a rewrite is only
+/// read beside a pre-approval.
+const FAMILIES: [&[&str]; 3] = [
+    &[DENY_RULE, VIOLATION_RULE],
+    &[PREAPPROVE_RULE, REWRITE_RULE],
+    &[RULES_RULE],
+];
+
+/// Every rule evaluated beside `rules`: the families they belong to, and any
+/// rule no family names.
+fn family(rules: &[&str]) -> BTreeSet<String> {
+    let mut wanted: BTreeSet<String> = rules.iter().map(|rule| (*rule).to_owned()).collect();
+    for members in FAMILIES {
+        if members.iter().any(|member| rules.contains(member)) {
+            wanted.extend(members.iter().map(|member| (*member).to_owned()));
+        }
+    }
+    wanted
+}
 
 thread_local! {
     static ANSWERS: std::cell::RefCell<Option<Answers>> = const { std::cell::RefCell::new(None) };
@@ -1903,7 +1940,9 @@ pub struct AnswerScope;
 
 impl Drop for AnswerScope {
     fn drop(&mut self) {
-        ANSWERS.with(|cell| *cell.borrow_mut() = None);
+        // Closed, not freed, for `HookLoadScope`'s reason: the call's answers
+        // are returned to the system whole when the process exits behind it.
+        ANSWERS.with(|cell| std::mem::forget(cell.borrow_mut().take()));
     }
 }
 
@@ -1967,9 +2006,19 @@ impl Answers {
             if let Some(answers) = cell.borrow_mut().as_mut()
                 && let Some(at) = answers.input_at(input)
             {
-                answers.inputs[at]
-                    .2
-                    .push((std::sync::Arc::clone(compiled), evaluated));
+                let held = &mut answers.inputs[at].2;
+                // A later family joins the evaluation already held for this
+                // program, so one entry answers every family it has run.
+                if let Some((_, kept)) = held
+                    .iter_mut()
+                    .find(|(program, _)| std::sync::Arc::ptr_eq(program, compiled))
+                {
+                    kept.asked.extend(evaluated.asked);
+                    kept.faulted.extend(evaluated.faulted);
+                    kept.members.extend(evaluated.members);
+                } else {
+                    held.push((std::sync::Arc::clone(compiled), evaluated));
+                }
             }
         });
     }
@@ -2031,8 +2080,9 @@ fn compile_cached(
     sources: &[(String, String)],
     data: &serde_json::Value,
     (text, digest): (&str, &[u8; 32]),
+    origin: Origin,
 ) -> Result<Bundle> {
-    let key = cache_key(id, sources, digest);
+    let key = cache_key(id, sources, digest, origin);
     let path = cache_path(root, id);
     if let Some(bundle) = path
         .as_deref()
@@ -2117,15 +2167,40 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
 //MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
-fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
-    let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
+fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32], origin: Origin) -> String {
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(3 + 2 * sources.len());
     fields.push(id.as_bytes());
+    fields.push(origin.tag());
     for (path, source) in sources {
         fields.push(path.as_bytes());
-        fields.push(source.as_bytes());
+        // A SHIPPED module's bytes are the binary's own, which the key already
+        // names by its build ID, so hashing them again on every call keys
+        // nothing the binary does not (2026-11-16). A tree module's are hashed.
+        if origin == Origin::Tree {
+            fields.push(source.as_bytes());
+        }
     }
     fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
+}
+
+/// Where a bundle's module sources came from, which decides what keys them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A preset's modules, compiled into this binary.
+    Shipped,
+    /// Modules read from the tree, or from a ref.
+    Tree,
+}
+
+impl Origin {
+    /// The field that keeps the two kinds of key apart.
+    const fn tag(self) -> &'static [u8] {
+        match self {
+            Self::Shipped => b"shipped",
+            Self::Tree => b"tree",
+        }
+    }
 }
 
 /// The data document as a `regorus::Value`, parsed once per distinct text
@@ -2297,30 +2372,44 @@ impl Compiled {
         Some(vm)
     }
 
-    /// Every entry evaluated in one VM, each rule's fault recorded against that
-    /// rule alone: a VM that faulted is replaced before the next entry runs, so
-    /// no rule's answer is read off a VM a sibling left mid-fault.
+    /// Every entry of the `wanted` rules evaluated in one VM, each rule's fault
+    /// recorded against that rule alone: a VM that faulted is replaced before
+    /// the next entry runs, so no rule's answer is read off a VM a sibling left
+    /// mid-fault. A bundle defining none of them builds no VM at all.
     ///
     /// No module can be written to reach this: regorus's VM reads an error in
     /// a rule body as undefined, and what still propagates is a resource limit
     /// (none is set) or the VM's own inconsistency. The record is what keeps a
     /// scoped answer equal to an unscoped one by construction if one does.
-    fn evaluate_all(&self, input: &regorus::Value) -> Option<Evaluated> {
+    fn evaluate(&self, input: &regorus::Value, wanted: &BTreeSet<String>) -> Option<Evaluated> {
+        let mut evaluated = Evaluated {
+            asked: wanted.clone(),
+            ..Evaluated::default()
+        };
+        let mut entries = self
+            .entries
+            .iter()
+            .filter(|(_, rule)| wanted.contains(rule))
+            .peekable();
+        if entries.peek().is_none() {
+            return Some(evaluated);
+        }
         let mut vm = self.vm(input)?;
-        let (mut faulted, mut members) = (BTreeSet::new(), BTreeMap::new());
-        for (package, rule) in &self.entries {
+        for (package, rule) in entries {
             match vm.execute_entry_point_by_name(&entry_point(package, rule)) {
                 Ok(regorus::Value::Undefined) => {}
                 Ok(value) => {
-                    members.insert((package.clone(), rule.clone()), value);
+                    evaluated
+                        .members
+                        .insert((package.clone(), rule.clone()), value);
                 }
                 Err(_) => {
-                    faulted.insert(rule.clone());
+                    evaluated.faulted.insert(rule.clone());
                     vm = self.vm(input)?;
                 }
             }
         }
-        Some((faulted, members))
+        Some(evaluated)
     }
 
     fn answer(&self, input: &regorus::Value, rules: &[&str]) -> Option<Answer> {
@@ -3074,15 +3163,33 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
 //MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
+//MUTANT skew-bricks-the-boundary|s@^    let ids: BTreeSet<\&str> = shipped.iter().map(\x7centry\x7c entry.id.as_str()).collect();$@    let ids: BTreeSet<\&str> = shipped.iter().map(\x7centry\x7c entry.id.as_str()).collect(); if let Some(row) = verdicts.iter().find(\x7crow\x7c ids.contains(row.id.as_str())) { return Err(UsageError::raise(row.id.clone())); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
-    let mut registry = verdicts.to_vec();
-    for entry in crate::verdict::vendored() {
-        registry.retain(|row| row.id != entry.id);
-        registry.push(entry);
-    }
+    let shipped = crate::verdict::vendored();
+    // ONE PASS, NOT ONE PER SHIPPED ROW: a `retain` over the whole registry for
+    // each shipped class was a quadratic 1.3M instructions on every hook call
+    // (callgrind, 2026-11-16). A consumer row a shipped one shadows is dropped,
+    // and a later shipped row of one id still replaces an earlier one.
+    let ids: BTreeSet<&str> = shipped.iter().map(|entry| entry.id.as_str()).collect();
+    let mut registry: Vec<_> = verdicts
+        .iter()
+        .filter(|row| !ids.contains(row.id.as_str()))
+        .cloned()
+        .collect();
+    let last: BTreeMap<&str, usize> = shipped
+        .iter()
+        .enumerate()
+        .map(|(at, entry)| (entry.id.as_str(), at))
+        .collect();
+    registry.extend(
+        shipped
+            .iter()
+            .enumerate()
+            .filter(|(at, entry)| last.get(entry.id.as_str()) == Some(at))
+            .map(|(_, entry)| entry.clone()),
+    );
     Ok(registry)
 }
 
@@ -4933,9 +5040,22 @@ rules contains not_quoted\n";
             id,
             sources,
             (data, &text),
-            ModuleChecks::SkipOnHotPath,
+            (ModuleChecks::SkipOnHotPath, Origin::Tree),
         )
         .expect("the fixture loads")
+    }
+
+    /// A shipped module is keyed by its path and the binary, never its bytes,
+    /// which the binary fixes; a tree module's bytes are its key, and the two
+    /// kinds never share one.
+    #[test]
+    fn a_shipped_modules_key_is_its_path_and_a_tree_modules_its_bytes() {
+        let digest = [0_u8; 32];
+        let module = |text: &str| vec![("presets/p/m.rego".to_owned(), text.to_owned())];
+        let key = |text, origin| cache_key("row", &module(text), &digest, origin);
+        assert_eq!(key("a", Origin::Shipped), key("b", Origin::Shipped));
+        assert_ne!(key("a", Origin::Tree), key("b", Origin::Tree));
+        assert_ne!(key("a", Origin::Shipped), key("a", Origin::Tree));
     }
 
     #[test]

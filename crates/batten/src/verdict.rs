@@ -1586,6 +1586,14 @@ pub enum Native by id {
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
     ScriptRunLoose => "script run loose",
+    /// This session's off-box daemon is not running, is stuck, or serves
+    /// another session (CLOUD-2736).
+    ///
+    /// **APPENDED LAST**, with the one below, for [`Native::ProseColumnRefused`]'s
+    /// reason.
+    OffboxDaemonDown => "spawn run missing",
+    /// The command that starts the off-box daemon was not run in the background.
+    OffboxDaemonForeground => "spawn run blocked",
 }
 }
 
@@ -2872,6 +2880,32 @@ asked whether it holds the result.",
             "edit run first",
             "make the edit with the host's Edit/Write tools; a reusable program is a tracked file under review",
         )],
+        applicability: Applicability::Advice,
+    },
+    // CLOUD-2736. Raised at the hook boundary from four small files, never by
+    // a module: the remedy is a command that differs per session, so it travels
+    // on the finding as its own route.
+    VendoredVerdict {
+        id: "spawn run missing",
+        gloss: "this session's off-box daemon is not running, is stuck, or serves another session",
+        class: "With the state repository variable set, a session's state leaves the machine only \
+while its off-box daemon runs, and the agent is what runs it: nothing in the engine starts a \
+process on the agent's behalf. A daemon can be killed at any time, so each tool call looks: the \
+daemon's lock is free (not running), it holds the lock and has not read its inbox for a long way \
+(stuck), or its status file names another session. The first calls that find one of those are \
+advised; after five, a call is refused until the command on the line has been run. Counted in \
+calls and bytes, never in time. Where the host has no way for an agent to keep a process running \
+this is advice only, and an unreachable state repository is never this class: that denies nothing.",
+        routes: &[read("daemon state read", "batten doctor session")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "spawn run blocked",
+        gloss: "the command that starts the off-box daemon was not run in the background",
+        class: "`batten offbox run` runs until it is killed. Run in the foreground it holds the \
+agent's turn until the host kills it, and the daemon dies with the call that started it. The same \
+command with the host's background mark is admitted.",
+        routes: &[read("daemon state read", "batten doctor session")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {

@@ -701,3 +701,173 @@ fn the_data_channel_reports_the_contained_failure_as_a_class_token_alone() {
     );
     nowhere(&env, &out, &secret, "contained failure under -J");
 }
+
+// --- redaction: the keyless entry (CLOUD-2726) --------------------------------
+
+/// A staging directory beside an [`Env`], holding `a.jsonl` with the token on
+/// line 2 of 3.
+///
+/// THE CALL IS IN-PROCESS, so the scanner cache and the key path resolve under
+/// this process's contained state root rather than under [`Env::home`]. The
+/// stub is therefore provisioned by a spawn left on the harness's default pin —
+/// the same root — where [`Env::install_scanner`] would put it under a home the
+/// library call never reads.
+struct Staging {
+    env: Env,
+    dir: PathBuf,
+    before: String,
+    state: &'static Path,
+}
+
+impl Staging {
+    fn new(name: &str) -> Self {
+        let state = common::scratch_state_root();
+        let env = Env::new(name);
+        let dir = env.repo.parent().unwrap().join("staging");
+        fs::create_dir_all(&dir).unwrap();
+        let before = format!("{{\"n\":1}}\n{{\"k\":\"{}\"}}\n{{\"n\":3}}\n", token());
+        fs::write(dir.join("a.jsonl"), &before).unwrap();
+        Staging {
+            env,
+            dir,
+            before,
+            state,
+        }
+    }
+
+    /// [`Env::install_scanner`], into the state root this process resolves.
+    fn install(&self, script: &str) {
+        let path = self.env.artifacts.join("ripsecrets");
+        fs::write(&path, script).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        self.env
+            .config(&format!("file://{}", path.display()), &digest(&bytes));
+        let applied = batten()
+            .args(["provision", "apply"])
+            .current_dir(&self.env.repo)
+            .output()
+            .expect("run batten");
+        assert!(
+            applied.status.success(),
+            "the stub scanner installs: {}",
+            String::from_utf8_lossy(&applied.stderr)
+        );
+    }
+
+    fn provisions(&self) -> Vec<batten::provision::Provision> {
+        batten::config::load(&self.env.repo.join("batten.toml"))
+            .expect("the fixture config loads")
+            .provisions
+    }
+
+    fn redact(&self) -> anyhow::Result<usize> {
+        batten::secrets::redact(
+            &self.provisions(),
+            &self.env.repo,
+            &self.dir,
+            &[String::from("a.jsonl")],
+        )
+    }
+
+    fn after(&self) -> String {
+        fs::read_to_string(self.dir.join("a.jsonl")).unwrap()
+    }
+}
+
+/// Fails by: the span surviving, a neighbouring line changing, or a line going.
+#[test]
+fn redact_replaces_the_matched_span_and_only_it() {
+    let staged = Staging::new("secrets-redact-span");
+    staged.install(&stub(&[("a.jsonl", 2, Some(TOKEN_PARTS))], 1));
+
+    assert_eq!(staged.redact().unwrap(), 1);
+
+    let after = staged.after();
+    assert!(!after.contains(&token()), "the token's bytes are gone");
+    let before: Vec<&str> = staged.before.split_inclusive('\n').collect();
+    let lines: Vec<&str> = after.split_inclusive('\n').collect();
+    assert_eq!(lines.len(), before.len(), "the line count is kept");
+    assert_eq!(lines[0], before[0]);
+    assert_eq!(lines[1], "{\"k\":\"[REDACTED]\"}\n");
+    assert_eq!(lines[2], before[2]);
+}
+
+/// Fails by: the redactor reaching the custody half — a key or a ledger
+/// appearing for a repository that only ever redacted.
+#[test]
+fn redact_mints_no_identity_and_writes_no_ledger() {
+    let staged = Staging::new("secrets-redact-keyless");
+    staged.install(&stub(&[("a.jsonl", 2, Some(TOKEN_PARTS))], 1));
+
+    assert_eq!(staged.redact().unwrap(), 1);
+
+    let repo = staged.env.repo.canonicalize().unwrap();
+    let key = batten::secrets::key_path(&repo).unwrap();
+    // THE PREMISE: the key path resolves inside this fixture, so its absence is
+    // an answer about this run and not about a directory nobody wrote to.
+    assert!(key.starts_with(staged.state), "{}", key.display());
+    assert!(!key.exists(), "no key is minted");
+    assert!(
+        !batten::secrets::ledger_path(&repo).unwrap().exists(),
+        "no ledger is written"
+    );
+}
+
+/// Fails by: the scanner running anywhere but where the staged files are.
+#[test]
+fn redact_runs_the_scanner_in_the_staging_directory() {
+    let staged = Staging::new("secrets-redact-cwd");
+    fs::write(staged.dir.join("staging-marker"), "").unwrap();
+    // THE PREMISE: the marker is in staging only.
+    assert!(!staged.env.repo.join("staging-marker").exists());
+    let script = format!(
+        "#!/bin/sh\nif [ -f staging-marker ]; then\n  T={}\n  printf '%s\\n' \"a.jsonl:2:$T\"\n  exit 1\nfi\nexit 0\n",
+        shell_token(TOKEN_PARTS)
+    );
+    staged.install(&script);
+
+    assert_eq!(staged.redact().unwrap(), 1);
+    assert!(!staged.after().contains(&token()));
+}
+
+/// Fails by: a span the scanner saw and the file does not hold reading as a
+/// clean redaction, or a half-written file.
+#[test]
+fn a_span_the_file_does_not_hold_is_an_error_and_writes_nothing() {
+    let staged = Staging::new("secrets-redact-disagree");
+    staged.install(&stub(&[("a.jsonl", 2, Some(OTHER_PARTS))], 1));
+
+    let refusal = staged.redact().unwrap_err();
+    assert!(
+        refusal.downcast_ref::<batten::UsageError>().is_none(),
+        "could-not-redact is internal, not a usage error"
+    );
+    assert!(!format!("{refusal:#}").contains(&other_token()));
+    assert_eq!(staged.after(), staged.before);
+}
+
+/// Fails by: a scanner that never ran being reported as nothing to redact.
+#[test]
+fn redact_without_a_scanner_is_a_usage_error_and_writes_nothing() {
+    let staged = Staging::new("secrets-redact-absent");
+
+    let refusal = batten::secrets::redact(
+        &[],
+        &staged.env.repo,
+        &staged.dir,
+        &[String::from("a.jsonl")],
+    )
+    .unwrap_err();
+    assert!(refusal.downcast_ref::<batten::UsageError>().is_some());
+    assert_eq!(staged.after(), staged.before);
+
+    // AND A RELATIVE STAGING DIRECTORY, refused before anything is resolved.
+    let relative = batten::secrets::redact(
+        &[],
+        &staged.env.repo,
+        Path::new("staging"),
+        &[String::from("a.jsonl")],
+    )
+    .unwrap_err();
+    assert!(relative.downcast_ref::<batten::UsageError>().is_some());
+}

@@ -54,10 +54,103 @@ pub struct Spilled {
 pub struct Streamed {
     /// The document, with every spilled leaf replaced by [`marker`] text.
     pub value: Value,
-    /// The exact bytes the host sent, spooled.
-    pub raw: PathBuf,
+    /// The exact bytes the host sent.
+    pub raw: Raw,
     /// The leaves that went to files, in document order.
     pub spilled: Vec<Spilled>,
+}
+
+/// The host's bytes as they were read: held while they fit [`RAW_HELD_MAX`],
+/// spooled to a file past it.
+///
+/// HELD, NOT SPOOLED, FOR THE COMMON CALL (2026-11-16). Every hook call made a
+/// directory, wrote its payload to a file, read it back and removed both — six
+/// file-system operations and a directory removal on a payload of a few hundred
+/// bytes. The spool exists so a payload memory must not hold never enters it
+/// whole (CLOUD-2224); one under the threshold is held instead, and one over it
+/// is spooled exactly as before.
+#[derive(Debug)]
+pub enum Raw {
+    /// The bytes, in memory.
+    Held(Vec<u8>),
+    /// The file holding the bytes.
+    Spooled(PathBuf),
+}
+
+impl Raw {
+    /// The bytes as text.
+    ///
+    /// # Errors
+    ///
+    /// A spool that will not read, or bytes that are not UTF-8.
+    pub fn text(&self) -> std::io::Result<String> {
+        match self {
+            Self::Held(bytes) => String::from_utf8(bytes.clone())
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err)),
+            Self::Spooled(path) => std::fs::read_to_string(path),
+        }
+    }
+
+    /// Remove the spool file, where there is one.
+    pub fn discard(&self) {
+        if let Self::Spooled(path) = self {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// The most of a payload held in memory before it is spooled.
+pub const RAW_HELD_MAX: usize = 1024 * 1024;
+
+/// Where the teed bytes go: memory up to [`RAW_HELD_MAX`], then a spool file
+/// that starts with what memory held.
+struct RawSink<'a> {
+    dir: &'a Path,
+    path: PathBuf,
+    held: Vec<u8>,
+    file: Option<std::io::BufWriter<std::fs::File>>,
+}
+
+impl RawSink<'_> {
+    /// The bytes as they stand: held, or spooled once flushed.
+    fn finish(self) -> Result<Raw> {
+        match self.file {
+            None => Ok(Raw::Held(self.held)),
+            Some(mut file) => {
+                file.flush()
+                    .with_context(|| format!("spool {}", self.path.display()))?;
+                Ok(Raw::Spooled(self.path))
+            }
+        }
+    }
+}
+
+impl Write for RawSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.file.is_none() && self.held.len() + buf.len() <= RAW_HELD_MAX {
+            self.held.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
+        if self.file.is_none() {
+            std::fs::create_dir_all(self.dir)?;
+            let mut file = std::io::BufWriter::new(
+                // The host's bytes, teed as they are parsed and read back by
+                // this process alone: committed when the parse returns.
+                std::fs::File::create(&self.path)?, // stream: the hook spool
+            );
+            file.write_all(&self.held)?;
+            self.held = Vec::new();
+            self.file = Some(file);
+        }
+        match self.file.as_mut() {
+            Some(file) => file.write(buf),
+            None => Ok(0),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.as_mut().map_or(Ok(()), Write::flush)
+    }
 }
 
 /// The text a spilled leaf's place holds until the caller replaces it with its
@@ -105,16 +198,19 @@ pub fn restore(value: &Value, spilled: &[Spilled]) -> Value {
     restored
 }
 
-/// Every byte the parser pulls is also written to the spool.
-struct Tee<R, W> {
+/// Every byte the parser pulls is also written to the sink, which the caller
+/// takes back once the parse returns.
+struct Tee<'a, 'b, R> {
     inner: R,
-    sink: W,
+    sink: &'b std::cell::RefCell<RawSink<'a>>,
 }
 
-impl<R: Read, W: Write> Read for Tee<R, W> {
+impl<R: Read> Read for Tee<'_, '_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
-        self.sink.write_all(buf.get(..read).unwrap_or_default())?;
+        self.sink
+            .borrow_mut()
+            .write_all(buf.get(..read).unwrap_or_default())?;
         Ok(read)
     }
 }
@@ -128,6 +224,13 @@ struct Walk<'a, C: FnMut(&str) -> u64> {
     over: bool,
     count: C,
     spilled: Vec<Spilled>,
+    /// The pieces read while the result's BYTES were still within the bound,
+    /// not yet counted: see [`Walk::tally`].
+    deferred: Vec<String>,
+    /// Their byte total.
+    deferred_bytes: u64,
+    /// Whether counting has begun, after which every piece is counted at once.
+    counting: bool,
 }
 
 /// Read one hook payload from `input`, streaming.
@@ -146,15 +249,15 @@ pub fn read(
     bound: u64,
     count: impl FnMut(&str) -> u64,
 ) -> Result<Streamed> {
-    std::fs::create_dir_all(spool_dir)
-        .with_context(|| format!("create the hook spool {}", spool_dir.display()))?;
-    let raw = spool_dir.join(format!("payload-{}.json", std::process::id()));
-    let spool = std::io::BufWriter::new(
-        // The host's bytes, teed as they are parsed and read back by this
-        // process alone: committed when the parse returns.
-        std::fs::File::create(&raw) // stream: the hook spool
-            .with_context(|| format!("spool {}", raw.display()))?,
-    );
+    // THE SPOOL DIRECTORY IS MADE BY WHAT FIRST NEEDS IT — a payload past the
+    // held size, or a leaf past the bound — so a call needing neither touches
+    // no file at all.
+    let sink = std::cell::RefCell::new(RawSink {
+        dir: spool_dir,
+        path: spool_dir.join(format!("payload-{}.json", std::process::id())),
+        held: Vec::new(),
+        file: None,
+    });
     let mut bom = [0_u8; 3];
     let mut input = BufReader::with_capacity(CHUNK, input);
     // A LEADING BOM IS DROPPED, on every host, as `decode` did: Cursor's Windows
@@ -166,7 +269,7 @@ pub fn read(
     }
     let tee = Tee {
         inner: input,
-        sink: spool,
+        sink: &sink,
     };
     let mut json = JsonStreamReader::new(tee);
     let mut walk = Walk {
@@ -176,13 +279,16 @@ pub fn read(
         over: false,
         count,
         spilled: Vec::new(),
+        deferred: Vec::new(),
+        deferred_bytes: 0,
+        counting: false,
     };
     let value = walk.document(&mut json)?;
     json.consume_trailing_whitespace()
         .context("the payload is more than one JSON document")?;
     Ok(Streamed {
         value,
-        raw,
+        raw: sink.into_inner().finish()?,
         spilled: walk.spilled,
     })
 }
@@ -276,6 +382,39 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
         })
     }
 
+    /// Add `piece` to the result's count, and mark the result over the bound
+    /// once the count passes it.
+    ///
+    /// COUNTING WAITS UNTIL THE BYTES COULD MATTER (2026-11-15). A piece never
+    /// counts more than its byte length — an `o200k` token is at least one
+    /// byte, and the tokenizer's own fallback counts bytes — so while the
+    /// result's bytes are within the bound its count is too, and nothing is
+    /// decided by counting it. The pieces wait, and the first one that takes
+    /// the bytes past the bound counts them all, each as it would have been
+    /// counted on arrival: the same total, the same piece at which the result
+    /// goes over. A result that never passes the bound in bytes — nearly every
+    /// tool result — never builds the tokenizer at all, which was a third of a
+    /// `PostToolUse`'s own work.
+    //MUTANT deferred-pieces-never-counted|s@^            for waiting in std::mem::take(\&mut self.deferred) {$@            for waiting in Vec::<String>::new() {@|a_result_over_the_bound_in_bytes_counts_every_piece_it_read
+    fn tally(&mut self, piece: &str) {
+        if !self.counting {
+            let bytes = self.deferred_bytes + piece.len() as u64;
+            if bytes <= self.bound {
+                self.deferred_bytes = bytes;
+                self.deferred.push(piece.to_owned());
+                return;
+            }
+            self.counting = true;
+            for waiting in std::mem::take(&mut self.deferred) {
+                self.counted += (self.count)(&waiting);
+            }
+        }
+        self.counted += (self.count)(piece);
+        if self.counted > self.bound {
+            self.over = true;
+        }
+    }
+
     /// One result string, read in chunks: kept while the result is within the
     /// bound, spilled to a file from the chunk that passes it.
     fn leaf<R: Read>(&mut self, json: &mut JsonStreamReader<R>, pointer: &str) -> Result<Value> {
@@ -306,13 +445,13 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                 .to_owned();
             carry.drain(..valid);
             if !self.over {
-                self.counted += (self.count)(&piece);
-                if self.counted > self.bound {
-                    self.over = true;
-                }
+                self.tally(&piece);
             }
             kept.push_str(&piece);
             if self.over && kept.len() > crate::capture::LEAF_KEEP_BYTES {
+                std::fs::create_dir_all(self.spill_dir).with_context(|| {
+                    format!("create the hook spool {}", self.spill_dir.display())
+                })?;
                 let path = self.spill_dir.join(format!(
                     "leaf-{}-{}.txt",
                     std::process::id(),
@@ -400,18 +539,66 @@ mod tests {
         );
     }
 
+    /// Fails by: the pieces read while the bytes were still within the bound
+    /// left out of the count once the bytes pass it, so a result over the bound
+    /// in TOKENS reads as under it and reaches the model whole.
+    #[test]
+    fn a_result_over_the_bound_in_bytes_counts_every_piece_it_read() {
+        let dir = scratch("deferred");
+        // 900 counted units first, within the bound in bytes and so deferred;
+        // then a leaf whose first 200 units carry the total past 1000.
+        let first = "q".repeat(900);
+        let second = format!("{}{}", "q".repeat(200), "x".repeat(50_000));
+        let sent = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "x"},
+            "tool_response": {"a": first, "b": second},
+        })
+        .to_string();
+        let read = super::read(sent.as_bytes(), &dir, 1000, q_count).expect("reads");
+        assert_eq!(
+            read.spilled
+                .iter()
+                .map(|s| s.pointer.as_str())
+                .collect::<Vec<_>>(),
+            ["/b"],
+            "1100 counted against a bound of 1000: over, so the long leaf spills"
+        );
+        assert_eq!(read.value["tool_response"]["a"], first.as_str());
+    }
+
     #[test]
     fn the_spool_holds_the_exact_bytes_the_host_sent() {
         let dir = scratch("raw");
         let sent = format!("\u{feff}{}", payload("é and \\\"quoted\\\" text"));
         let read =
             super::read(sent.as_bytes(), &dir, 1000, |text| text.len() as u64).expect("reads");
-        let spooled = std::fs::read_to_string(&read.raw).expect("raw");
+        assert!(
+            matches!(read.raw, super::Raw::Held(_)),
+            "a small payload is held"
+        );
+        assert!(!dir.exists(), "and touches no file");
         assert_eq!(
-            spooled,
+            read.raw.text().expect("raw"),
             sent.trim_start_matches('\u{feff}'),
             "byte for byte, BOM aside"
         );
+    }
+
+    /// Past the held size the payload is spooled, and the spool holds every
+    /// byte from the first — the held part included.
+    #[test]
+    fn a_payload_past_the_held_size_is_spooled_whole() {
+        let dir = scratch("raw-spooled");
+        let sent = payload(&"x".repeat(super::RAW_HELD_MAX));
+        let read =
+            super::read(sent.as_bytes(), &dir, u64::MAX, |text| text.len() as u64).expect("reads");
+        let super::Raw::Spooled(path) = &read.raw else {
+            panic!("a payload past the held size is spooled");
+        };
+        assert_eq!(std::fs::read_to_string(path).expect("spool"), sent);
+        assert_eq!(read.raw.text().expect("raw"), sent);
     }
 
     /// A recorder sees the response the tracker sent, not the marker that

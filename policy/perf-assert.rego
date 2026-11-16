@@ -62,6 +62,9 @@
 #MUTANT over-budget-passes|s@to_number(measured) > budgets\[id\]@false@|an_over_budget_path_is_refused
 #MUTANT readme-budget-disagreement-passes|s@published\[id\] != budgets\[id\]@false@|a_readme_publishing_a_different_budget_is_refused
 #MUTANT absent-budgeted-path-passes|s@not id in object.keys(judged)@false@|a_budgeted_path_absent_from_a_present_record_is_refused
+#MUTANT target-read-from-p95|s@measured := judged\[p50_key(id)\]@measured := judged[id]@|a_p95_over_its_budget_is_the_budget_finding_alone
+#MUTANT missing-p50-reads-clean|s@not p50_key(id) in object.keys(judged)@false@|a_targeted_path_with_no_p50_is_refused
+#MUTANT target-finding-reported-as-budget|s@"verdict": "hook measure late"@"verdict": "path measure late"@|a_p50_over_its_target_is_the_target_finding_alone
 #MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
 #MUTANT stop-budget-unenforced|s@"stop": 100,@@|a_stop_over_its_budget_is_refused
 
@@ -75,6 +78,8 @@
 package batten.perf_assert
 
 import rego.v1
+
+rules contains "hook measure late"
 
 rules contains "path measure late"
 
@@ -106,7 +111,34 @@ budgets := {
 	"hook": 100,
 	"wired": 100,
 	"check": 100,
+	# CLOUD-2736: the pre-tool and post-tool calls with the off-box daemon watch
+	# on, which an agent with the state repository set pays on every tool call.
+	"hook-offbox": 100,
+	"posttool-offbox": 100,
 }
+
+# The targets, in milliseconds, for the arms an agent waits on at every tool
+# call (CLOUD-2730).
+#
+# TARGET IS p50 AND LIMIT IS p95, because the two numbers answer different
+# questions: what a call normally costs, and what it must never exceed. With only
+# the ceiling gated, a change could take a hook path from 3 ms to 90 ms and
+# every gate stayed green.
+#
+# `noop` and `check` carry no target: neither is on the path of a mediated call.
+targets := {
+	"hook": 10,
+	"passthrough": 10,
+	"posttool": 10,
+	"stop": 10,
+	"wired": 10,
+	"hook-offbox": 10,
+	"posttool-offbox": 10,
+}
+
+# Where the record carries an arm's p50: `record-perf` writes it beside the p95,
+# as `<path>/p50`.
+p50_key(id) := sprintf("%s/p50", [id])
 
 # The record ids this module owns.
 #
@@ -168,6 +200,29 @@ unmeasured contains id if {
 	is_object(judged)
 	some id, _ in budgets
 	not id in object.keys(judged)
+}
+
+# A targeted arm whose p50 the record does not carry: the same partial record,
+# over the other reading.
+unmeasured contains p50_key(id) if {
+	is_object(judged)
+	some id, _ in targets
+	not p50_key(id) in object.keys(judged)
+}
+
+# A targeted arm whose measured p50 is over its target.
+violation contains {
+	"rule": "hook measure late",
+	"verdict": "hook measure late",
+	"subjects": [{"count": count(over_target)}],
+} if {
+	count(over_target) > 0
+}
+
+over_target contains id if {
+	some id, target in targets
+	measured := judged[p50_key(id)]
+	to_number(measured) > target
 }
 
 # --- the README half ---------------------------------------------------------
@@ -234,6 +289,37 @@ disagreeing contains id if {
 	not id in object.keys(published)
 }
 
+# The target column, found by its header for the budget column's reason.
+target_column := index if {
+	some cells in table_rows
+	some index, cell in cells
+	trim_space(cell) == "target"
+}
+
+# The published target per path id, for the rows that publish a number.
+published_target[id] := target if {
+	some cells in table_rows
+	id := trim_space(cells[1])
+	id in object.keys(targets)
+	cell := trim_space(cells[target_column])
+	some token in split(cell, " ")
+	regex.match(data.batten.patterns["published-budget-value"], token)
+	target := to_number(token)
+}
+
+# A targeted arm README publishes a different target for, or none.
+disagreeing contains id if {
+	some id, _ in targets
+	id in object.keys(published_target)
+	published_target[id] != targets[id]
+}
+
+disagreeing contains id if {
+	some id, _ in targets
+	count(table_rows) > 0
+	not id in object.keys(published_target)
+}
+
 # --- could not look ----------------------------------------------------------
 
 # THE `missing` CLAUSE, and it is not optional. A module that iterates only what
@@ -261,15 +347,17 @@ violation contains {
 # A README table publishing exactly what `budgets` enforces, so a case about the
 # measurement half is not also a case about the README half.
 agreeing_readme := [
-	"| path | what it does | p50 | p95 | budget |",
-	"| ---- | ------------ | --- | --- | ------ |",
-	"| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |",
-	"| `check` | one-rule tree | 2.3 ms | 2.7 ms | ≤ 100 ms |",
-	"| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |",
-	"| `passthrough` | a call no rule selects | — | — | ≤ 100 ms |",
-	"| `posttool` | a PostToolUse call | — | — | ≤ 100 ms |",
-	"| `stop` | an end of turn | — | — | ≤ 100 ms |",
-	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |",
+	"| path | what it does | p50 | p95 | target | budget |",
+	"| ---- | ------------ | --- | --- | ------ | ------ |",
+	"| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |",
+	"| `check` | one-rule tree | 2.3 ms | 2.7 ms | — | ≤ 100 ms |",
+	"| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |",
+	"| `passthrough` | a call no rule selects | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |",
+	"| `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
 ]
 
 # Every budgeted path measured, comfortably inside.
@@ -281,6 +369,78 @@ clean_record := {
 	"posttool": "2.3",
 	"stop": "2.6",
 	"wired": "8.4",
+	"hook/p50": "2.8",
+	"passthrough/p50": "2.0",
+	"posttool/p50": "2.1",
+	"stop/p50": "2.4",
+	"wired/p50": "8.0",
+	"hook-offbox": "3.2",
+	"hook-offbox/p50": "3.0",
+	"posttool-offbox": "2.6",
+	"posttool-offbox/p50": "2.4",
+}
+
+# THE TWO FINDINGS ARE TOLD APART BY TOKEN (CLOUD-2730): a p50 over its target
+# with a p95 inside its budget raises the target's and only the target's.
+test_a_p50_over_its_target_is_the_target_finding_alone if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"posttool": "50", "posttool/p50": "11"})},
+	}}
+	{finding.verdict | some finding in found} == {"hook measure late"}
+}
+
+test_a_p95_over_its_budget_is_the_budget_finding_alone if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"posttool": "101", "posttool/p50": "9"})},
+	}}
+	{finding.verdict | some finding in found} == {"path measure late"}
+}
+
+test_a_targeted_path_with_no_p50_is_refused if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.remove(clean_record, {"posttool/p50"})},
+	}}
+	{finding.verdict | some finding in found} == {"path measure partial"}
+}
+
+# `noop` and `check` are not on a mediated call's path, so a slow p50 for one of
+# them in the record is measured and not held to the target.
+test_an_untargeted_path_is_not_held_to_the_target if {
+	count(violation) == 0 with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"noop/p50": "40"})},
+	}}
+}
+
+test_a_readme_publishing_a_different_target_is_refused if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": array.concat(
+			array.slice(agreeing_readme, 0, 4),
+			array.concat(
+				["| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 20 ms | ≤ 100 ms |"],
+				array.slice(agreeing_readme, 5, 11),
+			),
+		)},
+		"tool-verdict": {"perf-p95": clean_record},
+	}}
+	{finding.verdict | some finding in found} == {"prose state wrong"}
+}
+
+test_a_readme_publishing_no_target_for_a_targeted_path_is_refused if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": array.concat(
+			array.slice(agreeing_readme, 0, 4),
+			array.concat(
+				["| `hook` | adjudication | 2.8 ms | 3.0 ms | — | ≤ 100 ms |"],
+				array.slice(agreeing_readme, 5, 11),
+			),
+		)},
+		"tool-verdict": {"perf-p95": clean_record},
+	}}
+	{finding.verdict | some finding in found} == {"prose state wrong"}
 }
 
 test_a_measurement_inside_every_budget_is_silent if {
@@ -347,8 +507,8 @@ test_a_readme_publishing_a_different_budget_is_refused if {
 		"lines": {"README.md": array.concat(
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"],
-				array.slice(agreeing_readme, 3, 9),
+				["| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |"],
+				array.slice(agreeing_readme, 3, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -371,8 +531,8 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 		"lines": {"README.md": array.concat(
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | — |"],
-				array.slice(agreeing_readme, 3, 9),
+				["| `noop` | process start | 2.1 ms | 2.4 ms | — | — |"],
+				array.slice(agreeing_readme, 3, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -384,15 +544,17 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 test_a_reordered_budget_column_is_still_found if {
 	count(violation) == 0 with input as {"tree": {
 		"lines": {"README.md": [
-			"| path | budget | p50 | p95 |",
-			"| ---- | ------ | --- | --- |",
-			"| `noop` | ≤ 100 ms | 2.1 ms | 2.4 ms |",
-			"| `check` | ≤ 100 ms | 2.3 ms | 2.7 ms |",
-			"| `hook` | ≤ 100 ms | 2.8 ms | 3.0 ms |",
-			"| `passthrough` | ≤ 100 ms | — | — |",
-			"| `posttool` | ≤ 100 ms | — | — |",
-			"| `stop` | ≤ 100 ms | — | — |",
-			"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
+			"| path | budget | target | p50 | p95 |",
+			"| ---- | ------ | ------ | --- | --- |",
+			"| `noop` | ≤ 100 ms | — | 2.1 ms | 2.4 ms |",
+			"| `check` | ≤ 100 ms | — | 2.3 ms | 2.7 ms |",
+			"| `hook` | ≤ 100 ms | ≤ 10 ms | 2.8 ms | 3.0 ms |",
+			"| `passthrough` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			"| `posttool` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			"| `stop` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			"| `wired` | ≤ 100 ms | ≤ 10 ms | 8.0 ms | 8.4 ms |",
+			"| `hook-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			"| `posttool-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
 		]},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}

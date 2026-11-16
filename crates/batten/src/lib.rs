@@ -119,6 +119,8 @@ pub mod mint;
 pub mod minted;
 pub mod mutate;
 pub mod o200k;
+pub mod offbox;
+pub mod offbox_watch;
 pub mod outcome;
 pub mod output;
 pub mod outputs;
@@ -172,6 +174,7 @@ pub mod selfwrite;
 /// longer resolve one.
 pub mod semver;
 pub mod session;
+pub mod sessions;
 pub mod severity;
 pub mod signer_posture;
 pub mod sink;
@@ -669,7 +672,351 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 replay::run(&root, &base, json, out)
             }
         },
+        // No config chain: the switch is the environment's alone (CLOUD-2717
+        // ruling 2), so no key could layer over it.
+        Some(Command::Offbox { command }) => match command {
+            cli::OffboxCommand::Status => run_offbox_status(out),
+            cli::OffboxCommand::Push {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_push(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Run {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_daemon(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Restore {
+                session,
+                harness,
+                from,
+            } => run_offbox_restore(out, &session, &harness, from.as_deref()),
+            cli::OffboxCommand::Rotate {
+                remote,
+                quiet_runs,
+                print_workflow,
+                install_url,
+            } => run_offbox_rotate(
+                out,
+                remote.as_deref(),
+                quiet_runs.as_deref(),
+                print_workflow,
+                install_url.as_deref(),
+            ),
+        },
     }
+}
+
+/// The daemon's real clock, wait and randomness (CLOUD-2721).
+///
+/// THE WAIT IS FOR AN EVENT, NOT A TIMER. The daemon holds a loopback datagram
+/// socket on a current-thread runtime, and each pause is a receive on it
+/// bounded by the schedule's deadline: a tool call's word from the hook ends
+/// it at once, and only an idle session waits the deadline out. Nothing
+/// sleeps, so no delay exemption is spent.
+struct DaemonWorld {
+    runtime: tokio::runtime::Runtime,
+    socket: tokio::net::UdpSocket,
+    port: u16,
+}
+
+impl DaemonWorld {
+    /// The world over a fresh loopback socket.
+    fn open() -> Result<Self> {
+        let refused = |err: std::io::Error| anyhow::anyhow!("offbox: the wake socket: {err}");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(refused)?;
+        let bound =
+            std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map_err(refused)?;
+        bound.set_nonblocking(true).map_err(refused)?;
+        let port = bound.local_addr().map_err(refused)?.port();
+        let socket = {
+            let _entered = runtime.enter();
+            tokio::net::UdpSocket::from_std(bound).map_err(refused)?
+        };
+        Ok(DaemonWorld {
+            runtime,
+            socket,
+            port,
+        })
+    }
+}
+
+impl offbox::World for DaemonWorld {
+    fn now(&mut self) -> i64 {
+        i64::try_from(now_unix()).unwrap_or(i64::MAX)
+    }
+
+    fn pause(&mut self, millis: u64) {
+        let socket = &self.socket;
+        self.runtime.block_on(async {
+            let mut word = [0_u8; 64];
+            let heard = tokio::time::timeout(
+                std::time::Duration::from_millis(millis),
+                socket.recv(&mut word),
+            )
+            .await;
+            // A burst of calls is one wake: what else is queued is read and
+            // dropped, since the inbox's length already says how many.
+            if heard.is_ok() {
+                while socket.try_recv(&mut word).is_ok() {}
+            }
+        });
+    }
+
+    fn wake_port(&self) -> u16 {
+        self.port
+    }
+
+    fn random(&mut self) -> u64 {
+        let mut bytes = [0_u8; 8];
+        // Jitter only spreads daemons apart; where the OS has no entropy to
+        // give, the process id still differs between two of them.
+        if getrandom::fill(&mut bytes).is_err() {
+            return u64::from(std::process::id());
+        }
+        u64::from_le_bytes(bytes)
+    }
+}
+
+/// `batten offbox run` (CLOUD-2721): the daemon, until it is killed.
+///
+/// What it reads from the world is read here: the switch, the origin, the
+/// scanner's rows. The clock is the daemon's to read — it decides no gate.
+fn run_offbox_daemon(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    if value.trim().is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let root = git::repo_root(Path::new("."))?;
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let transcript = transcript.map(PathBuf::from);
+    let predecessor = std::env::var(session::PARENT_ENV).ok();
+    let history = crate::sessions::machine_sources(harness, transcript.as_deref());
+    let launch = offbox::run(
+        &offbox::Launching {
+            project_root: &root,
+            provisions: &provisions,
+            harness,
+            session,
+            transcript: transcript.as_deref(),
+            value: &value,
+            origin: origin.as_deref(),
+            predecessor: predecessor.as_deref(),
+            wakes: None,
+            history: &history,
+            byte_cap: offbox::BYTE_CAP,
+        },
+        &mut DaemonWorld::open()?,
+    )?;
+    writeln!(out, "{}", launch.token())?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten offbox rotate` (CLOUD-2724): one rotation pass and its token, or —
+/// under `--print-workflow` — the workflow file that runs one on a schedule,
+/// which installs `batten` from `install_url`.
+///
+/// The clock is read here, at the verb's boundary, for the archive commit's time;
+/// it decides nothing, since "finished" is a count of passes.
+fn run_offbox_rotate(
+    out: &mut dyn Write,
+    remote: Option<&str>,
+    quiet_runs: Option<&str>,
+    print_workflow: bool,
+    install_url: Option<&str>,
+) -> Result<ExitCode> {
+    if print_workflow {
+        let Some(install_url) = install_url.filter(|url| !url.trim().is_empty()) else {
+            return Err(UsageError::raise(
+                "offbox rotate: --print-workflow needs --install-url, the install script the workflow downloads",
+            ));
+        };
+        write!(
+            out,
+            "{}",
+            offbox::rotate_workflow(install_url.trim(), env!("CARGO_PKG_VERSION"))
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let Some(remote) = remote.map(str::trim).filter(|url| !url.is_empty()) else {
+        return Err(UsageError::raise(
+            "offbox rotate: --remote is needed, the state repository's URL",
+        ));
+    };
+    let quiet_runs = match quiet_runs {
+        None => offbox::QUIET_RUNS,
+        Some(typed) => typed.trim().parse::<u64>().map_err(|_| {
+            UsageError::raise(format!(
+                "offbox rotate: --quiet-runs takes a whole number of passes, and `{typed}` is not one"
+            ))
+        })?,
+    };
+    // One scratch repository per remote, under the machine's state root: a
+    // cache of the archive's tip, pruned to it after every applied pass.
+    let key = blake3::hash(remote.as_bytes()).to_hex();
+    let scratch = state::state_root()?
+        .join("offbox-rotate")
+        .join(format!("{}.git", &key[..16]));
+    std::fs::create_dir_all(&scratch)?;
+    let rotated = offbox::rotate_once(
+        remote,
+        &scratch,
+        quiet_runs,
+        i64::try_from(now_unix()).unwrap_or(i64::MAX),
+    )?;
+    writeln!(out, "{}", rotated.token())?;
+    Ok(rotated.code())
+}
+
+/// `batten offbox restore` (CLOUD-2723): one restore, one token.
+///
+/// The predecessor is `--from`, else the environment's: the session this one
+/// continues, restored from when this session has no snapshot of its own.
+fn run_offbox_restore(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    from: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // Loaded for the forge's credential names, as `offbox push` loads it.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let ambient = std::env::var(session::PARENT_ENV).ok();
+    let restored = offbox::restore_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: None,
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        from.or(ambient.as_deref()),
+    )?;
+    writeln!(out, "{}", restored.token())?;
+    Ok(restored.code())
+}
+
+/// `batten offbox push` (CLOUD-2720): one snapshot, one swap, one token.
+///
+/// Everything the push takes from the world is read here, at the boundary: the
+/// switch from the environment, the origin from the clone, the scanner's rows
+/// and the forge's credential names from the config, and the clock.
+fn run_offbox_push(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // The config is where the scanner's rows are, and loading it is what
+    // declares the forge's credential names, as `batten land` relies on. A
+    // project with no config has no scanner, and the push says so.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let push = offbox::push_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: transcript.map(PathBuf::from),
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        &[],
+    )?;
+    if push.outcome == offbox::Pushed::Refused(offbox::Refusal::ScannerFailed) {
+        return Err(anyhow::anyhow!(
+            "offbox: the secret scanner ran and its answer could not be trusted, so nothing was pushed"
+        ));
+    }
+    writeln!(out, "{}", push.outcome.token())?;
+    Ok(push.outcome.code())
+}
+
+/// `batten offbox status` (CLOUD-2718): one token, and the exit that goes with it.
+///
+/// The origin is read from the clone and the repository from the environment, so
+/// this is the one place the two meet. A clone whose remotes cannot be read is
+/// the same answer as one with no origin: there is no host to derive a remote
+/// from, and the token says so.
+fn run_offbox_status(out: &mut dyn Write) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).ok();
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let status = offbox::status(value.as_deref(), origin.as_deref())?;
+    writeln!(out, "{}", status.token())?;
+    Ok(status.code())
 }
 
 /// Set on the re-exec after a self-update, so the updated engine never updates
@@ -689,14 +1036,19 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// tree's, is still followed to this checkout's own build, as it was before.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 //MUTANT ref-run-follows-tree-pin|s@^    if let Some(judging_ref) = overrides.config_from.as_deref() {$@    if let Some(judging_ref) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
-fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
+fn pin_text(root: &Path, overrides: &Overrides) -> Option<std::sync::Arc<String>> {
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
     if let Some(judging_ref) = overrides.config_from.as_deref() {
-        return git::show(dir, judging_ref, config::CONFIG_FILE).ok();
+        return git::show(dir, judging_ref, config::CONFIG_FILE)
+            .ok()
+            .map(std::sync::Arc::new);
     }
-    config::read_text(&dir.join(config::CONFIG_FILE))
+    // THE HEAD ALONE: the pin is a top-level key, read off the lines before the
+    // first table header (`engine::declared`), and reading the whole ~1 MB
+    // authority for it was most of an invocation's prologue (2026-11-16).
+    config::read_head(&dir.join(config::CONFIG_FILE))
         .ok()
-        .map(|text| String::clone(&text))
+        .map(std::sync::Arc::new)
 }
 
 /// When this checkout pins an engine this binary is not, re-run this invocation
@@ -14406,9 +14758,15 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     else {
         return;
     };
-    let kept = collect::engine_kept();
     let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
-    let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
+    let _ = collect::collect_if_pressed(
+        &repo,
+        &pruning,
+        collect::engine_kept,
+        &mut free,
+        Some(deadline),
+        false,
+    );
 }
 
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
@@ -16687,6 +17045,11 @@ fn run_lease_acquire(
                     writeln!(out, "lease: lost the race for it")?;
                     Ok(ExitCode::Violation)
                 }
+                // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+                Ok(lease::Outcome::Throttled { .. }) => {
+                    writeln!(err, "::error:: lease: the forge throttled the request")?;
+                    Ok(ExitCode::Internal)
+                }
                 Err(reason) => {
                     writeln!(err, "::error:: lease: {reason}")?;
                     Ok(ExitCode::Internal)
@@ -16740,6 +17103,11 @@ fn ask_the_holder_to_stand_down(
             lease::writer_version()
         )?,
         Ok(lease::Outcome::Rejected { .. }) => {}
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => writeln!(
+            err,
+            "::error:: lease: the stand-down request: the forge throttled it"
+        )?,
         Err(reason) => writeln!(err, "::error:: lease: the stand-down request: {reason}")?,
     }
     Ok(())
@@ -16806,6 +17174,11 @@ fn run_lease_renew(
             Ok(ExitCode::Success)
         }
         Ok(lease::Outcome::Rejected { .. }) => Ok(ExitCode::Violation),
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -17165,6 +17538,11 @@ fn run_lease_release(
             )?;
             Ok(ExitCode::Success)
         }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -17229,6 +17607,11 @@ fn run_lease_reserve(
         Ok(lease::Outcome::Rejected { .. }) => {
             writeln!(out, "lease: could not reserve; the lease moved")?;
             Ok(ExitCode::Violation)
+        }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
         }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
@@ -18939,7 +19322,7 @@ fn receipt_facts(
 /// `bypass_env` — every ruleset until one opts in — collects an empty set, reads
 /// no environment variable, and clones no policy. This runs on the hottest path
 /// in the binary, so that is a requirement rather than a nicety.
-fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
+fn without_set_hatches(policy: &hook::Policy) -> std::borrow::Cow<'_, hook::Policy> {
     let set: std::collections::BTreeSet<String> = policy
         .declared_hatches()
         .into_iter()
@@ -18947,11 +19330,12 @@ fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
         .map(std::borrow::ToOwned::to_owned)
         .collect();
     if set.is_empty() {
-        return policy;
+        return std::borrow::Cow::Borrowed(policy);
     }
     // The row is REMOVED rather than its refusal suppressed, so the rows behind
-    // it still fire. See `hook::Policy::without_hatched`.
-    policy.without_hatched(&set)
+    // it still fire. See `hook::Policy::without_hatched`. The one path that
+    // pays a copy of the policy, and only with a hatch set.
+    std::borrow::Cow::Owned(policy.clone().without_hatched(&set))
 }
 
 /// What a host that does not emit this event is told, split out of [`run_hook`]
@@ -19122,9 +19506,9 @@ fn destructive_call_facts(
 /// load, one evaluation per bundle per input, and one open per repository
 /// (CLOUD-2433). The on-disk parse cache is switched on earlier, in [`run`],
 /// because the `[forge]` prologue reads it before this function is reached.
-fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
+fn hook_call_memos(harness: hook::Harness) -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
     (
-        HookLoads::scope(),
+        HookLoads::scope_for(harness),
         policy::answer_scope(),
         git::open_scope(),
     )
@@ -19143,7 +19527,7 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let _memos = hook_call_memos();
+    let _memos = hook_call_memos(harness);
     let Some(payload) = read_payload(mode, err)? else {
         return Ok(ExitCode::Success);
     };
@@ -19243,6 +19627,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
+        offbox_post(harness, &envelope);
         post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
@@ -19317,7 +19702,7 @@ fn run_hook(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    let (policy, waivers, pruning) = if adjudicable {
+    let loaded = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
         let handoff = Handoff::new(&raw, followed.ran);
@@ -19326,8 +19711,11 @@ fn run_hook(
             Err(code) => return Ok(code),
         }
     } else {
-        (hook::Policy::declaring_nothing(harness), Vec::new(), None)
+        std::rc::Rc::new((hook::Policy::declaring_nothing(harness), Vec::new(), None))
     };
+    // BORROWED FROM THE CALL'S ONE LOAD, never cloned out of it: the memo
+    // holds the same `Rc` its table readers share.
+    let (policy, waivers, pruning) = (&loaded.0, &loaded.1, &loaded.2);
     // THE DISK COLLECTOR, BEFORE THE VERDICT (CLOUD-2197): one free-space read
     // above the declared minimum; below it, a bounded collection, then admit.
     collect_before_admitting(&envelope, pruning.as_ref(), &mut advice, err);
@@ -19378,7 +19766,7 @@ fn run_hook(
     let waived = if waivers.is_empty() {
         waiver::Live::new()
     } else {
-        waiver::live(&waivers, waiver::today()?)
+        waiver::live(waivers, waiver::today()?)
     };
     // The declared side effects (CLOUD-91), fired BEFORE the decision is written
     // and structurally unable to reach it: `action::fire` returns nothing, so
@@ -19489,6 +19877,7 @@ fn run_hook(
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
     let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
+    let decision = offbox_gate(harness, &envelope, decision);
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -19768,11 +20157,11 @@ fn decode_payload(
     // A spilled payload is by definition one memory must not hold, so there the
     // handlers read the parsed value, each spilled leaf holding its marker.
     let raw = if streamed.spilled.is_empty() {
-        std::fs::read_to_string(&streamed.raw).unwrap_or_default()
+        streamed.raw.text().unwrap_or_default()
     } else {
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
-    let _ = std::fs::remove_file(&streamed.raw);
+    streamed.raw.discard();
     Ok(Some((raw, envelope, streamed.spilled, spool)))
 }
 
@@ -20029,7 +20418,7 @@ fn hook_config_or_floor(
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<Result<HookConfig, ExitCode>> {
+) -> Result<Result<std::rc::Rc<HookConfig>, ExitCode>> {
     match load_hook_config(overrides, harness) {
         Ok(loaded) => Ok(Ok(loaded)),
         // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
@@ -20052,11 +20441,11 @@ fn hook_config_or_floor(
                 // `protected: PathSet::empty()`, which is what lets the
                 // repair write reach the file that is faulting — the
                 // protected gate is not SUPPRESSED here, it has no table.
-                Ok(Ok((
+                Ok(Ok(std::rc::Rc::new((
                     hook::Policy::declaring_nothing(harness),
                     Vec::new(),
                     None,
-                )))
+                ))))
             } else {
                 deny_unadjudicable(harness, envelope, &unreadable, mode, out, err).map(Err)
             }
@@ -20149,7 +20538,7 @@ fn follow_to_pinned<'a>(
     // will not read hands the child nothing, so it falls through instead —
     // a child answering `0` over an empty document is not an answer about this
     // call, and NOTHING RAN, so the hand-off below is still owed its turn.
-    let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
+    let Ok(raw) = payload.streamed.raw.text() else {
         return Ok(Follow::NOTHING);
     };
     hand_off(&target.root, &target.argv, &raw, out)
@@ -20582,10 +20971,20 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // What pins the admission to a situation is the anchor below:
     // `Anchor::Call { head }`, so one commit unbinds it as it voids a receipt.
     let root = hook_authority_root();
+    // NO RECORD, NO ADMISSION: `admitted` answers none for an empty store, so
+    // the HEAD and the epoch it would be asked under are not resolved for it.
+    // A shortcut with the same answer, so it carries no mutant: the cost gate
+    // is `perf-assert`, and `holds_any`'s own case pins what it reads.
+    if !admission::holds_any(root) {
+        return Ok(decision);
+    }
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
     };
-    let Ok((epoch, _)) = epoch::describe(root, None) else {
+    // THE CACHED EPOCH, which is byte-identical to the cold one or a bug
+    // (CLOUD-232). The cold read hashed every tracked policy file on every
+    // refused tool call: 53% of a refused `PreToolUse`, measured 2026-11-15.
+    let Ok((epoch, _)) = epoch::describe_cached(root, None) else {
         return Ok(decision);
     };
     let anchor = admission::Anchor::Call { head }.token();
@@ -20667,6 +21066,205 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 /// Composes the handler's answer with the engine's first, so the call site in
 /// `run_hook` stays one line under `rustfmt`: measured, the four-argument form
 /// wrapped to six lines and put `run_hook` back over `too_many_lines`.
+/// This checkout's off-box directory, or `None` with the state repository
+/// variable unset — in which case no file under it is opened (CLOUD-2736).
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT unset-still-writes-the-inbox|s@^    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(\x7cvalue\x7c !value.trim().is_empty()) {$@    if false {@|unset_opens_no_file_and_denies_nothing
+fn offbox_watch_dir() -> Option<PathBuf> {
+    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(|value| !value.trim().is_empty()) {
+        return None;
+    }
+    // THE DAEMON'S OWN ROOT: `offbox run` resolves the repository from its
+    // working directory, so the hook resolves the same one, never a config
+    // anchor that could sit beneath it.
+    let root = git::repo_root(hook_authority_root()).ok()?;
+    Some(state::repo_state_dir(&root).ok()?.join(offbox_watch::DIR))
+}
+
+/// The post-tool half of the daemon watch (CLOUD-2736): tell the daemon a tool
+/// call happened, and count whether it was there to hear.
+///
+/// One appended line, one shared try-lock, two small reads, one small write
+/// where the count moved. **It starts nothing and reaches no network.** Silent
+/// on failure, like every recorder at this boundary.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT hook-spawns-the-daemon|s@^    let heard = offbox_watch::probe(\&dir, leaf.as_deref());$@    let _ = std::process::Command::new("batten").args(["offbox", "status"]).spawn(); let heard = offbox_watch::probe(\&dir, leaf.as_deref());@|the_hook_starts_no_process
+fn offbox_post(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let session = envelope.session.as_deref();
+    let _ = offbox_watch::message(&dir, session.unwrap_or("-"));
+    let leaf = session.map(|session| offbox_watch::leaf(harness.as_str(), session));
+    let heard = offbox_watch::probe(&dir, leaf.as_deref());
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    if heard == offbox_watch::Liveness::Alive {
+        seen.misses = 0;
+        seen.owed = false;
+    } else {
+        seen.misses = seen.misses.saturating_add(1);
+        seen.owed = true;
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The finding that says the daemon is down and what fixes it.
+fn offbox_down(says: &str, remedy: &str) -> refusal::Refusal {
+    refusal::Refusal::engine(
+        verdict::Native::OffboxDaemonDown,
+        &[verdict::Subject::Artifact {
+            artifact: says.to_owned(),
+        }],
+        refusal::Fix::Run(remedy.to_owned()),
+    )
+    .with_command_route(remedy)
+}
+
+/// The advising half of the daemon watch (CLOUD-2736), on every event but the
+/// post-tool one — which on most hosts carries no advice, so its word waits in
+/// the hook's own file for the next event that does.
+///
+/// At session start the daemon is looked for outright and no miss is counted,
+/// so the agent can launch it before its first tool call. The daemon's attach
+/// note is relayed once: nothing is denied for an unreachable state repository.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT attach-note-repeated-every-call|s@^            seen.noted = true;$@@|the_attach_note_is_relayed_once_and_denies_nothing
+fn offbox_advise(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event == hook::Event::PostTool {
+        return;
+    }
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    let starting = envelope.event == hook::Event::SessionStart;
+    if let Some(session) = envelope
+        .session
+        .as_deref()
+        .filter(|_| starting || seen.owed)
+    {
+        let name = harness.as_str();
+        let found = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+        let remedy =
+            offbox_watch::remedy(&dir, found, session, name, envelope.transcript.as_deref());
+        if let (Some(says), Some(remedy)) = (found.says(), remedy) {
+            push_finding(
+                advice,
+                severity::AdvisoryTier::Caution,
+                offbox_down(says, &remedy),
+            );
+        }
+        seen.owed = false;
+    }
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    match offbox_watch::field(&status, "attached") {
+        Some("no") if !seen.noted => {
+            let note = std::fs::read_to_string(dir.join(offbox_watch::NOTE)).unwrap_or_default();
+            if let Some(line) = note.lines().next().filter(|line| !line.is_empty()) {
+                // The daemon's own sentence is the subject: it names the
+                // repository and both remedies, and the hook only relays it.
+                push_finding(
+                    advice,
+                    severity::AdvisoryTier::Caution,
+                    refusal::Refusal::engine(
+                        verdict::Native::WorkspaceStateBroken,
+                        &[verdict::Subject::Artifact {
+                            artifact: line.to_owned(),
+                        }],
+                        refusal::Fix::None,
+                    ),
+                );
+            }
+            seen.noted = true;
+        }
+        Some("yes") => seen.noted = false,
+        _ => {}
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The daemon gate (CLOUD-2736): after the grace, a pre-tool call is refused
+/// until the agent has run the command that brings the daemon back.
+///
+/// It only ever turns an allow into a deny, and only on a host KNOWN to let an
+/// agent keep a process running. In order: the relaunch command with the
+/// background mark is this gate's to allow, and without the mark it is refused
+/// with the instruction to background it; the `kill` remedy is allowed in the
+/// state it remedies; then five or more misses and a daemon that is still not
+/// alive ON THIS CALL refuse. The probe is taken now, so a daemon relaunched a
+/// moment ago is seen at once and a stale count denies nothing.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT gate-applies-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {$@    if false {@|a_host_with_no_known_background_facility_is_advised_and_never_denied
+//MUTANT foreground-relaunch-admitted|s@^        if backgrounded {$@        if true {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT background-relaunch-denied|s@^        if backgrounded {$@        if false {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT dead-daemon-never-denied|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if true {@|a_dead_daemon_is_denied_after_the_grace_with_the_relaunch_command
+//MUTANT denied-before-the-grace|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if false {@|a_dead_daemon_is_allowed_inside_the_grace
+//MUTANT stale-miss-count-denies-a-live-daemon|s@^    let now = offbox_watch::probe(\&dir, Some(\&offbox_watch::leaf(name, session)));$@    let now = offbox_watch::Liveness::Dead;@|a_relaunched_daemon_is_seen_at_once_whatever_the_count
+fn offbox_gate(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    decision: hook::Decision,
+) -> hook::Decision {
+    // EVERY DECISION THAT LETS THE CALL RUN, not the plain allow alone: a
+    // pre-approved call and a waived one proceed just the same, and a
+    // repository that grants its ordinary commands would otherwise never meet
+    // this gate at all. A refusal or an escalation already speaks, and stands.
+    let speaks = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
+    if envelope.event != hook::Event::PreTool || speaks {
+        return decision;
+    }
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {
+        return decision;
+    }
+    let (Some(dir), Some(session)) = (offbox_watch_dir(), envelope.session.as_deref()) else {
+        return decision;
+    };
+    let name = harness.as_str();
+    let transcript = envelope.transcript.as_deref();
+    let relaunch = offbox_watch::relaunch(session, name, transcript);
+    let command = envelope.command.trim();
+    if command == relaunch {
+        let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+        if backgrounded {
+            return decision;
+        }
+        return hook::Decision::Deny(
+            refusal::Refusal::engine(
+                verdict::Native::OffboxDaemonForeground,
+                &[verdict::Subject::Artifact {
+                    artifact: String::from("run it in the background"),
+                }],
+                refusal::Fix::Run(relaunch.clone()),
+            )
+            .with_command_route(&relaunch),
+        );
+    }
+    if offbox_watch::Seen::read(&dir).misses < offbox_watch::GRACE {
+        return decision;
+    }
+    let now = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+    let (Some(says), Some(remedy)) = (
+        now.says(),
+        offbox_watch::remedy(&dir, now, session, name, transcript),
+    ) else {
+        return decision;
+    };
+    if command == remedy {
+        return decision;
+    }
+    hook::Decision::Deny(offbox_down(says, &remedy))
+}
+
 fn admitted(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
@@ -21010,7 +21608,7 @@ fn collect_batch_advice(
 ) -> Result<()> {
     // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
     // session, so it is written before any declared handler provisions anything.
-    stamp_session(envelope);
+    stamp_session(harness, envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -21028,6 +21626,7 @@ fn collect_batch_advice(
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
+    offbox_advise(harness, envelope, advice);
     Ok(())
 }
 
@@ -21043,16 +21642,86 @@ fn collect_batch_advice(
 /// Fails open and silently, like every other side effect at this boundary: a
 /// session start is not a call being adjudicated, and a clone with no readable
 /// git directory is one where `claim check` reports the missing stamp itself.
-fn stamp_session(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+///
+/// # Held back for a restore (CLOUD-2723)
+///
+/// The stamp makes the receipts store non-empty, and a restore would then put
+/// the restored receipts aside instead of back in place. So where the state
+/// repository variable is set, the host is known to let an agent run the
+/// daemon, and this session has no restore record yet, a session start writes
+/// `stamp-owed` instead and the stamp is paid on a later event: once the
+/// restore record exists, or the daemon reports the restore `unavailable`.
+/// It is paid DATED AT THE SESSION'S START, which is what the gate reads.
+///
+/// **There is no fallback that pays it anyway.** A daemon that is never
+/// started is the daemon gate's to refuse; an unstamped session cannot claim.
+//MUTANT-SUITE crates/batten/tests/it/offbox_restore.rs
+//MUTANT stamp-written-before-restore|s@^        if defer_stamp(harness, envelope) {$@        if false {@|a_session_start_with_no_restore_record_owes_its_stamp
+//MUTANT stamp-written-while-restore-is-pending|s@^    if restored \x7c\x7c unavailable {$@    if true {@|an_owed_stamp_is_not_paid_while_the_restore_is_pending
+//MUTANT owed-stamp-never-paid|s@^    if restored \x7c\x7c unavailable {$@    if false {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT paid-stamp-dated-at-payment|s@^        if claim::stamp_session_at(\&receipts, began).is_ok() {$@        if claim::stamp_session(\&receipts).is_ok() {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT stamp-deferred-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) \x7c\x7c !owes {$@    if !owes {@|a_host_with_no_background_facility_is_stamped_at_once
+fn stamp_session(harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event == hook::Event::SessionStart {
+        if defer_stamp(harness, envelope) {
+            return;
+        }
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+        // `run_claim_check` reads it: a linked worktree dates its own session.
+        let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    pay_owed_stamp(harness, envelope);
+}
+
+/// Whether this session's restore record exists under the off-box directory.
+fn restore_recorded(dir: &Path, harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    envelope.session.as_deref().is_some_and(|session| {
+        offbox_watch::restored_path(dir, &offbox_watch::leaf(harness.as_str(), session)).exists()
+    })
+}
+
+/// At a session start: whether the stamp is held back, having written the
+/// file that says so.
+fn defer_stamp(harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    let Some(dir) = offbox_watch_dir() else {
+        return false;
+    };
+    let owes = envelope.session.is_some() && !restore_recorded(&dir, harness, envelope);
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) || !owes {
+        return false;
+    }
+    // Not written is not owed: a stamp that could never be paid would leave
+    // the session unable to claim for good.
+    std::fs::create_dir_all(&dir).is_ok()
+        && durable::replace(dir.join(offbox_watch::STAMP_OWED), b"").is_ok()
+}
+
+/// On any event after the start: pay a stamp that is owed, once the restore
+/// has reached an answer or the daemon has said it cannot.
+fn pay_owed_stamp(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
         return;
     };
-    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
-    // `run_claim_check` reads it: a linked worktree dates its own session.
-    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
+    let owed = dir.join(offbox_watch::STAMP_OWED);
+    let Ok(began) = std::fs::metadata(&owed).and_then(|meta| meta.modified()) else {
+        return;
+    };
+    let restored = restore_recorded(&dir, harness, envelope);
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    let unavailable = offbox_watch::field(&status, "restored") == Some("unavailable");
+    if restored || unavailable {
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        let receipts = git_dir.join(RECEIPT_DIR);
+        if claim::stamp_session_at(&receipts, began).is_ok() {
+            let _ = std::fs::remove_file(&owed);
+        }
+    }
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).
@@ -21949,7 +22618,7 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 
 /// Spawn the `[[hook.action]]` rows declared for this envelope's event.
 ///
-/// Reads config on its **own** path rather than reusing [`load_policy`]'s
+/// Reads config on its **own** path rather than reusing [`load_hook_config`]'s
 /// result, because the two answer different questions: the policy is the
 /// mediated-call rule set and is deliberately not loaded for a bypassed or
 /// nothing-to-judge call, while the action table is keyed on the event alone.
@@ -22644,7 +23313,7 @@ fn drain_advisories(
 /// reason work stops: the next attempt denies again with the same `Fix::Run`,
 /// which is the safe direction and one the agent can see.
 fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     // EVERY MATCHING ROW, not the first (CLOUD-690). `find` was correct while a
@@ -24152,7 +24821,7 @@ fn write_records_for(
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     let recorders = policy.declared_recorders();
@@ -24185,7 +24854,46 @@ fn write_records_for(
     let Ok(Some(branch)) = git::current_branch(root) else {
         return;
     };
-    let patterns = policy.compiled_patterns();
+    // ONLY THE PATTERNS THE SELECTED ROWS CAN READ (2026-11-15): compiling the
+    // whole table was a quarter of a `PostToolUse`. `recorder::pattern_ids`
+    // brings the Ready grammar's ids along when a row asks for it, so the
+    // grammar below resolves exactly when it is needed and not otherwise.
+    //
+    // TWO PHASES, because a tool name selects far more than a call: every
+    // shell command arrives as one tool. Phase one compiles only the rows'
+    // input SELECTORS and asks which rows this call is about; phase two
+    // compiles what those rows read. `append_all` re-asks selection against
+    // the phase-two table, where a row phase one dropped finds its selector
+    // absent and is not selected again — the same answer, by the same test.
+    let by_tool: Vec<&crate::recorder::Declared> = recorders
+        .iter()
+        .filter(|row| rules::selects_tool_name(&row.tool, raw_tool))
+        .collect();
+    let selectors: std::collections::BTreeSet<String> = by_tool
+        .iter()
+        .flat_map(|row| row.requires_input_matching.values().cloned())
+        .collect();
+    let selecting = policy.compiled_patterns_named(&selectors);
+    let probe = crate::recorder::Context {
+        result: &result,
+        input,
+        programs: policy.declared_programs(),
+        patterns: &selecting,
+        grammar: None,
+        root,
+        branch: Some(&branch),
+        now: 0,
+    };
+    let selected: Vec<&crate::recorder::Declared> = by_tool
+        .into_iter()
+        .filter(|row| {
+            crate::recorder::outcome(row, &probe) != crate::recorder::Outcome::NotSelected
+        })
+        .collect();
+    if selected.is_empty() {
+        return;
+    }
+    let patterns = policy.compiled_patterns_named(&crate::recorder::pattern_ids(&selected));
     // RESOLVED ONCE, AND A FAILURE IS `None` RATHER THAN A RETURN. A consumer
     // declaring no column that asks this authority has no use for a grammar, and
     // refusing to write its records because a vocabulary it never asked for is
@@ -24636,7 +25344,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     let result = facts::payload_in(&envelope.result)
         .or_else(|| recover_spilled(&envelope.result))
         .unwrap_or(serde_json::Value::Null);
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok(policy) = load_policy_tables(overrides) else {
         return;
     };
     let declared = policy.declared_mints();
@@ -24957,9 +25665,15 @@ fn collect_before_admitting(
     };
     let before = if trace { free().unwrap_or(0) } else { 0 };
     let collected = band.and_then(|prune| {
-        let kept = collect::engine_kept();
         let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
-        collect::collect_if_pressed(&repo, prune, &kept, &mut free, Some(deadline), false)
+        collect::collect_if_pressed(
+            &repo,
+            prune,
+            collect::engine_kept,
+            &mut free,
+            Some(deadline),
+            false,
+        )
     });
     if trace {
         let after = collected.as_ref().map_or(before, |done| done.free_after_mb);
@@ -24998,10 +25712,38 @@ fn collect_before_admitting(
 /// Read separately from the policy load below, and deliberately tolerant: a
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
+///
+/// ONCE PER HOOK CALL. A `PostToolUse` asks for it up to three times, and each
+/// read parsed the whole authority: on this repository's 962 KB `batten.toml`
+/// that was a third of the call (2026-11-15). The answer is kept in the call's
+/// [`HookLoads`] scope, so it dies with the call like every other memo there.
+//MUTANT capture-budget-reparsed|s@^    if let CaptureRead::Read(kept) = HookLoads::capture() {$@    if let CaptureRead::Read(kept) = CaptureRead::Unread {@|a_post_tool_call_reads_the_capture_bound_once
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
-    let parsed: config::Config = toml::from_str(&text).ok()?;
-    parsed.capture
+    if let CaptureRead::Read(kept) = HookLoads::capture() {
+        return kept;
+    }
+    // THROUGH `config::load`, so a warm call decodes the validated parse the
+    // cross-process cache holds rather than parsing the TOML (2026-11-15: the
+    // one remaining parse was still a third of a `PostToolUse`). Tolerant as
+    // before: an authority that will not load leaves the engine's defaults.
+    // SHARED, so the one table is read off the remembered parse rather than a
+    // clone of the whole authority made and dropped to keep it.
+    let read = || {
+        config::load_shared(&hook_authority_root().join(config::CONFIG_FILE))
+            .ok()?
+            .capture
+            .clone()
+    };
+    let answer = read();
+    HookLoads::keep_capture(answer.clone());
+    CAPTURE_PARSES.with(|count| count.set(count.get() + 1));
+    answer
+}
+
+thread_local! {
+    /// How many times this thread parsed the authority for the capture bound:
+    /// what a case reads to hold the parse to once per call.
+    static CAPTURE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The directory `batten hook` reads its authority from (CLOUD-824).
@@ -25097,18 +25839,49 @@ fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     hook_authority_root()
 }
 
-fn load_policy(
-    overrides: &Overrides,
-    harness: hook::Harness,
-) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
-    load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
+/// The policy for a reader of its DECLARED TABLES alone — facts, mints,
+/// recorders, patterns, programs — which no harness changes: whatever load
+/// this call already made, for any harness, else one made for
+/// [`hook::Harness::ExitCode`] as these readers always asked.
+///
+/// WHY IT EXISTS (2026-11-15): the post-tool recorders asked for `ExitCode`,
+/// the call had loaded for its own harness, and the memo is keyed by harness,
+/// so every `PostToolUse` built the whole policy a second time — 19 modules
+/// and all — to read tables it already held.
+//MUTANT tables-reader-ignores-the-call-harness|s@^    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);$@    let harness = hook::Harness::ExitCode;@|a_tables_reader_first_in_a_call_loads_for_the_calls_harness
+//MUTANT tables-reader-loads-again|s@^    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {$@    if let Some(held) = None::<hook::Policy> {@|a_tables_reader_takes_the_load_the_call_already_made
+fn load_policy_tables(overrides: &Overrides) -> Result<SharedPolicy> {
+    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {
+        return Ok(SharedPolicy(held));
+    }
+    // UNDER THE CALL'S OWN HARNESS where the scope knows it: the post-tool
+    // readers run before the call's own load, so loading for `ExitCode` here
+    // built one policy and the call then built a second for its harness.
+    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);
+    load_hook_config(overrides, harness).map(SharedPolicy)
 }
 
-/// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
-/// collector's band costs the pre-tool path nothing beyond the load it already
-/// pays (CLOUD-2197).
+/// A policy a hook call already loaded, shared rather than cloned: what a
+/// reader of its declared tables borrows.
+struct SharedPolicy(std::rc::Rc<HookConfig>);
+
+impl std::ops::Deref for SharedPolicy {
+    type Target = hook::Policy;
+
+    fn deref(&self) -> &hook::Policy {
+        &self.0.0
+    }
+}
+
+/// The mediated-call policy and its waivers, with the `[prune]` table the same
+/// resolve read, so the disk collector's band costs the pre-tool path nothing
+/// beyond the load it already pays (CLOUD-2197). Shared behind an `Rc` with the
+/// call's other readers, never cloned per reader.
 //MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new(), None));@|an_auto_mode_call_is_granted_where_no_authority_governs
-fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<HookConfig> {
+fn load_hook_config(
+    overrides: &Overrides,
+    harness: hook::Harness,
+) -> Result<std::rc::Rc<HookConfig>> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
@@ -25128,7 +25901,11 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
     // and the mode modules alone load, so auto mode grants and plan mode refuses
     // writes wherever the session's shell happens to stand.
     if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
-        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));
+        return Ok(std::rc::Rc::new((
+            hook::Policy::mode_default(harness)?,
+            Vec::new(),
+            None,
+        )));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
     // `Policy` is what `adjudicate` decides against and is resolved without a
@@ -25141,7 +25918,7 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
     let resolved = HookLoads::resolve(here, overrides)?;
     let policy =
         hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
-    let loaded = (policy, resolved.waivers.clone(), resolved.prune.clone());
+    let loaded = std::rc::Rc::new((policy, resolved.waivers.clone(), resolved.prune.clone()));
     HookLoads::keep(here, overrides, harness, &loaded);
     Ok(loaded)
 }
@@ -25171,7 +25948,24 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
 /// allocated (dhat, CLOUD-2315).
 struct HookLoads {
     resolved: Vec<((PathBuf, Overrides), std::rc::Rc<resolve::Resolved>)>,
-    loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
+    /// Behind an `Rc` for the resolve's reason: a recall deep-cloned the whole
+    /// policy, and a `PostToolUse` recalled it three times.
+    loaded: Vec<((PathBuf, Overrides, hook::Harness), std::rc::Rc<HookConfig>)>,
+    /// [`capture_budget`]'s answer, once it has been read in this scope.
+    capture: CaptureRead,
+    /// The harness this call is for, where the scope was opened for one: what
+    /// [`load_policy_tables`] loads under, so its load is the call's own.
+    harness: Option<hook::Harness>,
+}
+
+/// Whether this hook call has read the capture bound yet, and what it read.
+/// An enum rather than a nested `Option`, so "not read yet" and "read, and the
+/// authority declares none" are two names rather than two depths of `None`.
+#[derive(Clone, Default)]
+enum CaptureRead {
+    #[default]
+    Unread,
+    Read(Option<capture::CaptureConfig>),
 }
 
 thread_local! {
@@ -25184,23 +25978,63 @@ struct HookLoadScope;
 
 impl Drop for HookLoadScope {
     fn drop(&mut self) {
-        HOOK_LOADS.with(|cell| *cell.borrow_mut() = None);
+        // CLOSED, NOT FREED. The scope ends as the hook call returns and the
+        // process exits behind it, and walking the call's policy, resolve and
+        // config to free them element by element was ~2% of a warm call's
+        // instructions (callgrind, 2026-11-16) spent on memory the exit returns
+        // whole. The memo is still gone: nothing can read it after this.
+        HOOK_LOADS.with(|cell| std::mem::forget(cell.borrow_mut().take()));
     }
 }
 
 impl HookLoads {
-    /// Open the memo for the life of the returned guard.
-    fn scope() -> HookLoadScope {
+    /// Open the memo for the life of the returned guard, for a call made by
+    /// `harness`. A case opens one for no harness with [`HookLoads::open`].
+    fn scope_for(harness: hook::Harness) -> HookLoadScope {
+        Self::open(Some(harness))
+    }
+
+    fn open(harness: Option<hook::Harness>) -> HookLoadScope {
         HOOK_LOADS.with(|cell| {
             *cell.borrow_mut() = Some(Self {
                 resolved: Vec::new(),
                 loaded: Vec::new(),
+                capture: CaptureRead::Unread,
+                harness,
             });
         });
         HookLoadScope
     }
 
-    fn recall(here: &Path, overrides: &Overrides, harness: hook::Harness) -> Option<HookConfig> {
+    /// The harness the open scope is for, if it was opened for one.
+    fn harness() -> Option<hook::Harness> {
+        HOOK_LOADS.with(|cell| cell.borrow().as_ref().and_then(|loads| loads.harness))
+    }
+
+    /// The capture bound as this scope holds it; [`CaptureRead::Unread`]
+    /// outside a scope.
+    fn capture() -> CaptureRead {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map_or(CaptureRead::Unread, |loads| loads.capture.clone())
+        })
+    }
+
+    /// Keep the capture bound for the rest of the scope; outside one, nothing.
+    fn keep_capture(answer: Option<capture::CaptureConfig>) {
+        HOOK_LOADS.with(|cell| {
+            if let Some(loads) = cell.borrow_mut().as_mut() {
+                loads.capture = CaptureRead::Read(answer);
+            }
+        });
+    }
+
+    fn recall(
+        here: &Path,
+        overrides: &Overrides,
+        harness: hook::Harness,
+    ) -> Option<std::rc::Rc<HookConfig>> {
         HOOK_LOADS.with(|cell| {
             cell.borrow().as_ref().and_then(|loads| {
                 loads
@@ -25209,7 +26043,21 @@ impl HookLoads {
                     .find(|((root, held, host), _)| {
                         root == here && held == overrides && *host == harness
                     })
-                    .map(|(_, loaded)| loaded.clone())
+                    .map(|(_, loaded)| std::rc::Rc::clone(loaded))
+            })
+        })
+    }
+
+    /// Any policy this scope loaded for `here` under `overrides`, whichever
+    /// harness it was loaded for: [`load_policy_tables`]'s reading.
+    fn recall_any(here: &Path, overrides: &Overrides) -> Option<std::rc::Rc<HookConfig>> {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow().as_ref().and_then(|loads| {
+                loads
+                    .loaded
+                    .iter()
+                    .find(|((root, held, _), _)| root == here && held == overrides)
+                    .map(|(_, loaded)| std::rc::Rc::clone(loaded))
             })
         })
     }
@@ -25241,12 +26089,17 @@ impl HookLoads {
         Ok(resolved)
     }
 
-    fn keep(here: &Path, overrides: &Overrides, harness: hook::Harness, loaded: &HookConfig) {
+    fn keep(
+        here: &Path,
+        overrides: &Overrides,
+        harness: hook::Harness,
+        loaded: &std::rc::Rc<HookConfig>,
+    ) {
         HOOK_LOADS.with(|cell| {
             if let Some(loads) = cell.borrow_mut().as_mut() {
                 loads.loaded.push((
                     (here.to_path_buf(), overrides.clone(), harness),
-                    loaded.clone(),
+                    std::rc::Rc::clone(loaded),
                 ));
             }
         });
@@ -25256,7 +26109,7 @@ impl HookLoads {
 /// Resolve the `exec` output predicates for this run (CLOUD-117).
 ///
 /// **Absent authority declares no patterns, and is not an error** — the same
-/// reading [`load_policy`] gives the mediated-call policy, and for the same
+/// reading [`load_hook_config`] gives the mediated-call policy, and for the same
 /// reason. `batten exec` is a wrapper a caller puts in front of arbitrary
 /// commands, most of them in directories that are not Batten repositories;
 /// refusing there would make the wrapper the reason ordinary work stops.
@@ -29655,10 +30508,16 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             )?;
         }
     }
+    // LAST, and only with the state repository variable set (CLOUD-2722):
+    // whether this checkout's state is leaving the machine. It changes no exit.
+    if let Some(offbox) = &report.offbox {
+        output::line(out, offbox)?;
+    }
     Ok(session_code(&report))
 }
 
 //MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
+//MUTANT session-code-reads-the-offbox-field|s@^    match report.open {$@    if report.offbox.is_some() { return ExitCode::Usage; } match report.open {@|the_offbox_report_changes_no_exit_code
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
     // than unfinished work (CLOUD-1760). The two arms answer different questions —
@@ -30069,8 +30928,9 @@ pub fn land_ready_owes(
             kept.push(rule);
         }
     }
-    resolved.rules = kept;
-    let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
+    resolved.rules = kept.into();
+    let built = hook::Policy::from_resolved(&resolved, harness, root, None)?;
+    let policy = without_set_hatches(&built);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
     let raw = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -30108,6 +30968,54 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a reader of the declared tables building the whole policy a
+    /// second time because the call loaded it for another harness.
+    #[test]
+    fn a_tables_reader_takes_the_load_the_call_already_made() {
+        let _scope = HookLoads::open(None);
+        let overrides = Overrides::default();
+        let Ok(_) = load_hook_config(&overrides, hook::Harness::ClaudeCode) else {
+            return; // no authority here to load; nothing to share
+        };
+        let tables = load_policy_tables(&overrides).expect("the tables load");
+        assert_eq!(
+            tables.harness(),
+            hook::Harness::ClaudeCode,
+            "the call's own load, not a second one for exit-code"
+        );
+    }
+
+    /// Fails by: a tables reader that runs BEFORE the call's own load — as the
+    /// post-tool readers do — loading for exit-code, so the call then loads a
+    /// second policy for its own harness.
+    #[test]
+    fn a_tables_reader_first_in_a_call_loads_for_the_calls_harness() {
+        let _scope = HookLoads::scope_for(hook::Harness::ClaudeCode);
+        let overrides = Overrides::default();
+        let Ok(tables) = load_policy_tables(&overrides) else {
+            return; // no authority here to load
+        };
+        assert_eq!(tables.harness(), hook::Harness::ClaudeCode);
+        assert!(
+            HookLoads::recall(hook_authority_root(), &overrides, hook::Harness::ClaudeCode)
+                .is_some(),
+            "the call's own load is now a memo hit"
+        );
+    }
+
+    /// Fails by: each of a post-tool call's three asks for the capture bound
+    /// parsing the whole authority again — a third of the call on a large one.
+    #[test]
+    fn a_post_tool_call_reads_the_capture_bound_once() {
+        let parses = || CAPTURE_PARSES.with(std::cell::Cell::get);
+        let _scope = HookLoads::open(None);
+        let before = parses();
+        let first = capture_budget();
+        assert_eq!(capture_budget(), first);
+        assert_eq!(capture_budget(), first);
+        assert_eq!(parses() - before, 1, "one parse for the call");
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

@@ -105,6 +105,14 @@ pub const SESSION_SCHEMA: u32 = 1;
 /// The host's id for the session this process serves.
 pub const SESSION_ENV: &str = "BATTEN_SESSION";
 
+/// The off-box state repository, as the path it has on the project origin's
+/// host (CLOUD-2717 ruling 2).
+///
+/// Ambient, for [`SESSION_ENV`]'s reason: it is a fact about the machine this
+/// process runs on, never a setting a repository commits, so there is no
+/// config-file spelling and no surface flag. Unset means the feature is off.
+pub const STATE_REPO_ENV: &str = "BATTEN_STATE_REPO";
+
 /// The session a warm fork was forked from. Absent means "not a fork".
 pub const PARENT_ENV: &str = "BATTEN_SESSION_PARENT";
 

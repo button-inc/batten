@@ -71,6 +71,9 @@ row here, so a new module lands with its line.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
+- `sessions.rs` — the session-source contract (CLOUD-1010): `SessionSource` lists an agent's stored sessions and reads each one's native records from a cursor, verbatim and bounded; `read_jsonl` is the shared file source and `JsonlFile` the neutral one.
+- `offbox.rs` — off-box session state: reads `BATTEN_STATE_REPO`, derives the state repository's remote from the project origin, and says whether it can be written (CLOUD-2718); builds a session's snapshot as one orphan commit (CLOUD-2719), pushes it by compare-and-swap and absorbs a rival writer (CLOUD-2720), and runs the crash-only daemon with its backoff and status file (CLOUD-2721).
+- `offbox_watch.rs` — whether the off-box daemon is alive, from its lock, status file and inbox (CLOUD-2736): the probe the hook and `doctor session` share, the hook's own `misses`/`noted` file, the session leaf, and the two remedy commands. File operations only; reaches no transport.
 - `forge.rs` — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
 - `tools.rs` — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
 - `captured.rs` — declared REDUCTIONS over responses the agent already captured (CLOUD-1188).

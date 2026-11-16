@@ -2695,6 +2695,103 @@ pub struct SessionReport {
     /// to the row that went silent and the token names what it wanted, and neither
     /// carries a program name, a task body or a path out of the store.
     pub unminted: Vec<Unminted>,
+    /// Whether this checkout's state is leaving the machine (CLOUD-2722), or
+    /// absent — from the document too — with the state repository variable
+    /// unset. The exit code does not read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offbox: Option<OffboxReport>,
+}
+
+/// What the off-box daemon's own files say, read without a network call, a
+/// git ref or a session id (CLOUD-2722).
+///
+/// Pointers only: an id, counts and tokens. A status line that is missing or
+/// will not parse is `null` for its field, and an unknown key is ignored.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct OffboxReport {
+    /// `running`, `dead` or `stuck`: [`crate::offbox_watch::probe`]'s answer,
+    /// the same function the hook asks.
+    pub daemon: &'static str,
+    /// Which session the daemon serves. This verb has no session id of its
+    /// own, so it says whose daemon it is and never "another session's".
+    pub session: Option<String>,
+    /// The commit id last applied.
+    pub pushed: Option<String>,
+    /// How many bytes of inbox the daemon has not read.
+    pub unread_bytes: u64,
+    /// The epoch second before which the daemon makes no request.
+    pub wait_until: Option<i64>,
+    /// Consecutive throttled attempts.
+    pub throttles: Option<u32>,
+    /// Consecutive failed attempts.
+    pub failures: Option<u32>,
+    /// `yes`, `no`, `no-origin` or `unknown`.
+    pub attached: Option<String>,
+    /// `pending`, `yes`, `none` or `unavailable`.
+    pub restored: Option<String>,
+}
+
+/// The one text line `doctor session` adds.
+impl crate::output::Line for OffboxReport {
+    fn line(&self) -> String {
+        let count =
+            |value: Option<u32>| value.map_or_else(|| String::from("unknown"), |n| n.to_string());
+        format!(
+            "offbox: daemon {}, pushed {}, {} bytes unread, wait until {}, {} throttled, {} failed",
+            self.daemon,
+            self.pushed.as_deref().unwrap_or("none"),
+            self.unread_bytes,
+            self.wait_until
+                .map_or_else(|| String::from("none"), |until| until.to_string()),
+            count(self.throttles),
+            count(self.failures),
+        )
+    }
+}
+
+/// The off-box report for the checkout at `dir`, or `None` with the state
+/// repository variable unset. **It creates nothing**: with no off-box directory
+/// it reports a dead daemon and leaves the directory absent.
+//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
+//MUTANT unset-still-reports-offbox|s@^    if !set {$@    if false {@|unset_reports_no_offbox_at_all
+//MUTANT free-lock-reads-running|s@^        Liveness::Dead => "dead",$@        Liveness::Dead => "running",@|a_free_lock_is_a_dead_daemon
+//MUTANT unread-count-ignores-the-offset|s@^    let unread_bytes = inbox.saturating_sub(read.unwrap_or(inbox));$@    let unread_bytes = inbox;@|a_running_daemon_is_reported_from_its_own_files
+fn offbox_report(dir: &Path) -> Option<OffboxReport> {
+    use crate::offbox_watch::{self, Liveness, field};
+
+    let set =
+        std::env::var(crate::session::STATE_REPO_ENV).is_ok_and(|value| !value.trim().is_empty());
+    if !set {
+        return None;
+    }
+    let offbox = crate::git::repo_root(dir)
+        .ok()
+        .and_then(|root| crate::state::repo_state_dir(&root).ok())
+        .map(|state| state.join(offbox_watch::DIR))?;
+    let daemon = match offbox_watch::probe(&offbox, None) {
+        Liveness::Dead => "dead",
+        Liveness::Stuck => "stuck",
+        Liveness::Alive | Liveness::OtherSession => "running",
+    };
+    let status = std::fs::read_to_string(offbox.join(offbox_watch::STATUS)).unwrap_or_default();
+    let text = |key: &str| field(&status, key).map(str::to_owned);
+    let read = field(&status, "inbox_read").and_then(|value| value.parse::<u64>().ok());
+    let inbox = std::fs::metadata(offbox.join(offbox_watch::INBOX)).map_or(0, |meta| meta.len());
+    let unread_bytes = inbox.saturating_sub(read.unwrap_or(inbox));
+    Some(OffboxReport {
+        daemon,
+        session: text("session"),
+        pushed: text("pushed").filter(|id| id != "-"),
+        unread_bytes,
+        wait_until: field(&status, "wait_until")
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|until| *until != 0),
+        throttles: field(&status, "throttles").and_then(|value| value.parse().ok()),
+        failures: field(&status, "failures").and_then(|value| value.parse().ok()),
+        attached: text("attached"),
+        restored: text("restored"),
+    })
 }
 
 /// One registered rule, and one session-start fact it reads that nothing minted.
@@ -3009,6 +3106,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // container it exists to report.
     let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
     let unminted = unminted_facts(dir, resolved.as_ref());
+    let offbox = offbox_report(dir);
     let unreadable = SessionReport {
         version: config::VERSION,
         open: None,
@@ -3016,6 +3114,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ids: Vec::new(),
         ok: false,
         unminted: unminted.clone(),
+        offbox: offbox.clone(),
     };
     let Some((transcript, link)) = resolved.as_ref().and_then(|resolved| {
         let transcript = resolved.transcript.as_ref()?;
@@ -3056,6 +3155,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
                 ids: Vec::new(),
                 ok: unminted.is_empty(),
                 unminted,
+                offbox,
             };
         }
         Err(_) => return unreadable,
@@ -3100,6 +3200,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ok: ids.is_empty() && unminted.is_empty(),
         ids,
         unminted,
+        offbox,
     }
 }
 
