@@ -29063,7 +29063,7 @@ fn apply_admissions(
         };
         let anchor = admission::Anchor::Finding(fingerprint.clone()).token();
         let resolved = epochs
-            .entry((finding.rule.clone(), class.to_string()))
+            .entry((finding.rule.clone(), class.clone()))
             .or_insert_with(|| epoch::for_rule_cached(root, config_from, &finding.rule, class).ok())
             .clone();
         let Some(epoch) = resolved else {
