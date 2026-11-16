@@ -325,7 +325,6 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
     }
     // A corpus that collected nothing compares nothing, so a collector that
     // silently stopped reading `with input as` fails here rather than passing.
-    println!("parity corpus: {corpus} case input(s)");
     // 283 measured on #1276; the floor sits just under it.
     assert!(
         corpus >= 250,

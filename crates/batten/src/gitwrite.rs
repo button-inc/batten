@@ -1736,6 +1736,95 @@ pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Make `dest`, a materialised copy of `source`'s `HEAD` tree, a repository at
+/// that same commit — `git clone --shared --no-checkout` plus an index, in-process.
+///
+/// **BORROWED, NEVER COPIED:** the objects are reached through
+/// `objects/info/alternates`, so the history costs one line, and a write in
+/// `dest` (a suite that commits) lands in `dest`'s own store, never `source`'s.
+///
+/// `HEAD` names the branch `source`'s does (detached where `source`'s is), and
+/// `refs/heads/main` and `refs/remotes/origin/main` are carried where `source`
+/// resolves them, so a suite that asks what branch it is on, or measures its
+/// history against the trunk, reads what it would read in the checkout. The
+/// index is `HEAD`'s tree, so files the caller rewrote after materialising read
+/// as modified, exactly as they are. An existing `dest/.git` is kept.
+///
+/// # Errors
+///
+/// A repository that will not open or initialise, a `HEAD` that will not
+/// resolve, or a file that will not write.
+pub fn borrow_repository(source: &Path, dest: &Path) -> Result<()> {
+    if dest.join(".git").exists() {
+        return Ok(());
+    }
+    let origin = gix::open(source)
+        .map_err(|err| anyhow::anyhow!("gitwrite: could not open {}: {err}", source.display()))?;
+    let head = origin
+        .head_id()
+        .map_err(|err| anyhow::anyhow!("gitwrite: HEAD will not resolve: {err}"))?
+        .detach();
+    let objects = std::path::absolute(origin.common_dir().join("objects"))
+        .map_err(|err| anyhow::anyhow!("gitwrite: no absolute objects path: {err}"))?;
+    let carried: Vec<(String, gix::ObjectId)> = ["refs/heads/main", "refs/remotes/origin/main"]
+        .into_iter()
+        .filter_map(|name| {
+            let id = origin
+                .find_reference(name)
+                .ok()?
+                .into_fully_peeled_id()
+                .ok()?;
+            Some((name.to_owned(), id.detach()))
+        })
+        .collect();
+    let branch = origin
+        .head_name()
+        .ok()
+        .flatten()
+        .map(|name| name.as_bstr().to_string());
+    gix::init(dest).map_err(|err| {
+        anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dest.display())
+    })?;
+    let git = dest.join(".git");
+    let write = |relative: &str, text: String| -> Result<()> {
+        let at = git.join(relative);
+        if let Some(parent) = at.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                anyhow::anyhow!("gitwrite: cannot create {}: {err}", parent.display())
+            })?;
+        }
+        crate::durable::replace(&at, text)
+            .map_err(|err| anyhow::anyhow!("gitwrite: cannot write {}: {err}", at.display()))
+    };
+    write(
+        "objects/info/alternates",
+        format!("{}\n", objects.display()),
+    )?;
+    for (name, id) in &carried {
+        write(name, format!("{id}\n"))?;
+    }
+    match &branch {
+        Some(name) => {
+            write(name, format!("{head}\n"))?;
+            write("HEAD", format!("ref: {name}\n"))?;
+        }
+        None => write("HEAD", format!("{head}\n"))?,
+    }
+    let repo = gix::open(dest)
+        .map_err(|err| anyhow::anyhow!("gitwrite: could not open {}: {err}", dest.display()))?;
+    let tree = repo
+        .find_commit(head)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {head} is not a commit here: {err}"))?
+        .tree_id()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {head} names no tree: {err}"))?
+        .detach();
+    repo.index_from_tree(&tree)
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index for {}: {err}", dest.display()))?
+        .write(gix::index::write::Options::default())
+        .map_err(|err| anyhow::anyhow!("gitwrite: the index will not write: {err}"))?;
+    Ok(())
+}
+
 /// One directory level of a tree being assembled from a path list.
 #[derive(Default)]
 struct Node {
@@ -2105,6 +2194,51 @@ mod tests {
         assert!(carries(&dir, &first, &second));
         assert!(!carries(&dir, &second, &first));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A materialised copy reads as the checkout it came from: the same branch,
+    /// commit and tracked set, clean, with a rewritten file reading as changed —
+    /// and a commit made in it never lands in the source's store.
+    #[test]
+    fn a_borrowed_copy_reads_as_its_checkout_and_writes_only_to_itself() {
+        let source = crate::scratch::scratch("gitwrite-borrow-source");
+        init_on_main(&source).unwrap_or_else(|err| panic!("init: {err}"));
+        std::fs::write(source.join("a.txt"), "a\n").unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(&source, &["a.txt".to_owned()], "one")
+            .unwrap_or_else(|err| panic!("commit: {err}"));
+        let copy = crate::scratch::scratch("gitwrite-borrow-copy");
+        crate::git::materialize_rev(&source, "HEAD", &copy)
+            .unwrap_or_else(|err| panic!("materialise: {err}"));
+        borrow_repository(&source, &copy).unwrap_or_else(|err| panic!("borrow: {err}"));
+        let head = |dir: &Path| crate::git::resolve_ref(dir, "HEAD").ok().flatten();
+        assert_eq!(head(&copy), head(&source));
+        assert_eq!(
+            crate::git::current_branch(&copy).ok().flatten().as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            crate::git::tracked_paths(&copy).ok(),
+            crate::git::tracked_paths(&source).ok()
+        );
+        let status = |dir: &Path| {
+            crate::git::status_fact(dir)
+                .unwrap_or_else(|err| panic!("status: {err}"))
+                .changed
+        };
+        assert!(status(&copy).is_empty(), "{:?}", status(&copy));
+        std::fs::write(copy.join("a.txt"), "b\n").unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(status(&copy), vec!["a.txt".to_owned()]);
+        commit_paths(&copy, &["a.txt".to_owned()], "two")
+            .unwrap_or_else(|err| panic!("commit: {err}"));
+        let written = head(&copy).unwrap_or_else(|| panic!("a commit"));
+        let source_repo = gix::open(&source).unwrap_or_else(|err| panic!("open: {err}"));
+        let id = gix::ObjectId::from_hex(written.as_bytes()).unwrap_or_else(|err| panic!("{err}"));
+        assert!(
+            !source_repo.has_object(id),
+            "a write in the copy reached the source"
+        );
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&copy);
     }
 
     /// An object lands under the id it was read as, once: a second write of an
