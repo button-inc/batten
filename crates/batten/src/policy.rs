@@ -2096,51 +2096,123 @@ pub(crate) struct Compiled {
     /// [`Reads::Opaque`] (step 13a). Bytecode carries no AST, so the reading is
     /// taken when the entry is written, as `facts` is.
     reads: Option<Vec<String>>,
-    /// What a bytecode refusal is confirmed against, when the bundle's sources
-    /// are at hand (CLOUD-2696).
-    confirm: Option<Confirm>,
 }
 
-/// The interpreter a bytecode refusal is re-decided by (CLOUD-2696).
+/// The text bytecode is compiled from: each module as written, with every `:=`
+/// statement followed by a check that what it bound is defined (#1276,
+/// CLOUD-2696).
 ///
-/// **THE TWO EVALUATORS DISAGREE, MEASURED.** regorus's VM (0.11 and 0.15 alike)
-/// reads a helper function that is UNDEFINED for a call as satisfied when its
-/// result is bound with `:=` and negated over, so a module refused live what its
-/// own `with input as` cases — run by the interpreter under `policy test` —
-/// passed as clean (`an_undefined_helper_decides_alike_in_both_evaluators`).
-/// A gate whose live answer differs from its tested one is not the gate that was
-/// tested.
+/// **THE BYTECODE COMPILER DROPS A GUARD THE LANGUAGE REQUIRES.** regorus 0.15
+/// (and its `main`) emits `Guard NotUndefined` after every binding context but
+/// `:=` — `PlanContext::require_defined_values` in its `destructuring.rs` omits
+/// `ColonAssignment` — so `x := f(a)` with `f` undefined for `a` binds
+/// `Undefined` and the body runs on, where OPA and regorus's own interpreter
+/// fail it. Under a `not` over `x` that is a violation no case raises
+/// (`an_undefined_helper_decides_alike_in_both_evaluators`).
 ///
-/// So a refusal is the interpreter's answer, always: the bytecode stays the fast
-/// path for the common allow, and a call it would refuse is decided again by the
-/// evaluator the module's cases ran under. Built once per process, on the first
-/// refusal, so an allow pays nothing.
-struct Confirm {
-    id: String,
-    sources: Vec<(String, String)>,
-    data: serde_json::Value,
-    engine: std::sync::OnceLock<Option<Box<regorus::Engine>>>,
-}
-
-impl Confirm {
-    fn new(id: &str, sources: &[(String, String)], data: serde_json::Value) -> Self {
-        Self {
-            id: id.to_owned(),
-            sources: sources.to_vec(),
-            data,
-            engine: std::sync::OnceLock::new(),
+/// The guard is restored at the source: after each such statement, `; v == v`
+/// for every variable its left side binds. An equality over `Undefined` fails
+/// the body exactly as the missing guard would have, and over a defined value
+/// it holds. Only the program is compiled from this text; the interpreter,
+/// `policy test` and every pointer keep the module as written, so ONE evaluator
+/// decides, once, from the cached program. CLOUD-2696's first answer re-decided
+/// every bytecode refusal by compiling an interpreter from source, which cost
+/// every refusing or advising hook call a parse (measured 1.68× on `wired`).
+///
+/// `None` is could-not-look: the AST would not serialize, or an offset is not a
+/// boundary of its module's text. The bundle then stays interpreted.
+fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut out = Vec::with_capacity(policies.len());
+    for policy in &policies {
+        let source = policy.get("source")?;
+        let path = source.get("file")?.as_str()?.to_owned();
+        let mut text = source.get("contents")?.as_str()?.to_owned();
+        let mut guards = Vec::new();
+        colon_assignments(policy.get("ast")?, &mut guards);
+        // Spliced from the end, so each offset still holds when it is used.
+        guards.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        for (at, guard) in guards {
+            if !text.is_char_boundary(at) {
+                return None;
+            }
+            text.insert_str(at, &guard);
         }
+        out.push((path, text));
     }
+    Some(out)
+}
 
-    /// The interpreter over the same sources and data, compiled on first use.
-    fn engine(&self) -> Option<&regorus::Engine> {
-        self.engine
-            .get_or_init(|| {
-                compile(&self.id, &self.sources, &self.data)
-                    .ok()
-                    .and_then(|bundle| bundle.evaluator.engine().cloned().map(Box::new))
-            })
-            .as_deref()
+/// Every `:=` statement under `node`: the byte offset its statement ends at,
+/// with the guard that goes there.
+fn colon_assignments(node: &serde_json::Value, found: &mut Vec<(usize, String)>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(stmts) = map.get("stmts").and_then(serde_json::Value::as_array) {
+                found.extend(stmts.iter().filter_map(statement_guard));
+            }
+            for value in map.values() {
+                colon_assignments(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                colon_assignments(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A statement's guard, when it is a `:=` binding at least one named variable:
+/// `; v == v` per variable, at the statement's end — after any `with` modifier,
+/// which the statement's span covers.
+fn statement_guard(stmt: &serde_json::Value) -> Option<(usize, String)> {
+    let assign = stmt
+        .get("literal")?
+        .get("Expr")?
+        .get("expr")?
+        .get("AssignExpr")?;
+    if assign.get("op")?.as_str()? != "ColEq" {
+        return None;
+    }
+    let mut vars = BTreeSet::new();
+    bound_vars(assign.get("lhs")?, &mut vars);
+    vars.remove("_");
+    if vars.is_empty() {
+        return None;
+    }
+    let end = usize::try_from(stmt.get("span")?.get("end")?.as_u64()?).ok()?;
+    Some((
+        end,
+        vars.iter().map(|var| format!("; {var} == {var}")).collect(),
+    ))
+}
+
+/// The variables a binding pattern names: a bare variable, or each one inside
+/// an array or object pattern.
+fn bound_vars(node: &serde_json::Value, vars: &mut BTreeSet<String>) {
+    if let Some(name) = node
+        .get("Var")
+        .and_then(|var| var.get("value"))
+        .and_then(serde_json::Value::as_str)
+    {
+        vars.insert(name.to_owned());
+        return;
+    }
+    match node {
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                bound_vars(value, vars);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                bound_vars(item, vars);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2177,7 +2249,6 @@ fn compile_cached(
         }
         return Ok(bundle);
     };
-    let compiled = compiled.confirmed_by(id, sources, data);
     if let Some(path) = path {
         write_cached(&path, &key, &bundle, &compiled);
         // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
@@ -2208,7 +2279,7 @@ struct CacheHeader {
 /// key line, and the binary is identified by its build ID. `3` keys the pattern
 /// table by its digest rather than its text. `4` records the tree read set
 /// (step 13a), without which a bytecode bundle can only answer `Opaque`.
-const CACHE_FORMAT: &str = "batten-policy-rvm-4";
+const CACHE_FORMAT: &str = "batten-policy-rvm-5";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
@@ -2313,11 +2384,6 @@ fn read_cached(
         entries: header.entries,
         facts: header.facts,
         reads: header.reads,
-        confirm: Some(Confirm::new(
-            id,
-            sources,
-            serde_json::from_str(data).unwrap_or_else(|_| serde_json::json!({})),
-        )),
     };
     Some(Bundle {
         id: id.to_owned(),
@@ -2420,7 +2486,15 @@ impl Compiled {
     /// compiler cannot express a rule it defines.
     fn from_bundle(bundle: &Bundle, data: &serde_json::Value) -> Option<Self> {
         use regorus::languages::rego::compiler::Compiler;
-        let mut engine = bundle.evaluator.engine()?.clone();
+        // The program is compiled from the guarded text ([`guarded_sources`]),
+        // over the same data the interpreter holds.
+        let mut engine = new_engine();
+        engine
+            .add_data(regorus::Value::from_json_str(&data.to_string()).ok()?)
+            .ok()?;
+        for (path, text) in guarded_sources(bundle.evaluator.engine()?)? {
+            engine.add_policy(path, text).ok()?;
+        }
         let mut candidates = Vec::new();
         for package in &bundle.packages {
             for rule in ANSWERED_RULES {
@@ -2456,21 +2530,7 @@ impl Compiled {
                 Reads::Known(keys) => Some(keys.into_iter().collect()),
                 Reads::Opaque => None,
             },
-            confirm: None,
         })
-    }
-
-    /// This bytecode, with what its refusals are confirmed against.
-    fn confirmed_by(
-        self,
-        id: &str,
-        sources: &[(String, String)],
-        data: &serde_json::Value,
-    ) -> Self {
-        Self {
-            confirm: Some(Confirm::new(id, sources, data.clone())),
-            ..self
-        }
     }
 
     /// `bundle` evaluating through this bytecode rather than its interpreter.
@@ -2603,22 +2663,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
-    let decided = denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]));
-    // A BYTECODE REFUSAL IS THE INTERPRETER'S, OR IT IS NONE ([`Confirm`]).
-    if let Look::Is(found) = &decided
-        && !found.is_empty()
-        && let Evaluator::Compiled(compiled) = &bundle.evaluator
-        && let Some(engine) = compiled.confirm.as_ref().and_then(Confirm::engine)
-    {
-        let mut engine = engine.clone();
-        let interpreted = engine
-            .set_input_json(input)
-            .ok()
-            .and_then(|()| engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok())
-            .map(|results| Answer::of(&results));
-        return denials(bundle, interpreted);
-    }
-    decided
+    denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]))
 }
 
 /// The violations an answer carries, or could-not-look where it carries none
@@ -5288,17 +5333,16 @@ violation contains {"rule": "commit name refused", "verdict": "commit name refus
         let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix: x"]}]}}"#;
         let right = r#"{"call":{"programs":[{"arguments":["commit","-m","feat: x"]}]}}"#;
         let interpreted = bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]);
-        // As `compile_cached` builds it: bytecode that confirms a refusal.
-        let sources = sources_of(&[("policy/h.rego", UNDEFINED_HELPER)]);
-        let data = serde_json::json!({});
-        let compiled = {
-            let bundle = compile("row", &sources, &data).expect("the fixture compiles");
-            Compiled::from_bundle(&bundle, &data)
-                .expect("the fixture compiles to bytecode")
-                .confirmed_by("row", &sources, &data)
-                .into_bundle(bundle)
-        };
+        // As `compile_cached` builds it, and nothing re-decides its answer.
+        let compiled = bytecode(bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]));
         assert!(compiled.is_bytecode());
+        let before = engines_constructed();
+        let _ = verdicts(&compiled, wrong);
+        assert_eq!(
+            engines_constructed() - before,
+            0,
+            "the program decides a refusal alone: no interpreter is built to re-decide it"
+        );
         let refused = Some(vec!["commit name refused".to_owned()]);
         for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
             assert_eq!(
@@ -5309,6 +5353,67 @@ violation contains {"rule": "commit name refused", "verdict": "commit name refus
             assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
             assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
         }
+    }
+
+    /// The same undefined helper behind an ARRAY pattern, so the guard covers
+    /// every variable a pattern binds. No `with`: the RVM refuses the keyword
+    /// and such a bundle stays interpreted; where the guard lands after a
+    /// modifier is the text-level case below. Fails by: a pattern's variable
+    /// left unguarded.
+    const UNDEFINED_PAIR: &str = r#"package batten.pair
+
+import rego.v1
+
+rules contains "pair refused"
+
+pair(args) := [first, rest] if {
+	some i, word in args
+	word == "-m"
+	first := args[i + 1]
+	rest := args[i + 2]
+}
+
+violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects": []} if {
+	some program in input.call.programs
+	[first, _] := pair(program.arguments)
+	not startswith(first, "feat")
+}
+"#;
+
+    #[test]
+    fn a_pattern_binding_an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix","x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]));
+        assert!(compiled.is_bytecode());
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(verdicts(bundle, none), Some(Vec::new()), "{evaluator}");
+            assert_eq!(
+                verdicts(bundle, wrong),
+                Some(vec!["pair refused".to_owned()]),
+                "{evaluator}"
+            );
+        }
+    }
+
+    /// Fails by: a `:=` statement left unguarded, a guard for `_` or for an `=`
+    /// statement, or a guard placed before the statement's `with` modifier.
+    #[test]
+    fn every_colon_binding_is_guarded_after_its_whole_statement() {
+        let module = "package batten.g\nimport rego.v1\n\nx if {\n\ta := input.a\n\t[b, _] := input.b with input.c as 1\n\td = input.d\n}\n";
+        let bundle = bundle_of("row", &[("policy/g.rego", module)]);
+        let guarded = guarded_sources(bundle.evaluator.engine().expect("interpreted"))
+            .expect("the AST serializes");
+        assert_eq!(
+            guarded,
+            vec![(
+                String::from("policy/g.rego"),
+                module
+                    .replacen("a := input.a", "a := input.a; a == a", 1)
+                    .replacen("with input.c as 1", "with input.c as 1; b == b", 1),
+            )]
+        );
     }
 
     #[test]
