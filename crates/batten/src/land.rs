@@ -5484,6 +5484,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A draft pushed while the gate ran is never rewound by the lap's push of
+    /// the verified head (#1276): the swap is not admitted, so it races and the
+    /// lap verifies the newer head instead. The same head, pushed once verified,
+    /// is admitted.
+    #[test]
+    fn a_head_pushed_mid_gate_is_raced_never_rewound_by_the_verified_push() {
+        let root = crate::scratch::scratch("land-mid-gate");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        std::fs::write(root.join("a.txt"), "verified\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "verified").unwrap();
+        let verified = tip();
+        super::record_disk(&root, "work", &[Verified::Clean(verified.clone()).line()]).unwrap();
+        std::fs::write(root.join("b.txt"), "pushed mid-gate\n").unwrap();
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("a.txt"), String::from("b.txt")],
+            "mid-gate",
+        )
+        .unwrap();
+        let newer = tip();
+        assert_eq!(super::last_verified(&root, "work"), Some(verified.clone()));
+        assert!(
+            !super::admitted(&root, "work", &newer, &verified),
+            "the verified push would rewind a head pushed while the gate ran"
+        );
+        super::record_disk(&root, "work", &[Verified::Clean(newer.clone()).line()]).unwrap();
+        assert!(super::admitted(&root, "work", &verified, &newer));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
         let root = crate::scratch::scratch("land-admit");
