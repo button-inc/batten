@@ -2278,10 +2278,14 @@ fn statement_guard(stmt: &serde_json::Value) -> Option<(usize, String)> {
         return None;
     }
     let end = usize::try_from(stmt.get("span")?.get("end")?.as_u64()?).ok()?;
-    Some((
-        end,
-        vars.iter().map(|var| format!("; {var} == {var}")).collect(),
-    ))
+    let mut guard = String::new();
+    for var in &vars {
+        guard.push_str("; ");
+        guard.push_str(var);
+        guard.push_str(" == ");
+        guard.push_str(var);
+    }
+    Some((end, guard))
 }
 
 /// The variables a binding pattern names: a bare variable, or each one inside

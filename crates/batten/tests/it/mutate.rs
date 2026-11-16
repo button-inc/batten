@@ -111,6 +111,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+// Only the unix cases capture a child, so only they need the adapter's trait.
+#[cfg(unix)]
 use batten::exec::Streamed as _;
 
 use std::fs;

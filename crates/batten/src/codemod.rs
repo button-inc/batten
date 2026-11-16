@@ -288,7 +288,7 @@ pub fn lint_escapes(source: &str, edition: Edition, lint: &str) -> usize {
                     }
                 }
             }
-            entries.iter().any(|entry| *entry == wanted)
+            entries.contains(&wanted)
         })
         .count()
 }
