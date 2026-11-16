@@ -1562,10 +1562,22 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
 /// The vendored doc for `id`, or an empty one where none is declared.
 #[must_use]
 pub fn vendored(id: &str) -> Doc {
-    VENDORED_DOCS
-        .iter()
-        .find(|entry| entry.id == id)
-        .map(VendoredDoc::to_doc)
+    // INDEXED, NOT SCANNED: the registry asks for every shipped class's doc on
+    // each hook call, and a linear find per class was quadratic in the table
+    // (callgrind, 2026-11-16). Built once per process from the same table; the
+    // first entry for an id answers, as the scan's `find` did.
+    static BY_ID: std::sync::LazyLock<
+        std::collections::HashMap<&'static str, &'static VendoredDoc>,
+    > = std::sync::LazyLock::new(|| {
+        let mut index = std::collections::HashMap::with_capacity(VENDORED_DOCS.len());
+        for entry in VENDORED_DOCS {
+            index.entry(entry.id).or_insert(entry);
+        }
+        index
+    });
+    BY_ID
+        .get(id)
+        .map(|entry| entry.to_doc())
         .unwrap_or_default()
 }
 

@@ -298,8 +298,9 @@ pub struct Config {
     /// load, and a declared token nothing emits is refused the other way, so the
     /// table and the emitters cannot drift. The type and its validation are
     /// [`crate::verdict`].
-    #[serde(default, rename = "verdict", skip_serializing_if = "Vec::is_empty")]
-    pub verdicts: Vec<DeclaredVerdict>,
+    #[serde(default, rename = "verdict", skip_serializing_if = "Shared::is_empty")]
+    #[schemars(with = "Vec<DeclaredVerdict>")]
+    pub verdicts: Shared<DeclaredVerdict>,
     /// The three positional word lists every class and route name is drawn from
     /// (CLOUD-1284), and the tokenizer pin they were measured under.
     ///
@@ -787,6 +788,73 @@ pub struct Config {
     pub steps: Vec<crate::step_table::Step>,
 }
 
+/// A table shared between the parse and every layer built from it, rather than
+/// copied into each (2026-11-16).
+///
+/// The verdict table is ~60% of this repository's resolved authority, and a hook
+/// call held it three times: decoded into the `Config`, cloned into the
+/// resolve, cloned again into the policy. A clone of this is a reference count;
+/// a write copies the table first ([`std::sync::Arc::make_mut`]), so a layer
+/// that edits its copy still edits only its own. It reads, writes and describes
+/// itself exactly as the `Vec` it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shared<T>(std::sync::Arc<Vec<T>>);
+
+impl<T> Default for Shared<T> {
+    fn default() -> Self {
+        Self(std::sync::Arc::new(Vec::new()))
+    }
+}
+
+impl<T> Shared<T> {
+    /// Whether the table is empty: the `skip_serializing_if` its field takes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.0
+    }
+}
+
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<T> From<Vec<T>> for Shared<T> {
+    fn from(rows: Vec<T>) -> Self {
+        Self(std::sync::Arc::new(rows))
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Shared<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T: Serialize> Serialize for Shared<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Shared<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::deserialize(deserializer).map(Self::from)
+    }
+}
+
 impl Config {
     pub fn declaring_nothing() -> Self {
         Config {
@@ -811,7 +879,7 @@ impl Config {
             patterns: Vec::new(),
             traversals: Vec::new(),
             registers: Vec::new(),
-            verdicts: Vec::new(),
+            verdicts: Shared::default(),
             vocabulary: crate::config_model::Vocabulary::default(),
             scope: Vec::new(),
             protected: Vec::new(),
