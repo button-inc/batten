@@ -91,6 +91,16 @@ test_reviewed_codes_opaque_spawn_runs if {
 	count(violation) == 0 with input as call([opaque("perl", "tools/x.pl", true)])
 }
 
+# A compound line, as agents send most commands: the opaque spawn sits behind a
+# bare program and is still the call's to refuse.
+test_an_opaque_spawn_behind_a_compound_line_is_refused if {
+	found := violation with input as {"call": {
+		"command": "git status && python3 ship.py",
+		"programs": [{"program": "git", "name": "git", "via": null}, opaque("python3", "ship.py", false)],
+	}}
+	count(found) == 1
+}
+
 test_a_call_with_nothing_opaque_runs if {
 	count(violation) == 0 with input as call([{"program": "git", "name": "git", "via": null}])
 }

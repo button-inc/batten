@@ -10,9 +10,11 @@
 # paths and once with an option labelled "Yes, admit".
 #
 # SO THE QUESTION IS JUDGED BEFORE IT IS ASKED, on its own words: a question
-# whose text asks to admit must offer an option labelled `Admit…`, and every
-# path it names must be the full repository-relative one. A bare file name is
-# never a finding's path, so it can never match.
+# whose text asks to admit must offer an option labelled `Admit…`, must name a
+# path, and every test finding it names (`<path>::<case>`) must carry the full
+# repository-relative path. A test lives under a directory, so a `::` token with
+# no `/` is a shortened one that can never match; a root-level file such as
+# `clippy.toml` legitimately has no `/` and is a path as written.
 #
 # BOTH EXPRESSIONS ARE THE CONFIG'S: `admit-asked` and `finding-path` are
 # `[[pattern]]` rows in `batten.toml`, read here from `data.batten.patterns`.
@@ -63,17 +65,17 @@ violation contains {
 	not labelled_admit(question)
 }
 
-# Asks to admit, and names no repository-relative path at all.
+# Asks to admit, and names no path at all.
 violation contains {
 	"rule": "call ask loose",
 	"verdict": "call ask loose",
 	"subjects": [{"artifact": "AskUserQuestion"}],
 } if {
 	some question in admitting
-	count({token | some token in paths(question); contains(token, "/")}) == 0
+	count(paths(question)) == 0
 }
 
-# Names a path, shortened: it can never equal a finding's pair.
+# Names a test finding by a shortened path: it can never equal the pair.
 violation contains {
 	"rule": "call ask loose",
 	"verdict": "call ask loose",
@@ -81,6 +83,7 @@ violation contains {
 } if {
 	some question in admitting
 	some token in paths(question)
+	contains(token, "::")
 	not contains(token, "/")
 }
 
@@ -128,6 +131,11 @@ test_a_shortened_path_is_refused if {
 	found == {{"rule": "call ask loose", "verdict": "call ask loose", "subjects": [{"path": "session_provisioning.rs::a_local_release_build"}]}}
 }
 
+# The #1276 false positive: a root-level file has no `/` and is a whole path.
+test_a_root_level_file_is_a_path if {
+	count(judged("Admit this smell? pattern-removed clippy.toml", ["Admit", "Refuse"])) == 0
+}
+
 test_an_admission_naming_no_path_is_refused if {
 	count(judged("Admit the finding?", ["Admit", "Refuse"])) == 1
 }
@@ -137,7 +145,7 @@ test_a_question_that_asks_nothing_about_admission_is_clean if {
 }
 
 test_another_tool_is_not_judged if {
-	count(violation) == 0 with input as {"call": {"tool": "Bash", "arguments": {"command": "echo admit"}}}
+	count(violation) == 0 with input as {"call": {"tool": "Bash", "arguments": {"command": "cd /tmp && echo admit"}}}
 		with data.batten.patterns["admit-asked"] as asked_regex
 		with data.batten.patterns["finding-path"] as path_regex
 }

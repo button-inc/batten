@@ -184,6 +184,7 @@ mod engine_update;
 mod evaluator_closure;
 mod evaluator_io_probe;
 mod exec_lock;
+mod exec_streamed;
 mod exec_tracked;
 mod exit_code_handlers;
 mod extension_surfaces;
