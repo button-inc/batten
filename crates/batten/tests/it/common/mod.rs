@@ -263,10 +263,16 @@ pub(crate) fn dist_config() -> toml::Table {
 /// Read through [`at_root`], so under `mutate sweep` it is the STAGED manifest and
 /// a mutation of the body is what the suite sees.
 pub(crate) fn task_block(name: &str) -> Option<String> {
+    task_block_template(name).map(|block| rendered(&block))
+}
+
+/// [`task_block`] as the manifest spells it, `{{vars.batten}}` unrendered: for
+/// a pin on HOW a task names the engine rather than on what it runs.
+pub(crate) fn task_block_template(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
     let lines: Vec<String> = manifest.lines().map(str::to_owned).collect();
-    batten::mutate::task_block(&lines, name).map(|block| rendered(&block.join("\n")))
+    batten::mutate::task_block(&lines, name).map(|block| block.join("\n"))
 }
 
 /// `text` with `{{vars.batten}}` rendered as mise renders it with `BATTEN_BIN`
@@ -332,18 +338,20 @@ pub(crate) fn task_commands(name: &str) -> Vec<String> {
     else {
         return Vec::new();
     };
+    // RENDERED, as `task_block` is: what a task RUNS is the argv mise hands the
+    // shell, and a task spells batten through `{{vars.batten}}` (step 22).
     match run {
         toml::Value::String(body) => body
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-            .map(str::to_owned)
+            .map(rendered)
             .collect(),
         toml::Value::Array(entries) => entries
             .iter()
             .filter_map(|entry| match entry {
-                toml::Value::String(command) => Some(command.clone()),
+                toml::Value::String(command) => Some(rendered(command)),
                 toml::Value::Table(table) => table
                     .get("task")
                     .and_then(toml::Value::as_str)

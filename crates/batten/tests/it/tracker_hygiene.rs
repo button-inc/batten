@@ -1177,7 +1177,7 @@ fn the_committed_gates_record_then_check_the_one_row() {
         ("deferral-check", "deferral"),
         ("closing-key-check", "closing-key"),
     ] {
-        let block = common::task_block(task).unwrap_or_else(|| panic!("[tasks.{task}]"));
+        let block = common::task_block_template(task).unwrap_or_else(|| panic!("[tasks.{task}]"));
         let argv = common::task_value(&block, "run");
         assert!(
             argv.contains(&format!("record derive {family}")),
