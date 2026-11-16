@@ -1940,10 +1940,13 @@ regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with y
 # #1276, CLOUD-2775: `admit-ask.rego`'s two expressions. A question asks to
 # admit a finding when it says so in so many words; `admits`, `admitted` and
 # `admitting` are the same ask, and `admission` (an override's word, not the
-# ledger's) is not.
+# ledger's) is not. THE WORD MUST SIT IN THE SENTENCE THAT ASKS: one ending at a
+# `?` with no `. ` between them. On #1276 a question's prose saying "nothing is
+# admitted." was read as asking to admit, and a decision with no finding in it
+# was refused. A path's `.` is no sentence end, so `cli.rs::name?` still asks.
 [[pattern]]
 id = "admit-asked"
-regex = '(?i)\badmit(s|ted|ting)?\b'
+regex = '(?i)\badmit(s|ted|ting)?\b(?:[^.!?]|[.!?]\S)*\?'
 
 # A finding's path as a question names it: a file with an extension this
 # repository's findings carry, optionally `::item` for a test or a symbol.
