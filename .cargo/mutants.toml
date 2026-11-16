@@ -1,8 +1,10 @@
 # cargo-mutants' configuration (https://mutants.rs/, CLOUD-2253). Rust mutation
 # is cargo-mutants' alone; `mutant:changed` runs it over the branch's diff.
 
-# `[profile.mutants]` in Cargo.toml: no debug info for a mutant's build.
-profile = "mutants"
+# The `test` profile, with `CARGO_PROFILE_TEST_DEBUG=0` set by `mutate`'s
+# `suite_env`: dependency units hash as `target/debug`'s do, so the build
+# reuses them from the checkout's build directory (#1276).
+profile = "test"
 test_tool = "nextest"
 # The suite asks git about its own tree, so each build copy carries `.git`.
 copy_vcs = true

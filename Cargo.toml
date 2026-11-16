@@ -1005,12 +1005,11 @@ opt-level = 2
 # dev default. The dependency half above (CLOUD-1208) is untouched: those units
 # change only when the lockfile does, so their optimiser runs once.
 
-# cargo-mutants' builds (https://mutants.rs/performance.html, CLOUD-2253): one
-# incremental build per mutant, and nothing reads a mutant's debug info.
-# Selected by `.cargo/mutants.toml`.
-[profile.mutants]
-inherits = "test"
-debug = "none"
+# NO `[profile.mutants]` (#1276). Mutant builds use `test`, with
+# `CARGO_PROFILE_TEST_DEBUG=0` set where they are spawned, so their dependency
+# units hash as `target/debug`'s do and are reused from the checkout's build
+# directory instead of compiled into a second profile directory: measured, all
+# 437 registry units fresh and none compiled.
 
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release
