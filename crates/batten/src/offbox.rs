@@ -4132,6 +4132,18 @@ mod push_tests {
                 stored == std::fs::read(&one.transcript).unwrap(),
                 "kill at {kill_at}: the remote's transcript is not the source"
             );
+            // A segment closes at SEGMENT and not before: a record per file would
+            // pass every check above, at a kill point per record.
+            let segments = tree
+                .keys()
+                .filter(|path| path.starts_with("transcript/main/0/"))
+                .count();
+            assert!(
+                u64::try_from(segments).unwrap()
+                    <= u64::try_from(stored.len()).unwrap() / SEGMENT + 1,
+                "kill at {kill_at}: {segments} segments for {} bytes",
+                stored.len()
+            );
             assert_eq!(
                 tree["git/batten-receipts/r.json"], b"receipt, changed again\n",
                 "kill at {kill_at}"
@@ -4145,6 +4157,7 @@ mod push_tests {
                 .filter(|path| path.starts_with("absorbed/"))
                 .collect();
             assert!(aside.is_empty(), "kill at {kill_at}: kept aside: {aside:?}");
+            ships_only_stores(&tree, kill_at);
             if !killed {
                 steps = Some(kill_at);
                 break;
@@ -4152,6 +4165,34 @@ mod push_tests {
         }
         let steps = steps.expect("a start finishes unkilled inside the bound");
         assert!(steps > 8, "the premise: a start takes many steps: {steps}");
+    }
+
+    /// The tree a kill test reads carries no lock and no state entry that is
+    /// not a store, judged by literals rather than by the filters under test.
+    ///
+    /// Asserted on every pass, the first one included: a filter that lets the
+    /// non-stores through adds a kill point per file it lets in, so the loop
+    /// that walks the kill points would otherwise run for minutes before any
+    /// other assertion read the tree.
+    fn ships_only_stores(tree: &BTreeMap<String, Vec<u8>>, kill_at: u64) {
+        let not_a_store = [
+            "state/offbox",
+            "state/cache/",
+            "state/provision/",
+            "state/identity",
+            "state/store.json",
+        ];
+        let shipped: Vec<&String> = tree
+            .keys()
+            .filter(|path| {
+                path.to_ascii_lowercase().ends_with(".lock")
+                    || not_a_store.iter().any(|entry| path.contains(entry))
+            })
+            .collect();
+        assert!(
+            shipped.is_empty(),
+            "kill at {kill_at}: not a store, shipped: {shipped:?}"
+        );
     }
 
     /// Fails by: ANY durable step of a start in a container that does not have
@@ -4214,6 +4255,7 @@ mod push_tests {
                     "kill at {kill_at}: {ending} is nowhere on the remote whole"
                 );
             }
+            ships_only_stores(&tree, kill_at);
             if !killed {
                 steps = Some(kill_at);
                 break;
