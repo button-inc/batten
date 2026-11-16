@@ -436,7 +436,7 @@ fn replay(
     let base = crate::git::resolve_ref(root, fork)?.unwrap_or_else(|| fork.to_owned());
     let journal = Journal::open(root, &state, &base, &head, splices);
     if !journal.lacks_any(splices) {
-        return resume(&tree, splices, &journal, &|_| None);
+        return resume(&tree, splices, &journal, &|_| None, &|_| None);
     }
     place_tree(root, &state, &tree, &head, after)?;
     // A REPLAYED BODY RUNS IN A REPOSITORY, AS ITS HEAD FORM DOES. A bare file
@@ -509,15 +509,25 @@ fn replay(
     // build is appended here, and `run` names the file.
     let kept = state.join(BUILD_LOG);
     let _ = std::fs::remove_file(&kept);
-    resume(&tree, splices, &journal, &|still| {
-        let outcome = run_union(&tree, still, &published, wrapped.as_ref());
-        if let Some((code, output)) = outcome.as_ref()
-            && *code == BUILD_FAILED
-        {
-            let _ = crate::durable::append(&kept, output);
-        }
-        outcome
-    })
+    resume(
+        &tree,
+        splices,
+        &journal,
+        &|still| {
+            let outcome = run_union(&tree, still, &published, wrapped.as_ref());
+            if let Some((code, output)) = outcome.as_ref()
+                && *code == BUILD_FAILED
+            {
+                let _ = crate::durable::append(&kept, output);
+            }
+            outcome
+        },
+        &|failed| {
+            // UNWRAPPED: the run-wrapper journals passes under a key over the
+            // SPLICED bodies, and a HEAD body's pass is not one of them.
+            run_union(&tree, failed, &published, None)
+        },
+    )
 }
 
 /// Where a run's failed union builds keep their output, under `replay/`.
@@ -874,6 +884,7 @@ fn resume(
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
     journal: &Journal,
     run: UnionRun<'_>,
+    control: UnionRun<'_>,
 ) -> Result<Vec<Finding>> {
     let mut findings = Vec::new();
     let mut rest: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
@@ -891,7 +902,7 @@ fn resume(
         }
     }
     if !rest.is_empty() {
-        findings.extend(judge(tree, &rest, journal, run)?);
+        findings.extend(judge(tree, &rest, journal, run, control)?);
     }
     findings.sort_by(|a, b| (&a.path, a.line, &a.key).cmp(&(&b.path, b.line, &b.key)));
     Ok(findings)
@@ -926,6 +937,7 @@ fn judge(
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
     journal: &Journal,
     run: UnionRun<'_>,
+    control: UnionRun<'_>,
 ) -> Result<Vec<Finding>> {
     let mut splices = splices.clone();
     let mut findings = Vec::new();
@@ -962,24 +974,65 @@ fn judge(
         let unattributed = outcome
             .as_ref()
             .is_some_and(|(code, output)| *code == BUILD_FAILED && output.contains(COMPILE_FAILED));
-        for (path, (_, modified)) in &splices {
+        let mut failed: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
+        for (path, (head_text, modified)) in &splices {
             for test in modified {
-                let passed = passes(outcome.as_ref(), &test.inner)?;
-                if !unattributed {
-                    let verdict = if passed {
-                        Verdict::Passed
-                    } else {
-                        Verdict::Changed
-                    };
-                    journal.record(path, test, verdict);
-                }
-                if !passed {
+                if passes(outcome.as_ref(), &test.inner)? {
+                    if !unattributed {
+                        journal.record(path, test, Verdict::Passed);
+                    }
+                } else if unattributed {
                     findings.push(changed(path, test));
+                } else {
+                    failed
+                        .entry(path.clone())
+                        .or_insert_with(|| (head_text.clone(), Vec::new()))
+                        .1
+                        .push(test.clone());
                 }
             }
         }
+        findings.extend(controlled(tree, &failed, journal, control)?);
         return Ok(findings);
     }
+}
+
+/// The failed base bodies whose HEAD body passes in the same tree: only those
+/// are expectation changes (#1276).
+///
+/// **A FAILURE HEAD'S OWN BODY SHARES MEASURES THE TREE, NOT THE EXPECTATION.**
+/// The replay tree is not a checkout: its build sits under the checkout's
+/// `target/`, its `mise.toml` is untrusted, and its fixtures fall through to the
+/// checkout holding the build. Measured on #1276, three base bodies failed for
+/// those reasons alone — and so does HEAD's form of each, there. So each failed
+/// test's HEAD body is run in the same tree, and one that fails too is no
+/// finding and is not journaled: the next tree may differ. A control that could
+/// not run answers nothing, so every failure stands.
+fn controlled(
+    tree: &Path,
+    failed: &BTreeMap<String, (String, Vec<Modified>)>,
+    journal: &Journal,
+    control: UnionRun<'_>,
+) -> Result<Vec<Finding>> {
+    if failed.is_empty() {
+        return Ok(Vec::new());
+    }
+    for (path, (head_text, _)) in failed {
+        crate::durable::replace(tree.join(path), head_text)
+            .with_context(|| format!("test replay: restore {path} for its control"))?;
+    }
+    let held = control(failed);
+    let mut findings = Vec::new();
+    for (path, (_, tests)) in failed {
+        for test in tests {
+            let head_passes = held.is_none() || passes(held.as_ref(), &test.inner).unwrap_or(true);
+            if head_passes {
+                journal.record(path, test, Verdict::Changed);
+                findings.push(changed(path, test));
+            }
+        }
+    }
+    Ok(findings)
 }
 
 /// Run every still-spliced test in one `nextest` call: its outcome, or `None`
@@ -1478,12 +1531,94 @@ mod tests {
                 String::from("        PASS [   0.010s] batten::it tests::kept\n"),
             ))
         };
-        let findings = judge(&tree, &splices, &journal("replay-judge-journal"), &run).unwrap();
+        let findings = judge(
+            &tree,
+            &splices,
+            &journal("replay-judge-journal"),
+            &run,
+            &|_| None,
+        )
+        .unwrap();
         assert_eq!(
             findings.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(),
             ["src/x.rs::tests::narrowed"]
         );
         assert_eq!(runs.get(), 2);
+    }
+
+    /// Fails by: a base failure HEAD's own body shares in the tree counted as
+    /// an expectation change, or the control run with no failure to check, or
+    /// a failure HEAD's body passes past dropped (#1276).
+    #[test]
+    fn a_failure_head_s_own_body_shares_is_the_tree_s_not_the_expectation_s() {
+        let head = BASE
+            .replace("assert_eq!(1, 1);", "assert_eq!(2, 2);")
+            .replace(
+                "assert_eq!(super::helper(), 1);",
+                "let _ = super::helper();",
+            );
+        let changed = compare(BASE, &head);
+        let tree = judged_tree("replay-control");
+        let mut splices = BTreeMap::new();
+        splices.insert(String::from("src/x.rs"), (head.clone(), changed.modified));
+        let failing = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| format!("        FAIL [   0.010s] batten::it tests::{name}\n"))
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        let run = |_: &Splices| Some((TEST_RUN_FAILED, failing(&["kept", "narrowed"])));
+        let controlled = std::cell::RefCell::new(Vec::new());
+        let control = |failed: &Splices| {
+            controlled.borrow_mut().extend(
+                failed
+                    .values()
+                    .flat_map(|(_, tests)| tests.iter().map(|test| test.inner.clone())),
+            );
+            assert_eq!(
+                crate::fsio::read_to_string(tree.join("src/x.rs"))
+                    .ok()
+                    .as_deref(),
+                Some(head.as_str()),
+                "the control runs HEAD's own bodies"
+            );
+            Some((
+                TEST_RUN_FAILED,
+                format!(
+                    "        PASS [   0.010s] batten::it tests::narrowed\n{}",
+                    failing(&["kept"])
+                ),
+            ))
+        };
+        let findings = judge(
+            &tree,
+            &splices,
+            &journal("replay-control-journal"),
+            &run,
+            &control,
+        )
+        .unwrap();
+        assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
+        assert_eq!(
+            controlled.into_inner(),
+            ["tests::kept", "tests::narrowed"],
+            "only the failures are controlled"
+        );
+        let none = |_: &Splices| None;
+        let unchecked = judge(
+            &tree,
+            &splices,
+            &journal("replay-control-unchecked"),
+            &run,
+            &none,
+        )
+        .unwrap();
+        assert_eq!(
+            keys(&unchecked).len(),
+            2,
+            "a control that could not run leaves every failure standing"
+        );
     }
 
     /// The splices a test of the journal judges through.
@@ -1581,7 +1716,7 @@ mod tests {
                 kept_passes()
             })
         };
-        let findings = resume(tree, &splices, journal, &run).unwrap();
+        let findings = resume(tree, &splices, journal, &run, &|_| None).unwrap();
         assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
         assert_eq!(runs.get(), 2, "a charge, then the rebuild without it");
     }
@@ -1601,7 +1736,7 @@ mod tests {
             (runs.get() == 1).then(|| refusal(helper_line))
         };
         assert!(
-            resume(&tree, &splices, &journal, &stopped).is_err(),
+            resume(&tree, &splices, &journal, &stopped, &|_| None).is_err(),
             "a rebuild that never reported measured nothing"
         );
         assert_eq!(runs.get(), 2);
@@ -1615,7 +1750,7 @@ mod tests {
             );
             Some(kept_passes())
         };
-        let findings = resume(&tree, &splices, &journal, &rest).unwrap();
+        let findings = resume(&tree, &splices, &journal, &rest, &|_| None).unwrap();
         assert_eq!(
             keys(&findings),
             ["src/x.rs::tests::narrowed"],
@@ -1637,7 +1772,7 @@ mod tests {
             runs.set(runs.get() + 1);
             None::<(i32, String)>
         };
-        let findings = resume(&tree, &splices, &journal, &none).unwrap();
+        let findings = resume(&tree, &splices, &journal, &none, &|_| None).unwrap();
         assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
         assert_eq!(runs.get(), 0, "every verdict is read back");
         assert!(!journal.lacks_any(&splices));
@@ -1657,7 +1792,7 @@ mod tests {
             assert_eq!(standing(still), ["tests::kept"], "only the moved body runs");
             Some(kept_passes())
         };
-        let findings = resume(&tree, &splices, &journal, &run).unwrap();
+        let findings = resume(&tree, &splices, &journal, &run, &|_| None).unwrap();
         assert_eq!(keys(&findings), ["src/x.rs::tests::narrowed"]);
         assert_eq!(runs.get(), 1);
     }
