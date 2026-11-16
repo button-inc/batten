@@ -93,7 +93,7 @@ violation contains {
 # map leaves any other key undefined, which `turn-ask.rego` measured as a
 # silently passing suite.
 
-asked_regex := `(?i)\badmit(s|ted|ting)?\b`
+asked_regex := `(?i)\badmit(s|ted|ting)?\b(?:[^.!?]|[.!?]\S)*\?`
 
 path_regex := `[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?`
 
@@ -142,6 +142,22 @@ test_an_admission_naming_no_path_is_refused if {
 
 test_a_question_that_asks_nothing_about_admission_is_clean if {
 	count(judged("Override the gate for this PR?", ["Yes, override", "No"])) == 0
+}
+
+# The #1276 false positive: the word in a statement, not in the sentence that asks.
+test_the_word_outside_the_asking_sentence_asks_nothing if {
+	count(judged(
+		"Any failure still fails the lap, and nothing is admitted. Override the ruling for tier 3?",
+		["Override", "Keep the ruling"],
+	)) == 0
+}
+
+# ...and a path's `.` does not end the sentence that asks.
+test_an_admit_over_a_path_still_asks if {
+	count(judged(
+		"Admit test-expectation-changed crates/batten/tests/it/cli.rs::every_format?",
+		["Yes", "No"],
+	)) == 1
 }
 
 test_another_tool_is_not_judged if {
