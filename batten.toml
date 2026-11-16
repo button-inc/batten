@@ -1937,6 +1937,20 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 id = "deferral-offered"
 regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you|once you run|restart the session)"
 
+# #1276, CLOUD-2775: `admit-ask.rego`'s two expressions. A question asks to
+# admit a finding when it says so in so many words; `admits`, `admitted` and
+# `admitting` are the same ask, and `admission` (an override's word, not the
+# ledger's) is not.
+[[pattern]]
+id = "admit-asked"
+regex = '(?i)\badmit(s|ted|ting)?\b'
+
+# A finding's path as a question names it: a file with an extension this
+# repository's findings carry, optionally `::item` for a test or a symbol.
+[[pattern]]
+id = "finding-path"
+regex = '[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?'
+
 # CLOUD-2241: work promised to a later branch in a final message, which the turn
 # must file before it ends. The literals are the three witnessed on PR #1132
 # ("goes on the next branch", "ships on the next branch", "their own short

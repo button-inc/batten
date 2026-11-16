@@ -14,9 +14,12 @@
 # path it names must be the full repository-relative one. A bare file name is
 # never a finding's path, so it can never match.
 #
+# BOTH EXPRESSIONS ARE THE CONFIG'S: `admit-asked` and `finding-path` are
+# `[[pattern]]` rows in `batten.toml`, read here from `data.batten.patterns`.
+#
 # A REFUSAL NAMES THE TOOL OR THE SHORTENED TOKEN, never the question (rule 4).
 #MUTANT-SUITE crates/batten/tests/it/admit_ask.rs
-#MUTANT admit-label-unchecked|s@^\tnot labelled_admit\(question\)$@\tfalse@|an_admit_ask_without_the_exact_pair_is_refused
+#MUTANT admit-label-unchecked|s@^\tnot labelled_admit(question)$@\tfalse@|an_admit_ask_without_the_exact_pair_is_refused
 
 # METADATA
 # description: |
@@ -34,15 +37,11 @@ rules contains "call ask loose"
 # The ledger's own prefix (`asked::ADMIT`).
 admit := "Admit"
 
-# A path-shaped token: a file with an extension this repository's findings name,
-# optionally followed by `::item` for a test or symbol.
-path_token := `[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?`
-
 # Every question this call asks that asks to admit something.
 admitting contains question if {
 	input.call.tool == "AskUserQuestion"
 	some question in input.call.arguments.questions
-	regex.match(`(?i)\badmit(s|ted|ting)?\b`, question.question)
+	regex.match(data.batten.patterns["admit-asked"], question.question)
 }
 
 labelled_admit(question) if {
@@ -50,7 +49,9 @@ labelled_admit(question) if {
 	startswith(option.label, admit)
 }
 
-paths(question) := {token | some token in regex.find_n(path_token, question.question, -1)}
+paths(question) := {token |
+	some token in regex.find_n(data.batten.patterns["finding-path"], question.question, -1)
+}
 
 # Asks to admit, and no option the owner can pick says it admits.
 violation contains {
@@ -84,6 +85,14 @@ violation contains {
 }
 
 # --- the module's own tier ----------------------------------------------------
+#
+# The two pattern keys are bound one by one, never the whole map: binding the
+# map leaves any other key undefined, which `turn-ask.rego` measured as a
+# silently passing suite.
+
+asked_regex := `(?i)\badmit(s|ted|ting)?\b`
+
+path_regex := `[A-Za-z0-9_./-]+\.(rs|rego|toml|md|pkl|yml|yaml|json|sh|bats)(::[A-Za-z0-9_:]+)?`
 
 ask(question, labels) := {"call": {
 	"tool": "AskUserQuestion",
@@ -93,21 +102,26 @@ ask(question, labels) := {"call": {
 	}]},
 }}
 
+judged(question, labels) := v if {
+	v := violation with input as ask(question, labels)
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
+}
+
 full := "Admit both? test-removed crates/batten/tests/it/session_provisioning.rs::a_local_release_build"
 
 test_a_full_pair_with_an_admit_label_is_clean if {
-	count(violation) == 0 with input as ask(full, ["Admit both", "Refuse"])
+	count(judged(full, ["Admit both", "Refuse"])) == 0
 }
 
 # The #1276 third round: "Yes, admit" admits nothing in the ledger.
 test_an_option_not_labelled_admit_is_refused if {
-	found := violation with input as ask(full, ["Yes, admit both", "No"])
-	found == {{"rule": "call ask loose", "verdict": "call ask loose", "subjects": [{"artifact": "AskUserQuestion"}]}}
+	judged(full, ["Yes, admit both", "No"]) == {{"rule": "call ask loose", "verdict": "call ask loose", "subjects": [{"artifact": "AskUserQuestion"}]}}
 }
 
 # The #1276 first round: a shortened path never matches the finding's pair.
 test_a_shortened_path_is_refused if {
-	found := violation with input as ask(
+	found := judged(
 		"Admit? test-removed session_provisioning.rs::a_local_release_build and crates/batten/src/x.rs",
 		["Admit", "Refuse"],
 	)
@@ -115,13 +129,15 @@ test_a_shortened_path_is_refused if {
 }
 
 test_an_admission_naming_no_path_is_refused if {
-	count(violation) == 1 with input as ask("Admit the finding?", ["Admit", "Refuse"])
+	count(judged("Admit the finding?", ["Admit", "Refuse"])) == 1
 }
 
 test_a_question_that_asks_nothing_about_admission_is_clean if {
-	count(violation) == 0 with input as ask("Override the gate for this PR?", ["Yes, override", "No"])
+	count(judged("Override the gate for this PR?", ["Yes, override", "No"])) == 0
 }
 
 test_another_tool_is_not_judged if {
 	count(violation) == 0 with input as {"call": {"tool": "Bash", "arguments": {"command": "echo admit"}}}
+		with data.batten.patterns["admit-asked"] as asked_regex
+		with data.batten.patterns["finding-path"] as path_regex
 }
