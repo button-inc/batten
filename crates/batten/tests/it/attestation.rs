@@ -318,7 +318,7 @@ impl World {
         if credential {
             command.env(TOKEN, "a-token-the-fixture-never-checks");
         }
-        command.output().expect("the compiled binary runs")
+        command.streamed_output().expect("the compiled binary runs")
     }
 
     fn stub_calls(&self) -> String {

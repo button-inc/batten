@@ -18,6 +18,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -943,7 +944,7 @@ fn a_preapproval_carries_the_calls_advice_in_one_document() {
             .write_all(shell("default", "ls").as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let outcome = child.streamed_wait().expect("run batten adjudicate");
     let documents: Vec<serde_json::Value> = stdout(&outcome)
         .lines()
         .filter(|line| !line.trim().is_empty())

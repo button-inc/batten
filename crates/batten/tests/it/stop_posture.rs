@@ -134,6 +134,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 #[cfg(unix)]
 use std::fmt::Write as _;
@@ -568,7 +569,7 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 fn stdout_of(output: &Output) -> String {
@@ -603,7 +604,7 @@ fn the_hot_path_drops_the_modules_own_cases_and_policy_test_keeps_them() {
     let graded = batten()
         .current_dir(&dir)
         .args(["policy", "test"])
-        .output()
+        .streamed_output()
         .expect("run batten policy test");
     let report = String::from_utf8(graded.stdout).expect("stdout is UTF-8");
     assert_eq!(
@@ -1057,7 +1058,7 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    let output = child.wait_with_output().expect("run batten hook");
+    let output = child.streamed_wait().expect("run batten hook");
     let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
     assert!(
         !stdout.contains("turn 12"),
@@ -1513,7 +1514,7 @@ fn verb_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    command.output().expect("run batten verb")
+    command.streamed_output().expect("run batten verb")
 }
 
 /// A SKIPPED SCAN HOLDS A RULE FINDING — IT DOES NOT RESOLVE IT (CLOUD-1480).
@@ -1894,7 +1895,7 @@ fn a_closed_row_leaves_the_filed_checklist() {
         .take()
         .expect("piped stdin")
         .write_all(read.as_bytes());
-    let seeded = child.wait_with_output().expect("store the read");
+    let seeded = child.streamed_wait().expect("store the read");
     assert_eq!(seeded.status.code(), Some(0), "{}", common::stderr(&seeded));
 
     let stdout = stdout_of(&hook_in(&dir, &home, &stop_payload("Done.", false)));

@@ -294,7 +294,7 @@ fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
         if stop {
             command.env("BATTEN_FIXTURE_STOP", "1");
         }
-        let output = command.output().expect("run batten");
+        let output = command.streamed_output().expect("run batten");
         let said = common::stdout(&output);
         (output.status.code(), said, common::stderr(&output))
     };

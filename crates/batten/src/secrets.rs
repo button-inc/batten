@@ -63,6 +63,7 @@
 //! predicate is [`orphaned_key_ids`], ledger against file, because "the key file is
 //! missing" is indistinguishable from a repository that never scanned.
 
+use crate::stream::Streamed as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1171,7 +1172,11 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     };
 
     // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617), and here for the
@@ -1200,7 +1205,11 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output(),
+            .streamed_output_keeping(crate::stream::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            }),
     };
 
     let output =

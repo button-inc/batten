@@ -32,7 +32,7 @@ fn placed(root: &Path, lap: bool) -> std::process::Output {
     if lap {
         command.env("BATTEN_LAND_GATE", "1");
     }
-    command.output().expect("run batten land placed")
+    command.streamed_output().expect("run batten land placed")
 }
 
 /// Advice on stderr, and never a refusal: verifying without landing is

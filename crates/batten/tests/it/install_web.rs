@@ -37,6 +37,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
@@ -301,7 +302,7 @@ fn install_in(
     for (key, value) in env {
         command.env(key, value);
     }
-    let out = command.output().expect("run install.sh");
+    let out = command.streamed_output().expect("run install.sh");
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -902,7 +903,7 @@ fn run_dist(ws: &std::path::Path, args: &[&str]) {
     let ran = Command::new(common::require_bin("cargo-dist", "dist"))
         .args(args)
         .current_dir(ws)
-        .output()
+        .streamed_output()
         .expect("run the pinned dist");
     assert!(
         ran.status.success(),
@@ -966,7 +967,7 @@ fn run_dist_installer(
         .env("BATTEN_DOWNLOAD_URL", format!("file://{}", www.display()))
         .env("BATTEN_UNMANAGED_INSTALL", &into)
         .env("BATTEN_NO_MODIFY_PATH", "1")
-        .output()
+        .streamed_output()
         .expect("run sh");
     let said = format!(
         "{}{}",

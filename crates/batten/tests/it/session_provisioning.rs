@@ -116,6 +116,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -220,7 +222,7 @@ impl Bench {
             .expect("stdin is piped")
             .write_all(payload.as_bytes())
             .expect("write stdin");
-        let outcome = child.wait_with_output().expect("wait for batten");
+        let outcome = child.streamed_wait().expect("wait for batten");
         Door {
             out: stdout(&outcome),
             err: stderr(&outcome),
@@ -264,7 +266,7 @@ fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
     let wired = common::batten()
         .current_dir(&repo)
         .args(["wiring", "register", "--all"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
 
@@ -526,7 +528,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     )]
     let state = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &grandchild.to_string()])
-        .output()
+        .streamed_output()
         .expect("run ps");
     let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
     assert!(

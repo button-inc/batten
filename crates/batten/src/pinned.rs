@@ -84,6 +84,7 @@
 //! refuses where it cannot see becomes the reason work cannot proceed, and this
 //! one would refuse every program in the project.
 
+use crate::stream::Streamed as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -630,7 +631,11 @@ fn mediator(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output()
+        .streamed_output_keeping(crate::stream::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        })
         .ok()?;
     spawned.status.success().then_some(spawned.stdout)
 }

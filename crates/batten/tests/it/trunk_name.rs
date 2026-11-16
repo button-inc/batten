@@ -179,7 +179,7 @@ fn lease_carries(dir: &Path) -> Output {
         .env_remove("LEASE_TRUNK")
         .args(["lease", "carries", &head])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten lease carries")
 }
 
@@ -189,7 +189,11 @@ fn perf_record(dir: &Path) -> Output {
         .args(["perf", "record"])
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::stream::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("run batten perf record")
 }
 

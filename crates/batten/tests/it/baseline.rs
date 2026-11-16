@@ -87,7 +87,7 @@ fn run(repo: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
         .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_LOG_LEVEL")
-        .output()
+        .streamed_output()
         .expect("run batten");
     (
         output.status.code().expect("exit code"),

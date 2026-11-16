@@ -11,6 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -63,7 +64,7 @@ fn adjudicate(command: &str, hatch: bool) -> (Option<i32>, String) {
     if let Some(stdin) = child.stdin.as_mut() {
         let _ = stdin.write_all(payload(command).as_bytes());
     }
-    let out = child.wait_with_output().expect("await batten");
+    let out = child.streamed_wait().expect("await batten");
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stderr).into_owned(),

@@ -105,7 +105,7 @@ fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
         .current_dir(&repo)
         .env("PATH", &path)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten");
     let code = output.status.code().expect("exit code");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -142,7 +142,7 @@ fn doctor_reads_a_command_row_naming_batten_as_reachable_without_it_on_path() {
         .current_dir(&repo)
         .env("PATH", common::ambient_path())
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     // Concatenated rather than `format!`ed: `every_path_override_is_composed_with_join_paths`
     // reads a `format!` beside a `PATH` override as a separator spelled by hand.

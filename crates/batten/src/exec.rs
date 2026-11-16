@@ -191,6 +191,7 @@
 //! Reporting that as the child's code would be worse than useless, because there
 //! is no child.
 
+use crate::stream::StreamedChild as _;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -199,8 +200,7 @@ use std::path::{Path, PathBuf};
     reason = "stays: `batten exec -- <cmd>` IS the spawn — the verb's whole contract is a transparent passthrough of a caller's argv, streams and exit code (CLOUD-285)"
 )]
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -251,7 +251,7 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 ///
 /// See the module docs: a surviving grandchild holding the write end means EOF
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
-const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// hk's format axis, adopted rather than invented.
 ///
@@ -679,60 +679,15 @@ pub(crate) fn escalate_group(_pgid: &str) -> bool {
     false
 }
 
-/// Drain `pipe` into `sink`, accumulating everything that passed through.
-///
-/// The tee. Chunked rather than read-to-end-then-write so a long-running child's
-/// output still appears as it is produced: buffering it all until exit would make
-/// `batten exec -- cargo test` look hung.
-///
-/// `seen` is shared rather than returned because the caller may stop waiting
-/// (see [`PIPE_DRAIN_TIMEOUT`]): a return value is only readable by a join that
-/// completes, so a deadline over a returned `Vec` could only ever store nothing.
-/// Appended under the lock per chunk, which is the same granularity the write to
-/// `sink` already has.
-fn tee<R: Read, W: Write>(
-    mut pipe: R,
-    mut sink: W,
-    seen: &Mutex<Vec<u8>>,
-    spool: &Mutex<capture::Spool>,
-) -> Result<()> {
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = pipe.read(&mut chunk)?;
-        if read == 0 {
-            return Ok(());
-        }
-        let bytes = chunk.get(..read).unwrap_or(&[]);
-        sink.write_all(bytes)?;
-        sink.flush()?;
-        // Committed to the spool BEFORE the in-memory copy, because the spool is
-        // the only one another process can read (CLOUD-430) — a chunk that
-        // reached the caller and not the spool would be output a concurrent
-        // reader can never catch up to.
-        match spool.lock() {
-            Ok(mut held) => held.commit(bytes)?,
-            Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
-        }
-        match seen.lock() {
-            Ok(mut held) => held.extend_from_slice(bytes),
-            // A poisoned lock means the other end panicked mid-append. The bytes
-            // already on `sink` are the caller's answer either way, so the tee
-            // keeps teeing and the capture is what it is — dropping the stream
-            // here would take output away from the caller to protect bookkeeping.
-            Err(_) => return Err(anyhow::anyhow!("exec: the capture buffer was poisoned")),
-        }
-    }
-}
-
 /// What a tee thread reports, and where its bytes accumulate meanwhile.
 struct Drain {
-    /// The tee's own result, arriving when the pipe reaches EOF or errors.
-    outcome: mpsc::Receiver<Result<()>>,
+    /// The pump teeing the pipe, reporting when it reaches EOF or errors.
+    outcome: crate::stream::Pumping,
     /// Everything written through so far.
-    seen: Arc<Mutex<Vec<u8>>>,
-    /// The live capture this stream is spooling into, shared with the tee thread
-    /// so a drain that times out can still be sealed by the caller.
-    spool: Arc<Mutex<capture::Spool>>,
+    seen: crate::stream::Shared<Vec<u8>>,
+    /// The live capture this stream is spooling into, shared with the pump so a
+    /// drain that times out can still be sealed by the caller.
+    spool: crate::stream::Shared<capture::Spool>,
 }
 
 // THE DRAIN'S TWO DECISIONS, SHOWN RED BY WHAT IT REPORTS RATHER THAN BY A CLOCK
@@ -740,23 +695,26 @@ struct Drain {
 // first left — `0ns` once the first waited it out — and a pipe that never closes
 // is reported as such.
 impl Drain {
-    /// Spawn a tee of `pipe` into `sink`.
+    /// Spawn a tee of `pipe` into `sink`, the spool, and the in-memory copy.
+    ///
+    /// The spool BEFORE the in-memory copy, because the spool is the only one
+    /// another process can read (CLOUD-430): a chunk that reached the caller and
+    /// not the spool would be output a concurrent reader can never catch up to.
     fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,
     {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let spool = Arc::new(Mutex::new(spool));
-        let (tx, outcome) = mpsc::channel();
-        let buffer = Arc::clone(&seen);
-        let spooling = Arc::clone(&spool);
-        // Detached on purpose. A thread blocked on a pipe a grandchild holds open
-        // cannot be joined, and there is nothing to join it *for*: its bytes are
-        // in `seen` already, and the process is on its way out.
-        drop(std::thread::spawn(move || {
-            drop(tx.send(tee(pipe, sink, &buffer, &spooling)));
-        }));
+        let seen = crate::stream::Shared::new(Vec::new());
+        let spool = crate::stream::Shared::new(spool);
+        let outcome = crate::stream::spawn_pump(
+            pipe,
+            vec![
+                Box::new(sink),
+                Box::new(spool.clone()),
+                Box::new(seen.clone()),
+            ],
+        );
         Self {
             outcome,
             seen,
@@ -822,25 +780,17 @@ impl Drain {
         // finished" is `try_recv`, and only when the answer is no does the
         // remaining budget get waited on. The bytes were always safe; this is the
         // output half.
-        let finished = |result: Result<()>| -> Result<bool> {
-            result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
-            Ok(false)
+        let timed_out = match self.outcome.finished(deadline) {
+            crate::stream::Pumped::Finished(result) => {
+                result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
+                false
+            }
+            // The pump thread died without reporting — a panic. The bytes it
+            // did append are still real.
+            crate::stream::Pumped::Lost => false,
+            crate::stream::Pumped::Running => true,
         };
-        let timed_out = match self.outcome.try_recv() {
-            Ok(result) => finished(result)?,
-            // Disconnected without a value means the tee thread died without
-            // reporting — a panic. The bytes it did append are still real.
-            Err(mpsc::TryRecvError::Disconnected) => false,
-            Err(mpsc::TryRecvError::Empty) => match self.outcome.recv_timeout(deadline) {
-                Ok(result) => finished(result)?,
-                Err(mpsc::RecvTimeoutError::Disconnected) => false,
-                Err(mpsc::RecvTimeoutError::Timeout) => true,
-            },
-        };
-        let bytes = match self.seen.lock() {
-            Ok(held) => held.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
+        let bytes = self.seen.bytes();
         if timed_out {
             // Pointer-only: the stream and a count, never a byte of what was
             // captured. Said out loud rather than swallowed, because a truncated
@@ -861,14 +811,12 @@ impl Drain {
         // or race it. `try_unwrap` succeeding is the ordinary case (the tee has
         // exited); the fallback reopens the same paths, which is safe because the
         // spool's identity is its handle rather than its file descriptor.
-        let spool = match Arc::try_unwrap(self.spool) {
-            Ok(held) => held
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("exec: the spool was poisoned"))?,
-            Err(shared) => match shared.lock() {
-                Ok(held) => held.reopen()?,
-                Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
-            },
+        let spool = match self.spool.into_inner() {
+            Ok(Some(held)) => held,
+            Ok(None) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
+            Err(shared) => shared
+                .with(capture::Spool::reopen)
+                .ok_or_else(|| anyhow::anyhow!("exec: the spool was poisoned"))??,
         };
         Ok((bytes, spool))
     }
@@ -2333,7 +2281,7 @@ fn piped_through(
             }));
         }
     }
-    let finished = child.wait_with_output().ok()?;
+    let finished = child.streamed_wait().ok()?;
     let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
     if diagnostics == Diagnostics::Keep {
         // STDOUT FIRST, because that is where a verdict is written and a caller
@@ -3047,6 +2995,7 @@ fn report_bundle(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {
@@ -3498,12 +3447,12 @@ mod tests {
         name: &str,
         stream: capture::LiveStream,
         seen: &[u8],
-    ) -> (Drain, mpsc::Sender<Result<()>>) {
-        let (tx, outcome) = mpsc::channel();
+    ) -> (Drain, mpsc::Sender<std::io::Result<()>>) {
+        let (outcome, tx) = crate::stream::Pumping::held();
         let drain = Drain {
             outcome,
-            seen: Arc::new(Mutex::new(seen.to_vec())),
-            spool: Arc::new(Mutex::new(scratch_spool(name, stream))),
+            seen: crate::stream::Shared::new(seen.to_vec()),
+            spool: crate::stream::Shared::new(scratch_spool(name, stream)),
         };
         (drain, tx)
     }

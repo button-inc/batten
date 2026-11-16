@@ -101,7 +101,7 @@ impl Forge {
         if let Some(repo) = repo {
             command.env("GH_REPO", repo);
         }
-        let out = command.output().expect("run the diagnosis");
+        let out = command.streamed_output().expect("run the diagnosis");
         (
             out.status.code(),
             format!(

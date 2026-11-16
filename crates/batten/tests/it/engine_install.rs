@@ -42,7 +42,9 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten engine install")
+    command
+        .streamed_output()
+        .expect("run batten engine install")
 }
 
 /// The file `engine install` places: `batten.exe` on Windows.
@@ -425,7 +427,7 @@ fn engine_verb(
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten engine")
+    command.streamed_output().expect("run batten engine")
 }
 
 /// THE BINARY FOLLOWS THE WORKTREE'S PIN (CLOUD-2287). With neither environment
@@ -764,7 +766,7 @@ fn batten_in(home: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten")
+    command.streamed_output().expect("run batten")
 }
 
 /// `engine update` BRINGS EVERY COPY TO THE RELEASE (CLOUD-2279): the pin, the
@@ -1450,6 +1452,7 @@ mod repair {
     // the case measures the update's wiring and not a compile.
 
     use crate::common;
+    use batten::stream::StreamedChild as _;
 
     use std::path::{Path, PathBuf};
     use std::process::Output;
@@ -1540,7 +1543,7 @@ mod repair {
             .unwrap()
             .write_all(stdin.as_bytes())
             .unwrap();
-        child.wait_with_output().expect("wait for batten")
+        child.streamed_wait().expect("wait for batten")
     }
 
     fn text(output: &Output) -> String {

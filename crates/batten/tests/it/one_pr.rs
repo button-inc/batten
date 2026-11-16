@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -63,7 +64,7 @@ fn repo_with(name: &str, extra: &str) -> PathBuf {
 
 fn marker(dir: &Path) -> PathBuf {
     let output = common::git_command(dir, &["rev-parse", "--absolute-git-dir"])
-        .output()
+        .streamed_output()
         .expect("resolve the git dir");
     PathBuf::from(String::from_utf8(output.stdout).expect("utf-8").trim())
         .join("batten-receipts")

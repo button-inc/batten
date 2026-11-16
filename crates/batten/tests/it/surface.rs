@@ -62,7 +62,7 @@ const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 fn generate(shell: &str) -> Output {
     batten()
         .args(["generate", "completions", "--shell", shell])
-        .output()
+        .streamed_output()
         .expect("run batten generate completions")
 }
 
@@ -127,7 +127,7 @@ fn generate_writes_no_file() {
     let output = batten()
         .args(["generate", "completions", "--shell", "bash"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten generate completions");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
@@ -152,7 +152,7 @@ fn a_bare_noun_lists_its_sub_verbs_and_performs_no_action() {
     // its error path, so this is a usage error with an empty stdout.
     let output = batten()
         .arg("generate")
-        .output()
+        .streamed_output()
         .expect("run batten generate");
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -167,7 +167,10 @@ fn the_spec_carries_the_new_verbs_with_their_declared_effects() {
     // The surface is the source; `batten spec` is the derivation an agent reads.
     // A verb that exists but is absent from (or misclassified in) the spec is
     // the drift the one-declaration design exists to prevent.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(output.status.code(), Some(0));
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
 
@@ -269,7 +272,10 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
 /// under the program name. It is spelled here exactly once, which is what the
 /// retired `mise-tasks/man-pages.sh` was for.
 fn declared_pages() -> BTreeSet<String> {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
 
@@ -295,7 +301,10 @@ fn declared_pages() -> BTreeSet<String> {
 /// `the_committed_artifacts_are_exactly_the_ones_the_surface_declares` compares
 /// the sets — but the ambiguity is in the scheme rather than in this test.
 fn declared_commands() -> std::collections::BTreeMap<String, String> {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
     let program = spec["path"]
@@ -428,7 +437,7 @@ fn generate_man(command: &str) -> Output {
     if !command.is_empty() {
         batten.arg(command);
     }
-    batten.output().expect("run batten generate man")
+    batten.streamed_output().expect("run batten generate man")
 }
 
 #[test]
@@ -514,14 +523,14 @@ fn the_markdown_reference_is_emitted_whole_and_byte_stably() {
     // release's asset differ for no reason.
     let output = batten()
         .args(["generate", "markdown"])
-        .output()
+        .streamed_output()
         .expect("run batten generate markdown");
     assert_eq!(output.status.code(), Some(0));
     assert!(!output.stdout.is_empty(), "the reference rendered empty");
 
     let again = batten()
         .args(["generate", "markdown"])
-        .output()
+        .streamed_output()
         .expect("run batten generate markdown");
     assert_eq!(
         output.stdout, again.stdout,

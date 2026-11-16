@@ -50,6 +50,7 @@ pub mod claim;
 pub mod cli;
 pub mod codemod;
 pub use batten_fsio as fsio;
+pub use batten_stream as stream;
 pub mod collect;
 pub mod commit;
 pub mod completion;

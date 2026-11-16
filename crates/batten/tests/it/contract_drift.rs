@@ -17,6 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -46,7 +47,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
     let wired = common::batten()
         .current_dir(&dir)
         .args(["wiring", "register", "--all"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
     common::git_in(&dir, &["add", "-A"]);
@@ -85,7 +86,7 @@ fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Out
             .write_all(payload.as_bytes())
             .unwrap();
     }
-    let output = child.wait_with_output().unwrap();
+    let output = child.streamed_wait().unwrap();
     assert_eq!(
         output.status.code(),
         Some(0),

@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::stream::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -54,7 +55,7 @@ fn run_engine(binary: &Path, dir: &Path, args: &[&str], local: bool) -> Output {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     common::spawn_copy(&mut command)
-        .wait_with_output()
+        .streamed_wait()
         .expect("run batten")
 }
 
@@ -319,7 +320,7 @@ fn following(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&str
         pipe.write_all(input.as_bytes()).expect("write stdin");
     }
     drop(pipe);
-    child.wait_with_output().expect("run batten")
+    child.streamed_wait().expect("run batten")
 }
 
 /// `engine install` into a directory of the case's own, as the bootstrap's last

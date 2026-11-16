@@ -66,7 +66,7 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
             .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
             .current_dir(&repo)
             .env("FIXTURE_LOG", &log)
-            .output()
+            .streamed_output()
             .expect("run batten");
         (output.status.success(), common::stderr(&output))
     };
@@ -219,7 +219,7 @@ fn selected_step(repo: &std::path::Path, log: &std::path::Path) -> (bool, String
         .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
         .current_dir(repo)
         .env("FIXTURE_LOG", log)
-        .output()
+        .streamed_output()
         .expect("run batten");
     (output.status.success(), common::stderr(&output))
 }
