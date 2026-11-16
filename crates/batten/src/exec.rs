@@ -199,7 +199,6 @@ use std::path::{Path, PathBuf};
     reason = "stays: `batten exec -- <cmd>` IS the spawn — the verb's whole contract is a transparent passthrough of a caller's argv, streams and exit code (CLOUD-285)"
 )]
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -1319,7 +1318,7 @@ struct ForwardingThread {
     /// The worker itself, answering why it escalated, if it did.
     worker: std::thread::JoinHandle<Option<Escalation>>,
     /// The signal Batten was sent, or `0` for none. Read once, after the join.
-    received: Arc<std::sync::atomic::AtomicI32>,
+    received: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// The group to forward to, published by [`Forwarding::adopt`] once the
     /// child exists. `0` until then.
     ///
@@ -1329,7 +1328,7 @@ struct ForwardingThread {
     /// the alternative orders the two the other way and leaves a window in
     /// which the child is a group leader and Batten still holds the default
     /// dispositions.
-    pgid: Arc<std::sync::atomic::AtomicI32>,
+    pgid: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// This forwarder's place in [`forwarding`]'s count, released on every path:
     /// with the forwarder on an early `?` (one used to leave the count raised for
     /// the rest of the process), and in [`Forwarding::finish_reporting`] BEFORE
@@ -1371,7 +1370,9 @@ const ADOPT_GRACE: Duration = Duration::from_secs(2);
 /// `None` when no group ever arrived, which means the spawn failed or never
 /// happened — there is nothing to forward to and the signal stays recorded.
 #[cfg(unix)]
-fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::process::Pid> {
+fn await_group(
+    slot: &std::sync::Arc<std::sync::atomic::AtomicI32>,
+) -> Option<rustix::process::Pid> {
     use std::sync::atomic::Ordering;
 
     let deadline = std::time::Instant::now() + ADOPT_GRACE;
@@ -1494,11 +1495,11 @@ impl Forwarding {
         let mut signals = signal_hook::iterator::Signals::new(FORWARDED)
             .context("install the signal forwarder for the wrapped command")?;
         let handle = signals.handle();
-        let received = Arc::new(AtomicI32::new(0));
-        let pgid = Arc::new(AtomicI32::new(0));
+        let received = std::sync::Arc::new(AtomicI32::new(0));
+        let pgid = std::sync::Arc::new(AtomicI32::new(0));
 
-        let seen = Arc::clone(&received);
-        let group = Arc::clone(&pgid);
+        let seen = std::sync::Arc::clone(&received);
+        let group = std::sync::Arc::clone(&pgid);
         let worker = std::thread::spawn(move || {
             let first = {
                 let mut stream = signals.forever();
@@ -3931,9 +3932,9 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         const IGNORED_BY_DEFAULT: i32 = 23;
-        let ran = Arc::new(AtomicUsize::new(0));
+        let ran = std::sync::Arc::new(AtomicUsize::new(0));
         let hook = || {
-            let ran = Arc::clone(&ran);
+            let ran = std::sync::Arc::clone(&ran);
             move || {
                 ran.fetch_add(1, Ordering::SeqCst);
             }
