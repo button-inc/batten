@@ -16,6 +16,8 @@
 
 use crate::common;
 use batten::exec::Streamed as _;
+// Only the unix cases wait on a spawned child.
+#[cfg(unix)]
 use batten::exec::StreamedChild as _;
 
 use std::fs;
