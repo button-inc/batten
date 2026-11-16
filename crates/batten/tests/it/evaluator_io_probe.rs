@@ -473,9 +473,12 @@ fn the_probe_verb_refuses_a_supplied_status_and_a_command_that_will_not_start() 
 fn the_task_is_the_probe_verb() {
     let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run_line = parsed["tasks"]["evaluator-io-record"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run_line = common::rendered(
+        parsed["tasks"]["evaluator-io-record"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
+    let run_line = run_line.as_str();
     assert!(
         run_line.contains(
             "-- record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test"
