@@ -8,7 +8,7 @@
 //! itself spawns no git.
 
 use crate::common;
-use batten::stream::Streamed as _;
+use batten::exec::Streamed as _;
 
 use std::path::{Path, PathBuf};
 

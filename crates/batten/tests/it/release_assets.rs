@@ -930,7 +930,7 @@ fn the_names_the_module_demands_are_the_names_the_producers_write() {
             .args(args)
             .current_dir(&crate_dir)
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,

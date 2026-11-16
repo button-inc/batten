@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::stream::StreamedChild as _;
+use batten::exec::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -3117,7 +3117,7 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
             .args(["adjudicate", "--harness", token])
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,
@@ -14227,7 +14227,7 @@ fn a_reader_that_hangs_up_ends_the_run_without_a_diagnosis() {
         .env("RUST_BACKTRACE", "1")
         .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
-        .streamed_output_keeping(batten::stream::Keep {
+        .streamed_output_keeping(batten::exec::Keep {
             stdin: false,
             stdout: true,
             stderr: true,

@@ -136,6 +136,9 @@
                   "null"
                 ]
               },
+              "opaque": {
+                "type": "boolean"
+              },
               "program": {
                 "type": "string"
               },
@@ -144,6 +147,9 @@
               },
               "receipted": {
                 "type": "boolean"
+              },
+              "source": {
+                "type": "string"
               },
               "subcommand": {
                 "type": [
@@ -159,6 +165,9 @@
                   "array",
                   "null"
                 ]
+              },
+              "trusted": {
+                "type": "boolean"
               },
               "unread": {
                 "type": "boolean"
@@ -290,6 +299,9 @@
                   "null"
                 ]
               },
+              "opaque": {
+                "type": "boolean"
+              },
               "program": {
                 "type": "string"
               },
@@ -298,6 +310,9 @@
               },
               "receipted": {
                 "type": "boolean"
+              },
+              "source": {
+                "type": "string"
               },
               "subcommand": {
                 "type": [
@@ -316,6 +331,9 @@
                   "array",
                   "null"
                 ]
+              },
+              "trusted": {
+                "type": "boolean"
               },
               "unread": {
                 "type": "boolean"
@@ -381,6 +399,9 @@
                   "null"
                 ]
               },
+              "opaque": {
+                "type": "boolean"
+              },
               "program": {
                 "type": "string"
               },
@@ -389,6 +410,9 @@
               },
               "receipted": {
                 "type": "boolean"
+              },
+              "source": {
+                "type": "string"
               },
               "subcommand": {
                 "type": [
@@ -407,6 +431,9 @@
                   "array",
                   "null"
                 ]
+              },
+              "trusted": {
+                "type": "boolean"
               },
               "unread": {
                 "type": "boolean"

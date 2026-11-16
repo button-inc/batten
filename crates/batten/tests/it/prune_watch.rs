@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::stream::StreamedChild as _;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -1109,7 +1109,7 @@ fn a_step_run_build_is_watched() {
         .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::stream::Keep {
+        .streamed_output_keeping(batten::exec::Keep {
             stdin: true,
             stdout: false,
             stderr: false,
@@ -1156,7 +1156,7 @@ fn a_wrapped_compile_collects_under_pressure() {
             .arg(&out_dir)
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,
@@ -1225,7 +1225,7 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         .arg(dir.join("target/debug/deps"))
         .env("TARGET_PRUNE_FREE_MB", "5000")
         .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::stream::Keep {
+        .streamed_output_keeping(batten::exec::Keep {
             stdin: true,
             stdout: false,
             stderr: false,
@@ -1245,7 +1245,7 @@ fn the_wrapper_probe_answers_with_this_binary() {
     let probed = common::batten()
         .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
         .stdin(std::process::Stdio::null())
-        .streamed_output_keeping(batten::stream::Keep {
+        .streamed_output_keeping(batten::exec::Keep {
             stdin: true,
             stdout: false,
             stderr: false,
@@ -1266,7 +1266,7 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,

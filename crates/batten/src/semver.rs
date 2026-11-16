@@ -41,7 +41,7 @@
 //! materialization and doc build as the only thing anyone exercises. [`Route`] is what the
 //! caller reports, so a green never hides which baseline produced it.
 
-use crate::stream::Streamed as _;
+use crate::exec::Streamed as _;
 use std::path::{Path, PathBuf};
 
 use crate::exit::ExitCode;
@@ -246,7 +246,7 @@ pub fn against_rev(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .streamed_output_keeping(crate::stream::Keep {
+            .streamed_output_keeping(crate::exec::Keep {
                 stdin: false,
                 stdout: true,
                 stderr: true,
@@ -303,7 +303,7 @@ pub fn against_rustdoc(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .streamed_output_keeping(crate::stream::Keep {
+            .streamed_output_keeping(crate::exec::Keep {
                 stdin: false,
                 stdout: true,
                 stderr: true,
@@ -351,7 +351,7 @@ pub fn toolchain(root: &Path) -> Option<String> {
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .streamed_output_keeping(crate::stream::Keep {
+            .streamed_output_keeping(crate::exec::Keep {
                 stdin: false,
                 stdout: true,
                 stderr: true,
@@ -506,7 +506,7 @@ pub fn baseline_rustdoc(
             .current_dir(&worktree)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .streamed_output_keeping(crate::stream::Keep {
+            .streamed_output_keeping(crate::exec::Keep {
                 stdin: false,
                 stdout: true,
                 stderr: true,
@@ -607,7 +607,7 @@ pub fn current_rustdoc(
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .streamed_output_keeping(crate::stream::Keep {
+            .streamed_output_keeping(crate::exec::Keep {
                 stdin: false,
                 stdout: true,
                 stderr: true,

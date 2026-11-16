@@ -14,7 +14,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-batten = { path = "../batten" }
+batten = { path = "../batten", version = "=0.0.220" }
 
 [lints]
 workspace = true

@@ -6531,7 +6531,7 @@ pub fn pathspec_is_supported(spec: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::stream::Streamed as _;
+    use crate::exec::Streamed as _;
     use std::fs;
 
     use super::*;

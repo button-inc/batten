@@ -68,7 +68,7 @@
 //! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
 //! looking for `^arm=`, never by a second exit code.
 
-use crate::stream::Streamed as _;
+use crate::exec::Streamed as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

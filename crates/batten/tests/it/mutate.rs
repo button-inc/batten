@@ -111,7 +111,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::stream::Streamed as _;
+use batten::exec::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -527,7 +527,7 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
                 .arg(&copy)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
-                .streamed_output_keeping(batten::stream::Keep {
+                .streamed_output_keeping(batten::exec::Keep {
                     stdin: true,
                     stdout: false,
                     stderr: true,
