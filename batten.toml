@@ -604,6 +604,27 @@ severity = "deny"
 manifest = "mise.toml"
 node = "tasks"
 
+# #1276, CLOUD-2775. Opaque reach (a spawn the reach could not read) from a file
+# nobody reviewed. The reach does the reading; the module only says which
+# opaque entries are refused.
+[[rule]]
+id = "shell reach unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/script-spawn-opaque.rego"
+severity = "deny"
+
+# #1276, CLOUD-2775. An admission question judged before it is asked, so an
+# answer the ledger cannot bind is never collected.
+[[rule]]
+id = "call ask loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/admit-ask.rego"
+severity = "deny"
+
 # CLOUD-1340. The mediated half of a variable whose declared half `ci-suite-lane`
 # already gates over the workflow files; the two read different surfaces and do
 # not overlap.
@@ -14245,6 +14266,42 @@ they reach, so a task that runs a stage is a stage whatever it is called.
 id = "task run first"
 kind = "command"
 target = "mise run land, backgrounded (run_in_background), and act on its exit"
+
+# #1276, CLOUD-2775: the reach records what a call runs that nothing could read.
+[[verdict]]
+id = "shell reach unread"
+gloss = "a call runs program text nothing could read, from a file nobody reviewed"
+class = """
+The reach follows a call into the text that runs: a shell's script file and the \
+spawn calls of a Python, Node, Perl or Ruby program. A spawn whose arguments are \
+not literals, or a script present but unreadable, is opaque: every module would \
+judge the call as if that part ran nothing. Opaque reach from a file the \
+repository tracks with no working-tree change runs, because review read it; from \
+an inline program, an untracked script or an edited one it is refused. Run what \
+the script runs as its own command, or commit the script so it is reviewed.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/script-spawn-opaque.rego"
+
+# #1276, CLOUD-2775: an admission question the ledger could never record.
+[[verdict]]
+id = "call ask loose"
+gloss = "a question asks to admit a finding in words the ledger cannot bind"
+class = """
+An admission binds only when the question names the exact `<verdict> <path>` \
+pair and the chosen option's label starts with `Admit`. A question that shortens \
+the path, names none, or labels its option anything else is asked and answered \
+and admits nothing, so the gate refuses again and the owner is asked again. Name \
+the full repository-relative path and label the admitting option `Admit…`.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/admit-ask.rego"
 
 # CLOUD-1340, and it is a class for `branch write unsafe`'s reason exactly: a
 # consumer `[[rule]]` row carries no token an admission could bind, so a `shape`
