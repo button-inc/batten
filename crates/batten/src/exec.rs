@@ -383,6 +383,15 @@ pub struct ExecConfig {
     /// `--continue-on-error`.
     #[serde(default)]
     pub continue_on_error: bool,
+    /// Echo the child's PROGRESS lines to stderr even when its bytes are not
+    /// teed (#1276): `stage <step> ran|hit <s>` and the mutant sweep's per-row
+    /// and schema lines ([`is_progress_line`]). A stored gate log is a pointer
+    /// at its end (CLOUD-2223), so without this a lap that ran for an hour said
+    /// nothing about which stage it was in. Never configuration: a caller's
+    /// own choice, so it is skipped by serde and absent from the schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub echo_progress: bool,
 }
 
 /// The `jobs` default, as a function because `serde` needs one.
@@ -415,6 +424,7 @@ impl ExecConfig {
         style: OutputStyle::Interleave,
         jobs: 1,
         continue_on_error: false,
+        echo_progress: false,
     };
 }
 
@@ -842,6 +852,25 @@ struct ChildSink {
     at_line_start: bool,
     /// Whether these bytes reach a stream at all.
     discard: bool,
+    /// Whether a discarded stream still echoes its progress lines.
+    echo: bool,
+    /// The unterminated tail of the last chunk, held for [`Self::echo`] so a
+    /// progress line split across reads is matched whole.
+    pending: Vec<u8>,
+}
+
+/// Whether `line` reports progress: a step's `stage <name> ran|hit <seconds>`,
+/// or a mutant sweep's `mutate sweep: row …` / `mutate schema: …` line. One line
+/// each, a pointer-sized summary, never the payload.
+#[must_use]
+pub fn is_progress_line(line: &str) -> bool {
+    if line.contains("mutate sweep: row ") || line.contains("mutate schema: ") {
+        return true;
+    }
+    line.split_once("stage ").is_some_and(|(_, rest)| {
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        matches!(words.as_slice(), [_, "ran" | "hit", seconds] if seconds.parse::<f64>().is_ok())
+    })
 }
 
 impl ChildSink {
@@ -859,6 +888,8 @@ impl ChildSink {
             prefix,
             at_line_start: true,
             discard: !showing || style.style_only() == OutputStyle::KeepOrder,
+            echo: settings.echo_progress && stream.is_stderr(),
+            pending: Vec::new(),
         }
     }
 
@@ -882,6 +913,15 @@ impl ChildSink {
 impl Write for ChildSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if self.discard {
+            if self.echo {
+                self.pending.extend_from_slice(buf);
+                while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = self.pending.drain(..=end).collect();
+                    if is_progress_line(&String::from_utf8_lossy(&line)) {
+                        std::io::stderr().write_all(&line)?;
+                    }
+                }
+            }
             // Reported as written, because it was: the capture has it. Returning
             // a short count here would make the tee loop spin on bytes it has
             // already accounted for.
@@ -3270,6 +3310,43 @@ mod tests {
         let mut sink = ChildSink::of(&ExecConfig::DEFAULT, "child", capture::LiveStream::STDOUT);
         assert!(sink.discard, "the default shows the caller nothing");
         assert_eq!(sink.write(b"hello").expect("a discard cannot fail"), 5);
+    }
+
+    /// Fails by: a stage or sweep line not echoed, a payload line echoed, or a
+    /// progress line split across reads matched in halves rather than whole.
+    #[test]
+    fn a_discarded_stream_echoes_its_progress_lines_and_nothing_else() {
+        for line in [
+            "[verify:test-replay] stage test-replay ran 774.369\n",
+            "[hooks]   cargo-clippy – stage lint:clippy hit 663.809\n",
+            "[hooks]   mutant:changed – mutate sweep: row 24/351 branch-age reuse caught 1s\n",
+            "mutate schema: build 1 clean, 857 unviable\n",
+        ] {
+            assert!(is_progress_line(line), "{line}");
+        }
+        for line in [
+            "[deny] warning[duplicate]: found 2 duplicate entries for crate 'cfg-if'\n",
+            "the stage is set\n",
+            "stage left ran away\n",
+            "test result: ok. 1 passed\n",
+        ] {
+            assert!(!is_progress_line(line), "{line}");
+        }
+        let settings = ExecConfig {
+            echo_progress: true,
+            ..ExecConfig::DEFAULT
+        };
+        let mut sink = ChildSink::of(&settings, "child", capture::LiveStream::STDERR);
+        assert!(sink.discard && sink.echo, "echo rides a discarded stream");
+        sink.write_all(b"[x] stage x r").expect("write");
+        assert_eq!(
+            sink.pending, b"[x] stage x r",
+            "an unterminated line is held"
+        );
+        sink.write_all(b"an 1.0\nnext").expect("write");
+        assert_eq!(sink.pending, b"next", "the whole line was taken at its end");
+        let quiet = ChildSink::of(&settings, "child", capture::LiveStream::STDOUT);
+        assert!(!quiet.echo, "only stderr carries progress");
     }
 
     #[test]
