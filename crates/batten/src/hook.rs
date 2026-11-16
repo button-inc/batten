@@ -10358,6 +10358,37 @@ fn reach_argv(
     {
         reached.extend(reach_into(&script, mediated, Some("script"), depth));
     }
+    // WHAT A NON-SHELL INTERPRETER'S PROGRAM SPAWNS, and every program text
+    // nothing could read, as `opaque` entries (#1276, CLOUD-2775).
+    for spawned in interpreted_reach(name, &arguments) {
+        match spawned {
+            Spawned::Shell(text) => {
+                reached.extend(reach_into(&text, mediated, Some("script"), depth));
+            }
+            Spawned::Argv(words) => {
+                let words: Vec<&str> = words.iter().map(String::as_str).collect();
+                if let Some(at) = effective_program(&words) {
+                    reached.extend(reach_argv(
+                        &words,
+                        at,
+                        mediated,
+                        Some("script"),
+                        unread,
+                        depth,
+                    ));
+                }
+            }
+            Spawned::Opaque { source, trusted } => {
+                let mut entry = program_entry(name, &[], &[], mediated, Some("script"), unread);
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert(String::from("opaque"), Value::Bool(true));
+                    object.insert(String::from("source"), Value::String(source));
+                    object.insert(String::from("trusted"), Value::Bool(trusted));
+                }
+                reached.push(entry);
+            }
+        }
+    }
     for (inner, how) in inner_argv(name, &arguments).into_iter().chain(
         find_execs(name, &arguments)
             .into_iter()
@@ -10471,6 +10502,466 @@ fn shebang_script(program: &str) -> Option<String> {
         "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
     )
     .then_some(text)
+}
+
+/// What a program's text runs, as the reach reads it (CLOUD-2775).
+#[derive(Debug, PartialEq, Eq)]
+enum Spawned {
+    /// Shell text it hands a shell: `os.system("…")`, `` `…` ``.
+    Shell(String),
+    /// An argv it spawns directly: `subprocess.run(["git", "push"])`.
+    Argv(Vec<String>),
+    /// Something it runs that nothing here can read: a spawn whose arguments
+    /// are not all literals, or a script file present but unreadable or past
+    /// [`SCRIPT_FILE_MAX`]. `trusted` is whether `source` is a file the
+    /// repository tracks with no working-tree change.
+    Opaque { source: String, trusted: bool },
+}
+
+/// An interpreter whose spawn calls the reach reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Language {
+    Python,
+    Node,
+    Perl,
+    Ruby,
+}
+
+fn language_of(name: &str) -> Option<Language> {
+    if declares("python", name) {
+        Some(Language::Python)
+    } else if name == "node" || name == "nodejs" {
+        Some(Language::Node)
+    } else if declares("perl", name) {
+        Some(Language::Perl)
+    } else if declares("ruby", name) {
+        Some(Language::Ruby)
+    } else {
+        None
+    }
+}
+
+/// What `name`'s argv runs through program TEXT the reach can read: a
+/// non-shell interpreter's inline program and script file, and an unreadable
+/// script file for a shell too. A shell's readable text is [`inner_scripts`]'.
+///
+/// A script file that is ABSENT is not opaque: the reach does not know the
+/// stage's directory (`cd dir && sh x.sh` names `dir/x.sh`), so an absent file
+/// is usually elsewhere, not hidden. One present but unreadable or too large to
+/// read is opaque.
+fn interpreted_reach(name: &str, arguments: &[&str]) -> Vec<Spawned> {
+    let shell = matches!(
+        name,
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
+    );
+    let language = language_of(name);
+    if !shell && language.is_none() {
+        return Vec::new();
+    }
+    let grammar = grammar(name);
+    let inline = inline_values(&grammar, arguments);
+    let mut found = Vec::new();
+    if let Some(language) = language {
+        for text in &inline {
+            found.extend(spawns_in(language, text, "-c", false));
+        }
+    }
+    if !inline.is_empty() {
+        return found;
+    }
+    let Some(operand) = script_operand(&grammar, arguments) else {
+        return found;
+    };
+    let path = Path::new(operand);
+    if !path.is_file() {
+        return found;
+    }
+    let trusted = tracked_clean(path);
+    match (script_file_text(operand), language) {
+        (Some(text), Some(language)) => found.extend(spawns_in(language, &text, operand, trusted)),
+        (Some(_), None) => {}
+        (None, _) => found.push(Spawned::Opaque {
+            source: operand.to_owned(),
+            trusted,
+        }),
+    }
+    found
+}
+
+/// Whether `path` is a file its repository tracks with no working-tree change,
+/// by the index facts every content-keyed step reads ([`crate::git::index_facts`]).
+/// Anything that cannot be established is untrusted.
+fn tracked_clean(path: &Path) -> bool {
+    let Ok(absolute) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Some(root) = absolute
+        .parent()
+        .and_then(|dir| crate::git::repo_root(dir).ok())
+        .and_then(|root| std::fs::canonicalize(root).ok())
+    else {
+        return false;
+    };
+    let Ok(relative) = absolute.strip_prefix(&root) else {
+        return false;
+    };
+    let spec = relative.to_string_lossy().replace('\\', "/");
+    crate::git::index_facts(&root, std::slice::from_ref(&spec))
+        .ok()
+        .and_then(|facts| facts.get(&spec).cloned())
+        .is_some_and(|fact| {
+            !fact.entries.is_empty() && fact.diverged.is_empty() && fact.untracked.is_empty()
+        })
+}
+
+/// One argument of a spawn call, as written.
+#[derive(Debug)]
+enum Arg {
+    /// A string literal with no interpolation.
+    Literal(String),
+    /// A `[…]` list whose every element is such a literal.
+    List(Vec<String>),
+    /// Anything else, kept as written so `shell=True` can be recognised.
+    Other(String),
+}
+
+/// Every spawn call in `text`, a `language` program read from `source`.
+///
+/// LITERALS ONLY, AND THAT IS THE WHOLE CONTRACT. A call whose arguments are
+/// string literals (or a list of them) is reached exactly as written; any other
+/// argument — a variable, an f-string, a template with `${…}`, interpolation, a
+/// concatenation — is [`Spawned::Opaque`], never guessed at. A call is
+/// recognised by its spelling, so a comment naming one is skipped by its line's
+/// comment marker and a spawn a program builds by reflection is not seen.
+fn spawns_in(language: Language, text: &str, source: &str, trusted: bool) -> Vec<Spawned> {
+    let opaque = || Spawned::Opaque {
+        source: source.to_owned(),
+        trusted,
+    };
+    let mut found = Vec::new();
+    for (at, call) in spawn_calls(language, text) {
+        let line_start = text[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        let marker = if language == Language::Node {
+            "//"
+        } else {
+            "#"
+        };
+        if text[line_start..at].contains(marker) {
+            continue;
+        }
+        let spawned = match call {
+            Call::Backtick(body) => literal_body(language, &body).map(Spawned::Shell),
+            Call::Named { name, open } => {
+                let args = call_args(language, text, open);
+                decide(language, &name, &args)
+            }
+        };
+        found.push(spawned.unwrap_or_else(opaque));
+    }
+    found
+}
+
+/// A spawn call's spelling: a named function and where its arguments begin,
+/// or a backtick (`` `…` ``, `qx(…)`, `%x(…)`) and its body.
+enum Call {
+    Named { name: String, open: usize },
+    Backtick(String),
+}
+
+/// The spawn calls `language`'s text spells, in order.
+fn spawn_calls(language: Language, text: &str) -> Vec<(usize, Call)> {
+    let named: &str = match language {
+        Language::Python => {
+            r"\b(?:subprocess\.|os\.)?(run|call|check_call|check_output|Popen|getoutput|getstatusoutput|system|popen)\s*\("
+        }
+        Language::Node => {
+            r"(?:\bchild_process\.|\bcp\.|^|[^.\w])(execSync|exec|spawnSync|spawn|execFileSync|execFile)\s*\("
+        }
+        Language::Perl | Language::Ruby => r"(?:^|[^.\w])(system|exec|spawn)\b\s*\(?",
+    };
+    let Ok(named) = regex::Regex::new(named) else {
+        return Vec::new();
+    };
+    // A bare name is a spawn only where its module is in scope.
+    let bare_ok = match language {
+        Language::Python => {
+            text.contains("from subprocess import") || text.contains("from os import")
+        }
+        Language::Node => text.contains("child_process"),
+        Language::Perl | Language::Ruby => true,
+    };
+    let mut calls: Vec<(usize, Call)> = Vec::new();
+    for found in named.captures_iter(text) {
+        let (Some(whole), Some(name)) = (found.get(0), found.get(1)) else {
+            continue;
+        };
+        let prefixed = text[whole.start()..name.start()].contains('.');
+        let qualified = match language {
+            Language::Python => {
+                let module = &text[whole.start()..name.start()];
+                match name.as_str() {
+                    "system" | "popen" => module.starts_with("os."),
+                    _ => module.starts_with("subprocess."),
+                }
+            }
+            Language::Node => prefixed,
+            Language::Perl | Language::Ruby => true,
+        };
+        if !(qualified || bare_ok) {
+            continue;
+        }
+        calls.push((
+            name.start(),
+            Call::Named {
+                name: name.as_str().to_owned(),
+                open: whole.end(),
+            },
+        ));
+    }
+    // Backticks run a shell in Perl and Ruby; in JavaScript they are a template
+    // string, which only a named call above can hand to a shell.
+    if matches!(language, Language::Perl | Language::Ruby) {
+        let mut rest = text.char_indices().peekable();
+        while let Some((at, c)) = rest.next() {
+            if c == '`' {
+                let body: String = rest
+                    .by_ref()
+                    .map(|(_, c)| c)
+                    .take_while(|c| *c != '`')
+                    .collect();
+                calls.push((at, Call::Backtick(body)));
+            }
+        }
+    }
+    if matches!(language, Language::Perl | Language::Ruby) {
+        let quoted = if language == Language::Perl {
+            r"\bqx\(([^)]*)\)"
+        } else {
+            r"%x\(([^)]*)\)"
+        };
+        if let Ok(quoted) = regex::Regex::new(quoted) {
+            for found in quoted.captures_iter(text) {
+                if let (Some(whole), Some(body)) = (found.get(0), found.get(1)) {
+                    calls.push((whole.start(), Call::Backtick(body.as_str().to_owned())));
+                }
+            }
+        }
+    }
+    calls.sort_by_key(|(at, _)| *at);
+    calls
+}
+
+/// The arguments of the call whose argument list opens at `open`: up to the
+/// matching `)`, or for a parenthesis-less Perl or Ruby call to the end of the
+/// statement, split at top-level commas.
+fn call_args(language: Language, text: &str, open: usize) -> Vec<Arg> {
+    let parenthesised = text[..open].ends_with('(');
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in text[open..].chars() {
+        if let Some(q) = quote {
+            current.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' | ']' | '}' if depth > 0 => {
+                depth -= 1;
+                current.push(c);
+            }
+            ')' if parenthesised => break,
+            ';' | '\n' if !parenthesised && depth == 0 => break,
+            ',' if depth == 0 => parts.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    parts.push(current);
+    parts
+        .iter()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| classify_arg(language, part))
+        .collect()
+}
+
+fn classify_arg(language: Language, part: &str) -> Arg {
+    if let Some(value) = string_literal(language, part) {
+        return Arg::Literal(value);
+    }
+    if let Some(inner) = part
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let elements: Option<Vec<String>> = call_args_inner(language, inner)
+            .into_iter()
+            .map(|element| string_literal(language, &element))
+            .collect();
+        if let Some(elements) = elements {
+            return Arg::List(elements);
+        }
+    }
+    Arg::Other(part.split_whitespace().collect())
+}
+
+/// `inner`'s top-level comma-separated elements, quotes respected.
+fn call_args_inner(_language: Language, inner: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in inner.chars() {
+        if let Some(q) = quote {
+            current.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            ',' => parts.push(std::mem::take(&mut current).trim().to_owned()),
+            _ => current.push(c),
+        }
+    }
+    let last = current.trim().to_owned();
+    if !last.is_empty() {
+        parts.push(last);
+    }
+    parts
+}
+
+/// `part` as a string literal with no interpolation, unescaped, or `None`.
+fn string_literal(language: Language, part: &str) -> Option<String> {
+    let (raw, body) = match language {
+        Language::Python => {
+            let prefix_len = part
+                .chars()
+                .take_while(|c| matches!(c, 'r' | 'R' | 'b' | 'B' | 'u' | 'U'))
+                .count();
+            let prefix = &part[..prefix_len];
+            (prefix.contains(['r', 'R']), &part[prefix_len..])
+        }
+        _ => (false, part),
+    };
+    let quote = body.chars().next()?;
+    if !matches!(quote, '\'' | '"' | '`') || body.len() < 2 || !body.ends_with(quote) {
+        return None;
+    }
+    let inner = &body[1..body.len() - 1];
+    let interpolated = match (language, quote) {
+        // Not a string literal in Python, and a shell command in Perl and Ruby.
+        (Language::Python | Language::Perl | Language::Ruby, '`') => return None,
+        (Language::Node, '`') => inner.contains("${"),
+        (Language::Perl, '"') => inner.contains(['$', '@']),
+        (Language::Ruby, '"') => inner.contains("#{"),
+        _ => false,
+    };
+    if interpolated {
+        return None;
+    }
+    let mut value = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == quote {
+            // An unescaped quote inside means this was not one literal.
+            return None;
+        }
+        if c == '\\' && !raw {
+            match chars.next()? {
+                'n' => value.push('\n'),
+                't' => value.push('\t'),
+                other => value.push(other),
+            }
+        } else {
+            value.push(c);
+        }
+    }
+    Some(value)
+}
+
+/// A backtick body as shell text, or `None` where it interpolates.
+fn literal_body(language: Language, body: &str) -> Option<String> {
+    let interpolated = match language {
+        Language::Node => body.contains("${"),
+        Language::Perl => body.contains(['$', '@']),
+        Language::Ruby => body.contains("#{"),
+        Language::Python => true,
+    };
+    (!interpolated).then(|| body.to_owned())
+}
+
+/// What one named spawn call runs, or `None` where its arguments are not the
+/// literals its form needs.
+fn decide(language: Language, name: &str, args: &[Arg]) -> Option<Spawned> {
+    let shell_flag = args
+        .iter()
+        .any(|arg| matches!(arg, Arg::Other(text) if text == "shell=True"));
+    match (language, name) {
+        (Language::Python, "getoutput" | "getstatusoutput" | "system" | "popen")
+        | (Language::Node, "execSync" | "exec") => match args.first()? {
+            Arg::Literal(text) => Some(Spawned::Shell(text.clone())),
+            _ => None,
+        },
+        (Language::Python, _) => match args.first()? {
+            Arg::List(words) => Some(Spawned::Argv(words.clone())),
+            Arg::Literal(text) if shell_flag => Some(Spawned::Shell(text.clone())),
+            Arg::Literal(text) => Some(Spawned::Argv(vec![text.clone()])),
+            Arg::Other(_) => None,
+        },
+        (Language::Node, _) => {
+            let Arg::Literal(program) = args.first()? else {
+                return None;
+            };
+            let mut words = vec![program.clone()];
+            match args.get(1) {
+                None => {}
+                Some(Arg::List(rest)) => words.extend(rest.iter().cloned()),
+                // An options object after no argv list is the call's own.
+                Some(Arg::Other(options)) if options.starts_with('{') => {}
+                Some(_) => return None,
+            }
+            Some(Spawned::Argv(words))
+        }
+        (Language::Perl | Language::Ruby, _) => {
+            let words: Option<Vec<String>> = args
+                .iter()
+                .map(|arg| match arg {
+                    Arg::Literal(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            let words = words?;
+            match words.as_slice() {
+                [] => None,
+                [one] => Some(Spawned::Shell(one.clone())),
+                _ => Some(Spawned::Argv(words)),
+            }
+        }
+    }
 }
 
 /// The argv a program starts as a child, with how it was reached: the binary
@@ -11619,9 +12110,15 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     // text only, so `echo`, a `for` word or a commit message still
                     // mentions freely — the false positive that reverted the wide
                     // scan cannot recur here.
+                    //
+                    // AND ONLY WHERE THE TEXT CAN WRITE (#1276, CLOUD-2775): a
+                    // program text naming the path with no mutating operation in
+                    // it reads, or searches for the string, and was refused as an
+                    // unknown write.
                     if own.is_none()
                         && let Some(path) = script_texts(program, &arguments, &segment.stdin_text)
                             .into_iter()
+                            .filter(|text| text_mutates(text))
                             .find_map(|text| protected_in_text(policy, &text))
                     {
                         return Decision::Deny(unknown_program_refusal(program, &path));
@@ -11670,6 +12167,35 @@ fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     .filter(|word| !word.is_empty())
     .find(|word| protects(policy, word))
     .map(ToOwned::to_owned)
+}
+
+/// Whether a program text carries any operation that writes, moves or deletes a
+/// file, in any language the interpreter grammar reads (#1276, CLOUD-2775).
+///
+/// THE DIRECTION IS FAIL-CLOSED. This is not "does it write THAT path", which
+/// the text cannot settle without running it: any mutator anywhere in the text
+/// keeps the protected-path refusal, and only a text with none — `print`,
+/// `open(p)` to read, `re.search` over the string — is let through as a read. A
+/// shell redirect counts, so `a > b` in a comparison over-refuses, which is
+/// the side this scan must err on.
+fn text_mutates(text: &str) -> bool {
+    const MUTATORS: &str = concat!(
+        // Python: an `open` mode that writes, appends, creates or updates.
+        r#"\bopen\s*\([^)]*['"][rbt]*[wax+][rwabxt+]*['"]"#,
+        r"|\.write_text\s*\(|\.write_bytes\s*\(|\.unlink\s*\(|\.rmdir\s*\(|\.touch\s*\(",
+        r"|\.rename\s*\(|\.mkdir\s*\(|\bos\.(remove|unlink|rename|replace|rmdir|truncate|makedirs)\s*\(",
+        r"|\bshutil\.",
+        // Node.
+        r"|\b(writeFile|appendFile|unlink|rm|rmdir|rename|copyFile|truncate|mkdir)(Sync)?\s*\(",
+        r"|\bcreateWriteStream\s*\(",
+        // Ruby and Perl.
+        r"|\bFile\.(write|delete|unlink|rename|truncate|open\s*\([^)]*['\x22][wa+])",
+        r"|\bFileUtils\.|\bunlink\b|\brename\b|\bmkdir\b|\brmdir\b",
+        // A shell redirect, or a shell mutator, in any text it runs.
+        r"|>>?\s*['\x22]?[\w./~-]",
+        r"|\b(sed\s+-i|tee|dd|cp|mv|rm|truncate|install|ln)\b",
+    );
+    regex::Regex::new(MUTATORS).is_ok_and(|mutators| mutators.is_match(text))
 }
 
 /// Refuse a protected path named by a program neither table classifies.
@@ -16869,6 +17395,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a literal spawn not reached (a stage hidden in a Python, Node,
+    /// Perl or Ruby program reaches no module), a computed one guessed at
+    /// instead of opaque, or a decoy read as a spawn: a commented-out call, a
+    /// method of the same name on an unrelated object, or a bare name whose
+    /// module is not in scope (CLOUD-2775).
+    #[test]
+    fn an_interpreters_literal_spawn_is_reached_and_a_computed_one_is_opaque() {
+        let py = "import subprocess, os\n\
+                  # subprocess.run(['rm', '-rf', '/'])\n\
+                  subprocess.run(['git', 'push', '--force'])\n\
+                  os.system('cargo nextest run')\n\
+                  subprocess.check_call('mise run land', shell=True)\n\
+                  subprocess.run(cmd)\n\
+                  asyncio.run(main())\n";
+        assert_eq!(
+            spawns_in(Language::Python, py, "s.py", false),
+            vec![
+                Spawned::Argv(vec!["git".into(), "push".into(), "--force".into()]),
+                Spawned::Shell("cargo nextest run".into()),
+                Spawned::Shell("mise run land".into()),
+                Spawned::Opaque {
+                    source: "s.py".into(),
+                    trusted: false
+                },
+            ]
+        );
+        let js = "const cp = require('child_process');\n\
+                  cp.execSync('git push');\n\
+                  cp.spawnSync('cargo', ['test']);\n\
+                  /re/.exec(line);\n\
+                  cp.execSync(`git ${verb}`);\n";
+        assert_eq!(
+            spawns_in(Language::Node, js, "s.js", true),
+            vec![
+                Spawned::Shell("git push".into()),
+                Spawned::Argv(vec!["cargo".into(), "test".into()]),
+                Spawned::Opaque {
+                    source: "s.js".into(),
+                    trusted: true
+                },
+            ]
+        );
+        let pl = "system('git', 'push');\nmy $x = `cargo test`;\nsystem(\"git $verb\");\n";
+        assert_eq!(
+            spawns_in(Language::Perl, pl, "s.pl", false),
+            vec![
+                Spawned::Argv(vec!["git".into(), "push".into()]),
+                Spawned::Shell("cargo test".into()),
+                Spawned::Opaque {
+                    source: "s.pl".into(),
+                    trusted: false
+                },
+            ]
+        );
+        let rb = "system('mise run land')\nout = %x(git status)\n";
+        assert_eq!(
+            spawns_in(Language::Ruby, rb, "s.rb", false),
+            vec![
+                Spawned::Shell("mise run land".into()),
+                Spawned::Shell("git status".into()),
+            ]
+        );
+        let reached =
+            program_reach("python3 -c \"import subprocess; subprocess.run(['git', 'push'])\"");
+        assert!(
+            reached
+                .iter()
+                .any(|entry| entry["name"] == "git" && entry["via"] == "script"),
+            "an inline program's literal spawn is reached: {reached:?}"
+        );
+        let opaque = program_reach("python3 -c \"import subprocess; subprocess.run(argv)\"");
+        assert!(
+            opaque
+                .iter()
+                .any(|entry| entry["opaque"] == true && entry["trusted"] == false),
+            "an inline program's computed spawn is opaque and never trusted: {opaque:?}"
+        );
+    }
+
     /// Fails by: a redirection handed to the program as an argument, or a
     /// redirect-only line read as a program (CLOUD-2670).
     #[test]
@@ -18110,6 +18715,36 @@ deny contains "refused by themodule" if {
             guarded("python3 write.py .serena/memories/core.md"),
             Decision::Deny(_)
         ));
+    }
+
+    /// Fails by: a program text that only reads a protected path, or searches
+    /// for it as a string, refused as an unknown write, or a mutator dropped
+    /// from the scan so a write through it is admitted (#1276, CLOUD-2775).
+    #[test]
+    fn a_protected_path_an_interpreter_only_reads_is_not_refused() {
+        for command in [
+            "python3 -c \"print(open('.serena/memories/core.md').read())\"",
+            "python3 -c \"import re, sys; print(re.search('.serena/memories/core.md', sys.stdin.read()))\"",
+            "node -e 'console.log(require(\"fs\").readFileSync(\".serena/memories/core.md\", \"utf8\"))'",
+            "ruby -e 'puts File.read(\".serena/memories/core.md\")'",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Allow),
+                "{command} only reads the path"
+            );
+        }
+        for command in [
+            "python3 -c \"open('.serena/memories/core.md', 'w').write('')\"",
+            "python3 -c \"import os; os.remove('.serena/memories/core.md')\"",
+            "python3 -c \"import shutil; shutil.copy('x', '.serena/memories/core.md')\"",
+            "node -e 'require(\"fs\").unlinkSync(\".serena/memories/core.md\")'",
+            "python3 -c \"import os; os.system('echo x > .serena/memories/core.md')\"",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Deny(_)),
+                "{command} writes the path"
+            );
+        }
     }
 
     /// The two arms assert different things and must say so (CLOUD-1804).

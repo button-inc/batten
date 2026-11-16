@@ -348,6 +348,31 @@ fn a_stage_inside_a_script_file_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A stage a Python program spawns with literal arguments is the stage
+/// (#1276, CLOUD-2775): the reach reads the interpreter's spawn calls.
+#[test]
+fn a_stage_a_python_script_spawns_is_refused() {
+    // Under the checkout's own scratch, so the script is in the repository
+    // and `script run loose` (an interpreter running a file from outside it)
+    // is not the refusal that answers.
+    let dir = common::scratch("stage-python-spawn");
+    let script = dir.join("ship.py");
+    std::fs::write(
+        &script,
+        "import subprocess\nsubprocess.run(['batten', 'enforce', '--half', 'live'])\n",
+    )
+    .unwrap();
+    let inline =
+        String::from("python3 -c \"import subprocess; subprocess.run(['batten', 'enforce'])\"");
+    all_refused(&[
+        (&format!("python3 {}", script.display()), false),
+        (&inline, false),
+    ]);
+    let harmless = dir.join("echo.py");
+    std::fs::write(&harmless, "print('batten enforce')\n").unwrap();
+    none_refused(&[(&format!("python3 {}", harmless.display()), false)]);
+}
+
 /// A landing is the one way a stage is meant to run.
 #[test]
 fn a_backgrounded_land_is_allowed() {
