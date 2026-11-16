@@ -82,11 +82,15 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 /// A Claude Code `PreToolUse` envelope for a write tool aimed at `path`.
+///
+/// The content is a config that loads: a write of `batten.toml` whose text
+/// would not load is refused by the engine before any admission is consulted
+/// (`config-write-unloadable`), and this suite is about the admission.
 fn write_payload(path: &str) -> String {
     let escaped = serde_json::to_string(path).expect("a path is encodable");
     format!(
         "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Write\",\
-         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"x\"}}}}"
+         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"version = 1\\n\"}}}}"
     )
 }
 

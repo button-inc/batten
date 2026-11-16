@@ -69,9 +69,11 @@ const CITED: &str = "The ordering key is wrong at mise-tasks/checks-green.sh:164
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run = parsed["tasks"]["finding-sink-check"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run = common::rendered(
+        parsed["tasks"]["finding-sink-check"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
     let (_, argv) = run
         .split_once(" -- ")
         .expect("the task runs the engine with `cargo run ... --`");
