@@ -391,7 +391,18 @@ pub struct ExecConfig {
     /// own choice, so it is skipped by serde and absent from the schema.
     #[serde(skip)]
     #[schemars(skip)]
-    pub echo_progress: bool,
+    pub progress: Progress,
+}
+
+/// Whether a stream that is not teed still echoes its progress lines
+/// ([`ExecConfig::progress`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Progress {
+    /// Nothing but what the tee setting shows.
+    #[default]
+    Silent,
+    /// Each [`is_progress_line`] reaches stderr as it arrives.
+    Echo,
 }
 
 /// The `jobs` default, as a function because `serde` needs one.
@@ -424,7 +435,7 @@ impl ExecConfig {
         style: OutputStyle::Interleave,
         jobs: 1,
         continue_on_error: false,
-        echo_progress: false,
+        progress: Progress::Silent,
     };
 }
 
@@ -888,7 +899,7 @@ impl ChildSink {
             prefix,
             at_line_start: true,
             discard: !showing || style.style_only() == OutputStyle::KeepOrder,
-            echo: settings.echo_progress && stream.is_stderr(),
+            echo: settings.progress == Progress::Echo && stream.is_stderr(),
             pending: Vec::new(),
         }
     }
@@ -3333,7 +3344,7 @@ mod tests {
             assert!(!is_progress_line(line), "{line}");
         }
         let settings = ExecConfig {
-            echo_progress: true,
+            progress: Progress::Echo,
             ..ExecConfig::DEFAULT
         };
         let mut sink = ChildSink::of(&settings, "child", capture::LiveStream::STDERR);

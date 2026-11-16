@@ -2010,7 +2010,7 @@ const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
     // EACH STAGE'S RESULT AS IT LANDS (#1276): the log stays stored and named
     // by a pointer at the end, but a lap that ran an hour said nothing until
     // then. One line per stage and per mutant row, never the payload.
-    echo_progress: true,
+    progress: crate::exec::Progress::Echo,
     ..crate::exec::ExecConfig::DEFAULT
 };
 const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
