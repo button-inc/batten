@@ -3117,6 +3117,7 @@ impl StreamedChild for std::process::Child {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::mpsc;
 
     #[test]
@@ -3932,9 +3933,9 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         const IGNORED_BY_DEFAULT: i32 = 23;
-        let ran = std::sync::Arc::new(AtomicUsize::new(0));
+        let ran = Arc::new(AtomicUsize::new(0));
         let hook = || {
-            let ran = std::sync::Arc::clone(&ran);
+            let ran = Arc::clone(&ran);
             move || {
                 ran.fetch_add(1, Ordering::SeqCst);
             }
