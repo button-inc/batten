@@ -74,6 +74,7 @@ use crate::config_model::PerfExempt;
 #[cfg(test)]
 use crate::config_model::PerfLatency;
 use crate::config_model::SCHEMA_PATH;
+pub use crate::config_model::Shared;
 use crate::config_model::SUPPORTED_VERSION;
 use crate::config_model::Strictness;
 use crate::config_model::Unit;
@@ -5316,7 +5317,11 @@ mod tests {
             if std::mem::take(&mut not_deserialized) {
                 continue;
             }
-            let Some((field, element)) = rest.split_once(": Vec<") else {
+            // A table held as a [`Shared`] is still a table.
+            let Some((field, element)) = rest
+                .split_once(": Vec<")
+                .or_else(|| rest.split_once(": Shared<"))
+            else {
                 continue;
             };
             if element.starts_with("String") {

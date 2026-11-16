@@ -562,7 +562,7 @@ pub struct Resolved {
     /// what it MEANS changes. House style §8 admits raise-only overrides, and
     /// redefining a refusal is not one.
     #[serde(rename = "verdict")]
-    pub verdicts: Vec<crate::config_model::DeclaredVerdict>,
+    pub verdicts: crate::config_model::Shared<crate::config_model::DeclaredVerdict>,
     /// The `[vocabulary]` word lists (CLOUD-1638), carried for
     /// [`Resolved::verdicts`]' reason and layered the same way.
     ///
