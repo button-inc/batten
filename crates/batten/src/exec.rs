@@ -1087,7 +1087,10 @@ impl Record<'_> {
 ///
 /// `CommandExt::process_group` rather than mise's `pre_exec(setpgid)`: the
 /// workspace forbids `unsafe`, and for this purpose the two are the same call.
-#[cfg(unix)]
+///
+/// ONE FUNCTION ON EVERY PLATFORM (#1276): it only decides, and [`lead_group`]
+/// is the no-op where there are no groups, so a second cfg arm was a second
+/// escape in the spawn census for a body that did nothing.
 #[expect(
     clippy::disallowed_types,
     reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
@@ -1098,14 +1101,6 @@ fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
     }
 }
 
-/// [`group_at_spawn`] where there are no process groups.
-#[cfg(not(unix))]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
-)]
-fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
-
 /// Make the child of `builder` lead a process group of its own, marked so a
 /// nested mise knows an ancestor already manages it.
 ///
@@ -1114,24 +1109,24 @@ fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
 /// suite left in the sweep's own group cannot be signalled apart from the sweep —
 /// so killing it reached its direct child only, and every hung suite left its test
 /// binary sleeping under init (CLOUD-2059).
-#[cfg(unix)]
+///
+/// ONE FUNCTION, THE PLATFORM SPLIT INSIDE IT (#1276): where there are no process
+/// groups it leaves the builder alone, and a cfg twin carried a second escape in
+/// the spawn census for that empty body.
 #[expect(
     clippy::disallowed_types,
     reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
 )]
 pub(crate) fn lead_group(builder: &mut Command) {
-    use std::os::unix::process::CommandExt as _;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
 
-    builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+        builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+    }
+    #[cfg(not(unix))]
+    let _ = builder;
 }
-
-/// [`lead_group`] where there are no process groups.
-#[cfg(not(unix))]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
-)]
-pub(crate) fn lead_group(_builder: &mut Command) {}
 
 /// The on-disk note that a group is currently owned, and by which Batten.
 ///
