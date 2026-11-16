@@ -55,7 +55,7 @@ pattern = \"TODO\"
 /// structs, so a fixture cannot pass against a rule the loader would reject.
 fn rules_of(text: &str) -> Vec<Rule> {
     let config: Config = config::parse(text, "identity-churn fixture").unwrap();
-    config.rules
+    config.rules.to_vec()
 }
 
 /// One scan of a tree: what the engine found, and the identity multiset those

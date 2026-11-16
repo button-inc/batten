@@ -783,6 +783,30 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
 //MUTANT remember-ignored|s@^    if !remember \x7c\x7c !scope_open() {$@    if !scope_open() {@|a_write_is_never_served_from_the_memo
 //MUTANT open-key-ignores-cwd|s@^        cwd: std::env::current_dir().ok(),$@        cwd: None,@|a_read_from_another_working_directory_is_opened_again
 fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
+    let scoped = remember && scope_open();
+    // THE SAME QUESTION, ANSWERED BY THE SAME OPEN (2026-11-16): a hook call
+    // asked for one repository a dozen times, and each ask canonicalised its
+    // paths and walked discovery upward again — ~35 system calls apiece —
+    // before the memo was consulted at all. A question asked before in this
+    // scope, spelled the same from the same working directory, goes straight to
+    // the entry it found, which is still believed only while its files hold
+    // their bytes; one whose files moved is discovered afresh below.
+    let asked: Option<Asked> = scoped.then(|| {
+        (
+            dir.to_path_buf(),
+            ceilings.clone(),
+            std::env::current_dir().ok(),
+        )
+    });
+    if let Some(asked) = &asked
+        && let Some(repo) = with_opens(|opens| {
+            let key = opens.2.get(asked)?;
+            opens.get(key)
+        })
+        .flatten()
+    {
+        return Ok(repo);
+    }
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
         .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
@@ -798,10 +822,10 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
     // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
     // a second walk or the config reads a remembered entry would need.
-    if !remember || !scope_open() {
+    let Some(asked) = asked else {
         return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
             .map_err(|_| refused());
-    }
+    };
     let (found, trust) =
         gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
@@ -812,6 +836,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
         cwd: std::env::current_dir().ok(),
     };
     if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
+        let _ = with_opens(|opens| opens.2.insert(asked, key));
         return Ok(repo);
     }
     // READ BEFORE THE OPEN, so a file changed while gix parses it is remembered
@@ -822,6 +847,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     // Only the repository the key names: a `.git` made or removed between the
     // two walks would otherwise file another repository's handle under it.
     if repo.git_dir() == key.git_dir {
+        let _ = with_opens(|opens| opens.2.insert(asked, key.clone()));
         let _ = with_opens(|opens| opens.remember(key, &repo, read));
     }
     Ok(repo)
@@ -878,11 +904,17 @@ struct OpenKey {
 /// shape a source scan can tell from a read. A read that only needs an unshared
 /// handle takes [`open_fresh`], which spends nothing.
 ///
-/// `.0` is the remembered opens; `.1` is whether a write has spent the scope.
+/// `.0` is the remembered opens; `.1` is whether a write has spent the scope;
+/// `.2` is which entry each question asked in the scope found ([`Asked`]).
 /// A tuple rather than named fields so the memo's existing cases keep their
 /// base form (`test replay`).
 #[derive(Default)]
-struct Opens(BTreeMap<OpenKey, Opened>, bool);
+struct Opens(BTreeMap<OpenKey, Opened>, bool, BTreeMap<Asked, OpenKey>);
+
+/// One question an open was asked: the directory as the caller spelled it, the
+/// ceilings as given, and the working directory a relative spelling resolves
+/// against.
+type Asked = (PathBuf, Vec<PathBuf>, Option<PathBuf>);
 
 /// One remembered open: the repository, and the bytes its open read.
 struct Opened {
@@ -1015,6 +1047,7 @@ impl Opens {
     fn spend(&mut self) {
         self.0.clear();
         self.1 = true;
+        self.2.clear();
     }
 }
 
@@ -6540,6 +6573,37 @@ mod tests {
             canonical(&other),
             "the second read came from the memo, not a fresh open"
         );
+    }
+
+    /// A question asked again in the scope goes straight to the entry it found,
+    /// with no second discovery: pointed at another repository's entry, the
+    /// answer is that repository's, which no walk from `dir` could reach.
+    #[test]
+    fn a_question_asked_twice_in_one_scope_is_not_discovered_again() {
+        let dir = crate::scratch::scratch("git-memo-asked");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-asked-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read dir");
+        open_upwards(&other, Vec::new()).expect("read other");
+        with_opens(|opens| {
+            let elsewhere = opens
+                .2
+                .iter()
+                .find(|((asked, _, _), _)| *asked == other)
+                .map(|(_, key)| key.clone())
+                .expect("other's question is remembered");
+            let mine = opens
+                .2
+                .iter_mut()
+                .find(|((asked, _, _), _)| *asked == dir)
+                .expect("dir's question is remembered");
+            *mine.1 = elsewhere;
+        })
+        .expect("a scope is open");
+        let again = open_upwards(&dir, Vec::new()).expect("dir again");
+        assert_eq!(tree(&again), canonical(&other));
     }
 
     /// A write is opened fresh even inside a scope: a remembered handle shares
