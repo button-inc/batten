@@ -1544,7 +1544,7 @@ pub fn build(
         "test",
         "--no-run",
         "--profile",
-        "mutants",
+        "test",
         "--message-format",
         "json",
     ]
@@ -1553,10 +1553,7 @@ pub fn build(
     for package in &packages {
         args.extend([String::from("-p"), (*package).to_owned()]);
     }
-    let env = [(
-        String::from("CARGO_TARGET_DIR"),
-        target.to_string_lossy().into_owned(),
-    )];
+    let env = cargo_dirs(target);
     let Known {
         unviable: mut skip,
         mut handed,
@@ -1818,7 +1815,7 @@ fn nextest_args(mutant: &Listed, cases: &BTreeSet<Case>) -> Vec<String> {
         "nextest",
         "run",
         "--cargo-profile",
-        "mutants",
+        "test",
         "--profile",
         "mutants",
         "--color",
@@ -1867,11 +1864,8 @@ fn run_cases(
     let own = judging.scratch.join(id.to_string());
     let _ = std::fs::create_dir_all(own.join("tmp"));
     let _ = std::fs::create_dir_all(own.join("fixtures"));
-    let env = [
-        (
-            String::from("CARGO_TARGET_DIR"),
-            judging.target.to_string_lossy().into_owned(),
-        ),
+    let mut env = cargo_dirs(judging.target);
+    env.extend([
         // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
         // a fixture at a fixed path is then never shared by two workers
         // running one case, so no run waits on another's cases, and what a
@@ -1885,7 +1879,7 @@ fn run_cases(
             own.join("fixtures").to_string_lossy().into_owned(),
         ),
         (String::from(ACTIVE), id.to_string()),
-    ];
+    ]);
     let ran = super::spawn(
         judging.work,
         super::Program::Cargo,
@@ -2854,7 +2848,7 @@ pub fn record_reach(
         "nextest",
         "run",
         "--cargo-profile",
-        "mutants",
+        "test",
         "--profile",
         "batten-cover",
         "--no-fail-fast",
@@ -2866,14 +2860,11 @@ pub fn record_reach(
     for package in packages {
         args.extend([String::from("-p"), (*package).to_owned()]);
     }
-    let env = [
-        (
-            String::from("CARGO_TARGET_DIR"),
-            target.to_string_lossy().into_owned(),
-        ),
+    let mut env = cargo_dirs(target);
+    env.extend([
         (String::from(REACH), base.to_string_lossy().into_owned()),
         (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
-    ];
+    ]);
     let ran = super::spawn_as(
         work,
         super::Program::Cargo,
@@ -3928,6 +3919,43 @@ fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
         .join("schema"))
 }
 
+/// The checkout's own build directory, shared by every schema build of this
+/// process (#1276), recorded once by [`sweep`].
+static SHARED_BUILD: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The environment every schema build and run spawns cargo under: the mirror's
+/// own target directory for what cargo uplifts, and the CHECKOUT's build
+/// directory for every intermediate unit.
+///
+/// MEASURED ON #1276: the mirror's 738 dependency units matched 734 of
+/// `target/debug`'s by name and hash, compiled and stored twice. Built under the
+/// `test` profile into the checkout's build directory, a schema build reused all
+/// 437 registry units and compiled none: 101 s against ~160 s for a cold round.
+/// The target directory stays the mirror's, so an uplifted binary built from
+/// mutated sources never lands over the checkout's `target/debug/batten`, and
+/// `CARGO_TARGET_TMPDIR` stays inside the mirror tree, where its fixtures need
+/// a checkout around them. Outside a sweep no build directory was recorded,
+/// and a build uses its target directory alone, as before.
+fn cargo_dirs(target: &std::path::Path) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            String::from("CARGO_TARGET_DIR"),
+            target.to_string_lossy().into_owned(),
+        ),
+        // The `test` profile's own setting for the crate under mutation, the
+        // one `[profile.mutants]` carried: nothing reads a mutant's debug info,
+        // and a dependency's unit hash does not depend on it.
+        (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
+    ];
+    if let Some(build) = SHARED_BUILD.get() {
+        env.push((
+            String::from("CARGO_BUILD_BUILD_DIR"),
+            build.to_string_lossy().into_owned(),
+        ));
+    }
+    env
+}
+
 /// The schema mirror's build tree: a cache, one more tree the disk collector
 /// ranks (`collect::trees`). It holds a whole incremental build, 6.0 GB measured
 /// on #1276, outside `[prune] root`. Unseen by the collector, it left a lap's
@@ -3964,6 +3992,7 @@ pub fn sweep(
     // of its own passed only inside a checkout, so a target beside the tree
     // failed the unmutated baseline.
     let target = mirror_target(root)?;
+    let _ = SHARED_BUILD.set(root.join("target"));
     let started = std::time::Instant::now();
     // WHAT A STOPPED RUN FINISHED IS KEPT, BEFORE ANYTHING MOVES IT: its
     // records are sealed against the snapshot it ran over, which the copy
@@ -4267,7 +4296,7 @@ fn sweep_format(
     unprobed: BTreeSet<String>,
 ) -> Format {
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
-    let mut cargo_args: Vec<String> = ["--cargo-profile", "mutants"].map(str::to_owned).to_vec();
+    let mut cargo_args: Vec<String> = ["--cargo-profile", "test"].map(str::to_owned).to_vec();
     for package in packages {
         cargo_args.extend([String::from("-p"), package.to_owned()]);
     }

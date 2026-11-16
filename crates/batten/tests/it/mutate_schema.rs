@@ -58,7 +58,7 @@ fn seeded_with(name: &str, lib: &str) -> std::path::PathBuf {
         &repo,
         "Cargo.toml",
         "[package]\nname = \"fix\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
-         [workspace]\n\n[profile.mutants]\ninherits = \"test\"\n",
+         [workspace]\n",
     );
     common::write(
         &repo,
