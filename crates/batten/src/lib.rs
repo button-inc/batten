@@ -10459,7 +10459,8 @@ fn run_override_spend(
         String::new,
         |record| record.binding.anchor.token(),
     );
-    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
+    // THIS RULE'S EPOCH (CLOUD-2779), never the whole surface's.
+    let epoch = epoch::for_rule(root, overrides.config_from.as_deref(), rule, token)?;
     let situation = admission::Situation {
         rule,
         verdict: token,
@@ -10959,7 +10960,10 @@ fn run_override_request(
     // under `--config-from <ref>` bound the working tree's epoch and the spend
     // presented the ref's: every such admission refused `unbound`, and the one
     // route to repairing an unloadable working config was closed.
-    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
+    //
+    // THIS RULE'S EPOCH (CLOUD-2779): the surface that decides `rule` and its
+    // verdict, so an unrelated config edit leaves the admission bound.
+    let epoch = epoch::for_rule(root, overrides.config_from.as_deref(), rule, &resolved.id)?;
     // `user.email` rather than a name: it is the accountable identity
     // `[attribution]` already decides over, and it is never a model identity
     // (`rules/commits.md`). An unset one is the empty string rather than
@@ -21439,8 +21443,9 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // CACHED (#1276): a hook call's deny reached this every time, and the cold
     // `describe` re-read and fingerprinted the whole tracked surface each call,
     // measured at 61% of a warm `wired` call's instructions. The cached value is
-    // byte-identical or a bug (`describe_cached`).
-    let Ok((epoch, _)) = epoch::describe_cached(root, None) else {
+    // byte-identical or a bug (`describe_cached`). Per rule since CLOUD-2779,
+    // through the same cache.
+    let Ok(epoch) = epoch::for_rule_cached(root, None, refusal.rule(), class) else {
         return Ok(decision);
     };
     let anchor = admission::Anchor::Call { head }.token();
@@ -21631,11 +21636,11 @@ fn protected_escape(
     }
     let situation = git::head_commit(&root)
         .ok()
-        .zip(epoch::describe_cached(&root, None).ok());
+        .zip(epoch::for_rule_cached(&root, None, "protected-mutation", "path write refused").ok());
     let mut unnamed = Vec::new();
     for changed_path in changed {
         let admitted = match &situation {
-            Some((head, (epoch, _))) => admission::admitted_path(
+            Some((head, epoch)) => admission::admitted_path(
                 &root,
                 "protected-mutation",
                 "path write refused",
@@ -28988,9 +28993,10 @@ fn apply_admissions(
     // The HEAD term is gone from this path (CLOUD-1125): a tree finding is
     // anchored by its own fingerprint, which no commit enters. `epoch` still
     // resolves here, and could-not-look still admits nothing.
-    let Ok((epoch, _)) = epoch::describe_cached(root, config_from) else {
-        return Ok(findings);
-    };
+    // PER RULE (CLOUD-2779), resolved once per rule and class: one that will
+    // not resolve admits nothing for that rule, as the whole surface's did.
+    let mut epochs: std::collections::BTreeMap<(String, String), Option<String>> =
+        std::collections::BTreeMap::new();
     // THE COMMIT'S OWN COPY (CLOUD-1674). The store is the spending host's and
     // nowhere else, so a runner reading the same commit found no record and
     // raised the finding the author had already overridden — exit 0 here, exit
@@ -29025,6 +29031,14 @@ fn apply_admissions(
             continue;
         };
         let anchor = admission::Anchor::Finding(fingerprint.clone()).token();
+        let resolved = epochs
+            .entry((finding.rule.clone(), class.to_string()))
+            .or_insert_with(|| epoch::for_rule_cached(root, config_from, &finding.rule, class).ok())
+            .clone();
+        let Some(epoch) = resolved else {
+            kept.push(finding);
+            continue;
+        };
         let mut admitted =
             admission::admitted(root, &finding.rule, class, &finding.path, &anchor, &epoch)?;
         if admitted.is_none() {
