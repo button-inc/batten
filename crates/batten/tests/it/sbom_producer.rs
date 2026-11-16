@@ -325,7 +325,7 @@ impl Fixture {
             .env("FIXTURE", &self.dir)
             .env("CARGO_HOME", self.dir.join("cargo-home"))
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,

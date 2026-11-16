@@ -272,6 +272,65 @@ pub fn ensure_use(source: &str, edition: Edition, item: &str) -> Result<String, 
     Ok(edited)
 }
 
+/// Rewrite every path written exactly `from` to `to`, keeping every other byte
+/// (#1276): an item moved between modules. `use a::b::T as _;` becomes
+/// `use c::T as _;` and `a::b::T { x }` becomes `c::T { x }` when `from` is
+/// `a::b::T` and `to` is `c::T`; a longer path through it (`a::b::T::new`)
+/// moves with it, since its qualifier is that path.
+///
+/// Only a parsed path node is matched, compared as written with whitespace
+/// removed. A different path sharing a prefix (`a::b::Tx`), a comment, a string,
+/// a path split across a use group (`use a::b::{T}`) and a path inside a macro's
+/// token tree are left alone; the last two are the primitive's remainder, read
+/// by the caller.
+///
+/// # Errors
+///
+/// [`CouldNotLook`] when the parser reports any error over `source` under
+/// `edition`. The source is then not rewritten at all.
+pub fn rewrite_paths(
+    source: &str,
+    edition: Edition,
+    from: &str,
+    to: &str,
+) -> Result<String, CouldNotLook> {
+    let parse = SourceFile::parse(source, edition.parser());
+    let errors = parse.errors();
+    if !errors.is_empty() {
+        return Err(CouldNotLook {
+            errors: errors.len(),
+        });
+    }
+    let root = parse.syntax_node();
+    let mut ranges: Vec<std::ops::Range<usize>> = root
+        .descendants()
+        .filter_map(ast::Path::cast)
+        .filter(|path| {
+            let written: String = path
+                .syntax()
+                .text()
+                .to_string()
+                .split_whitespace()
+                .collect();
+            written == from
+        })
+        .map(|path| {
+            let range = path.syntax().text_range();
+            usize::from(range.start())..usize::from(range.end())
+        })
+        .collect();
+    if ranges.is_empty() {
+        return Ok(source.to_owned());
+    }
+    // Spliced from the end, so each range's offsets still hold when it is cut.
+    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
+    let mut edited = source.to_owned();
+    for range in ranges {
+        edited.replace_range(range, to);
+    }
+    Ok(edited)
+}
+
 /// Put `item` (a whole `use …;` line) in scope in EVERY module that calls
 /// `method`, once each: the innermost inline module around each call, or the
 /// file itself.

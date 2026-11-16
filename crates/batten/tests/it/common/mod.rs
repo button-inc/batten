@@ -35,8 +35,8 @@
 // remainder is not dead code, it is another target's.
 #![allow(dead_code)]
 
-use batten::stream::Streamed as _;
-use batten::stream::StreamedChild as _;
+use batten::exec::Streamed as _;
+use batten::exec::StreamedChild as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[expect(
@@ -832,7 +832,7 @@ impl Batten {
     /// [`batten::stream::Streamed::streamed_output`], refused first where it would
     /// fall through: every stream of the binary under test through the one pump.
     pub(crate) fn streamed_output(&mut self) -> std::io::Result<Output> {
-        use batten::stream::Streamed as _;
+        use batten::exec::Streamed as _;
         self.refuse_fall_through();
         self.0.streamed_output()
     }
@@ -842,9 +842,9 @@ impl Batten {
     /// `stderr` set are kept, as `output` kept them.
     pub(crate) fn streamed_output_keeping(
         &mut self,
-        keep: batten::stream::Keep,
+        keep: batten::exec::Keep,
     ) -> std::io::Result<Output> {
-        use batten::stream::Streamed as _;
+        use batten::exec::Streamed as _;
         self.refuse_fall_through();
         self.0.streamed_output_keeping(keep)
     }

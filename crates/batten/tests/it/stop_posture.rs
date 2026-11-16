@@ -134,7 +134,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::stream::StreamedChild as _;
+use batten::exec::StreamedChild as _;
 
 #[cfg(unix)]
 use std::fmt::Write as _;

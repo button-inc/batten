@@ -9,7 +9,7 @@
 //! the match is asserted here, over the real pattern and the real template.
 
 use crate::common::at_root;
-use batten::stream::Streamed as _;
+use batten::exec::Streamed as _;
 
 /// The template `renovate.json5` hands Renovate, filled as Renovate fills it.
 fn templated(command: &str, dep: &str, old: &str, new: &str) -> String {
