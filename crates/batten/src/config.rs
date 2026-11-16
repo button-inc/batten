@@ -3842,7 +3842,7 @@ pub const DEFAULTS_NOTE: &str =
 #[must_use]
 pub fn defaults() -> Config {
     Config {
-        rules: default_rules(),
+        rules: default_rules().into(),
         ..Config::declaring_nothing()
     }
 }

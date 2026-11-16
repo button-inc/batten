@@ -642,7 +642,8 @@ fn collection_stops_at_max_free() {
     rules.max_free_mb = Some(20);
     let mut plenty = || Ok(1000);
     assert!(
-        batten::collect::collect_if_pressed(&root, &rules, &[], &mut plenty, None, false).is_none()
+        batten::collect::collect_if_pressed(&root, &rules, Vec::new, &mut plenty, None, false)
+            .is_none()
     );
     assert!(present(&profile, "u2", "4444444444444443"));
 }
@@ -759,7 +760,7 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
     let collected = batten::collect::collect_if_pressed(
         &repo,
         &rules,
-        &[],
+        Vec::new,
         &mut pressed,
         Some(unreached()),
         false,

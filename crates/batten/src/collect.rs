@@ -1429,10 +1429,15 @@ struct Skipped {
 /// One free-space read, and `None` at once above `min_free_mb` or where the
 /// band is undeclared: that is the whole cost on the hook path. Below it, the
 /// trees are the checkout's `[prune] root` and each linked worktree's.
+///
+/// `kept` is asked only below the minimum: the files no collection removes are
+/// read off the whole process table, and the hook used to pay that scan — 230
+/// system calls on every pre-tool call — before the one read that says nothing
+/// will be collected (2026-11-16).
 pub fn collect_if_pressed(
     repo: &Path,
     prune: &crate::config_model::Prune,
-    kept: &[Kept],
+    kept_files: impl FnOnce() -> Vec<Kept>,
     free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
     deadline: Option<Instant>,
     wait: bool,
@@ -1442,7 +1447,8 @@ pub fn collect_if_pressed(
     if free >= min {
         return None;
     }
-    collect_toward_max(repo, prune, kept, free, free_mb, deadline, wait)
+    let kept = kept_files();
+    collect_toward_max(repo, prune, &kept, free, free_mb, deadline, wait)
 }
 
 /// The trees a collection ranks together: the checkout's `[prune] root`, each
@@ -2480,10 +2486,37 @@ mod tests {
             // BOUNDED, SO NO MUTANT COPY IN THE SHARED TEMP DIRECTORY IS READ
             // ([`a_collection_frees_toward_max_in_mebibytes`], CLOUD-2789).
             let bound = std::time::Instant::now() + Duration::from_secs(3600);
-            super::collect_if_pressed(&repo, &config, &[], &mut || Ok(free), Some(bound), false)
+            super::collect_if_pressed(&repo, &config, Vec::new, &mut || Ok(free), Some(bound), false)
         };
         assert!(pressed(10).is_none(), "at the minimum");
         assert!(pressed(9).is_some(), "below it");
+    }
+
+    /// Fails by: the kept files — a whole process-table scan — read on a call
+    /// that the one free-space read already said collects nothing.
+    #[test]
+    fn a_collection_above_the_minimum_reads_no_process_table() {
+        let repo = scratch("unpressed-kept");
+        let config = band(Some((10, 20)));
+        let asked = std::cell::Cell::new(0_u32);
+        let kept = || {
+            asked.set(asked.get() + 1);
+            Vec::new()
+        };
+        assert!(
+            super::collect_if_pressed(&repo, &config, kept, &mut || Ok(10), None, false).is_none()
+        );
+        assert_eq!(
+            asked.get(),
+            0,
+            "above the minimum, nothing is kept because nothing is collected"
+        );
+        let kept = || {
+            asked.set(asked.get() + 1);
+            Vec::new()
+        };
+        let _ = super::collect_if_pressed(&repo, &config, kept, &mut || Ok(9), None, false);
+        assert_eq!(asked.get(), 1, "below it, the kept files are read once");
     }
 
     /// Fails by: the bytes to free misread from the band's MiB. 1 MiB is asked
