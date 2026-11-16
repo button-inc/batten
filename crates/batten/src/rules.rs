@@ -11119,9 +11119,10 @@ fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + 
     // `tokens` (`validate_ratchet_measure`).
     // Or a lint's escapes, read off the parsed syntax (#1276): `pattern` names
     // the lint, and the count is of attributes, never of text.
-    let lint = (rule.counts == Some(CeilingUnit::LintEscapes))
-        .then(|| rule.pattern.as_deref())
-        .flatten();
+    let lint = rule
+        .pattern
+        .as_deref()
+        .filter(|_| rule.counts == Some(CeilingUnit::LintEscapes));
     Ok(move |text: &str| {
         if let Some(lint) = lint {
             return crate::codemod::lint_escapes(text, crate::codemod::Edition::E2024, lint);
