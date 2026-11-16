@@ -3,7 +3,7 @@
 //! A recipe is a migration already proven on this tree, written only in
 //! `batten`'s codemod primitives ([`codemod::rename_method_calls`],
 //! [`codemod::redirect_calls`], [`codemod::import_for_calls`],
-//! [`codemod::rewrite_calls_by_chain`]). This crate is never
+//! [`codemod::rewrite_calls_by_chain`], [`codemod::rewrite_paths`]). This crate is never
 //! released: a recipe reaches the shipped binary only when a preset vendors it. It is kept rather than thrown away with its driver for
 //! two reasons. A consumer making the same move runs it as one call, which is
 //! what vendoring one into a preset will mean. And the tree it already migrated
@@ -62,6 +62,13 @@ pub const RECIPES: &[Recipe] = &[
         skip: &["mutation_markers.rs", "batten-stream/src/lib.rs"],
         apply: stream_keep_set,
     },
+    Recipe {
+        name: "stream-adapter-exec",
+        summary: "`Streamed`, `StreamedChild` and `Keep` move from `stream` to `exec`, the placed spawn boundary (#1276)",
+        edition: Edition::E2024,
+        skip: &["mutation_markers.rs"],
+        apply: stream_adapter_exec,
+    },
 ];
 
 /// The recipe named `name`.
@@ -102,7 +109,7 @@ fn stream_capture(source: &str, base: &str) -> Result<String, CouldNotLook> {
         codemod::import_for_calls(
             &renamed,
             edition,
-            &format!("use {base}::stream::{trait_name} as _;"),
+            &format!("use {base}::exec::{trait_name} as _;"),
             to,
         )
     };
@@ -120,9 +127,26 @@ fn stream_keep_set(source: &str, base: &str) -> Result<String, CouldNotLook> {
         let (stdin, stdout, stderr) = (set("stdin"), set("stdout"), set("stderr"));
         (stdin || stdout || stderr).then(|| {
             format!(
-                "streamed_output_keeping({base}::stream::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
+                "streamed_output_keeping({base}::exec::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
             )
         })
     };
     codemod::rewrite_calls_by_chain(source, Edition::E2024, "streamed_output", &rewrite)
+}
+
+/// `batten-stream` carried the process adapter, a spawn in a module the
+/// spawn-placement table does not place. It moved to `exec`, the placed
+/// child-process boundary, and every path to it moves with it. Its blind spot:
+/// a path inside a macro's arguments, which the compiler names.
+fn stream_adapter_exec(source: &str, base: &str) -> Result<String, CouldNotLook> {
+    let mut text = source.to_owned();
+    for item in ["Streamed", "StreamedChild", "Keep"] {
+        text = codemod::rewrite_paths(
+            &text,
+            Edition::E2024,
+            &format!("{base}::stream::{item}"),
+            &format!("{base}::exec::{item}"),
+        )?;
+    }
+    Ok(text)
 }

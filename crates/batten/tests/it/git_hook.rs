@@ -44,8 +44,8 @@
 // ported: "git-hook.bats::the gate's exit status is the hook's" crates/batten/tests/it/git_hook.rs subject:.claude/hooks/git-hook.sh
 
 use crate::common;
-use batten::stream::Streamed as _;
-use batten::stream::StreamedChild as _;
+use batten::exec::Streamed as _;
+use batten::exec::StreamedChild as _;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

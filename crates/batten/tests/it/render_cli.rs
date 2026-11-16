@@ -26,7 +26,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::stream::Streamed as _;
+use batten::exec::Streamed as _;
 
 use common::{at_root, task_body, task_env};
 

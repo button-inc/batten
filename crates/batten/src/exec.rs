@@ -191,7 +191,6 @@
 //! Reporting that as the child's code would be worse than useless, because there
 //! is no child.
 
-use crate::stream::StreamedChild as _;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -2991,11 +2990,199 @@ fn report_bundle(
     )))
 }
 
+// THE PROCESS ADAPTER over `crate::stream` (#1276), at the placed child-process
+// boundary: `batten-stream` is I/O alone, and this module is where a `Command`
+// meets it, under the spawn-placement table's `exec` row.
+
+/// [`std::process::Command::output`] and [`std::process::Child::wait_with_output`],
+/// with every stream through [`pump`](crate::stream::pump) (#1276).
+///
+/// The same [`std::process::Output`] comes back, so a call site changes only
+/// its method name. What changes underneath: stdin is closed as `output` closes
+/// it, and stdout and stderr are each pumped on their own thread
+/// ([`spawn_pump`](crate::stream::spawn_pump)) into a [`Shared`](crate::stream::Shared) buffer chunk by chunk while the child
+/// runs, instead of `std`'s private read-to-end. A caller that also wants the
+/// bytes live, or in a spool, pumps the child's pipes itself into those sinks.
+pub trait Streamed {
+    /// The child's status and both streams, pumped as they were written. Every
+    /// stream takes `output`'s default: stdin closed, stdout and stderr piped.
+    ///
+    /// # Errors
+    ///
+    /// The child cannot be started or waited for.
+    fn streamed_output(&mut self) -> std::io::Result<std::process::Output> {
+        self.streamed_output_keeping(Keep::NONE)
+    }
+
+    /// [`Streamed::streamed_output`] for a command whose caller already set
+    /// some of its streams: each stream `keep` names is left exactly as set,
+    /// and only the others take `output`'s default. A kept stream that is not a
+    /// pipe captures nothing, as under `output`.
+    ///
+    /// `std` cannot be asked which streams a `Command` already has, and
+    /// `output` alone knows; so the caller says, and the `stream-keep-set`
+    /// recipe (`crates/batten-codemods`) said it at every chain that set one.
+    ///
+    /// # Errors
+    ///
+    /// The child cannot be started or waited for.
+    fn streamed_output_keeping(&mut self, keep: Keep) -> std::io::Result<std::process::Output>;
+}
+
+/// Which of a command's streams its caller set before capturing it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Keep {
+    /// Stdin was set.
+    pub stdin: bool,
+    /// Stdout was set.
+    pub stdout: bool,
+    /// Stderr was set.
+    pub stderr: bool,
+}
+
+impl Keep {
+    /// No stream was set: every one takes `output`'s default.
+    pub const NONE: Self = Self {
+        stdin: false,
+        stdout: false,
+        stderr: false,
+    };
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this impl IS the census's one capture route — every spawn site that \
+              reads its child's output reaches its streams through here, not its own loop (#1276)"
+)]
+impl Streamed for std::process::Command {
+    fn streamed_output_keeping(&mut self, keep: Keep) -> std::io::Result<std::process::Output> {
+        if !keep.stdin {
+            self.stdin(std::process::Stdio::null());
+        }
+        if !keep.stdout {
+            self.stdout(std::process::Stdio::piped());
+        }
+        if !keep.stderr {
+            self.stderr(std::process::Stdio::piped());
+        }
+        self.spawn()?.streamed_wait()
+    }
+}
+
+/// [`std::process::Child::wait_with_output`] through [`pump`](crate::stream::pump).
+pub trait StreamedChild {
+    /// Close stdin, pump whichever of stdout and stderr were piped while the
+    /// child runs, wait for it, and return what each said.
+    ///
+    /// # Errors
+    ///
+    /// The child cannot be waited for.
+    fn streamed_wait(self) -> std::io::Result<std::process::Output>;
+}
+
+impl StreamedChild for std::process::Child {
+    fn streamed_wait(mut self) -> std::io::Result<std::process::Output> {
+        // Closed first, as `wait_with_output` does: a child reading stdin to EOF
+        // would otherwise wait on a pipe this end still holds open.
+        drop(self.stdin.take());
+        let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            let buffer = crate::stream::Shared::new(Vec::new());
+            let pumping =
+                pipe.map(|pipe| crate::stream::spawn_pump(pipe, vec![Box::new(buffer.clone())]));
+            (buffer, pumping)
+        };
+        let (out, out_pump) = drain(
+            self.stdout
+                .take()
+                .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+        );
+        let (err, err_pump) = drain(
+            self.stderr
+                .take()
+                .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+        );
+        let status = self.wait()?;
+        for pumping in [out_pump, err_pump].into_iter().flatten() {
+            if let crate::stream::Pumped::Finished(Err(why)) =
+                pumping.finished(crate::stream::DRAIN_GRACE)
+            {
+                return Err(why);
+            }
+        }
+        Ok(std::process::Output {
+            status,
+            stdout: out.bytes(),
+            stderr: err.bytes(),
+        })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    /// Fails by: a stream lost or crossed, the status dropped, stdin left open
+    /// (the child hangs reading it), or a stream past one pipe's 64 KiB
+    /// deadlocking against the wait.
+    #[test]
+    fn streamed_output_is_output_with_every_stream_pumped() {
+        // `sh`, `cat` and `/dev/zero`: a unix contract, compiled everywhere.
+        if !cfg!(unix) {
+            return;
+        }
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays: the case IS a spawn, because the primitive's contract is about a real child's pipes"
+        )]
+        let ran = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "cat; head -c 200000 /dev/zero | tr '\\0' o; head -c 200000 /dev/zero | tr '\\0' e >&2; exit 3",
+            ])
+            .streamed_output()
+            .expect("sh runs");
+        assert_eq!(ran.status.code(), Some(3));
+        assert_eq!(ran.stdout.len(), 200_000);
+        assert!(ran.stdout.iter().all(|byte| *byte == b'o'));
+        assert_eq!(ran.stderr.len(), 200_000);
+        assert!(ran.stderr.iter().all(|byte| *byte == b'e'));
+    }
+
+    /// Fails by: a stream the caller set overwritten (here a stdin read from a
+    /// file becomes closed, and the child reads nothing), or a stream the
+    /// caller did not name left without `output`'s default.
+    #[test]
+    fn a_kept_stream_is_left_as_the_caller_set_it() {
+        // `sh`, `cat` and `/dev/zero`: a unix contract, compiled everywhere.
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("batten-stream-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("in");
+        std::fs::write(&input, "from the file").unwrap();
+        let cat = |keep: Keep| {
+            #[expect(
+                clippy::disallowed_types,
+                reason = "stays: the case IS a spawn, because the primitive's contract is about a real child's pipes"
+            )]
+            let mut command = std::process::Command::new("cat");
+            command
+                .stdin(std::fs::File::open(&input).unwrap())
+                .streamed_output_keeping(keep)
+                .unwrap()
+        };
+        let kept = cat(Keep {
+            stdin: true,
+            ..Keep::NONE
+        });
+        assert_eq!(kept.stdout, b"from the file");
+        let defaulted = cat(Keep::NONE);
+        assert!(defaulted.stdout.is_empty(), "an unnamed stdin is closed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {

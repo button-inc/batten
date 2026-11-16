@@ -40,7 +40,7 @@
 
 use crate::common;
 use crate::common::StateHome as _;
-use batten::stream::StreamedChild as _;
+use batten::exec::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -132,7 +132,7 @@ impl Store {
             .env_remove("CLAUDE_PROJECT_DIR")
             .state_home(&self.home)
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,

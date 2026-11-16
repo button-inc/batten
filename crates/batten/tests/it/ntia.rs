@@ -451,9 +451,9 @@ fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
             command.env(name, value);
         }
         let out = command
-            .streamed_output_keeping(batten::stream::Keep {
+            .streamed_output_keeping(batten::exec::Keep {
                 stdin: true,
-                ..batten::stream::Keep::NONE
+                ..batten::exec::Keep::NONE
             })
             .expect("run one entry");
         let failed = !out.status.success();
