@@ -3172,7 +3172,7 @@ struct Graph<'g> {
     ids: std::collections::HashMap<&'g str, usize>,
     names: Vec<&'g str>,
     edges: Vec<Vec<usize>>,
-    tokens: Vec<Option<Option<blake3::Hash>>>,
+    tokens: Vec<Option<blake3::Hash>>,
 }
 
 /// One walk's reusable state: the visited map and the ids it set.
@@ -3212,7 +3212,17 @@ impl<'g> Graph<'g> {
                     .collect()
             })
             .collect();
-        let tokens = vec![None; names.len()];
+        // EACH NAME'S ITEMS HASHED ONCE PER SWEEP, here rather than on first
+        // reach: nearly every name is reached by some case.
+        let tokens = names
+            .iter()
+            .map(|name| {
+                depends
+                    .items
+                    .get(*name)
+                    .map(|items| name_token(name, items))
+            })
+            .collect();
         Self {
             ids,
             names,
@@ -3249,23 +3259,9 @@ impl<'g> Graph<'g> {
         &walk.reached
     }
 
-    /// A name's token, its name and its items' digest, or `None` with no items.
-    fn token(
-        &self,
-        items: &std::collections::BTreeMap<String, BTreeSet<String>>,
-        name: &str,
-    ) -> Option<blake3::Hash> {
-        items.get(name).map(|items| name_token(name, items))
-    }
-
-    /// [`Graph::token`] by id, computed once per sweep.
-    fn token_of(
-        &mut self,
-        items: &std::collections::BTreeMap<String, BTreeSet<String>>,
-        id: usize,
-    ) -> Option<blake3::Hash> {
-        let name = self.names[id];
-        *self.tokens[id].get_or_insert_with(|| items.get(name).map(|items| name_token(name, items)))
+    /// A reached id's token, computed when the graph was built.
+    fn token_of(&self, id: usize) -> Option<blake3::Hash> {
+        self.tokens[id]
     }
 }
 
@@ -3308,7 +3304,7 @@ pub fn case_digests<'c>(
     let mut digests = std::collections::BTreeMap::new();
     let mut named_parts: std::collections::HashMap<Vec<usize>, blake3::Hash> =
         std::collections::HashMap::new();
-    let mut graph = Graph::new(depends);
+    let graph = Graph::new(depends);
     let mut walk = Walk::default();
     for case in cases {
         let (name, binary) = case;
@@ -3343,11 +3339,11 @@ pub fn case_digests<'c>(
                 .filter_map(|name| graph.id(name));
             let reached = graph.reach(starts, &mut walk);
             let mut part = blake3::Hasher::new();
-            if let Some(token) = graph.token(depends.items, "") {
+            if let Some(token) = depends.items.get("").map(|items| name_token("", items)) {
                 part.update(token.as_bytes());
             }
             for id in reached {
-                if let Some(token) = graph.token_of(depends.items, *id) {
+                if let Some(token) = graph.token_of(*id) {
                     part.update(token.as_bytes());
                 }
             }
