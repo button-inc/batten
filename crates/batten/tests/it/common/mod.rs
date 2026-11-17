@@ -607,6 +607,18 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // mutant was ever judged.
         batten::mutate::schema::REACH,
         batten::mutate::schema::TREE_ENV,
+        // NOR THE SWEEP'S CARGO SETTINGS OR NEXTEST PROFILE (#1276). The schema
+        // runs its baseline and its judging with these exported, and nextest
+        // hands every case its own profile name. A case driving `cargo` or
+        // `nextest` over a fixture then built into the sweep's shared directory
+        // or asked for `batten-cover`, a profile its fixture has none of: 13 of
+        // 10,086 baseline cases failed for it, and a failed baseline judges no
+        // mutant. `test:cargo` sets none of them.
+        "CARGO_TARGET_DIR",
+        "CARGO_BUILD_BUILD_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_PROFILE_TEST_DEBUG",
+        "NEXTEST_PROFILE",
         // NOT the overlay variable itself: it is how a mutated preset reaches the
         // `batten` a suite spawns, and scrubbing it judged every preset row
         // against the embedded, unmutated text (85 false survivors).
