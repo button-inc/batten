@@ -7931,6 +7931,7 @@ fn evaluate_rules(
     inputs: &RunInputs<'_>,
     scan: &mut Scan,
 ) -> anyhow::Result<()> {
+    let mut due: Vec<&Rule> = Vec::new();
     for rule in rules {
         // A COPY BEHIND ITS PRESET (CLOUD-2290), on the tree verbs only and for
         // every scope: an ejected module usually decides the mediated call, which
@@ -8007,36 +8008,44 @@ fn evaluate_rules(
         // the state this row found, where nothing reported and the largest item
         // in CI was a silent span.
         //
-        // Deltas over the process-global counters rather than an accumulator
-        // threaded through nine read sites. Sound because this loop is serial,
-        // which `rules/rust.md` records as a measured verdict rather
-        // than an accident.
+        // Deltas over this THREAD's read counters ([`thread_reads`]) rather
+        // than an accumulator threaded through nine read sites: rules run side
+        // by side off the hook surface (#1276), so the process-global counters
+        // interleave and only a thread's own count is one rule's.
         //
         // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
         // precondition skip above puts it: a rule held back by an unmet
         // requirement never enters the body, so it has no cost to report and a
         // zero row for it would read as "evaluated, and free".
-        let started = std::time::Instant::now();
-        let (files_before, bytes_before) = (files_read(), bytes_read());
-        let outcome = {
-            let Scan {
-                findings, classes, ..
-            } = &mut *scan;
-            isolate(|| run_rule(rule, root, inputs, findings, classes))
-        };
-        costs_lock().push(RuleCost {
-            rule: rule.id.clone(),
-            elapsed: started.elapsed(),
-            files_read: files_read().saturating_sub(files_before),
-            bytes_read: bytes_read().saturating_sub(bytes_before),
-        });
-        match outcome {
+        due.push(rule);
+    }
+    // EVERY DUE RULE IS EVALUATED, THEN FOLDED IN DECLARATION ORDER (#1276).
+    // The loop above stays serial: it is cheap and writes the scan in order.
+    // Evaluation runs on `workers` threads off the tree verbs — measured on
+    // #1276, `enforce --half live` spent ~200 s on one core of four, every
+    // rule reading shared, read-only inputs and writing only its own findings
+    // and classes. Each rule fills its own buffers and they are folded in the
+    // order the table declares, so the output is byte-for-byte what the serial
+    // loop produced (§6). The hook surface stays on one thread: `rules/rust.md`
+    // holds `batten hook` to at most one runtime and never a multi-thread one.
+    let workers = if inputs.surface == crate::facts::Surface::Hook {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+    };
+    let evaluated = evaluate_due(&due, root, inputs, workers);
+    for (rule, done) in due.iter().zip(evaluated) {
+        scan.findings.extend(done.findings);
+        scan.classes.extend(done.classes);
+        costs_lock().push(done.cost);
+        match done.outcome {
             Isolated::Evaluated => {}
             Isolated::NotEvaluated(why) => {
                 scan.not_evaluated.insert(rule.id.clone(), why);
             }
             // A typed answer the boundary owns — see `isolate` for why these two
-            // are not a gate's to contain.
+            // are not a gate's to contain. The first in declaration order wins,
+            // as it did when the loop stopped there.
             Isolated::Propagate(failure) => return Err(failure),
             Isolated::Errored(failure) => {
                 // Both maps, and both are load-bearing: `not_evaluated` is what
@@ -8050,6 +8059,94 @@ fn evaluate_rules(
         }
     }
     Ok(())
+}
+
+/// One rule's evaluation, held until it is folded in declaration order.
+struct Evaluated {
+    findings: Vec<Finding>,
+    classes: BTreeMap<String, String>,
+    outcome: Isolated,
+    cost: RuleCost,
+}
+
+/// Evaluate each of `due` on up to `workers` scoped threads, answering in
+/// `due`'s order. A worker takes the next index until none is left, so a slow
+/// rule holds one thread and the rest drain past it.
+///
+/// THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind (CLOUD-1217),
+/// and its read counts are THIS THREAD'S ([`thread_reads`]): the process-wide
+/// counters interleave once rules run side by side.
+fn evaluate_due(
+    due: &[&Rule],
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    workers: usize,
+) -> Vec<Evaluated> {
+    let one = |rule: &Rule| {
+        let started = std::time::Instant::now();
+        let (files_before, bytes_before) = thread_reads();
+        let mut findings = Vec::new();
+        let mut classes = BTreeMap::new();
+        let outcome = isolate(|| run_rule(rule, root, inputs, &mut findings, &mut classes));
+        let (files_after, bytes_after) = thread_reads();
+        Evaluated {
+            findings,
+            classes,
+            outcome,
+            cost: RuleCost {
+                rule: rule.id.clone(),
+                elapsed: started.elapsed(),
+                files_read: files_after.saturating_sub(files_before),
+                bytes_read: bytes_after.saturating_sub(bytes_before),
+            },
+        }
+    };
+    let workers = workers.clamp(1, due.len().max(1));
+    if workers == 1 {
+        return due.iter().map(|rule| one(rule)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<Evaluated>>> = due.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(rule) = due.get(at) else {
+                        break;
+                    };
+                    let done = one(rule);
+                    if let Some(slot) = slots.get(at) {
+                        *slot
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(done);
+                    }
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .zip(due)
+        .map(|(slot, rule)| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(|| Evaluated {
+                    findings: Vec::new(),
+                    classes: BTreeMap::new(),
+                    outcome: Isolated::Errored(RuleFailure {
+                        class: ErrorClass::Panic,
+                        reason: String::new(),
+                    }),
+                    cost: RuleCost {
+                        rule: rule.id.clone(),
+                        elapsed: std::time::Duration::ZERO,
+                        files_read: 0,
+                        bytes_read: 0,
+                    },
+                })
+        })
+        .collect()
 }
 
 /// What the run asks the boundary to write (CLOUD-851).
@@ -8764,11 +8861,10 @@ pub fn documents_acquired() -> usize {
 /// passes, and the two conservation walks — which is precisely the population the
 /// cache never covered.
 ///
-/// **Monotonic and process-global, read as a DELTA around one rule**, which is
-/// what makes the per-rule attribution possible without threading an accumulator
-/// through nine call sites. Sound only because [`run`]'s loop is serial; a
-/// concurrent second run in the same process would interleave, which is why the
-/// test that reads them lives in its own binary, exactly as
+/// **Monotonic and process-global.** A rule's census reads its delta from
+/// [`thread_reads`], this thread's share, because rules run side by side off
+/// the hook surface (#1276); these stay the process totals a test reads, which
+/// is why that test lives in its own binary, exactly as
 /// `document_read_count.rs` does and for the same reason.
 static FILES_READ: AtomicUsize = AtomicUsize::new(0);
 static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
@@ -8781,6 +8877,21 @@ static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
 fn count_read(bytes: usize) {
     FILES_READ.fetch_add(1, Ordering::Relaxed);
     BYTES_READ.fetch_add(bytes, Ordering::Relaxed);
+    THREAD_READS.with(|reads| {
+        let (files, total) = reads.get();
+        reads.set((files + 1, total + bytes));
+    });
+}
+
+thread_local! {
+    /// This thread's share of [`FILES_READ`] and [`BYTES_READ`]: what a rule's
+    /// census reads as its delta once rules run side by side (#1276).
+    static THREAD_READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The files and bytes this thread has read on a rule's behalf.
+fn thread_reads() -> (usize, usize) {
+    THREAD_READS.with(std::cell::Cell::get)
 }
 
 /// How many files this process has read on a rule's behalf.
