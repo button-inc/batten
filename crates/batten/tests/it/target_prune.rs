@@ -163,6 +163,18 @@ fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
     sized(deps, stem, hash, kind, age_seconds, 16 * 1024);
 }
 
+/// A unit last used `age_seconds` before a fixed 2001 instant.
+///
+/// NEVER `now - age`: the collector holds every unit used since the earliest
+/// running build ON THE HOST started (`collect::live_since`). Measured on
+/// #1276, both collection cases failed in every mutant once the host's
+/// cargo-mutants had run longer than the 7200 s backdate, since the "stale"
+/// unit was then newer than a live build. No process starts before 2001, so an
+/// anchored age keeps the fixtures' order and is never live.
+fn aged(age_seconds: u64) -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000 - age_seconds)
+}
+
 /// The same, of a chosen size.
 fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, bytes: usize) {
     std::fs::create_dir_all(deps).unwrap();
@@ -180,7 +192,7 @@ fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, byte
         mode.set_mode(0o755);
         std::fs::set_permissions(&path, mode).unwrap();
     }
-    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+    let when = aged(age_seconds);
     std::fs::File::options()
         .write(true)
         .open(&path)
@@ -246,7 +258,7 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
     std::fs::create_dir_all(&fingerprint).unwrap();
     let file = fingerprint.join(format!("bin-{name}"));
     std::fs::write(&file, b"fingerprint").unwrap();
-    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+    let when = aged(age_seconds);
     common::set_times(
         &file,
         std::fs::FileTimes::new()
