@@ -1868,7 +1868,7 @@ fn run_cases(
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
     let ran = ran?;
-    let judged = verdict_of_run(&ran.outcome, report.as_deref(), cases);
+    let judged = verdict_of_run(ran.outcome, report.as_deref(), cases);
     if judged.0 == Verdict::Error {
         // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
         // case started and said nothing anywhere, so an error now leaves
@@ -1952,7 +1952,7 @@ fn junit_cases(xml: &str) -> Option<Vec<(Case, CaseEnd)>> {
 /// naming no case, or a passing exit missing one of `cases` from its report
 /// decided nothing about the mutant.
 fn verdict_of_run(
-    outcome: &super::Outcome,
+    outcome: super::Outcome,
     report: Option<&[(Case, CaseEnd)]>,
     cases: &BTreeSet<Case>,
 ) -> (Verdict, Option<Case>, Vec<Case>) {
@@ -7706,36 +7706,36 @@ mod tests {
         let cases: BTreeSet<Case> = [a.clone(), b.clone()].into();
         let caught = junit_cases(JUNIT_FIXTURE).expect("XML");
         let (verdict, killer, passed) =
-            verdict_of_run(&Outcome::Failed(Some(100)), Some(&caught), &cases);
+            verdict_of_run(Outcome::Failed(Some(100)), Some(&caught), &cases);
         assert_eq!((verdict, killer), (Verdict::Caught, Some(b.clone())));
         assert!(passed.contains(&a) && !passed.contains(&b), "{passed:?}");
         let timed = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::TimedOut)];
         assert_eq!(
-            verdict_of_run(&Outcome::Failed(Some(100)), Some(&timed), &cases).0,
+            verdict_of_run(Outcome::Failed(Some(100)), Some(&timed), &cases).0,
             Verdict::Timeout
         );
         assert_eq!(
-            verdict_of_run(&Outcome::TimedOut, None, &cases).0,
+            verdict_of_run(Outcome::TimedOut, None, &cases).0,
             Verdict::Timeout
         );
         let clean = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::Passed)];
-        let missed = verdict_of_run(&Outcome::Passed, Some(&clean), &cases);
+        let missed = verdict_of_run(Outcome::Passed, Some(&clean), &cases);
         assert_eq!((missed.0, missed.2.len()), (Verdict::Missed, 2));
         // Could-not-look: no report, an empty one, or one missing a case.
         assert_eq!(
-            verdict_of_run(&Outcome::Passed, None, &cases).0,
+            verdict_of_run(Outcome::Passed, None, &cases).0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(&Outcome::Passed, Some(&[]), &cases).0,
+            verdict_of_run(Outcome::Passed, Some(&[]), &cases).0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(&Outcome::Passed, Some(&clean[..1]), &cases).0,
+            verdict_of_run(Outcome::Passed, Some(&clean[..1]), &cases).0,
             Verdict::Error
         );
         assert_eq!(
-            verdict_of_run(&Outcome::Failed(Some(101)), Some(&clean), &cases).0,
+            verdict_of_run(Outcome::Failed(Some(101)), Some(&clean), &cases).0,
             Verdict::Error
         );
     }
