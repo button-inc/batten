@@ -14548,9 +14548,7 @@ fn run_land_push_verified(
 ) -> Result<ExitCode> {
     let head = git::head_commit(root).ok();
     let pushed = land::push_verified(root, url, branch)?;
-    if let land::Pushed::Landed(verified) = &pushed
-        && head.as_deref().is_some_and(|head| head != verified)
-    {
+    if let Some(verified) = moved_past(head.as_deref(), &pushed) {
         writeln!(
             out,
             "land: HEAD moved past the verified {} while the gate ran; the next lap verifies it",
@@ -14558,6 +14556,17 @@ fn run_land_push_verified(
         )?;
     }
     report_push(pushed, branch, out)
+}
+
+/// The verified head a lap pushed while `HEAD` had moved past it, if it did: a
+/// commit made while the gate ran is the next lap's to verify, and says so.
+fn moved_past<'a>(head: Option<&str>, pushed: &'a land::Pushed) -> Option<&'a str> {
+    match pushed {
+        land::Pushed::Landed(verified) if head.is_some_and(|head| head != verified) => {
+            Some(verified)
+        }
+        _ => None,
+    }
 }
 
 /// What a push said, for both the hand-driven verb and the lap.
@@ -15657,6 +15666,11 @@ fn run_land_ready(
 /// it reads the CHECKS verdict rather than a run count so that a lap arriving
 /// while this lap's own run is still in flight leaves it alone — cancelling the
 /// matrix it had just bought is the failure that arm exists to refuse.
+/// Did the lap's gate pass the forge's `head`? Only that head is readied.
+fn gate_passed(verified: Option<&str>, head: &str) -> bool {
+    verified == Some(head)
+}
+
 fn spend_the_matrix(
     root: &Path,
     branch: &str,
@@ -15700,7 +15714,7 @@ fn spend_the_matrix(
     // whatever was pushed last, by this lap or by hand while it ran; readying
     // a head no gate passed would spend a matrix on unverified work and let it
     // land on CI alone. A different head laps, and the next lap verifies it.
-    if land::last_verified(root, branch).as_deref() != Some(head.as_str()) {
+    if !gate_passed(land::last_verified(root, branch).as_deref(), &head) {
         writeln!(
             out,
             "land: {branch}'s pull request is at {}, which no gate run passed; the next lap verifies it before any ready",
@@ -32062,6 +32076,29 @@ mod mutation_markers;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// Fails by: the comparison inverted, so a lap whose `HEAD` stood still says
+    /// it moved, and one that moved says nothing.
+    #[test]
+    fn a_lap_says_head_moved_only_when_it_did() {
+        let pushed = super::land::Pushed::Landed("v1".to_owned());
+        assert_eq!(super::moved_past(Some("v2"), &pushed), Some("v1"));
+        assert_eq!(super::moved_past(Some("v1"), &pushed), None);
+        assert_eq!(super::moved_past(None, &pushed), None);
+        assert_eq!(
+            super::moved_past(Some("v2"), &super::land::Pushed::Raced),
+            None
+        );
+    }
+
+    /// Fails by: the comparison inverted, so the head no gate passed is readied
+    /// and the one it passed is refused.
+    #[test]
+    fn only_the_head_the_gate_passed_is_readied() {
+        assert!(super::gate_passed(Some("h1"), "h1"));
+        assert!(!super::gate_passed(Some("h0"), "h1"));
+        assert!(!super::gate_passed(None, "h1"));
+    }
 
     /// A call id becomes ONE file name under the git dir: letters, digits, `-`
     /// and `_` kept, every other character `_`, so `/` and `..` cannot climb.
