@@ -179,3 +179,30 @@ fn an_unprotected_write_passes() {
     assert_eq!(code, Some(0), "{said}");
     assert!(!said.contains("path write refused"), "{said}");
 }
+
+/// A call that `cd`s below the root changes nothing protected, so its post-call
+/// hook, which runs in the directory the call left behind, refuses nothing.
+///
+/// Measured on #1276: the snapshot carried its root as `.`, so a post-call hook
+/// in `target/debug/incremental` re-read the protected set there, found none of
+/// it, and refused every protected path as changed by a read-only `du`.
+#[test]
+fn a_call_that_moves_below_the_root_changes_nothing_protected() {
+    let dir = fixture("protected-escape-moved-cwd");
+    let below = dir.join("deep/below");
+    std::fs::create_dir_all(&below).expect("a directory below the root");
+    let command = "cd deep/below && ls";
+    let pre = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PreToolUse", "call-moved", command),
+    );
+    assert!(!stdout(&pre).contains("\"deny\""), "{}", stdout(&pre));
+    let post = run_with_stdin(
+        &below,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PostToolUse", "call-moved", command),
+    );
+    let said = format!("{}{}", stdout(&post), String::from_utf8_lossy(&post.stderr));
+    assert!(!said.contains("path write refused"), "{said}");
+}
