@@ -3166,6 +3166,120 @@ fn named_closure<'n>(
     reached
 }
 
+/// The mentions graph by integer id, built once per sweep: ids are ranked in
+/// name order, so a walk listed by id is listed by name.
+struct Graph<'g> {
+    ids: std::collections::HashMap<&'g str, usize>,
+    names: Vec<&'g str>,
+    edges: Vec<Vec<usize>>,
+    tokens: Vec<Option<Option<blake3::Hash>>>,
+}
+
+/// One walk's reusable state: the visited map and the ids it set.
+#[derive(Default)]
+struct Walk {
+    seen: Vec<bool>,
+    reached: Vec<usize>,
+    frontier: Vec<usize>,
+}
+
+impl<'g> Graph<'g> {
+    /// Every name the mentions graph or a probe names, ranked by name.
+    fn new(depends: &Depends<'g>) -> Self {
+        let mut all: BTreeSet<&'g str> = BTreeSet::new();
+        for (name, mentioned) in depends.mentions {
+            all.insert(name);
+            all.extend(mentioned.iter().map(String::as_str));
+        }
+        for names in depends.names {
+            all.extend(names.iter().map(String::as_str));
+        }
+        let names: Vec<&'g str> = all.into_iter().collect();
+        let ids: std::collections::HashMap<&'g str, usize> = names
+            .iter()
+            .enumerate()
+            .map(|(id, name)| (*name, id))
+            .collect();
+        let edges = names
+            .iter()
+            .map(|name| {
+                depends
+                    .mentions
+                    .get(*name)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|next| ids.get(next.as_str()).copied())
+                    .collect()
+            })
+            .collect();
+        let tokens = vec![None; names.len()];
+        Self {
+            ids,
+            names,
+            edges,
+            tokens,
+        }
+    }
+
+    fn id(&self, name: &str) -> Option<usize> {
+        self.ids.get(name).copied()
+    }
+
+    /// Every id reachable from `starts`, the starts included, in name order.
+    fn reach<'w>(&self, starts: impl Iterator<Item = usize>, walk: &'w mut Walk) -> &'w [usize] {
+        walk.seen.resize(self.names.len(), false);
+        for id in walk.reached.drain(..) {
+            walk.seen[id] = false;
+        }
+        walk.frontier.clear();
+        walk.frontier.extend(starts);
+        while let Some(id) = walk.frontier.pop() {
+            if std::mem::replace(&mut walk.seen[id], true) {
+                continue;
+            }
+            walk.reached.push(id);
+            walk.frontier.extend(
+                self.edges[id]
+                    .iter()
+                    .copied()
+                    .filter(|next| !walk.seen[*next]),
+            );
+        }
+        walk.reached.sort_unstable();
+        &walk.reached
+    }
+
+    /// A name's token, its name and its items' digest, or `None` with no items.
+    fn token(
+        &self,
+        items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+        name: &str,
+    ) -> Option<blake3::Hash> {
+        items.get(name).map(|items| name_token(name, items))
+    }
+
+    /// [`Graph::token`] by id, computed once per sweep.
+    fn token_of(
+        &mut self,
+        items: &std::collections::BTreeMap<String, BTreeSet<String>>,
+        id: usize,
+    ) -> Option<blake3::Hash> {
+        let name = self.names[id];
+        *self.tokens[id].get_or_insert_with(|| items.get(name).map(|items| name_token(name, items)))
+    }
+}
+
+/// One reached name's contribution to a case's digest.
+fn name_token(name: &str, items: &BTreeSet<String>) -> blake3::Hash {
+    let mut own = blake3::Hasher::new();
+    own.update(format!("\x1b{name}\x1f").as_bytes());
+    for item in items {
+        own.update(b"\x1b");
+        own.update(item.as_bytes());
+    }
+    own.finalize()
+}
+
 /// Each case's own text, digested once per sweep (read once per file): in
 /// each of its own module files, the test function it names and the helper
 /// functions beside it; the whole file where no such test is found; and the
@@ -3194,8 +3308,8 @@ pub fn case_digests<'c>(
     let mut digests = std::collections::BTreeMap::new();
     let mut named_parts: std::collections::HashMap<Vec<usize>, blake3::Hash> =
         std::collections::HashMap::new();
-    let mut item_parts: std::collections::HashMap<&str, blake3::Hash> =
-        std::collections::HashMap::new();
+    let mut graph = Graph::new(depends);
+    let mut walk = Walk::default();
     for case in cases {
         let (name, binary) = case;
         let test = name.rsplit("::").next().unwrap_or(name);
@@ -3211,35 +3325,31 @@ pub fn case_digests<'c>(
                     .as_bytes(),
             );
         }
-        // ONCE PER DISTINCT PROBE SET, AND EACH NAME'S ITEMS ONCE PER SWEEP
+        // ONCE PER DISTINCT PROBE SET, OVER A GRAPH INDEXED ONCE PER SWEEP
         // (#1276). Measured: the union of every reached name's items, built and
-        // sorted per case, held one core for 20 minutes over 6236 cases before a
-        // single mutant was judged. The part is a function of the probe set
-        // alone, and a digest per name keys exactly what the union did.
+        // sorted per case, held one core for 20 minutes over 6236 cases before
+        // a single mutant was judged; memoised per probe set, the string-keyed
+        // closure alone still held it, because nearly every probe set is
+        // distinct. The walk is now over integer ids with one reused visited
+        // map, ids are ranked in name order so the walk's order is the names',
+        // and each name's items are hashed once.
         let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
         let named = *named_parts.entry(key).or_insert_with(|| {
-            let reached = named_closure(
-                ran.into_iter()
-                    .flatten()
-                    .filter_map(|probe| depends.names.get(*probe))
-                    .flatten(),
-                depends.mentions,
-            );
+            let starts = ran
+                .into_iter()
+                .flatten()
+                .filter_map(|probe| depends.names.get(*probe))
+                .flatten()
+                .filter_map(|name| graph.id(name));
+            let reached = graph.reach(starts, &mut walk);
             let mut part = blake3::Hasher::new();
-            for name in std::iter::once("").chain(reached.iter().map(String::as_str)) {
-                let Some((name, items)) = depends.items.get_key_value(name) else {
-                    continue;
-                };
-                let digest = item_parts.entry(name.as_str()).or_insert_with(|| {
-                    let mut own = blake3::Hasher::new();
-                    for item in items {
-                        own.update(b"\x1b");
-                        own.update(item.as_bytes());
-                    }
-                    own.finalize()
-                });
-                part.update(format!("\x1b{name}\x1f").as_bytes());
-                part.update(digest.as_bytes());
+            if let Some(token) = graph.token(depends.items, "") {
+                part.update(token.as_bytes());
+            }
+            for id in reached {
+                if let Some(token) = graph.token_of(depends.items, *id) {
+                    part.update(token.as_bytes());
+                }
             }
             part.finalize()
         });
@@ -5019,6 +5129,49 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_indexed_walk_reaches_what_the_closure_reaches_in_name_order() {
+        let set = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let mentions: std::collections::BTreeMap<String, BTreeSet<String>> = [
+            ("a", set(&["b", "c"])),
+            ("b", set(&["d"])),
+            ("c", set(&["d"])),
+            ("d", set(&["a"])),
+            ("x", set(&["y"])),
+        ]
+        .into_iter()
+        .map(|(name, next)| (name.to_owned(), next))
+        .collect();
+        let names = vec![set(&["d", "lone"]), set(&["x"])];
+        let empty = std::collections::BTreeMap::new();
+        let read = std::collections::BTreeMap::new();
+        let depends = Depends {
+            probes: &[],
+            names: &names,
+            items: &empty,
+            mentions: &mentions,
+            read: &read,
+            resources: &std::collections::BTreeMap::new(),
+            untraced: "",
+        };
+        let graph = Graph::new(&depends);
+        let mut walk = Walk::default();
+        for start in [vec!["d", "lone"], vec!["x"], vec!["b", "x"]] {
+            let starts: Vec<String> = start.iter().map(|name| (*name).to_owned()).collect();
+            let want: Vec<String> = named_closure(starts.iter(), &mentions)
+                .into_iter()
+                .collect();
+            let got: Vec<String> = graph
+                .reach(starts.iter().filter_map(|name| graph.id(name)), &mut walk)
+                .iter()
+                .map(|id| graph.names[*id].to_owned())
+                .collect();
+            assert_eq!(got, want, "from {start:?}");
+        }
+    }
 
     #[test]
     fn a_schema_build_keeps_no_incremental_session() {
