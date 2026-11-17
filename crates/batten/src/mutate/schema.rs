@@ -1553,7 +1553,8 @@ pub fn build(
     for package in &packages {
         args.extend([String::from("-p"), (*package).to_owned()]);
     }
-    let env = cargo_dirs(target);
+    args.extend(cargo_dirs(target));
+    let env: Vec<(String, String)> = Vec::new();
     let Known {
         unviable: mut skip,
         mut handed,
@@ -1860,11 +1861,12 @@ fn run_cases(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
 ) -> anyhow::Result<(Verdict, Option<Case>, Vec<Case>)> {
-    let args = nextest_args(mutant, cases);
+    let mut args = nextest_args(mutant, cases);
+    args.extend(cargo_dirs(judging.target));
     let own = judging.scratch.join(id.to_string());
     let _ = std::fs::create_dir_all(own.join("tmp"));
     let _ = std::fs::create_dir_all(own.join("fixtures"));
-    let mut env = cargo_dirs(judging.target);
+    let mut env: Vec<(String, String)> = Vec::new();
     env.extend([
         // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
         // a fixture at a fixed path is then never shared by two workers
@@ -2860,7 +2862,8 @@ pub fn record_reach(
     for package in packages {
         args.extend([String::from("-p"), (*package).to_owned()]);
     }
-    let mut env = cargo_dirs(target);
+    args.extend(cargo_dirs(target));
+    let mut env: Vec<(String, String)> = Vec::new();
     env.extend([
         (String::from(REACH), base.to_string_lossy().into_owned()),
         (String::from(TREE_ENV), work.to_string_lossy().into_owned()),
@@ -4049,10 +4052,6 @@ fn mirror_state(root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
         .join("schema"))
 }
 
-/// The checkout's own build directory, shared by every schema build of this
-/// process (#1276), recorded once by [`sweep`].
-static SHARED_BUILD: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-
 /// The environment every schema build and run spawns cargo under: the mirror's
 /// own target directory for what cargo uplifts, and the CHECKOUT's build
 /// directory for every intermediate unit.
@@ -4066,31 +4065,34 @@ static SHARED_BUILD: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLo
 /// `CARGO_TARGET_TMPDIR` stays inside the mirror tree, where its fixtures need
 /// a checkout around them. Outside a sweep no build directory was recorded,
 /// and a build uses its target directory alone, as before.
-fn cargo_dirs(target: &std::path::Path) -> Vec<(String, String)> {
-    let mut env = vec![
-        (
-            String::from("CARGO_TARGET_DIR"),
-            target.to_string_lossy().into_owned(),
-        ),
+fn cargo_dirs(target: &std::path::Path) -> Vec<String> {
+    // AS ARGUMENTS, NEVER EXPORTED (#1276). Exported, every case the suite ran
+    // inherited them: a fixture keyed its own build flags with them while the
+    // `batten` it started had them cleared, and a case driving cargo over a
+    // fixture built into the sweep's directory. A failed baseline judges no
+    // mutant, and 13 of 10,086 cases failed for it.
+    vec![
+        // THE MIRROR'S OWN TARGET, AND NO SHARED BUILD DIRECTORY (#1276).
+        // Building into the checkout's saved 909 MB of duplicate units, and
+        // cargo then compiled the suite's `CARGO_TARGET_TMPDIR` under it: the
+        // baseline's fixtures (4.8 GB) landed in the checkout's `target/tmp`,
+        // where no sweep collected them, and cases that read their own
+        // repository read the checkout's.
+        String::from("--target-dir"),
+        target.to_string_lossy().into_owned(),
         // The `test` profile's own setting for the crate under mutation, the
         // one `[profile.mutants]` carried: nothing reads a mutant's debug info,
         // and a dependency's unit hash does not depend on it.
-        (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
+        String::from("--config"),
+        String::from("profile.test.debug=0"),
         // NO INCREMENTAL STATE FOR THE SCHEMA BUILD (#1276). It is one build per
         // head of source instrumented afresh, so a session is never reused, and
         // rustc copies the previous session into each new one while it compiles:
         // measured, `target/debug/incremental` went 4.7 -> 8.6 GB inside one lap
-        // and fell to 2.2 GB when the build stopped. In the shared build
-        // directory that peak is what filled the volume at the schema stage.
-        (String::from("CARGO_INCREMENTAL"), String::from("0")),
-    ];
-    if let Some(build) = SHARED_BUILD.get() {
-        env.push((
-            String::from("CARGO_BUILD_BUILD_DIR"),
-            build.to_string_lossy().into_owned(),
-        ));
-    }
-    env
+        // and fell to 2.2 GB when the build stopped.
+        String::from("--config"),
+        String::from("build.incremental=false"),
+    ]
 }
 
 /// The schema mirror's build tree: a cache, one more tree the disk collector
@@ -4129,7 +4131,6 @@ pub fn sweep(
     // of its own passed only inside a checkout, so a target beside the tree
     // failed the unmutated baseline.
     let target = mirror_target(root)?;
-    let _ = SHARED_BUILD.set(root.join("target"));
     let started = std::time::Instant::now();
     // WHAT A STOPPED RUN FINISHED IS KEPT, BEFORE ANYTHING MOVES IT: its
     // records are sealed against the snapshot it ran over, which the copy
@@ -5191,11 +5192,16 @@ mod tests {
 
     #[test]
     fn a_schema_build_keeps_no_incremental_session() {
-        let env = cargo_dirs(std::path::Path::new("/t"));
+        let args = cargo_dirs(std::path::Path::new("/t"));
         assert!(
-            env.iter()
-                .any(|(key, value)| key == "CARGO_INCREMENTAL" && value == "0"),
-            "{env:?}"
+            args.windows(2)
+                .any(|pair| pair[0] == "--config" && pair[1] == "build.incremental=false"),
+            "{args:?}"
+        );
+        // NOR IS ANY OF IT EXPORTED to the cases the suite runs (#1276).
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("CARGO_")),
+            "{args:?}"
         );
     }
 
