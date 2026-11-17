@@ -120,6 +120,7 @@ clap_complete.workspace = true
 clap_mangen.workspace = true
 etcetera.workspace = true
 blake3.workspace = true
+roxmltree.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
 gix.workspace = true
