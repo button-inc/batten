@@ -592,6 +592,13 @@ pub(crate) fn batten() -> Batten {
         // handed it to every case, and 17 that read a child's stderr found a
         // `disk-call` line before the one they assert. A case tracing sets it.
         "BATTEN_DISK_TRACE",
+        // NOR THE SCHEMA SWEEP'S RECORDER (#1276): the reach baseline runs this
+        // suite with both exported, so every `batten` a case started recorded
+        // into the OUTER sweep's reach and read its tree. The cases driving a
+        // sweep of their own failed, the baseline failed with them, and no
+        // mutant was ever judged.
+        batten::mutate::schema::REACH,
+        batten::mutate::schema::TREE_ENV,
         // NOT the overlay variable itself: it is how a mutated preset reaches the
         // `batten` a suite spawns, and scrubbing it judged every preset row
         // against the embedded, unmutated text (85 false survivors).
