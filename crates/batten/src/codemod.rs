@@ -242,28 +242,50 @@ pub fn redirect_calls(
 /// nothing.
 #[must_use]
 pub fn lint_escapes(source: &str, edition: Edition, lint: &str) -> usize {
+    lint_attributes(source, edition, lint)
+        .iter()
+        .filter(|found| matches!(found.level.as_str(), "expect" | "allow"))
+        .count()
+}
+
+/// A lint-level attribute naming a lint, as [`lint_attributes`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintAttribute {
+    /// The 1-based line the attribute opens on.
+    pub line: usize,
+    /// Its level: `expect`, `allow`, `warn`, `deny` or `forbid`.
+    pub level: String,
+    /// The attribute's whole source text, `#[` to `]`.
+    pub text: String,
+}
+
+/// Every lint-level attribute in `source` (outer or inner, any of the five
+/// levels) whose lint list names `lint`, in source order, read off the parsed
+/// syntax tree.
+///
+/// The census's reader (#1276): a text scan read an attribute spelled inside a
+/// string literal or a raw string as a row, and a parse cannot. The same
+/// comparison as [`lint_escapes`]: each list entry whole, whitespace removed.
+#[must_use]
+pub fn lint_attributes(source: &str, edition: Edition, lint: &str) -> Vec<LintAttribute> {
     let wanted: String = lint.split_whitespace().collect();
     SourceFile::parse(source, edition.parser())
         .syntax_node()
         .descendants()
         .filter_map(ast::TokenTreeMeta::cast)
-        .filter(|meta| {
-            meta.syntax()
+        .filter_map(|meta| {
+            let attr = meta
+                .syntax()
                 .parent()
-                .is_some_and(|parent| ast::Attr::can_cast(parent.kind()))
-        })
-        .filter(|meta| {
-            meta.path().is_some_and(|path| {
-                matches!(
-                    path.syntax().text().to_string().as_str(),
-                    "expect" | "allow"
-                )
-            })
-        })
-        .filter(|meta| {
-            let Some(tree) = meta.token_tree() else {
-                return false;
-            };
+                .filter(|parent| ast::Attr::can_cast(parent.kind()))?;
+            let level = meta.path()?.syntax().text().to_string();
+            if !matches!(
+                level.as_str(),
+                "expect" | "allow" | "warn" | "deny" | "forbid"
+            ) {
+                return None;
+            }
+            let tree = meta.token_tree()?;
             // The list's entries at its own depth, each the run of its
             // non-trivia tokens between commas; the outer parentheses are the
             // tree's first and last tokens.
@@ -288,9 +310,17 @@ pub fn lint_escapes(source: &str, edition: Edition, lint: &str) -> usize {
                     }
                 }
             }
-            entries.contains(&wanted)
+            if !entries.contains(&wanted) {
+                return None;
+            }
+            let start = usize::from(attr.text_range().start());
+            Some(LintAttribute {
+                line: source[..start].matches('\n').count() + 1,
+                level,
+                text: attr.text().to_string(),
+            })
         })
-        .count()
+        .collect()
 }
 
 /// Put `item` (a whole `use …;` line) in scope at the top of the file, once.
