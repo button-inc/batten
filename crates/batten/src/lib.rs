@@ -32094,6 +32094,28 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// A call id becomes ONE file name under the git dir: letters, digits, `-`
+    /// and `_` kept, every other character `_`, so `/` and `..` cannot climb.
+    ///
+    /// Fails by: any arm of the keep-set inverted or joined the wrong way — a
+    /// letter replaced, a `-` replaced, or a `/` kept.
+    #[test]
+    fn a_call_id_is_one_safe_file_name() {
+        let dir = std::env::temp_dir().join(format!("batten-snapshot-name-{}", std::process::id()));
+        let _stale = std::fs::remove_dir_all(&dir);
+        gix::init(&dir).unwrap();
+        let path = super::protected_snapshot_path(&dir, "toolu_01-Ab/../x").unwrap();
+        let _removed = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("toolu_01-Ab____x.json")
+        );
+        assert!(
+            path.parent()
+                .is_some_and(|parent| parent.ends_with("protected-watch"))
+        );
+    }
+
     /// Fails by: a lap's engine handed to its gate after its sources moved, a
     /// path the shell would split handed over, or a current engine withheld.
     #[test]
