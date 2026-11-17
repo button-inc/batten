@@ -3192,6 +3192,10 @@ pub fn case_digests<'c>(
     type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
     let mut digests = std::collections::BTreeMap::new();
+    let mut named_parts: std::collections::HashMap<Vec<usize>, blake3::Hash> =
+        std::collections::HashMap::new();
+    let mut item_parts: std::collections::HashMap<&str, blake3::Hash> =
+        std::collections::HashMap::new();
     for case in cases {
         let (name, binary) = case;
         let test = name.rsplit("::").next().unwrap_or(name);
@@ -3207,21 +3211,40 @@ pub fn case_digests<'c>(
                     .as_bytes(),
             );
         }
-        let reached = named_closure(
-            ran.into_iter()
-                .flatten()
-                .filter_map(|probe| depends.names.get(*probe))
-                .flatten(),
-            depends.mentions,
-        );
-        let named: BTreeSet<&String> = std::iter::once("")
-            .chain(reached.iter().map(String::as_str))
-            .flat_map(|name| depends.items.get(name).into_iter().flatten())
-            .collect();
-        for item in named {
-            hasher.update(b"\x1b");
-            hasher.update(item.as_bytes());
-        }
+        // ONCE PER DISTINCT PROBE SET, AND EACH NAME'S ITEMS ONCE PER SWEEP
+        // (#1276). Measured: the union of every reached name's items, built and
+        // sorted per case, held one core for 20 minutes over 6236 cases before a
+        // single mutant was judged. The part is a function of the probe set
+        // alone, and a digest per name keys exactly what the union did.
+        let key: Vec<usize> = ran.into_iter().flatten().copied().collect();
+        let named = *named_parts.entry(key).or_insert_with(|| {
+            let reached = named_closure(
+                ran.into_iter()
+                    .flatten()
+                    .filter_map(|probe| depends.names.get(*probe))
+                    .flatten(),
+                depends.mentions,
+            );
+            let mut part = blake3::Hasher::new();
+            for name in std::iter::once("").chain(reached.iter().map(String::as_str)) {
+                let Some((name, items)) = depends.items.get_key_value(name) else {
+                    continue;
+                };
+                let digest = item_parts.entry(name.as_str()).or_insert_with(|| {
+                    let mut own = blake3::Hasher::new();
+                    for item in items {
+                        own.update(b"\x1b");
+                        own.update(item.as_bytes());
+                    }
+                    own.finalize()
+                });
+                part.update(format!("\x1b{name}\x1f").as_bytes());
+                part.update(digest.as_bytes());
+            }
+            part.finalize()
+        });
+        hasher.update(b"\x1b");
+        hasher.update(named.as_bytes());
         if let Some(paths) = depends.read.get(case) {
             for path in paths {
                 hasher.update(format!("\x1a{path}\x1f").as_bytes());
