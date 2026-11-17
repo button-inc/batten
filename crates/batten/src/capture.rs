@@ -40,8 +40,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::error::UsageError;
+// THE PROCESS ADAPTER (#1276) lives here, where a child's bytes are already
+// this module's subject: every capture of a child's streams goes through it.
+pub mod child_io;
 use crate::identity;
 use crate::state;
+pub use child_io::{Keep, Streamed, StreamedChild};
 
 /// Which of a child's two output streams a capture holds.
 ///

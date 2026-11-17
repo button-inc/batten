@@ -76,7 +76,7 @@
 //! id is a token out of the reader's own committed config, and what it means is
 //! written down there, once, in the row's `gloss`.
 
-use crate::exec::Streamed as _;
+use crate::capture::Streamed as _;
 use std::path::Path;
 
 use schemars::JsonSchema;
@@ -309,7 +309,7 @@ fn ran_clean(root: &Path, argv: &[String], decided_by: Decided) -> Option<bool> 
             // than a pipe buffer and is never drained deadlocks, and a gate that
             // hangs is worse than one that answers wrong.
             Decided::SilentExit => command
-                .streamed_output_keeping(crate::exec::Keep {
+                .streamed_output_keeping(crate::capture::Keep {
                     stdin: true,
                     stdout: false,
                     stderr: true,
