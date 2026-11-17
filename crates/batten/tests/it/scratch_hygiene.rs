@@ -279,6 +279,10 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
         .arg("-c")
         .arg(collector_command())
         .env("CARGO_TARGET_DIR", root.join("target"))
+        // NOR THE RUNNING SUITE'S BUILD DIRECTORY: under a mutant sweep's
+        // baseline it is set, and a fixture's lone-run collector then wiped the
+        // real build directory's `tmp` under every other running case (#1276).
+        .env_remove("CARGO_BUILD_BUILD_DIR")
         // ITS OWN TEMP DIR: a lone-run collector inheriting this suite's
         // `TMPDIR` would take the running suite's temp root.
         .env("TMPDIR", root.join("tmpdir"))
