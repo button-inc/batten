@@ -1002,7 +1002,7 @@ fn judge(
 ///
 /// **A FAILURE HEAD'S OWN BODY SHARES MEASURES THE TREE, NOT THE EXPECTATION.**
 /// The replay tree is not a checkout: its build sits under the checkout's
-/// `target/`, its `mise.toml` is untrusted, and its fixtures fall through to the
+/// `target/`, its task-runner config is untrusted, and its fixtures fall through to the
 /// checkout holding the build. Measured on #1276, three base bodies failed for
 /// those reasons alone — and so does HEAD's form of each, there. So each failed
 /// test's HEAD body is run in the same tree, and one that fails too is no
