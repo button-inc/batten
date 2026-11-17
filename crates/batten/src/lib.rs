@@ -30644,7 +30644,28 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
 /// either: reporting "no key was removed" having compared nothing is the vacuous
 /// pass CLOUD-251 names, and it is the failure this gate would have if an
 /// unreadable baseline were treated as an empty schema.
+/// The `config deprecations` baseline that names the newest `v*` release tag.
+pub const LATEST_RELEASE: &str = "latest";
+
 fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    // `latest` NAMES A BASELINE, IT DOES NOT DEFAULT ONE (#1276): the newest `v*`
+    // tag by version order, resolved in-process, and every line below carries
+    // the tag it resolved to. The rule `config retire unnamed` used to reach this
+    // verb through an integration suite, which compiled the whole `it` binary in
+    // verify's seconds tier; the test's tag lookup now lives here instead.
+    let resolved;
+    let against = if against == LATEST_RELEASE {
+        resolved = git::newest_version_tag(Path::new("."))?.ok_or_else(|| {
+            UsageError::raise(
+                "no `v*` release tag in this clone, so no baseline to compare against \
+                 (fetch tags, or name the ref)"
+                    .to_owned(),
+            )
+        })?;
+        resolved.as_str()
+    } else {
+        against
+    };
     let Ok(published) = git::show(Path::new("."), against, config::SCHEMA_PATH) else {
         // THE DOCUMENT IS EMITTED ANYWAY. A data channel that is sometimes absent
         // is unparseable by the caller that asked for it, so the could-not-look
