@@ -3946,6 +3946,13 @@ fn cargo_dirs(target: &std::path::Path) -> Vec<(String, String)> {
         // one `[profile.mutants]` carried: nothing reads a mutant's debug info,
         // and a dependency's unit hash does not depend on it.
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
+        // NO INCREMENTAL STATE FOR THE SCHEMA BUILD (#1276). It is one build per
+        // head of source instrumented afresh, so a session is never reused, and
+        // rustc copies the previous session into each new one while it compiles:
+        // measured, `target/debug/incremental` went 4.7 -> 8.6 GB inside one lap
+        // and fell to 2.2 GB when the build stopped. In the shared build
+        // directory that peak is what filled the volume at the schema stage.
+        (String::from("CARGO_INCREMENTAL"), String::from("0")),
     ];
     if let Some(build) = SHARED_BUILD.get() {
         env.push((
@@ -4989,6 +4996,16 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_schema_build_keeps_no_incremental_session() {
+        let env = cargo_dirs(std::path::Path::new("/t"));
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "CARGO_INCREMENTAL" && value == "0"),
+            "{env:?}"
+        );
+    }
 
     /// A one-file crate at a fresh scratch root, its `src/lib.rs` probed as a
     /// sweep would probe it, and `more` beside it in `src/more.rs`.
