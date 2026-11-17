@@ -2387,26 +2387,6 @@ impl Keep {
     };
 }
 
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: this impl IS the census's one capture route — every spawn site that \
-              reads its child's output reaches its streams through here, not its own loop (#1276)"
-)]
-impl Streamed for std::process::Command {
-    fn streamed_output_keeping(&mut self, keep: Keep) -> std::io::Result<std::process::Output> {
-        if !keep.stdin {
-            self.stdin(std::process::Stdio::null());
-        }
-        if !keep.stdout {
-            self.stdout(std::process::Stdio::piped());
-        }
-        if !keep.stderr {
-            self.stderr(std::process::Stdio::piped());
-        }
-        self.spawn()?.streamed_wait()
-    }
-}
-
 /// [`std::process::Child::wait_with_output`] through [`pump`](crate::stream::pump).
 pub trait StreamedChild {
     /// Close stdin, pump whichever of stdout and stderr were piped while the

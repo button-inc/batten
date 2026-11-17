@@ -3042,6 +3042,30 @@ fn report_bundle(
 // recorded worst closure. Re-exported so `exec::Streamed` keeps resolving.
 pub use crate::capture::{Keep, Streamed, StreamedChild};
 
+// THE ONE SPAWN of the adapter stays in `exec`, the placed module: the traits
+// live in `capture` so a caller names them without an edge onto `exec`, and the
+// impl for `Command` is here, where the spawn-placement table already allows
+// it, rather than widening that table to `capture` (#1276).
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this impl IS the census's one capture route — every spawn site that \
+              reads its child's output reaches its streams through here, not its own loop (#1276)"
+)]
+impl Streamed for std::process::Command {
+    fn streamed_output_keeping(&mut self, keep: Keep) -> std::io::Result<std::process::Output> {
+        if !keep.stdin {
+            self.stdin(std::process::Stdio::null());
+        }
+        if !keep.stdout {
+            self.stdout(std::process::Stdio::piped());
+        }
+        if !keep.stderr {
+            self.stderr(std::process::Stdio::piped());
+        }
+        self.spawn()?.streamed_wait()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
