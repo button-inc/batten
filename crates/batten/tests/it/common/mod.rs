@@ -588,6 +588,10 @@ pub(crate) fn batten() -> Batten {
         // the suite included, so a placement case would read every head as the
         // lap's own and its refusal arm could never fail.
         "BATTEN_LAND_GATE",
+        // THE DISK TRACE (#1276): a lap run under it to measure its collector
+        // handed it to every case, and 17 that read a child's stderr found a
+        // `disk-call` line before the one they assert. A case tracing sets it.
+        "BATTEN_DISK_TRACE",
         // NOT the overlay variable itself: it is how a mutated preset reaches the
         // `batten` a suite spawns, and scrubbing it judged every preset row
         // against the embedded, unmutated text (85 false survivors).
@@ -2880,102 +2884,25 @@ fn tokens_in(text: &str) -> Vec<String> {
     found
 }
 
-/// The text of every attribute in `source` that mentions `lint`, with the
+/// The text of every lint-level attribute in `source` naming `lint`, with the
 /// 1-based line it starts on.
 ///
-/// A bounded scan rather than a parse: an attribute opens at `#[` or `#![` and
-/// closes at the first `)]` before the NEXT opener. That bound is what makes it
-/// safe over a file that discusses annotations in prose and names a lint in a
-/// `const` — an unbounded search would stitch a doc comment to some later
-/// attribute's closer and report a finding about neither. Measured on
-/// `spawn_census.rs`: the first version of that scan flagged its own inner
-/// `allow` line.
+/// A PARSE, NOT A SCAN (#1276): `batten::codemod::lint_attributes` reads the
+/// syntax tree, so an attribute spelled in a comment, a doc line, a string or a
+/// raw string is no row, and a lint sharing a prefix is not this one. The text
+/// scan it replaces took three bounds (the next opener, a `//` line start, an
+/// odd quote count) and still read `codemod.rs`'s multi-line fixture string as
+/// four undecided rows.
 ///
-/// Enough to tell an `expect` from an `allow` and to find a `reason`, which is
-/// all any caller asks. The alternative is a proc-macro parse of the whole crate
-/// to check a property clippy has already enforced the hard half of.
-///
-/// **This lives here because there are two inventories now** — the spawn census
+/// **This lives here because there are two inventories** — the spawn census
 /// over `disallowed_types` and the delay inventory over `disallowed_methods`
-/// (CLOUD-1177) — and two copies of a scanner are two authorities that can
-/// disagree about what an annotation IS. It is parameterized by the lint for
-/// exactly that reason.
+/// (CLOUD-1177) — and two readers are two authorities that can disagree about
+/// what an annotation IS. It is parameterized by the lint for exactly that reason.
 pub(crate) fn annotations_naming(source: &str, lint: &str) -> Vec<(usize, String)> {
-    let mut found = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find("#[") {
-        // `#![` opens one character earlier; take the wider span so an inner
-        // attribute is not read as a bare one.
-        let mut open = cursor + offset;
-        if open > 0 && source.as_bytes()[open - 1] == b'!' && open > 1 {
-            open -= 1;
-        }
-        cursor = open + 2;
-        let rest = &source[open..];
-        let Some(close) = rest.find(")]") else {
-            break;
-        };
-        // The next opener bounds this one. An attribute with no `(` — a bare
-        // `#[test]`, or an annotation named without its arguments in a doc
-        // comment — has no closer of its own, so its "closer" belongs to
-        // something further down and it is skipped.
-        let next = rest[2..].find("#[").map_or(rest.len(), |at| at + 2);
-        if close + 2 > next {
-            continue;
-        }
-        // AN ATTRIBUTE INSIDE A COMMENT IS PROSE, NOT AN INVENTORY ROW.
-        //
-        // The bound above handles a doc comment naming an annotation WITHOUT its
-        // arguments — that has no closer of its own and is skipped. It does not
-        // handle one that spells it in full, and that is the shape a module
-        // explaining why its spawn was retired naturally writes: "this was a
-        // child process under `#[expect(clippy::disallowed_types)]`". Seven such
-        // sentences read as seven annotations carrying no `reason`, so the census
-        // reported the prose that RECORDS a retirement as a row that had not
-        // been decided.
-        //
-        // Keyed on the line's own opening rather than on a span search: a
-        // comment marker anywhere earlier in the file says nothing about this
-        // line, and the question is only ever whether THIS attribute is
-        // commented out.
-        let line_start = source[..open].rfind('\n').map_or(0, |at| at + 1);
-        let before = &source[line_start..open];
-        if before.trim_start().starts_with("//") {
-            continue;
-        }
-        // NOR IS ONE INSIDE A STRING LITERAL. `spawn_widening.rs` builds fixture
-        // MODULES as string constants, so the escape a case hands the gate under
-        // test is spelled in full inside quotes — and the census read three of
-        // its own fixtures as undecided rows. An odd number of quotes before the
-        // opener means this `#[` is inside one; escaped quotes do not open or
-        // close, so they are skipped rather than counted.
-        let quotes = before
-            .char_indices()
-            .filter(|&(at, ch)| ch == '"' && !before[..at].ends_with('\\'))
-            .count();
-        if quotes % 2 == 1 {
-            continue;
-        }
-        // AND AN ATTRIBUTE THAT IS NOT A LINT LEVEL IS NOT THIS INVENTORY'S.
-        //
-        // The span bound above stitches a BARE attribute — `#[test]`, which has
-        // no closer of its own — to the next `)]` further down, so a case whose
-        // body mentions the lint made its own `#[test]` a finding. Requiring the
-        // opener to be one of the four level words is what the callers actually
-        // mean by an annotation, and it decides in one comparison rather than by
-        // guessing where a bare attribute ends.
-        let opens_a_level = ["expect(", "allow(", "warn(", "deny("]
-            .iter()
-            .any(|level| rest[2..].trim_start().starts_with(level));
-        if !opens_a_level {
-            continue;
-        }
-        let attribute = &rest[..close + 2];
-        if attribute.contains(lint) {
-            found.push((source[..open].lines().count() + 1, attribute.to_owned()));
-        }
-    }
-    found
+    batten::codemod::lint_attributes(source, batten::codemod::Edition::E2024, lint)
+        .into_iter()
+        .map(|found| (found.line, found.text))
+        .collect()
 }
 
 /// The `reason` an annotation carries, as the author wrote it rather than as the
