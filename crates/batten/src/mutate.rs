@@ -3699,8 +3699,7 @@ const CAUGHT_RECORD: &str = "rows.tsv";
 /// uses. Falls back to the build root only where no state directory resolves.
 fn record_dir(root: &Path) -> PathBuf {
     crate::state::repo_state_dir(root)
-        .map(|state| state.join("mutate"))
-        .unwrap_or_else(|_| target_dir(root))
+        .map_or_else(|_| target_dir(root), |state| state.join("mutate"))
 }
 
 /// A row's key: its script, the bytes it mutates, and its suite's CODE, the
@@ -3752,6 +3751,26 @@ fn recorded_rows(record: &Path) -> std::collections::HashMap<String, Verdict> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The row verdicts a sweep reads: the state directory's record, over the one a
+/// sweep wrote into `work` before #1276 moved it, so a record left there is
+/// read once more rather than judged again. A key in both answers as the state
+/// directory has it.
+fn rows_recorded_for(record: &Path, work: &Path) -> std::collections::HashMap<String, Verdict> {
+    let mut rows = recorded_rows(&work.join(CAUGHT_RECORD));
+    rows.extend(recorded_rows(record));
+    rows
+}
+
+/// The finding a recorded verdict stands for, or none for a caught row.
+fn recorded_finding(name: &str, gate: &Gate, row: &Row, verdict: &Verdict) -> Option<Finding> {
+    verdict.is_finding().then(|| Finding {
+        gate: name.to_owned(),
+        slug: Some(row.slug.clone()),
+        verdict: verdict.clone(),
+        owner: gate.owner.clone(),
+    })
 }
 
 /// Append one caught key, whole-line so a torn tail never fuses two keys. Best
@@ -4356,7 +4375,7 @@ pub fn sweep_shard(
         });
     }
     let record = record_dir(root).join(CAUGHT_RECORD);
-    let recorded = recorded_rows(&record);
+    let recorded = rows_recorded_for(&record, &work);
     let caught: std::collections::HashSet<String> = recorded
         .iter()
         .filter(|(_, verdict)| **verdict == Verdict::Caught)
@@ -4374,14 +4393,7 @@ pub fn sweep_shard(
                 "mutate sweep: row {declared}/{total} {name} {} {verdict} (recorded) 0s",
                 row.slug
             );
-            if verdict.is_finding() {
-                findings.push(Finding {
-                    gate: name.clone(),
-                    slug: Some(row.slug.clone()),
-                    verdict: verdict.clone(),
-                    owner: gate.owner.clone(),
-                });
-            }
+            findings.extend(recorded_finding(name, gate, row, verdict));
             continue;
         }
         let started = std::time::Instant::now();
@@ -6521,9 +6533,7 @@ mod tests {
             .iter()
             .map(|row| row_key(&root, &gate, row))
             .collect();
-        let record = record_dir(&root).join(CAUGHT_RECORD);
-        fs::create_dir_all(record.parent().expect("a parent")).expect("the record's directory");
-        fs::write(&record, keys.join("\n")).expect("record every row caught");
+        fs::write(work.join(CAUGHT_RECORD), keys.join("\n")).expect("record every row caught");
         let names = [
             "zz-missing",
             "probe",
