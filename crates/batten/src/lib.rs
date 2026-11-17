@@ -21610,6 +21610,10 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
     let Some((root, patterns, state)) = policy.protected_snapshot() else {
         return;
     };
+    // ABSOLUTE, BECAUSE THE POST-CALL HOOK RUNS WHERE THE CALL LEFT IT (#1276):
+    // a root stored as `.` was re-read from `target/debug/incremental` after a
+    // `cd`, found no protected file there, and refused all 110 as changed.
+    let root = std::path::absolute(&root).unwrap_or(root);
     let Some(path) = protected_snapshot_path(&root, call) else {
         return;
     };
