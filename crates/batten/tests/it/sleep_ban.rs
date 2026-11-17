@@ -349,6 +349,11 @@ fn toy_clippy(dir: &Path) -> (bool, String) {
         // Out of the workspace's own target dir, or every case contends on the
         // lock the gate deliberately serialises.
         .env("CARGO_TARGET_DIR", dir.join("target"))
+        // Nor a build directory inherited from a mutant sweep's baseline: two
+        // toy crates of one name shared its units, and the second clippy run
+        // read as fresh and said nothing (#1276).
+        .env_remove("CARGO_BUILD_BUILD_DIR")
+        .env_remove("CARGO_INCREMENTAL")
         .streamed_output()
         .expect("run clippy over the toy crate");
     let mut said = String::from_utf8_lossy(&out.stderr).into_owned();
