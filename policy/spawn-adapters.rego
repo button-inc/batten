@@ -156,11 +156,6 @@ rules contains "adapter place missing"
 #              tool version is inferred rather than read is not canonical
 adapters := {
 	"exec", "provision", "secrets", "symbols",
-	# `capture` holds the process adapter (#1276), moved out of `exec`: one
-	# spawn, in `Streamed for Command`. Under `exec`, `secrets` reaching it
-	# pulled `task` along, past the recorded deepest closure; `capture` is
-	# already in both closures, so the move grows neither.
-	"capture",
 	"judge", "handler", "action", "rules", "semver",
 	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 	"lease",
