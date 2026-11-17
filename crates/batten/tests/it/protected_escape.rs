@@ -206,3 +206,47 @@ fn a_call_that_moves_below_the_root_changes_nothing_protected() {
     let said = format!("{}{}", stdout(&post), String::from_utf8_lossy(&post.stderr));
     assert!(!said.contains("path write refused"), "{said}");
 }
+
+/// ONLY AN EXECUTED CALL'S POST-CALL HOOK COMPARES. A `PostToolUse` for any
+/// other tool carrying the same call id refuses nothing and leaves the
+/// snapshot standing, so the shell call's own post-call hook still judges it.
+///
+/// Fails by: the event-or-operation guard joined with `&&`, so a read's
+/// post-call hook consumes the snapshot and refuses the write as its own.
+#[test]
+fn only_an_executed_calls_post_hook_compares() {
+    let dir = fixture("protected-escape-other-tool");
+    let command = "python3 tool.py";
+    let pre = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PreToolUse", "call-shared", command),
+    );
+    assert!(!stdout(&pre).contains("\"deny\""), "{}", stdout(&pre));
+    std::fs::write(dir.join(GUARDED), "changed\n").expect("the write lands");
+    let read = format!(
+        "{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s1\",\"tool_use_id\":\"call-shared\",\
+         \"tool_name\":\"Read\",\"tool_input\":{{\"file_path\":{}}},\"tool_response\":{{}}}}",
+        serde_json::to_string(ORDINARY).expect("a path is encodable")
+    );
+    let other = run_with_stdin(&dir, &["adjudicate", "--harness", "claude-code"], &read);
+    let said = format!(
+        "{}{}",
+        stdout(&other),
+        String::from_utf8_lossy(&other.stderr)
+    );
+    assert!(
+        !said.contains("path write refused"),
+        "a read refuses nothing: {said}"
+    );
+    let post = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("PostToolUse", "call-shared", command),
+    );
+    let said = format!("{}{}", stdout(&post), String::from_utf8_lossy(&post.stderr));
+    assert!(
+        said.contains("path write refused at guarded.txt"),
+        "the shell call's own post-call hook still judges it: {said}"
+    );
+}

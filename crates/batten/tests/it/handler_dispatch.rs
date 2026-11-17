@@ -472,6 +472,19 @@ fn a_config_write_that_would_not_load_is_refused() {
         door.out,
         door.err
     );
+    // THE CAUSE, NEVER THE EXCERPT (rule 4): what follows the colon is the load
+    // error's own words, with every `N | source` line and every blank line gone.
+    // Inverting either filter leaves the excerpt alone, or nothing.
+    let cause = door
+        .out
+        .split_once("would not load: ")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .unwrap_or_default();
+    assert!(
+        cause.chars().any(char::is_alphabetic) && !cause.contains('|'),
+        "the refusal names the cause and no source excerpt: {cause:?} in {}",
+        door.out
+    );
 }
 
 /// The mutation's target: a write that still loads is not refused.
