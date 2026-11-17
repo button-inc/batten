@@ -1386,8 +1386,6 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run -j 4 ci ::: lint",
         "batten --config-from origin/main mutate sweep",
         "mise run {% if env.X %}lint{% else %}ci{% endif %}",
-        // `enforce` runs the rules' checks, among them a filtered nextest run.
-        "mise run batten -- enforce",
         "mise run --output prefix ci",
         "mise watch ci",
     ] {
@@ -1410,6 +1408,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- cargo llvm-cov report --summary-only",
         "./install.sh",
         "sh target/distrib/batten-installer.sh",
+        // `enforce` runs the rules' checks, and none is a test run since
+        // `test:config-deprecations` asks the verb instead of nextest (#1276).
+        "mise run batten -- enforce",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");
     }
