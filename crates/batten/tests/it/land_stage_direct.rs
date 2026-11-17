@@ -64,13 +64,24 @@ fn decision(root: &std::path::Path, command: &str, background: bool) -> String {
 }
 
 /// Every command in `table` is refused by THIS row.
+///
+/// THE ROOT IS THE REAL CLONE, so its singleton locks are real too: run under
+/// `mise run land`, a `mise run land` row meets the live lap's lock first and
+/// is refused as `task run twice`, the gate before this one (#1276). That is
+/// the same command refused harder, and is accepted only while a live process
+/// holds `land`'s lock.
 fn all_refused(table: &[(&str, bool)]) {
     let root = root();
+    let land_held = batten::git::git_dir(&root)
+        .ok()
+        .and_then(|git_dir| batten::task::singleton_holder(&git_dir, "land"))
+        .is_some();
     let escaped: Vec<String> = table
         .iter()
         .filter_map(|(command, background)| {
             let out = decision(&root, command, *background);
-            (!(out.contains("\"deny\"") && out.contains(VERDICT)))
+            let held_first = land_held && out.contains("task run twice");
+            (!(out.contains("\"deny\"") && (out.contains(VERDICT) || held_first)))
                 .then(|| format!("{command} (background: {background})\n{out}"))
         })
         .collect();
