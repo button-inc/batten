@@ -32090,6 +32090,46 @@ mod tests {
             std::path::Path::new("/nonexistent-batten-root")
         ));
     }
+
+    /// A binary cargo ran from a tree is that tree's engine: this process and
+    /// the tree's engine digest, never another tree's.
+    ///
+    /// Fails by: the engine never recognised (`None`), a placeholder path or
+    /// digest handed back, or a tree the binary was not built under accepted.
+    /// Found by cargo-mutants on #1276: every replacement of the return value
+    /// survived the suite.
+    #[test]
+    fn a_lap_started_by_cargo_is_its_trees_engine() {
+        // The repository root, two above the crate: the engine digest reads it.
+        let root = &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (exe, digest) =
+            super::lap_engine_at_start(root).expect("nextest runs this binary as cargo built it");
+        assert_eq!(exe, std::env::current_exe().expect("this process's path"));
+        assert_eq!(
+            digest,
+            super::engine::digest(root).expect("this tree's digest")
+        );
+        assert!(!digest.is_empty());
+        assert_eq!(
+            super::lap_engine_at_start(std::path::Path::new("/nonexistent-batten-root")),
+            None
+        );
+    }
+
+    /// The gate is handed the lap's own engine while the tree is the one it was
+    /// built from. Its own process, so the once-set lap engine is this case's.
+    ///
+    /// Fails by: the engine never handed over, or a placeholder path handed
+    /// over instead of the binary (cargo-mutants on #1276).
+    #[test]
+    fn the_gate_gets_the_laps_engine_while_its_sources_stand() {
+        // The repository root, two above the crate: the engine digest reads it.
+        let root = &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let exe = std::env::current_exe().expect("this process's path");
+        let digest = super::engine::digest(root).expect("this tree's digest");
+        let _ = super::LAP_ENGINE.set(Some((exe.clone(), digest)));
+        assert_eq!(super::lap_engine(root), exe.to_str().map(str::to_owned));
+    }
     use super::*;
 
     /// A write's projection reads the file it replaces: a missing file is a
