@@ -742,7 +742,7 @@ const AGAINST: FlagDecl = FlagDecl {
     id: "against",
     long: None,
     short: None,
-    help: "The git ref whose published schema is the baseline (e.g. v0.0.111)",
+    help: "The git ref whose published schema is the baseline (e.g. v0.0.111), or `latest` for the newest v* tag by version order",
     env: EnvDecl::None,
     global: false,
     // POSITIONAL and required, which is how every other verb takes the one input

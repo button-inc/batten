@@ -1127,7 +1127,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The git ref whose published schema is the baseline (e.g. v0.0.111)"
+              "help": "The git ref whose published schema is the baseline (e.g. v0.0.111), or `latest` for the newest v* tag by version order"
             },
             {
               "name": "json",

@@ -1506,8 +1506,13 @@ env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
-run = "cargo nextest run -p batten --no-tests=fail --test it config_deprecations::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
+# THE PREDICATE ITSELF, NOT ITS TEST SUITE (#1276). This ran
+# `cargo nextest … --test it config_deprecations::`, so verify's seconds tier
+# compiled the whole `it` binary before `test:cargo` had: measured at 266.9 s of
+# `enforce --half live`, every other row of which ran in under 3 s. The suite
+# still runs whole under `test:cargo`; the gate asks the verb, against the
+# newest `v*` tag by version order, named on its output line.
+run = "{{vars.batten}} config deprecations latest"
 
 [tasks.prose-only-check]
 description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"
