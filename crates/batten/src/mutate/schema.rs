@@ -1724,37 +1724,23 @@ fn case_bound(
 /// Each case's measured seconds, from a nextest `JUnit` report: the `name`,
 /// `classname` (the binary) and `time` of every `<testcase>`.
 fn durations(junit: &str) -> std::collections::BTreeMap<Case, f64> {
-    let mut timed = std::collections::BTreeMap::new();
-    for element in junit.split("<testcase ").skip(1) {
-        let head = format!(" {}", element.split('>').next().unwrap_or_default());
-        let (Some(name), Some(binary), Some(time)) = (
-            attribute(&head, "name"),
-            attribute(&head, "classname"),
-            attribute(&head, "time"),
-        ) else {
-            continue;
-        };
-        if let Ok(time) = time.parse::<f64>() {
-            timed.insert((name, binary), time);
-        }
-    }
-    timed
-}
-
-/// One XML attribute's unescaped value from an element's head.
-fn attribute(head: &str, key: &str) -> Option<String> {
-    let needle = format!(" {key}=\"");
-    let at = head.find(&needle)? + needle.len();
-    let value = &head[at..];
-    let value = &value[..value.find('"')?];
-    Some(
-        value
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&amp;", "&"),
-    )
+    // AS XML, as the judge reads its report (#1276), never split on text.
+    let Ok(doc) = roxmltree::Document::parse(junit) else {
+        return std::collections::BTreeMap::new();
+    };
+    doc.descendants()
+        .filter(|node| node.has_tag_name("testcase"))
+        .filter_map(|case| {
+            let time = case.attribute("time")?.parse::<f64>().ok()?;
+            Some((
+                (
+                    case.attribute("name")?.to_owned(),
+                    case.attribute("classname")?.to_owned(),
+                ),
+                time,
+            ))
+        })
+        .collect()
 }
 
 /// The two runs a mutant is judged by. The first holds the cases that killed a
@@ -1783,28 +1769,6 @@ fn phases(
         }
     }
     (first, second)
-}
-
-/// The case a failed run names first, from nextest's `FAIL [ time] binary
-/// name` line (`--color never`).
-fn killer(output: &str) -> Option<Case> {
-    output.lines().find_map(|line| named(line, "FAIL ["))
-}
-
-/// Every case a run names as passed, from its `PASS [ time] binary name`
-/// lines: what a run that killed, or timed out, still proved.
-fn passes(output: &str) -> Vec<Case> {
-    output
-        .lines()
-        .filter_map(|line| named(line, "PASS ["))
-        .collect()
-}
-
-fn named(line: &str, status: &str) -> Option<Case> {
-    let rest = line.trim_start().strip_prefix(status)?;
-    let (_, rest) = rest.split_once("] ")?;
-    let (binary, name) = rest.trim().split_once(' ')?;
-    Some((name.trim().to_owned(), binary.to_owned()))
 }
 
 /// The nextest argv that runs exactly `cases` against `mutant`: the cases'
@@ -1866,6 +1830,15 @@ fn run_cases(
     let own = judging.scratch.join(id.to_string());
     let _ = std::fs::create_dir_all(own.join("tmp"));
     let _ = std::fs::create_dir_all(own.join("fixtures"));
+    // THE VERDICT IS READ FROM THE RUN'S OWN JUNIT REPORT, written under this
+    // run's scratch so no two workers share one (#1276).
+    let store = own.join("store");
+    let config = own.join("nextest.toml");
+    crate::durable::replace(&config, judge_config(judging.work, &store)?)?;
+    args.extend([
+        String::from("--config-file"),
+        config.to_string_lossy().into_owned(),
+    ]);
     let mut env: Vec<(String, String)> = Vec::new();
     env.extend([
         // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
@@ -1889,25 +1862,124 @@ fn run_cases(
         &env,
         case_bound(cases, judging.seconds).min(super::runner_bound()),
     );
+    let report = crate::fsio::read_to_string(store.join(JUDGE_PROFILE).join(JUDGE_REPORT))
+        .ok()
+        .and_then(|xml| junit_cases(&xml));
     // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
     let _ = std::fs::remove_dir_all(&own);
     let ran = ran?;
-    let passed = passes(&ran.output);
-    Ok(match ran.outcome {
-        super::Outcome::Passed => (Verdict::Missed, None, cases.iter().cloned().collect()),
-        super::Outcome::TimedOut => (Verdict::Timeout, None, passed),
-        super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => {
-            (Verdict::Timeout, None, passed)
-        }
-        super::Outcome::Failed(Some(100)) => (Verdict::Caught, killer(&ran.output), passed),
-        super::Outcome::Failed(_) => {
-            // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
-            // case started and said nothing anywhere, so an error now leaves
-            // its output beside the tree, where the summary points.
-            keep_error(judging, id, &ran.output);
-            (Verdict::Error, None, Vec::new())
-        }
-    })
+    let judged = verdict_of_run(&ran.outcome, report.as_deref(), cases);
+    if judged.0 == Verdict::Error {
+        // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
+        // case started and said nothing anywhere, so an error now leaves
+        // its output beside the tree, where the summary points.
+        keep_error(judging, id, &ran.output);
+    }
+    Ok(judged)
+}
+
+/// The nextest profile every judging run uses ([`nextest_args`]).
+const JUDGE_PROFILE: &str = "mutants";
+
+/// The `JUnit` report each judging run writes under its own store.
+const JUDGE_REPORT: &str = "judge.xml";
+
+/// The work tree's nextest config with this run's store and a `JUnit` report on
+/// the judging profile.
+///
+/// # Errors
+///
+/// The work tree's nextest config does not parse.
+fn judge_config(work: &std::path::Path, store: &std::path::Path) -> anyhow::Result<String> {
+    let text =
+        crate::fsio::read_to_string(work.join(".config").join("nextest.toml")).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|why| anyhow::anyhow!("parse nextest.toml: {why}"))?;
+    doc["store"]["dir"] = toml_edit::value(store.to_string_lossy().into_owned());
+    doc["profile"][JUDGE_PROFILE]["junit"]["path"] = toml_edit::value(JUDGE_REPORT);
+    Ok(doc.to_string())
+}
+
+/// How one case ended, as its `JUnit` `<testcase>` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaseEnd {
+    Passed,
+    Failed,
+    TimedOut,
+}
+
+/// Every case a nextest `JUnit` report names, with how it ended: a `<failure>`
+/// or `<error>` child of type `test timeout` timed out, any other failed, and
+/// none passed. `None` when the report is not XML.
+///
+/// READ AS XML, NEVER AS WORDS (#1276). The judge used to scan the run's text
+/// output, and a compiler snippet naming `TIMEOUT_MULTIPLIER` filed 220 caught
+/// mutants as timeouts. A case's own output sits inside its element and is
+/// never a status.
+fn junit_cases(xml: &str) -> Option<Vec<(Case, CaseEnd)>> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter_map(|case| {
+                let name = case.attribute("name")?;
+                let binary = case.attribute("classname")?;
+                let end = case
+                    .children()
+                    .filter(roxmltree::Node::is_element)
+                    .find_map(|child| match child.tag_name().name() {
+                        "failure" | "error" => {
+                            Some(if child.attribute("type") == Some("test timeout") {
+                                CaseEnd::TimedOut
+                            } else {
+                                CaseEnd::Failed
+                            })
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(CaseEnd::Passed);
+                Some(((name.to_owned(), binary.to_owned()), end))
+            })
+            .collect(),
+    )
+}
+
+/// One judging run's verdict, the case that killed it, and every case it
+/// proved passing, from how the process ended and its `JUnit` report.
+///
+/// COULD-NOT-LOOK IS AN ERROR, NEVER A MISS: a run with no report, a report
+/// naming no case, or a passing exit missing one of `cases` from its report
+/// decided nothing about the mutant.
+fn verdict_of_run(
+    outcome: &super::Outcome,
+    report: Option<&[(Case, CaseEnd)]>,
+    cases: &BTreeSet<Case>,
+) -> (Verdict, Option<Case>, Vec<Case>) {
+    let passed: Vec<Case> = report
+        .into_iter()
+        .flatten()
+        .filter(|(_, end)| *end == CaseEnd::Passed)
+        .map(|(case, _)| case.clone())
+        .collect();
+    if matches!(outcome, super::Outcome::TimedOut) {
+        return (Verdict::Timeout, None, passed);
+    }
+    let Some(rows) = report.filter(|rows| !rows.is_empty()) else {
+        return (Verdict::Error, None, Vec::new());
+    };
+    if let Some((killer, _)) = rows.iter().find(|(_, end)| *end == CaseEnd::Failed) {
+        return (Verdict::Caught, Some(killer.clone()), passed);
+    }
+    if rows.iter().any(|(_, end)| *end == CaseEnd::TimedOut) {
+        return (Verdict::Timeout, None, passed);
+    }
+    let reported: BTreeSet<&Case> = rows.iter().map(|(case, _)| case).collect();
+    if matches!(outcome, super::Outcome::Passed) && cases.iter().all(|case| reported.contains(case))
+    {
+        return (Verdict::Missed, None, passed);
+    }
+    (Verdict::Error, None, Vec::new())
 }
 
 /// Keep what an erring run of mutant `id` said under the sweep's `errors/`,
@@ -6171,7 +6243,7 @@ mod tests {
     fn a_junit_report_times_each_case_by_name_and_binary() {
         let report = "<testsuite name=\"batten::it\"><testcase name=\"a::b&lt;1&gt;\" \
                       classname=\"batten::it\" timestamp=\"x\" time=\"0.250\">\
-                      </testcase><testcase name=\"c\" classname=\"batten\" time=\"2\"/>";
+                      </testcase><testcase name=\"c\" classname=\"batten\" time=\"2\"/></testsuite>";
         let timed = durations(report);
         assert_eq!(timed.get(&case("a::b<1>")), Some(&0.25));
         assert_eq!(
@@ -6218,13 +6290,44 @@ mod tests {
         assert!(second.is_empty());
     }
 
+    /// nextest's `JUnit` markup as it writes it (cargo-nextest 0.9.104,
+    /// measured on #1276): a failure's message and the case's own output carry
+    /// words that read as a status.
+    const JUNIT_FIXTURE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="4" failures="2" errors="0">
+    <testsuite name="batten::it" tests="4" disabled="0" errors="0" failures="2">
+        <testcase name="tests::a" classname="batten" time="0.006">
+        </testcase>
+        <testcase name="m::b" classname="batten::it" time="0.113">
+            <failure message="panicked" type="test failure with exit code 101">TIMEOUT_MULTIPLIER * measured</failure>
+            <system-out>TIMEOUT [ 9s] not a status</system-out>
+        </testcase>
+        <testcase name="m::slow" classname="batten::it" time="2.007">
+            <failure type="test timeout"/>
+        </testcase>
+        <testcase name="tests::c" classname="batten" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>"#;
+
+    /// Every case a report names, and how each ended, read from the element and
+    /// its `type`, never from the words inside it.
+    ///
+    /// Fails by: a failure whose text names a timeout read as one, a timeout
+    /// read as a failure, a pass dropped, or a case keyed by the wrong binary.
     #[test]
-    fn the_killer_is_the_first_failed_case_a_run_names() {
-        let output = "   SETUP FAIL [ 0.1s] clear-scratch: sh\n\
-                      \x20       FAIL [   4.551s] batten::it mutate::a_change\n\
-                      \x20       FAIL [   1.000s] batten unit::other\n";
-        assert_eq!(killer(output), Some(case("mutate::a_change")));
-        assert_eq!(killer("PASS [ 1s] batten::it x"), None);
+    fn a_junit_report_names_each_case_and_how_it_ended() {
+        let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
+        assert_eq!(
+            junit_cases(JUNIT_FIXTURE).expect("XML"),
+            [
+                (pair("tests::a", "batten"), CaseEnd::Passed),
+                (pair("m::b", "batten::it"), CaseEnd::Failed),
+                (pair("m::slow", "batten::it"), CaseEnd::TimedOut),
+                (pair("tests::c", "batten"), CaseEnd::Passed),
+            ]
+        );
+        assert_eq!(junit_cases("FAIL [ 1s] batten::it x"), None);
     }
 
     /// A region holds its start and not its end, an empty one holds its start,
@@ -7588,23 +7691,52 @@ mod tests {
         assert_ne!(pair(&a), pair(&b), "each case is its own pair");
     }
 
-    /// A run's `PASS` lines name every case it proved, beside the `FAIL` line
-    /// naming its killer.
+    /// Each way a judging run can end, judged from its process outcome and its
+    /// report alone.
     ///
-    /// Fails by: a pass dropped, or a failure read as a pass.
+    /// Fails by: a caught mutant filed a timeout or a miss, a timeout filed a
+    /// kill, a run with no report or a report missing a case read as a miss, or
+    /// a passing run's cases dropped.
     #[test]
-    fn a_run_names_its_passes_and_its_killer() {
-        let output = "        PASS [   0.1s] batten tests::a\n        FAIL [   0.2s] batten::it m::b\n        PASS [   0.3s] batten tests::c\n";
+    fn a_run_is_judged_from_its_report_and_its_exit() {
+        use super::super::Outcome;
+        let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
+        let a = pair("tests::a", "batten");
+        let b = pair("m::b", "batten::it");
+        let cases: BTreeSet<Case> = [a.clone(), b.clone()].into();
+        let caught = junit_cases(JUNIT_FIXTURE).expect("XML");
+        let (verdict, killer, passed) =
+            verdict_of_run(&Outcome::Failed(Some(100)), Some(&caught), &cases);
+        assert_eq!((verdict, killer), (Verdict::Caught, Some(b.clone())));
+        assert!(passed.contains(&a) && !passed.contains(&b), "{passed:?}");
+        let timed = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::TimedOut)];
         assert_eq!(
-            passes(output),
-            [
-                (String::from("tests::a"), String::from("batten")),
-                (String::from("tests::c"), String::from("batten")),
-            ]
+            verdict_of_run(&Outcome::Failed(Some(100)), Some(&timed), &cases).0,
+            Verdict::Timeout
         );
         assert_eq!(
-            killer(output),
-            Some((String::from("m::b"), String::from("batten::it")))
+            verdict_of_run(&Outcome::TimedOut, None, &cases).0,
+            Verdict::Timeout
+        );
+        let clean = [(a.clone(), CaseEnd::Passed), (b.clone(), CaseEnd::Passed)];
+        let missed = verdict_of_run(&Outcome::Passed, Some(&clean), &cases);
+        assert_eq!((missed.0, missed.2.len()), (Verdict::Missed, 2));
+        // Could-not-look: no report, an empty one, or one missing a case.
+        assert_eq!(
+            verdict_of_run(&Outcome::Passed, None, &cases).0,
+            Verdict::Error
+        );
+        assert_eq!(
+            verdict_of_run(&Outcome::Passed, Some(&[]), &cases).0,
+            Verdict::Error
+        );
+        assert_eq!(
+            verdict_of_run(&Outcome::Passed, Some(&clean[..1]), &cases).0,
+            Verdict::Error
+        );
+        assert_eq!(
+            verdict_of_run(&Outcome::Failed(Some(101)), Some(&clean), &cases).0,
+            Verdict::Error
         );
     }
 
