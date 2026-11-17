@@ -3144,6 +3144,7 @@ pub struct Depends<'a> {
 /// Every name reachable from `start` through what each named item mentions:
 /// a function naming `LIMIT`, where `const LIMIT: u8 = limit();`, depends on
 /// `limit` too, which no token of the function names.
+#[cfg(test)]
 fn named_closure<'n>(
     start: impl IntoIterator<Item = &'n String>,
     mentions: &std::collections::BTreeMap<String, BTreeSet<String>>,
@@ -4925,25 +4926,32 @@ pub fn test_digests(
             read.insert(case.clone(), touched.clone());
         }
     }
-    let base = case_digests(
-        root,
-        executed.keys(),
-        dirs,
-        &executed,
-        &Depends {
-            probes: &index.probes,
-            names: &index.names,
-            items: &index.items,
-            mentions: &index.mentions,
-            read: &read,
-            resources,
-            untraced: &untraced,
-        },
-    );
+    let depends = Depends {
+        probes: &index.probes,
+        names: &index.names,
+        items: &index.items,
+        mentions: &index.mentions,
+        read: &read,
+        resources,
+        untraced: &untraced,
+    };
+    let base = case_digests(root, executed.keys(), dirs, &executed, &depends);
+    // ONE INDEXED GRAPH FOR EVERY CASE'S SELECTION WALK, as `case_digests`
+    // walks its own: per case a `String` closure over the mentions graph held
+    // this stage at one core for minutes on #1276 (sampled under gdb).
+    let graph = Graph::new(&depends);
+    let mut walk = Walk::default();
     for (case, ids) in &executed {
         out.insert(
             case.clone(),
-            selection_digest(index, case, ids, base.get(case), resources),
+            selection_digest(
+                index,
+                (&graph, &mut walk),
+                case,
+                ids,
+                base.get(case),
+                resources,
+            ),
         );
     }
     out
@@ -4952,19 +4960,31 @@ pub fn test_digests(
 /// [`test_digests`] for one case past [`case_digests`]'s `base`.
 fn selection_digest(
     index: &DependencyIndex,
+    (graph, walk): (&Graph<'_>, &mut Walk),
     case: &Case,
     ids: &BTreeSet<usize>,
     base: Option<&String>,
     resources: &std::collections::BTreeMap<String, String>,
 ) -> Option<String> {
-    let test = case.0.rsplit("::").next().unwrap_or(&case.0).to_owned();
-    let reached = named_closure(
-        ids.iter()
-            .filter_map(|id| index.names.get(*id))
-            .flatten()
-            .chain([&test, &String::new()]),
-        &index.mentions,
-    );
+    let test = case.0.rsplit("::").next().unwrap_or(&case.0);
+    let starts: Vec<&str> = ids
+        .iter()
+        .filter_map(|id| index.names.get(*id))
+        .flatten()
+        .map(String::as_str)
+        .chain([test, ""])
+        .collect();
+    // What `named_closure` reaches, in name order: the graph's walk, plus each
+    // start the graph does not hold (no mention names it, so it reaches only
+    // itself).
+    let mut reached: Vec<&str> = graph
+        .reach(starts.iter().filter_map(|name| graph.id(name)), walk)
+        .iter()
+        .map(|id| graph.names[*id])
+        .collect();
+    reached.extend(starts.iter().filter(|name| graph.id(name).is_none()));
+    reached.sort_unstable();
+    reached.dedup();
     let mut probes: BTreeSet<usize> = ids.clone();
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"tc1\x1f");
@@ -4978,7 +4998,7 @@ fn selection_digest(
         }
         None => true,
     };
-    for name in &reached {
+    for name in reached {
         if index.gated_names.contains(name) || !include(index.name_includes.get(name)) {
             return None;
         }
