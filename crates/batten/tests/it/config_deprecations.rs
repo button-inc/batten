@@ -394,3 +394,20 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
         }
     }
 }
+
+/// Fails by: `latest` resolving a different tag than version order names, or
+/// answering anything but could-not-look where no tag is fetched (#1276). The
+/// gate `config retire unnamed` asks `latest`, so this is what it relies on.
+#[test]
+fn latest_names_the_newest_tag_by_version_order() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (code, said) = deprecations(&root, "latest");
+    match latest_release_tag(&root) {
+        Some(against) => {
+            let (explicit_code, explicit) = deprecations(&root, &against);
+            assert_eq!((code, &said), (explicit_code, &explicit), "{against}");
+            assert!(said.contains(&against), "the line names {against}: {said}");
+        }
+        None => assert_ne!(code, 0, "no tag is could-not-look, never clean: {said}"),
+    }
+}

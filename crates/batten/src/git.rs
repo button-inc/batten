@@ -2038,6 +2038,41 @@ pub fn previous_tag(dir: &Path, tag: &str) -> Result<Option<String>> {
         .map(|name| name.to_string()))
 }
 
+/// The newest `v*` tag by VERSION order — `git tag --list 'v*'
+/// --sort=-v:refname`'s first line, in-process (#1276).
+///
+/// **VERSION ORDER, NEVER CREATION ORDER OR LEXICAL ORDER:** a re-cut tag must
+/// not reorder the baseline, and `v0.0.10` sorts above `v0.0.9`. Each name's
+/// numeric dot-separated components compare as numbers; a name that does not
+/// parse as one sorts below every one that does. `None` when the repository has
+/// no `v*` tag, which a caller must treat as could-not-look, never a pass.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the repository or its references cannot be read.
+pub fn newest_version_tag(dir: &Path) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not list this repository's tags".to_owned());
+    let references = repo.references().map_err(|_| refused())?;
+    let tags = references.tags().map_err(|_| refused())?;
+    let key = |name: &str| -> Option<Vec<u64>> {
+        name.strip_prefix('v')?
+            .split(['.', '-', '+'])
+            .map(|part| part.parse::<u64>().ok())
+            .take_while(Option::is_some)
+            .collect::<Option<Vec<u64>>>()
+            .filter(|parts| !parts.is_empty())
+    };
+    Ok(tags
+        .filter_map(Result::ok)
+        .filter_map(|reference| {
+            let name = reference.name().shorten().to_string();
+            key(&name).map(|parts| (parts, name))
+        })
+        .max()
+        .map(|(_, name)| name))
+}
+
 /// One commit's attribution record: who wrote it, who committed it, what it
 /// trails, and what it says.
 ///

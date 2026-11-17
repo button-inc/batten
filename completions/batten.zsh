@@ -1645,7 +1645,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':against -- The git ref whose published schema is the baseline (e.g. v0.0.111):_default' \
+':against -- The git ref whose published schema is the baseline (e.g. v0.0.111), or `latest` for the newest v* tag by version order:_default' \
 && ret=0
 ;;
 (lint)
