@@ -6566,7 +6566,6 @@ pub fn pathspec_is_supported(spec: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::exec::Streamed as _;
     use std::fs;
 
     use super::*;
@@ -8130,13 +8129,11 @@ mod tests {
         ] {
             command.env_remove(var);
         }
-        let output = command.streamed_output().expect("run git");
-        assert!(
-            output.status.success(),
-            "git {args:?} failed in {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        // STATUS, NOT A CAPTURE: git's own stderr reaches the test's, which
+        // the runner shows on failure, and `git` keeps no edge onto `exec`
+        // (module_closure's plumbing ceiling).
+        let status = command.status().expect("run git");
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
     }
 
     /// Compare directories after canonicalizing both sides: the system temp
