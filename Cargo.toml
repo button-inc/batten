@@ -88,6 +88,11 @@ anyhow = "1"
 # `sha2` share, and a third crate resolving its own `digest` is exactly the
 # split that row exists to refuse.
 blake3 = { version = "1", default-features = false, features = ["std"] }
+# nextest's JUnit report, read as XML (#1276): the mutant judge classified a run
+# by a word in its text output, and every caught mutant whose output carried a
+# compiler snippet naming `TIMEOUT_MULTIPLIER` was filed a timeout. Read-only,
+# no dependencies of its own.
+roxmltree = "0.20"
 # The HTTP client (CLOUD-745), and it is NOT `reqwest` -- which that row names,
 # so the substitution is recorded there rather than made quietly here.
 #
