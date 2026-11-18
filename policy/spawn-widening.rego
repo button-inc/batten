@@ -207,6 +207,7 @@ net_growth(line) := growth if {
 		engine_source(path)
 		not delta["base-lines"][path]
 	]
+
 	# INDENTATION IS NOT IDENTITY (#1276): the same escape moved from a closure
 	# to a module changes its leading space and nothing else, so each side is
 	# counted over trimmed text. A copy or a repeat still grows the trimmed count.
