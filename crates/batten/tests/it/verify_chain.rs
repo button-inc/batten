@@ -290,14 +290,21 @@ fn members(step: &str) -> Vec<String> {
 /// fan, so it reports every failure it holds, and the `run` array stops at the
 /// first failing tier. Fails by: a build or the suite moved into a cheaper tier,
 /// or the tiers collapsed back into one step.
+///
+/// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785: a step `batten step graph run
+/// <group>` runs every `[[step]]` row of the group, so a task's tier is the
+/// position of the step whose group holds a row running it.
 #[test]
 fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
     let gated = steps("verify:gated");
     let position = |task: &str| {
         gated
             .iter()
-            .position(|step| {
-                step.starts_with("mise run ") && members(step).iter().any(|m| m == task)
+            .position(|step| match common::graph_group(step) {
+                Some(group) => common::group_rows(&group)
+                    .iter()
+                    .any(|row| row.task.as_deref() == Some(task)),
+                None => step.starts_with("mise run ") && members(step).iter().any(|m| m == task),
             })
             .unwrap_or_else(|| panic!("verify:gated runs {task}: {gated:?}"))
     };
@@ -374,7 +381,22 @@ fn the_receipt_is_the_last_step() {
     let gated = steps("verify:gated");
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
-    assert!(gated[0].contains("tree-clean"), "{gated:?}");
+    // THE FIRST STEP IS A GRAPH WHOSE ONE ROOT IS `tree-clean` (CLOUD-2785):
+    // every other row of the group waits on it, so nothing in the group is
+    // decided over a dirty tree.
+    let first = common::graph_group(&gated[0])
+        .map(|group| common::group_rows(&group))
+        .unwrap_or_default();
+    let roots: Vec<_> = first
+        .iter()
+        .filter(|row| row.depends_on.is_empty())
+        .map(|row| row.task.clone())
+        .collect();
+    assert_eq!(
+        roots,
+        [Some("tree-clean".to_owned())],
+        "{gated:?}: {first:?}"
+    );
     assert!(
         depends_of("verify:gated")
             .iter()
