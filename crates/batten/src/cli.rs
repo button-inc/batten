@@ -881,6 +881,9 @@ pub enum LandCommand {
     Lap {
         /// The remote reference this lap lands onto; `None` is the declared trunk.
         reference: Option<String>,
+        /// Stop at the first final verify, never leasing, pushing or readying
+        /// (CLOUD-2783).
+        hold: bool,
     },
     /// Is this head built on the CURRENT tip of the reference, so its pull
     /// request can fast-forward-land (CLOUD-1991)?
@@ -3069,6 +3072,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
             reference: reference_of(matches),
+            hold: matches.get_flag("hold"),
         }),
         ("linear", matches) => Some(LandCommand::Linear {
             reference: reference_of(matches),
