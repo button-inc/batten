@@ -395,6 +395,12 @@ pub(crate) fn task_depends(name: &str) -> Vec<String> {
 pub(crate) fn task_reaches(name: &str) -> Vec<String> {
     let mut reached = task_depends(name);
     for line in task_body(name).lines() {
+        // A `step graph run <group>` line (CLOUD-2785) reaches every task its
+        // group's `[[step]]` rows run, which the step table holds, not the body.
+        if let Some(group) = graph_group(line) {
+            reached.extend(group_rows(&group).into_iter().filter_map(|row| row.task));
+            continue;
+        }
         let Some(rest) = line.trim().strip_prefix("mise run ") else {
             continue;
         };
@@ -408,6 +414,62 @@ pub(crate) fn task_reaches(name: &str) -> Vec<String> {
         }
     }
     reached
+}
+
+/// The group a `… step graph run <group>` line runs, or `None` for any other line.
+pub(crate) fn graph_group(line: &str) -> Option<String> {
+    let (_, rest) = line.split_once("step graph run ")?;
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+/// One `[[step]]` row of a graph group, as the committed `batten.toml` declares it.
+#[derive(Debug)]
+pub(crate) struct GroupRow {
+    /// The row's `id`.
+    pub id: String,
+    /// The mise task its `run` starts, where it is `mise run <task> …`.
+    pub task: Option<String>,
+    /// The rows it waits for.
+    pub depends_on: Vec<String>,
+}
+
+/// Every `[[step]]` row in `group`, in the order the committed `batten.toml`
+/// lists them.
+pub(crate) fn group_rows(group: &str) -> Vec<GroupRow> {
+    let text = fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses as TOML");
+    let words = |value: Option<&toml::Value>| -> Vec<String> {
+        value
+            .and_then(toml::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    parsed
+        .get("step")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("group").and_then(toml::Value::as_str) == Some(group))
+        .map(|row| {
+            let run = words(row.get("run"));
+            GroupRow {
+                id: row
+                    .get("id")
+                    .and_then(toml::Value::as_str)
+                    .expect("every step row has an id")
+                    .to_owned(),
+                task: (run.len() > 2 && run[0] == "mise" && run[1] == "run")
+                    .then(|| run[2].clone()),
+                depends_on: words(row.get("depends_on")),
+            }
+        })
+        .collect()
 }
 
 /// Every `BATTEN_` variable the command surface declares, derived from the

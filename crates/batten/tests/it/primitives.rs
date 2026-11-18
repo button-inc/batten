@@ -2101,11 +2101,10 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
 // shared state this touches cannot flip the verdict.
 #[test]
 fn a_fixture_copy_marks_the_shared_template_in_use() {
-    let Some(template) = common::git_init_template() else {
-        // No template could be established: `init_repo` forks instead, and
-        // there is nothing shared for a collector to remove.
-        return;
-    };
+    // A host where no template can be established forks `git init` per fixture
+    // and shares nothing a collector could remove, so the case fails there
+    // rather than passing having asserted nothing.
+    let template = common::git_init_template().expect("this host establishes the shared template");
     let old = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
     fs::OpenOptions::new()
         .write(true)
