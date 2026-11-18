@@ -554,7 +554,20 @@ pub fn run_step(
     let running = journaled
         .as_ref()
         .map_or(command, |(argv, _)| argv.as_slice());
-    let ran = crate::exec::run_with(running, &[], &settings, &mut std::io::sink());
+    // A MISS ON LINUX IS TRACED (CLOUD-2784), so a read outside the row's
+    // declared inputs is seen before a receipt is minted over it. Where no
+    // tracer answers the step runs untraced and records as before.
+    let traced = matches!(answer, Answer::Miss(_))
+        .then(crate::mutate::trace::tracer)
+        .flatten()
+        .and_then(|strace| Some((strace, trace_file(step)?)));
+    let spawned: Vec<String> = match (&traced, running.split_first()) {
+        (Some((strace, file)), Some((program, rest))) => std::iter::once(strace.clone())
+            .chain(crate::mutate::trace::trace_args(file, program, rest))
+            .collect(),
+        _ => running.to_vec(),
+    };
+    let ran = crate::exec::run_with(&spawned, &[], &settings, &mut std::io::sink());
     // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
     // the whole of it; an economy either way, so its failure is swallowed.
     if let Some((_, root)) = &journaled {
@@ -562,6 +575,31 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
+    if passed && let Some((_, file)) = &traced {
+        match lint_trace(step, file) {
+            Linted::Declared => {}
+            Linted::Undeclared(count, listing) => {
+                let _ = writeln!(
+                    err,
+                    "step run: {step} read {count} path(s) outside its inputs; read {}",
+                    listing.display()
+                );
+                return Ok(ExitCode::Violation);
+            }
+            // The row no longer reads (the command moved the authority): the
+            // record below recomputes the key and refuses on its own words.
+            Linted::RowUnread => {}
+            Linted::Unread => {
+                // A trace that cannot be read whole proves nothing about the
+                // declaration, so no receipt: the step's own verdict stands.
+                let _ = writeln!(
+                    err,
+                    "step run: {step} — its trace could not be read whole; not recording"
+                );
+                return ran;
+            }
+        }
+    }
     if passed && matches!(answer, Answer::Miss(_)) {
         // A record that refuses or fails here — the inputs moved while the
         // command ran, the store would not take the write — costs the next run
@@ -583,6 +621,121 @@ pub fn run_step(
     let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// Where a step's traced run writes its trace, emptied first; `None` where the
+/// git dir cannot be found or the directory not made, which runs untraced.
+fn trace_file(step: &str) -> Option<std::path::PathBuf> {
+    let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
+    let dir = git_dir.join(TRACES);
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join(format!("{}.trace", crate::tools::digest(step.as_bytes())));
+    let _ = std::fs::remove_file(&file);
+    Some(file)
+}
+
+/// Under the git dir: each step's last trace and its undeclared listing.
+const TRACES: &str = "batten-step-trace";
+
+/// What a traced run's reads say about its row's declaration.
+enum Linted {
+    /// Every read was declared, outside the worktree, or ignored.
+    Declared,
+    /// This many worktree paths were read undeclared; the listing names them.
+    Undeclared(usize, std::path::PathBuf),
+    /// The trace could not be read whole, so nothing is proven.
+    Unread,
+    /// The row no longer reads; the record's own recompute decides.
+    RowUnread,
+}
+
+/// Read `file`'s trace against `step`'s declared inputs, writing the
+/// undeclared paths, one per line, beside it.
+fn lint_trace(step: &str, file: &Path) -> Linted {
+    let (Some(row), Ok(root)) = (declared(step), crate::git::repo_root(Path::new("."))) else {
+        return Linted::RowUnread;
+    };
+    let root = crate::git::canonical(&root);
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|dir| crate::git::canonical(&dir));
+    let Some(touched) = crate::mutate::trace::await_trace(file)
+        .as_deref()
+        .and_then(|text| crate::mutate::trace::touched(text, cwd.as_deref()))
+    else {
+        return Linted::Unread;
+    };
+    let mut cache = BTreeMap::new();
+    let mut ignored = |path: &str| {
+        *cache
+            .entry(path.to_owned())
+            .or_insert_with(|| crate::git::check_ignore(&root, path).unwrap_or(false))
+    };
+    let found = undeclared(&root, &row.inputs, &touched, &mut ignored);
+    if found.is_empty() {
+        return Linted::Declared;
+    }
+    let listing = file.with_extension("undeclared");
+    let mut body = found.join("\n");
+    body.push('\n');
+    if std::fs::write(&listing, body).is_err() {
+        return Linted::Unread;
+    }
+    Linted::Undeclared(found.len(), listing)
+}
+
+/// The worktree paths among `touched` that `inputs` does not declare (CLOUD-2784).
+///
+/// Kept out: a path outside `root` (the toolchain, which `tools` keys), the git
+/// dir, the root itself and every ancestor directory of a declared pathspec (a
+/// run reaching a declared file walks them), anything a declared pathspec
+/// selects ([`crate::git::pathspec_matches`], git's own reading), and anything
+/// `ignored` answers for, judged ancestor first, so `target/` is asked once and
+/// never per file beneath it. Sorted, each once.
+fn undeclared(
+    root: &Path,
+    inputs: &[String],
+    touched: &[std::path::PathBuf],
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for path in touched {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
+            continue;
+        }
+        if inputs.iter().any(|spec| {
+            crate::git::pathspec_matches(spec, &relative) || ancestor_of(&relative, spec)
+        }) {
+            continue;
+        }
+        out.insert(relative);
+    }
+    out.into_iter()
+        .filter(|relative| {
+            let mut ancestors: Vec<&str> = relative
+                .match_indices('/')
+                .map(|(at, _)| &relative[..at])
+                .collect();
+            ancestors.push(relative);
+            !ancestors.into_iter().any(|path| ignored(path))
+        })
+        .collect()
+}
+
+/// Whether `dir` is an ancestor directory of what `spec` selects: the literal
+/// part of the spec, up to its first wildcard, lies beneath `dir`.
+fn ancestor_of(dir: &str, spec: &str) -> bool {
+    let spec = spec.strip_prefix("./").unwrap_or(spec);
+    let literal = spec
+        .find(['*', '?', '[', '\\'])
+        .map_or(spec, |at| &spec[..at]);
+    literal
+        .strip_prefix(dir)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// A receipt's stamp: the first field of its first line, RFC 3339 in UTC, so
@@ -702,6 +855,58 @@ mod tests {
         ];
         assert_eq!(super::evict(&tied, 2), vec!["a".to_owned()]);
         assert_eq!(super::evict(&tied, 1), vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    // EACH RULE OF THE TRACE LINT, ONE PATH APIECE (CLOUD-2784): dropping any
+    // clause turns its path undeclared, or declares the one that is not.
+    #[test]
+    fn only_an_undeclared_unignored_worktree_read_is_undeclared() {
+        let root = std::path::Path::new("/repo");
+        let touched: Vec<std::path::PathBuf> = [
+            "/repo/a/x.rs",         // under a declared pathspec
+            "/repo",                // the root
+            "/repo/deep",           // an ancestor of a declared pathspec
+            "/repo/.git/HEAD",      // the git dir
+            "/usr/lib/libc.so",     // outside the worktree
+            "/repo/target/debug/t", // ignored, by its ancestor
+            "/repo/b",              // undeclared
+            "/repo/c/missing",      // undeclared, a probe that found nothing
+            "/repo/b",              // repeated
+        ]
+        .map(std::path::PathBuf::from)
+        .to_vec();
+        let inputs = vec!["a".to_owned(), "deep/er/file".to_owned()];
+        let mut asked = Vec::new();
+        let mut ignored = |path: &str| {
+            asked.push(path.to_owned());
+            path == "target"
+        };
+        let found = super::undeclared(root, &inputs, &touched, &mut ignored);
+        assert_eq!(found, vec!["b".to_owned(), "c/missing".to_owned()]);
+        assert!(
+            !asked.iter().any(|path| path == "target/debug/t"),
+            "an ignored ancestor answers for everything beneath it: {asked:?}"
+        );
+    }
+
+    #[test]
+    fn the_whole_tree_declared_leaves_nothing_undeclared() {
+        let touched = vec![std::path::PathBuf::from("/repo/anything")];
+        let found = super::undeclared(
+            std::path::Path::new("/repo"),
+            &[".".to_owned()],
+            &touched,
+            &mut |_| false,
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn an_ancestor_is_the_literal_part_of_a_spec_beneath_it() {
+        assert!(super::ancestor_of("crates", "crates/batten/src"));
+        assert!(super::ancestor_of("crates", "crates/*/src"));
+        assert!(!super::ancestor_of("crate", "crates/batten"));
+        assert!(!super::ancestor_of("crates/batten", "crates"));
     }
 
     #[test]
