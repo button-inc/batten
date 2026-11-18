@@ -7,7 +7,6 @@
 //! which each case then checks against it.
 
 use crate::common;
-use batten::exec::Streamed as _;
 use std::path::PathBuf;
 use std::process::Output;
 
