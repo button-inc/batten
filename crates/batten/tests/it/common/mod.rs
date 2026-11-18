@@ -2214,7 +2214,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
 /// `.git/config` is the same values by a cheaper route. A fixture that wants a
 /// DIFFERENT identity still sets it after the copy, and one whose subject is an
 /// UNSET identity unsets it — `attribution.rs` already does exactly that.
-fn git_init_template() -> Option<&'static Path> {
+pub(crate) fn git_init_template() -> Option<&'static Path> {
     static TEMPLATE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     TEMPLATE.get_or_init(build_git_init_template).as_deref()
 }
@@ -2411,6 +2411,25 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+/// Date the shared template as used now, so the disk collector keeps it.
+///
+/// A READ IS A USE THE COLLECTOR CANNOT SEE (#1276). It keeps a `target/tmp`
+/// entry written since the earliest live test process started
+/// (`collect::fixtures_since`), dating each by its newest write. The template
+/// is written once and only read after, so once the process that published it
+/// exited, a pass dated it stale and removed it under a live mutation sweep:
+/// lap 9 failed `copy_tree`'s "read the template directory" on NotFound. Each
+/// copy now rewrites `HEAD`'s mtime, a child `newest_write` reads, from a
+/// process that is itself in the window. `HEAD`, not the directory: opening a
+/// directory to set its time needs write-attribute access on Windows. A failed
+/// touch is not fatal; the copy then fails where it names the cause.
+fn mark_in_use(template: &Path) {
+    let _ = fs::OpenOptions::new()
+        .write(true)
+        .open(template.join("HEAD"))
+        .and_then(|head| head.set_modified(std::time::SystemTime::now()));
+}
+
 /// Make `dir` a git repository.
 ///
 /// Under `CARGO_TARGET_TMPDIR` this copies [`git_init_template`], at zero forks.
@@ -2443,6 +2462,7 @@ pub(crate) fn init_repo(dir: &Path) {
         return;
     };
     {
+        mark_in_use(template);
         copy_tree(template, &dir.join(".git"));
         // CHECK WHAT THE COPY PRODUCED, HERE (CLOUD-1832). `copy_tree` creates
         // its destination and copies whatever it finds, so a template that was
