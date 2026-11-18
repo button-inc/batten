@@ -159,12 +159,33 @@ governed if input.tree.documents["mise.toml"].tasks.verify
 # program's stated reason: `verify` names its successor in exactly one place, a
 # third link would break this loudly, and an evaluator that followed `mise run`
 # calls transitively would be a second authority on the task graph mise owns.
-verify_text := concat("\n", [
+verify_named := concat("\n", [
 	task_run("verify"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify", "depends"], [])),
 	task_run("verify:gated"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "depends"], [])),
 ])
+
+# A STEP GRAPH IS WHAT THOSE BLOCKS RUN, TOO (CLOUD-2785). Tiers 1 and 2 moved
+# out of the `verify:gated` array into `[[step]]` rows that `step graph run
+# <group>` schedules, so a task those rows start is a task verify runs. One hop,
+# for the reason above: a `step graph run <group>` fragment in the text verify
+# runs names a group, and each row of that group contributes its `run` argv. A
+# row in a group no such line names contributes nothing.
+graph_groups contains group if {
+	some at in indexof_n(verify_named, "step graph run ")
+	line := split(substring(verify_named, at + count("step graph run "), -1), "\n")[0]
+	group := trim(split(line, " ")[0], "\"")
+	group != ""
+}
+
+graph_runs := [concat(" ", row.run) |
+	some row in object.get(object.get(input.tree.documents, "batten.toml", {}), "step", [])
+	row.group in graph_groups
+	is_array(row.run)
+]
+
+verify_text := concat("\n", array.concat([verify_named], graph_runs))
 
 # --- the workflows ------------------------------------------------------------
 
@@ -2105,6 +2126,44 @@ test_a_ci_task_verify_does_not_run_is_refused if {
 		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [{"run": "mise run smoke"}]}},
 	}
 	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	some f in found
+	f.verdict == "task run missing"
+	some s in f.subjects
+	s.artifact == "smoke"
+}
+
+# --- a task verify runs through a step graph (CLOUD-2785) ---------------------
+
+# A CI job running `smoke`, a `verify:gated` that runs `step graph run g`, and a
+# step row in group `group` whose `run` starts `smoke`.
+graph_reached(group) := out if {
+	wf := {
+		"on": {"pull_request": {"types": ["opened"]}},
+		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run smoke"}]}},
+	}
+	base := swap(".github/workflows/ci.yml", wf)
+	manifest := base.tree.documents["mise.toml"]
+	gated := object.union(object.get(manifest.tasks, "verify:gated", {}), {"run": ["batten step graph run g"]})
+	tasks := object.union(manifest.tasks, {"verify:gated": gated})
+	config := object.union(
+		object.get(base.tree.documents, "batten.toml", {}),
+		{"step": [{"id": "gate:smoke", "group": group, "run": ["mise", "run", "smoke"]}]},
+	)
+	docs := object.union(base.tree.documents, {"mise.toml": object.union(manifest, {"tasks": tasks}), "batten.toml": config})
+	out := {"tree": object.union(object.remove(base.tree, ["documents"]), {"documents": docs})}
+}
+
+test_a_ci_task_a_graph_group_verify_runs_starts_is_not_missing if {
+	found := violation with input as graph_reached("g")
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+# The same row in a group no `step graph run` line names starts nothing verify
+# runs, so the task is still CI-only.
+test_a_ci_task_in_a_group_nothing_runs_is_refused if {
+	found := violation with input as graph_reached("h")
 	some f in found
 	f.verdict == "task run missing"
 	some s in f.subjects

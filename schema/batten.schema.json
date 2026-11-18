@@ -3156,6 +3156,16 @@
         "email"
       ]
     },
+    "Journal": {
+      "description": "A per-case journal a step's miss runs under.",
+      "oneOf": [
+        {
+          "description": "`cargo nextest run` under the case-by-case journal (CLOUD-2772).",
+          "type": "string",
+          "const": "nextest"
+        }
+      ]
+    },
     "Judge": {
       "description": "The `[judge]` table: what the judge may put in a model call.\n\nEvery field defaults to the refusing reading, so a `[judge]` table that\nmerely exists sends nothing but pointers and hashes.",
       "type": "object",
@@ -6287,9 +6297,25 @@
       ]
     },
     "Step": {
-      "description": "One declared step: what its verdict depends on.",
+      "description": "One declared step: what its verdict depends on, and where it runs in a graph.\n\nA KEYED ROW declares both `inputs` and `tools`; a SCHEDULE-ONLY NODE declares\nneither (CLOUD-2785): it is in a `batten step graph run` group, always runs,\nand never keys or takes a receipt. Absent and empty are different answers,\nwhich is why both lists are optional and an empty one is still refused.",
       "type": "object",
       "properties": {
+        "depends_on": {
+          "description": "Rows of the same group that must exit 0 before this one starts.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "group": {
+          "description": "The graph this row is a node of, as `step graph run <group>` names it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "id": {
           "description": "The step's name, as its caller passes it to `batten step`.",
           "type": "string",
@@ -6297,7 +6323,32 @@
         },
         "inputs": {
           "description": "Git pathspecs (no `:` magic) whose INDEX entries are key material. `.`\nis the whole tracked tree.\n\nThe index rather than the worktree, and the worktree must agree with it\nover the set: a diverged or untracked path under a spec is no key at all.",
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "journal": {
+          "description": "The per-case journal a miss runs under, chosen by the row and never by\nsniffing the command's argv.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Journal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run": {
+          "description": "The argv `batten step graph run` starts this row with. Never key\nmaterial: the command a receipt covers is the one after `step run --`.",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string",
             "maxLength": 1536
@@ -6305,7 +6356,10 @@
         },
         "tools": {
           "description": "Programs, as argv, whose stdout is key material: a tool's version, or\nthe declaration of the step's own command. Each must exit 0 and print\nsomething, or there is no key.",
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "array",
             "items": {
@@ -6313,13 +6367,22 @@
               "maxLength": 1536
             }
           }
+        },
+        "verdict": {
+          "description": "How the step's verdict is read. One variant on purpose: it is where a\nstructured verdict is added, and a text pattern has none to be spelled in.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verdict"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "id",
-        "inputs",
-        "tools"
+        "id"
       ]
     },
     "Strictness": {
@@ -6826,6 +6889,16 @@
           "required": [
             "authority"
           ]
+        }
+      ]
+    },
+    "Verdict": {
+      "description": "How a step's verdict is read.",
+      "oneOf": [
+        {
+          "description": "The command's exit code, house-style §7.",
+          "type": "string",
+          "const": "exit"
         }
       ]
     },
