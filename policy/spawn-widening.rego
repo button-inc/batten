@@ -37,6 +37,7 @@
 #
 #MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns[placement_pattern]@|an_added_spawn_escape_is_refused
 #MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns[escape_pattern]@|an_added_spawn_placement_is_refused
+#MUTANT escape-indent-is-identity|s@\["base-lines"\]\[path\]; trim_space(l) == trim_space(line)@["base-lines"][path]; l == line@|an_escape_reindented_in_place_is_clean
 #MUTANT-SUITE crates/batten/tests/it/spawn_widening.rs
 
 # METADATA
@@ -206,8 +207,11 @@ net_growth(line) := growth if {
 		engine_source(path)
 		not delta["base-lines"][path]
 	]
-	head := sum([n | some path in array.concat(edited, added); n := count([l | some l in input.tree.lines[path]; l == line])])
-	base := sum([n | some path in edited; n := count([l | some l in delta["base-lines"][path]; l == line])])
+	# INDENTATION IS NOT IDENTITY (#1276): the same escape moved from a closure
+	# to a module changes its leading space and nothing else, so each side is
+	# counted over trimmed text. A copy or a repeat still grows the trimmed count.
+	head := sum([n | some path in array.concat(edited, added); n := count([l | some l in input.tree.lines[path]; trim_space(l) == trim_space(line)])])
+	base := sum([n | some path in edited; n := count([l | some l in delta["base-lines"][path]; trim_space(l) == trim_space(line)])])
 	growth := head - base
 }
 
@@ -318,6 +322,16 @@ test_an_escape_moved_between_engine_files_is_clean if {
 			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,", "    clippy::disallowed_types,"],
 			"crates/batten/src/capture.rs": ["fn b() {}"],
 		},
+	)
+}
+
+# THE SAME ESCAPE RE-INDENTED IS NOT A NEW ONE (#1276): measured on
+# `pr_watch.rs`, where the crate's one `disallowed_methods` exemption moved from
+# a closure to the `clock` module and read as an added escape.
+test_an_escape_reindented_in_place_is_clean if {
+	count(violation) == 0 with input as tree(
+		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "    clippy::disallowed_methods,"]},
+		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "            clippy::disallowed_methods,"]},
 	)
 }
 
