@@ -1896,6 +1896,16 @@ const LAND_REFERENCE: FlagDecl = FlagDecl::positional_optional(
     "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)",
 );
 
+/// `land lap --hold`: stop at the first final verify (CLOUD-2783).
+///
+/// The lap's only instrument that does not land: without it, measuring a lap
+/// readied and fast-forwarded whatever it measured.
+const LAND_HOLD: FlagDecl = FlagDecl::switch(
+    "hold",
+    "hold",
+    "Stop after the first verify whose verdict is final, before the lease, push and ready",
+);
+
 /// `--resolve <path>`: a path whose conflict the caller merged in the worktree.
 ///
 /// **Repeatable, and every conflicting path must be named** (CLOUD-1586).
@@ -7781,7 +7791,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         exits: EXITS_VERDICT,
-        flags: &[LAND_REFERENCE],
+        flags: &[LAND_REFERENCE, LAND_HOLD],
     },
     // `write`, for `land replay`'s first half: it fetches the reference into the
     // odb and moves its remote-tracking ref, which is the lap's own fetch reused

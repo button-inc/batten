@@ -599,6 +599,44 @@ pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     append(root, branch, lines)
 }
 
+/// Whether `step`'s answer ends a held lap, and with which code (CLOUD-2783).
+///
+/// Only a FINAL verify does: `0` green or `2` refused. A verify's `3` is not a
+/// verdict — a reclaimed or voided gate laps exactly as it does unheld — and no
+/// other step holds, so the replay before it still runs and nothing after it
+/// (the lease, the push, the ready) is ever entered.
+#[must_use]
+pub fn held_after(step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    (step == Step::Verify && matches!(code, ExitCode::Success | ExitCode::Violation))
+        .then_some(code)
+}
+
+/// A held lap's record line: its head, then the wall time of its entry and of
+/// each step it ran, in order (CLOUD-2783). The phase that dominates an
+/// unchanged-head lap is read off this line, never guessed.
+#[must_use]
+pub fn held_line(head: &str, entry_ms: u128, phases: &[(Step, u128)]) -> String {
+    phases.iter().fold(
+        format!("held {head} entry-ms={entry_ms}"),
+        |mut line, (step, ms)| {
+            use std::fmt::Write as _;
+            let _ = write!(line, " {}-ms={ms}", step.as_str());
+            line
+        },
+    )
+}
+
+/// Append one line (a held lap, an engine use) to this branch's lap record, through the record's
+/// one door.
+///
+/// # Errors
+///
+/// A record that cannot be written.
+pub fn record_line(root: &Path, branch: &str, line: &str) -> Result<()> {
+    append(root, branch, &[line.to_owned()])
+}
+
 /// Append `lines` to this branch's lap record.
 ///
 /// ONE WRITER FOR BOTH FAMILIES, because the store is shared: a replay outcome
@@ -5163,6 +5201,52 @@ mod lap_tests {
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// A HELD LAP ENDS ONLY ON A FINAL VERIFY (CLOUD-2783): green holds with
+    /// `0`, refused with `2`; a verify's `3` laps as it does unheld, and no
+    /// other step holds, so the replay still runs and nothing after the verify
+    /// is entered.
+    ///
+    /// Fails by: a hold on a could-not-look verify (it would report a lap that
+    /// decided nothing), or on any step but verify.
+    #[test]
+    fn held_after_ends_a_held_lap_only_on_a_final_verify() {
+        use super::{Step, held_after};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(held_after(Step::Verify, ExitCode::Internal), None);
+        assert_eq!(held_after(Step::Verify, ExitCode::Usage), None);
+        for step in [
+            Step::Replay,
+            Step::Lease,
+            Step::Push,
+            Step::Ready,
+            Step::Wait,
+        ] {
+            assert_eq!(held_after(step, ExitCode::Success), None, "{step:?}");
+        }
+    }
+
+    /// The held line names the head, the entry, and each step in the order run.
+    #[test]
+    fn a_held_line_carries_every_phase_in_order() {
+        use super::{Step, held_line};
+        assert_eq!(
+            held_line("abc", 12, &[(Step::Replay, 34), (Step::Verify, 56)]),
+            format!(
+                "held abc entry-ms=12 {}-ms=34 {}-ms=56",
+                Step::Replay.as_str(),
+                Step::Verify.as_str()
+            )
+        );
+    }
 
     /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
     ///

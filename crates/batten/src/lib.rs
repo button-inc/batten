@@ -11896,14 +11896,14 @@ fn run_land(
             };
             run_land_push(root, &url, &branch, out)
         }
-        cli::LandCommand::Lap { reference } => {
+        cli::LandCommand::Lap { reference, hold } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_lap(root, &url, &reference, &branch, out, err)
+            run_land_lap(root, &url, &reference, &branch, *hold, out, err)
         }
         cli::LandCommand::Linear { reference } => {
             let Some(url) = land_remote(root, err)? else {
@@ -12531,8 +12531,9 @@ fn run_land_singleton(
 const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The engine this lap runs, and the engine-source digest it was built from:
-/// set once, when the lap starts (`run_land_lap`).
-static LAP_ENGINE: std::sync::OnceLock<Option<(PathBuf, String)>> = std::sync::OnceLock::new();
+/// set when the lap starts (`run_land_lap`), and replaced when a lap rebuilds
+/// the engine after a replay moved it (CLOUD-2783).
+static LAP_ENGINE: std::sync::Mutex<Option<(PathBuf, String)>> = std::sync::Mutex::new(None);
 
 /// The running binary and the engine digest of `root`, when `cargo run` just
 /// built this binary from `root`: cargo sets `CARGO_MANIFEST_DIR` for a binary
@@ -12574,9 +12575,70 @@ fn engine_for_gate(exe: &Path, built_from: &str, now: &str) -> Option<String> {
     (built_from == now && !path.contains(char::is_whitespace)).then(|| path.to_owned())
 }
 
-fn lap_engine(root: &Path) -> Option<String> {
-    let (exe, built_from) = LAP_ENGINE.get()?.as_ref()?;
-    engine_for_gate(exe, built_from, &engine::digest(root).ok()?)
+/// How the gate's engine was had this verify (CLOUD-2783): the lap's own,
+/// rebuilt once because a replay moved its sources, or none — every gate step
+/// then falls back to `cargo run`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineUse {
+    Reused,
+    Built,
+    Fallback,
+}
+
+impl EngineUse {
+    /// The lap record's token.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reused => "reused",
+            Self::Built => "built",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+/// THE DECISION, apart from the build so it is tested without one: an unmoved
+/// digest reuses the lap's engine; a moved one is built ONCE, here, for every
+/// gate step, and a failed build falls back. `built` is `None` when no build
+/// was asked for, which only an unmoved digest does.
+fn engine_use(built_from: &str, now: &str, built: Option<bool>) -> EngineUse {
+    match (built_from == now, built) {
+        (true, _) => EngineUse::Reused,
+        (false, Some(true)) => EngineUse::Built,
+        (false, _) => EngineUse::Fallback,
+    }
+}
+
+/// Build the tree's engine once, where `cargo run` would have built it per
+/// step. The output path is the running lap binary's: Linux and macOS keep the
+/// running image, and later spawns get the tree's engine. Windows cannot
+/// replace a running `.exe`, so the build fails there and the lap falls back.
+fn build_engine(root: &Path) -> bool {
+    let argv: Vec<String> = ["cargo", "build", "--quiet", "-p", "batten"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    matches!(
+        exec::piped_argv(root, &argv, "", exec::Diagnostics::Drop, &[]),
+        Some((0, _))
+    )
+}
+
+/// The gate's `BATTEN_BIN`, and how it was had. `None` when the lap was not
+/// started by `cargo run`: nothing is built, and the gate keeps whatever
+/// `BATTEN_BIN` it inherits, as before.
+fn lap_engine(root: &Path) -> Option<(Option<String>, EngineUse)> {
+    let mut cell = LAP_ENGINE.lock().ok()?;
+    let (exe, built_from) = cell.as_ref()?.clone();
+    let now = engine::digest(root).ok()?;
+    let built = (built_from != now).then(|| build_engine(root));
+    let used = engine_use(&built_from, &now, built);
+    if used == EngineUse::Built {
+        *cell = Some((exe.clone(), now.clone()));
+    }
+    let engine = (used != EngineUse::Fallback)
+        .then(|| engine_for_gate(&exe, &now, &now))
+        .flatten();
+    Some((engine, used))
 }
 
 fn run_land_lap(
@@ -12584,9 +12646,13 @@ fn run_land_lap(
     url: &str,
     reference: &str,
     branch: &str,
+    hold: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // THE LANDING'S FIRST INSTANT, so a held lap can say what its entry cost
+    // before the first step (CLOUD-2783).
+    let started = std::time::Instant::now();
     let laps = std::env::var("LAND_MAX_LAPS")
         .ok()
         .and_then(|declared| declared.parse::<u32>().ok())
@@ -12597,7 +12663,9 @@ fn run_land_lap(
         // filter `LAND_ANSWER_MAX_UNKNOWNS` already applies to its own count.
         .filter(|laps| *laps > 0)
         .unwrap_or(LAPS);
-    let _ = LAP_ENGINE.set(lap_engine_at_start(root));
+    if let Ok(mut cell) = LAP_ENGINE.lock() {
+        *cell = lap_engine_at_start(root);
+    }
     // THE COMPOSITION, VALIDATED BEFORE A LAP SPENDS ANYTHING. A pipeline that
     // would ready and then abandon fails to LOAD rather than in production,
     // which is the whole difference between a schema and a convention.
@@ -12681,6 +12749,8 @@ fn run_land_lap(
         budget: laps,
         pipeline,
         guard: &guard,
+        hold,
+        started,
     };
     // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
     // and the CI wait, every lap. It ends with the landing, on its stop flag.
@@ -12764,6 +12834,10 @@ struct Laps<'run> {
     pipeline: pipeline::Pipeline,
     /// Held by the caller for the whole landing; each step publishes its phase.
     guard: &'run LandSingleton,
+    /// Stop at the first final verify (CLOUD-2783): `land lap --hold`.
+    hold: bool,
+    /// When the landing began, for the held lap's entry time.
+    started: std::time::Instant,
 }
 
 /// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
@@ -12889,7 +12963,13 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         budget: laps,
         pipeline,
         guard,
+        hold,
+        started,
     } = run;
+    // WHAT EACH PHASE OF THE LAST LAP COST, for a held lap's record (CLOUD-2783):
+    // the entry before the first step, then each step's own wall time.
+    let mut entry_ms: Option<u128> = None;
+    let mut phase_ms: Vec<(land::Step, u128)> = Vec::new();
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
     // unconditional ask every time — see `land::stale`'s own header, which
@@ -12962,6 +13042,8 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         }
         ledger.attempt();
         writeln!(out, "land: lap {lap} — {} of {laps} charged", ledger.laps)?;
+        entry_ms.get_or_insert_with(|| started.elapsed().as_millis());
+        phase_ms.clear();
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
         // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
         let mut seen: Option<land::TapVerdict> = None;
@@ -12998,8 +13080,10 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // minutes — so announcing it on completion would name every phase
             // exactly when it stopped being true.
             guard.phase(step.as_str(), lap);
+            let began = std::time::Instant::now();
             let (code, verdict, asked, stalled) =
                 run_the_step(step, this_lap, &bet, &mut ledger, out, err)?;
+            phase_ms.push((step, began.elapsed().as_millis()));
             // The wait is the only step with readings to carry, and both are
             // latched rather than acted on here — see `honour_the_notice`.
             seen = verdict.or(seen);
@@ -13025,6 +13109,17 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             note_the_poison(step, code, basis, &mut bet);
             if land::poisons_this_clone(step, code, seen, basis) {
                 note_the_cooldown(root, reference, out, err)?;
+            }
+            // THE HOLD (CLOUD-2783): a final verify ends a held lap before the
+            // lease, the push and the ready. Replay and verify compensate
+            // nothing, so the unwind owes nothing; it runs as every exit's does.
+            if let Some(held) = land::held_after(step, code).filter(|_| hold) {
+                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                let head = git::head_commit(root).unwrap_or_else(|_| String::from("-"));
+                let line = land::held_line(&head, entry_ms.unwrap_or_default(), &phase_ms);
+                writeln!(err, "land: held after verify ({head}): {line}")?;
+                land::record_line(root, branch, &line)?;
+                return Ok(held);
             }
             match land::lap_progress(step, code, stalled, seen, basis) {
                 land::Progress::Proceed => {}
@@ -14999,8 +15094,13 @@ fn run_land_verify_seen(
     // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
     // the gate's first step, reads this and lets the run through.
     published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
-    if let Some(engine) = lap_engine(root) {
-        published.push(("BATTEN_BIN".to_owned(), engine));
+    // BUILT ONCE PER LAP, NEVER PER STEP (CLOUD-2783): the record says which.
+    if let Some((engine, used)) = lap_engine(root) {
+        let digest = engine::digest(root).unwrap_or_else(|_| String::from("-"));
+        land::record_line(root, branch, &format!("engine {digest} {}", used.as_str()))?;
+        if let Some(engine) = engine {
+            published.push(("BATTEN_BIN".to_owned(), engine));
+        }
     }
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
@@ -32168,6 +32268,24 @@ mod tests {
         );
     }
 
+    /// A LAP BUILDS A MOVED ENGINE ONCE, FOR EVERY GATE STEP (CLOUD-2783): an
+    /// unmoved digest reuses the lap's engine, a moved one that built is
+    /// handed on, and a moved one whose build failed falls back to `cargo run`.
+    ///
+    /// Fails by: a moved digest reused (the gate runs a stale engine), a failed
+    /// build handed on, or a good build reported as a fallback.
+    #[test]
+    fn a_moved_engine_is_built_once() {
+        use super::{EngineUse, engine_use};
+        assert_eq!(engine_use("a", "a", None), EngineUse::Reused);
+        assert_eq!(engine_use("a", "b", Some(true)), EngineUse::Built);
+        assert_eq!(engine_use("a", "b", Some(false)), EngineUse::Fallback);
+        assert_eq!(engine_use("a", "b", None), EngineUse::Fallback);
+        assert_eq!(EngineUse::Built.as_str(), "built");
+        assert_eq!(EngineUse::Reused.as_str(), "reused");
+        assert_eq!(EngineUse::Fallback.as_str(), "fallback");
+    }
+
     /// Fails by: the comparison inverted, so the head no gate passed is readied
     /// and the one it passed is refused.
     #[test]
@@ -32260,8 +32378,13 @@ mod tests {
         let root = &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let exe = std::env::current_exe().expect("this process's path");
         let digest = super::engine::digest(root).expect("this tree's digest");
-        let _ = super::LAP_ENGINE.set(Some((exe.clone(), digest)));
-        assert_eq!(super::lap_engine(root), exe.to_str().map(str::to_owned));
+        if let Ok(mut cell) = super::LAP_ENGINE.lock() {
+            *cell = Some((exe.clone(), digest));
+        }
+        assert_eq!(
+            super::lap_engine(root),
+            Some((exe.to_str().map(str::to_owned), super::EngineUse::Reused))
+        );
     }
     use super::*;
 
