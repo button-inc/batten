@@ -182,6 +182,11 @@ regex-automata = { version = "0.4", default-features = false, features = [
 rustix.workspace = true
 signal-hook.workspace = true
 
+# The disk watcher's wake on every write to the volume (CLOUD-2782): a
+# fanotify filesystem mark, which no other platform has.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix.workspace = true
+
 # File identity for the collector's kept set (CLOUD-2197): `(dev, ino)` on unix
 # is `std`, and its Windows analogue is not.
 [target.'cfg(windows)'.dependencies]
