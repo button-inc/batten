@@ -19581,6 +19581,20 @@ fn red_head_for(
     }
 }
 
+/// The pid of a live `land` lap on this checkout (CLOUD-2781), read the way
+/// `land` reads it to refuse a second lap: the singleton lock under the
+/// per-worktree git dir, and a pid that exists. Asked only before a call runs,
+/// which is when a write into a lap's tree can still be refused.
+fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<String> {
+    // NO MODULE ON THIS CALL, NO READ: the common call opens no repository for
+    // it, as `red_head_for` keeps the hook's hot path.
+    if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
+        return None;
+    }
+    let git_dir = git::git_dir(hook_authority_root()).ok()?;
+    task::singleton_holder(&git_dir, LAND_TASK)
+}
+
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
 /// destructive pair, the unread history a config write touches, and the
 /// dispatch receipt, the pinned programs and the red-head record (CLOUD-2270).
@@ -19589,6 +19603,7 @@ fn red_head_for(
 struct CallFacts {
     discards: facts::Look<Vec<String>>,
     singleton: Option<(String, String)>,
+    land_live: Option<String>,
     unread_history: facts::Look<Vec<String>>,
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
@@ -19602,6 +19617,7 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
     CallFacts {
         discards,
         singleton,
+        land_live: land_live_for(policy, envelope),
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
@@ -20159,6 +20175,7 @@ fn dispatch_envelope(
     let call = call_facts(&policy, &envelope);
     let facts = hook::Facts {
         singleton: &call.singleton,
+        land_live: &call.land_live,
         discards: &call.discards,
         unread_history: &call.unread_history,
         commit_subject: &call.commit_subject,

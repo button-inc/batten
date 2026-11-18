@@ -742,3 +742,76 @@ fn a_commit_made_while_the_gate_ran_voids_it() {
         "the moved head is never recorded as verified"
     );
 }
+
+/// A bench registering ONLY `path write held`, from its committed bytes, so no
+/// other row's refusal can stand in for this one's.
+fn lap_tree_bench(name: &str) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let module = std::fs::read_to_string(root.join("policy/lap-tree-held.rego"))
+        .expect("the module is readable");
+    common::Fixture::new(name)
+        .config(
+            "version = 1\n\n\
+             [[rule]]\nid = \"path write held\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"policy/lap-tree-held.rego\"\n\
+             severity = \"deny\"\n",
+        )
+        .file("policy/lap-tree-held.rego", &module)
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// A Claude Code `PreToolUse` Write of `path`, judged in `dir`; whether it was
+/// refused under `path write held`.
+fn held(dir: &std::path::Path, path: &str) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": path, "content": "x\n"},
+    })
+    .to_string();
+    let answer = common::run_with_stdin(dir, &["adjudicate", "--harness", "claude-code"], &payload);
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+}
+
+/// **A WRITE INTO A LIVE LAP'S CHECKOUT IS REFUSED BEFORE IT RUNS** (CLOUD-2781).
+///
+/// The live lap is this test process itself, holding the checkout's `land`
+/// singleton with its own pid: the reading `land` uses to refuse a second lap.
+/// Inside the checkout is refused while it holds; outside is admitted; and the
+/// same write is admitted once nothing holds the lock.
+#[test]
+fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-tree-held");
+    let inside = dir.join("src/a.rs").to_string_lossy().into_owned();
+    let outside = std::env::temp_dir()
+        .join("land-lap-tree-held-outside.md")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !held(&dir, &inside),
+        "no lap is live yet, so nothing is held"
+    );
+
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        held(&dir, &inside),
+        "a write inside the checkout is held while the lap is live"
+    );
+    assert!(
+        !held(&dir, &outside),
+        "a write outside the checkout is admitted"
+    );
+
+    batten::task::singleton_release(&git_dir, "land");
+    assert!(
+        !held(&dir, &inside),
+        "the same write is admitted once the lap has ended"
+    );
+}
