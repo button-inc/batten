@@ -230,6 +230,30 @@ fn declared(step: &str) -> Option<Step> {
     config.steps.into_iter().find(|row| row.id == step)
 }
 
+/// The part of a row a key hashes: the three fields a row had before it could
+/// schedule (CLOUD-2785), serialized exactly as the whole row then was.
+#[derive(serde::Serialize)]
+struct KeyRow<'a> {
+    id: &'a str,
+    inputs: &'a [String],
+    tools: &'a [Vec<String>],
+}
+
+/// The key's `row` line: ONLY `id`, `inputs` and `tools` (CLOUD-2785), in the
+/// order and spelling the whole row serialized to before it could schedule, so
+/// no field added since moves a key. `None` for a schedule-only node.
+fn row_line(row: &Step) -> Option<String> {
+    let (Some(inputs), Some(tools)) = (&row.inputs, &row.tools) else {
+        return None;
+    };
+    let projected = KeyRow {
+        id: &row.id,
+        inputs,
+        tools,
+    };
+    Some(format!("row {}", serde_json::to_string(&projected).ok()?))
+}
+
 /// Everything the key hashes, or `None` where any part cannot be read.
 ///
 /// Each component is a line of its own and every free-form value is JSON-quoted,
@@ -240,15 +264,19 @@ fn material(
     args: &[String],
     command: Option<&[String]>,
 ) -> Option<String> {
+    // A SCHEDULE-ONLY NODE KEYS NOTHING (CLOUD-2785): it declares neither list.
+    let (Some(inputs), Some(tools)) = (&row.inputs, &row.tools) else {
+        return None;
+    };
     let mut lines: Vec<String> = vec![format!("step {}", serde_json::to_string(&row.id).ok()?)];
     // The declaration itself: a receipt earned under one `inputs`/`tools` set
     // never answers under a narrower one.
-    lines.push(format!("row {}", serde_json::to_string(row).ok()?));
+    lines.push(row_line(row)?);
     lines.extend(args.iter().map(|arg| format!("arg {}", quoted(arg))));
     if let Some(command) = command {
         lines.push(format!("command {}", serde_json::to_string(command).ok()?));
     }
-    for tool in &row.tools {
+    for tool in tools {
         let (code, said) = tool_said(root, tool)?;
         let said = said.trim();
         if code != 0 || said.is_empty() {
@@ -260,7 +288,7 @@ fn material(
             quoted(said)
         ));
     }
-    let facts = crate::git::index_facts(root, &row.inputs).ok()?;
+    let facts = crate::git::index_facts(root, inputs).ok()?;
     let mut entries: BTreeMap<(String, u32), String> = BTreeMap::new();
     for fact in facts.values() {
         // THE INDEX IS WHAT THE KEY HASHES, so the worktree must agree with it
@@ -547,8 +575,12 @@ pub fn run_step(
     // receipt's key stays the declared command's; a journal that cannot be set
     // up runs the command as declared, because the journal is an economy and
     // the step's verdict is the command's alone.
+    // BY THE ROW, NEVER BY THE ARGV (CLOUD-2785): `journal = "nextest"`.
     let journaled = Some(command)
-        .filter(|command| crate::mutate::resume::is_nextest_run(command))
+        .filter(|_| {
+            declared(step)
+                .is_some_and(|row| row.journal == Some(crate::step_table::Journal::Nextest))
+        })
         .and_then(|_| crate::git::repo_root(Path::new(".")).ok())
         .and_then(|root| Some((crate::mutate::resume::journaled(&root, command).ok()?, root)));
     let running = journaled
@@ -671,7 +703,7 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
             .entry(path.to_owned())
             .or_insert_with(|| crate::git::check_ignore(&root, path).unwrap_or(false))
     };
-    let found = undeclared(&root, &row.inputs, &touched, &mut ignored);
+    let found = undeclared(&root, row.inputs(), &touched, &mut ignored);
     if found.is_empty() {
         return Linted::Declared;
     }
@@ -764,6 +796,142 @@ fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
         .take(excess)
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// `batten step graph run <group> [--jobs N]` (CLOUD-2785): every row of
+/// `group`, each as a child process from its `run` argv, a row starting only
+/// once every `depends_on` exited 0, at most `jobs` at once.
+///
+/// A CHILD PROCESS PER NODE, never `run_step` on a thread: `check`, `record`
+/// and `declared` read the working directory, `announce` pushes one phase per
+/// process, and a tee writes to the process's own streams. The spawn is
+/// [`crate::exec::run_with`], the placed boundary, so the inventory does not
+/// grow; a node's lines carry its task runner's own prefix.
+///
+/// Prints one pointer line per node (`ran <code> <seconds>` or `skipped`) and
+/// the peak concurrency reached, and exits with the worst node's code.
+///
+/// # Errors
+///
+/// An I/O error when a line cannot be written.
+pub fn run_graph(group: &str, jobs: Option<&str>, err: &mut dyn Write) -> Result<ExitCode> {
+    let jobs = match jobs.map(str::parse::<std::num::NonZeroUsize>) {
+        None => None,
+        Some(Ok(jobs)) => Some(jobs),
+        Some(Err(_)) => {
+            writeln!(err, "step graph: --jobs takes a positive integer")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let rows: Vec<Step> = match crate::resolve::committed(Path::new("."), &Overrides::default()) {
+        Ok(config) => config
+            .steps
+            .into_iter()
+            .filter(|row| row.group.as_deref() == Some(group))
+            .collect(),
+        Err(error) => {
+            writeln!(err, "step graph: the step table did not load: {error}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    if rows.is_empty() {
+        writeln!(err, "step graph: no [[step]] row is in group {group}")?;
+        return Ok(ExitCode::Usage);
+    }
+    let bound = jobs.map_or(usize::MAX, std::num::NonZeroUsize::get);
+    let outcome = schedule(&rows, bound, &|row: &Step| {
+        let mut settings = crate::exec::ExecConfig::DEFAULT;
+        settings.tee = true;
+        let argv = row.run.clone().unwrap_or_default();
+        // A NON-ZERO CHILD ARRIVES AS A `Passthrough` carrying its own code,
+        // which may sit outside the §7 table; anything else is a spawn that
+        // never decided, which is internal.
+        match crate::exec::run_with(&argv, &[], &settings, &mut std::io::sink()) {
+            Ok(code) => code.code(),
+            Err(error) => error
+                .downcast_ref::<crate::error::Passthrough>()
+                .map_or(ExitCode::Internal.code(), |carried| carried.0),
+        }
+    });
+    for line in &outcome.lines {
+        writeln!(err, "step graph: {line}")?;
+    }
+    writeln!(
+        err,
+        "step graph: {group} peak {} of {}",
+        outcome.peak,
+        jobs.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
+    )?;
+    if outcome.worst == 0 {
+        return Ok(ExitCode::Success);
+    }
+    ExitCode::from_code(outcome.worst)
+        .map_or_else(|| Err(crate::error::Passthrough::raise(outcome.worst)), Ok)
+}
+
+/// What a scheduled graph did: a pointer line per node, the most rows that ran
+/// at once, and the worst code.
+struct Scheduled {
+    lines: Vec<String>,
+    peak: usize,
+    worst: i32,
+}
+
+/// Run `rows` as a dependency graph with at most `bound` at once, each through
+/// `run`. Pure over `run`, so the order, the bound and the skips are testable
+/// without a process.
+fn schedule(rows: &[Step], bound: usize, run: &(dyn Fn(&Step) -> i32 + Sync)) -> Scheduled {
+    let mut done: BTreeMap<&str, i32> = BTreeMap::new();
+    let mut waiting: Vec<&Step> = rows.iter().collect();
+    let mut lines = Vec::new();
+    let (mut running, mut peak) = (0_usize, 0_usize);
+    let mut worst = 0_i32;
+    std::thread::scope(|scope| {
+        let (finished, arrivals) = std::sync::mpsc::channel::<(&str, i32, f64)>();
+        loop {
+            // A ROW WHOSE DEPENDENCY FAILED NEVER STARTS, and neither does any
+            // row waiting on it: repeat until no skip uncovers another.
+            while let Some((at, dependency)) = waiting.iter().enumerate().find_map(|(at, row)| {
+                row.depends_on
+                    .iter()
+                    .find(|dependency| done.get(dependency.as_str()).is_some_and(|code| *code != 0))
+                    .map(|dependency| (at, dependency.clone()))
+            }) {
+                let row = waiting.remove(at);
+                lines.push(format!("{} skipped ({dependency} failed)", row.id));
+                done.insert(row.id.as_str(), ExitCode::Internal.code());
+            }
+            while running < bound {
+                let Some(at) = waiting.iter().position(|row| {
+                    row.depends_on
+                        .iter()
+                        .all(|dependency| done.get(dependency.as_str()) == Some(&0))
+                }) else {
+                    break;
+                };
+                let row = waiting.remove(at);
+                running += 1;
+                peak = peak.max(running);
+                let finished = finished.clone();
+                scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let code = run(row);
+                    let _ = finished.send((row.id.as_str(), code, started.elapsed().as_secs_f64()));
+                });
+            }
+            if running == 0 {
+                break;
+            }
+            let Ok((id, code, seconds)) = arrivals.recv() else {
+                break;
+            };
+            running -= 1;
+            lines.push(format!("{id} ran {code} {seconds:.3}"));
+            worst = worst.max(code);
+            done.insert(id, code);
+        }
+    });
+    Scheduled { lines, peak, worst }
 }
 
 /// The run time a receipt recorded: the `<n>ms` field of its first line, or
@@ -909,6 +1077,38 @@ mod tests {
         assert!(!super::ancestor_of("crates/batten", "crates"));
     }
 
+    // TODAY'S BYTES, LITERALLY (CLOUD-2785): before rows could schedule, the
+    // key's row line was the whole row serialized, and this is that string for
+    // this row. A field added to the projection, or one leaking from `Step`,
+    // changes it and re-runs every step on its next lap.
+    #[test]
+    fn only_id_inputs_and_tools_are_key_material() {
+        let keyed = |run: Option<&str>, group: Option<&str>| crate::step_table::Step {
+            id: String::from("s"),
+            inputs: Some(vec![String::from("a")]),
+            tools: Some(vec![vec![String::from("t"), String::from("--version")]]),
+            run: run.map(|word| vec![word.to_owned()]),
+            group: group.map(str::to_owned),
+            depends_on: group.map_or_else(Vec::new, |_| vec![String::from("x")]),
+            verdict: group.map(|_| crate::step_table::Verdict::Exit),
+            journal: group.map(|_| crate::step_table::Journal::Nextest),
+        };
+        let today = r#"row {"id":"s","inputs":["a"],"tools":[["t","--version"]]}"#;
+        assert_eq!(super::row_line(&keyed(None, None)).as_deref(), Some(today));
+        assert_eq!(
+            super::row_line(&keyed(Some("go"), Some("g"))).as_deref(),
+            Some(today)
+        );
+        let mut node = keyed(Some("go"), Some("g"));
+        node.inputs = None;
+        node.tools = None;
+        assert_eq!(
+            super::row_line(&node),
+            None,
+            "a schedule-only node keys nothing"
+        );
+    }
+
     #[test]
     fn a_receipts_stamp_is_its_first_field() {
         assert_eq!(
@@ -937,8 +1137,13 @@ mod tests {
         crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
         let row = |tool: &[&str]| Step {
             id: String::from("s"),
-            inputs: vec![String::from("input")],
-            tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
+            inputs: Some(vec![String::from("input")]),
+            tools: Some(vec![tool.iter().map(|word| (*word).to_owned()).collect()]),
+            run: None,
+            group: None,
+            depends_on: Vec::new(),
+            verdict: None,
+            journal: None,
         };
         // The platform's own shell spells each tool: one that answers, one
         // that exits zero saying nothing, and one that answers and fails.
@@ -977,8 +1182,13 @@ mod tests {
         assert_eq!(tool_said(&root, &native), Some((0, digest.clone())));
         let row = Step {
             id: String::from("s"),
-            inputs: vec![String::from("input")],
-            tools: vec![native],
+            inputs: Some(vec![String::from("input")]),
+            tools: Some(vec![native]),
+            run: None,
+            group: None,
+            depends_on: Vec::new(),
+            verdict: None,
+            journal: None,
         };
         let held = material(&root, &row, &[], None).expect("the line keys the step");
         assert!(held.contains(&digest), "keyed on the in-process digest");

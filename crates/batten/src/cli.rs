@@ -655,6 +655,14 @@ pub enum StepCommand {
         /// The command, verbatim. Never empty — the surface requires it.
         command: Vec<String>,
     },
+    /// Run a group's rows as a graph (CLOUD-2785).
+    Graph {
+        /// The group, as the step table names it.
+        group: String,
+        /// At most this many rows at once, as written; `None` is no bound. The
+        /// verb parses it, so a bad value is its usage error with a reason.
+        jobs: Option<String>,
+    },
 }
 
 /// `sbom`'s flags, as a payload struct for `CheckFlags`' reason: a flag added
@@ -3647,6 +3655,13 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
                 .cloned()
                 .collect::<Vec<_>>(),
         }),
+        ("graph", matches) => match matches.subcommand()? {
+            ("run", matches) => Some(StepCommand::Graph {
+                group: matches.get_one::<String>("group").cloned()?,
+                jobs: matches.get_one::<String>("jobs").cloned(),
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }

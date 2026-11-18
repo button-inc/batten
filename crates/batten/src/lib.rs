@@ -620,6 +620,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 args,
                 command,
             } => run_step_watched(&step, &args, &command, err),
+            cli::StepCommand::Graph { group, jobs } => {
+                crate::step::run_graph(&group, jobs.as_deref(), err)
+            }
         },
         // The §8 chain supplies the `[sbom]` declarations from the committed
         // authority alone; the tree is the repository root's.

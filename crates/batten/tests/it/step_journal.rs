@@ -56,7 +56,7 @@ fn a_journaled_step_runs_each_passed_case_once_per_input_state() {
         &repo,
         "batten.toml",
         "version = 1\n\n[[step]]\nid = \"suite\"\ninputs = [\".\"]\n\
-         tools = [[\"cargo\", \"--version\"]]\n",
+         tools = [[\"cargo\", \"--version\"]]\njournal = \"nextest\"\n",
     );
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
@@ -163,7 +163,7 @@ fn selected_repo(name: &str) -> std::path::PathBuf {
         &repo,
         "batten.toml",
         "version = 1\n\n[[step]]\nid = \"suite\"\ninputs = [\".\"]\n\
-         tools = [[\"cargo\", \"--version\"]]\n",
+         tools = [[\"cargo\", \"--version\"]]\njournal = \"nextest\"\n",
     );
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
