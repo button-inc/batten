@@ -627,6 +627,58 @@ pub fn held_line(head: &str, entry_ms: u128, phases: &[(Step, u128)]) -> String 
     )
 }
 
+/// `land lap --hold` and its clock (CLOUD-2783): whether a final verify ends
+/// the landing, and what the entry and each step of the last lap cost.
+#[derive(Debug)]
+pub struct Hold {
+    on: bool,
+    started: std::time::Instant,
+    entry_ms: Option<u128>,
+    phases: Vec<(Step, u128)>,
+}
+
+impl Hold {
+    /// A landing that began now, held or not.
+    #[must_use]
+    pub fn new(on: bool) -> Self {
+        Self {
+            on,
+            started: std::time::Instant::now(),
+            entry_ms: None,
+            phases: Vec::new(),
+        }
+    }
+
+    /// A lap opens: the entry is the time to the first one, and each lap's
+    /// phases start afresh.
+    pub fn lap(&mut self) {
+        let started = self.started;
+        self.entry_ms
+            .get_or_insert_with(|| started.elapsed().as_millis());
+        self.phases.clear();
+    }
+
+    /// Run one step, keeping its wall time.
+    pub fn time<T>(&mut self, step: Step, run: impl FnOnce() -> T) -> T {
+        let began = std::time::Instant::now();
+        let answer = run();
+        self.phases.push((step, began.elapsed().as_millis()));
+        answer
+    }
+
+    /// The code a held lap ends with after `step` answered `code`, or `None`.
+    #[must_use]
+    pub fn after(&self, step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+        held_after(step, code).filter(|_| self.on)
+    }
+
+    /// The held lap's record line for `head`.
+    #[must_use]
+    pub fn line(&self, head: &str) -> String {
+        held_line(head, self.entry_ms.unwrap_or_default(), &self.phases)
+    }
+}
+
 /// Append one line (a held lap, an engine use) to this branch's lap record, through the record's
 /// one door.
 ///
