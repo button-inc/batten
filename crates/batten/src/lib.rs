@@ -12661,14 +12661,20 @@ fn run_land_lap(
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
         reconcile_at_entry(root, branch, out)?;
-        let (ended, lines) = disk_watch::around(disk_watcher(root, prune_rules.as_ref()), || {
-            run_land_laps(run, out, err)
+        // EACH COLLECTION REACHES THE LAP RECORD WHEN IT ENDS (CLOUD-2782), not
+        // when the landing does: a lap that dies mid-run keeps what the watcher
+        // saw. `record_disk` stays the record's one door; the lines are only
+        // echoed here.
+        let watch = disk_watcher(root, prune_rules.as_ref()).map(|mut watch| {
+            let (root, branch) = (root.to_path_buf(), branch.to_owned());
+            watch.record = Some(Box::new(move |lines: &[String]| {
+                let _ = land::record_disk(&root, &branch, lines);
+            }));
+            watch
         });
-        if !lines.is_empty() {
-            for line in &lines {
-                writeln!(err, "land: {line}")?;
-            }
-            land::record_disk(root, branch, &lines)?;
+        let (ended, lines) = disk_watch::around(watch, || run_land_laps(run, out, err));
+        for line in &lines {
+            writeln!(err, "land: {line}")?;
         }
         ended
     })
@@ -14693,6 +14699,7 @@ fn disk_watcher<'a>(
         config,
         free_mb: Box::new(free_mb),
         kept: collect::engine_kept(),
+        record: None,
     })
 }
 

@@ -790,6 +790,7 @@ fn the_arm_watches_past_the_gate() {
             )
         }),
         kept: Vec::new(),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         // THE FIRST STEP: the volume is fine while it runs, and it returns.
@@ -855,6 +856,7 @@ fn watched(
             ))
         }),
         kept: Vec::new(),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
@@ -873,7 +875,13 @@ fn a_sample_at_the_minimum_collects_nothing() {
     // reads `stop`, and `around` joins any collection it started.
     let lines = watched(&repo, &config, |_| 10, |taken| taken >= 1);
     assert!(present(&profile, "stale", STALE), "{lines:?}");
-    assert!(lines.is_empty(), "{lines:?}");
+    // Only the watcher's armed line (CLOUD-2782): no collection ran.
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("disk-watch-armed ")),
+        "{lines:?}"
+    );
 }
 
 /// The FIRST sample below the minimum collects, when no collection is already
@@ -956,6 +964,7 @@ fn an_undeclared_band_watches_at_the_default() {
                 Ok(free)
             }),
             kept: Vec::new(),
+            record: None,
         };
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
             wait_for(|| {
