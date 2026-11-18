@@ -48,16 +48,16 @@ fn committed_patterns(ids: &[&str]) -> String {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
     let config: toml::Value = toml::from_str(&text).unwrap();
     let rows = config["pattern"].as_array().unwrap();
-    ids.iter()
-        .map(|id| {
-            let row = rows
-                .iter()
-                .find(|row| row["id"].as_str() == Some(id))
-                .unwrap_or_else(|| panic!("batten.toml declares pattern `{id}`"));
-            let regex = toml::Value::String(row["regex"].as_str().unwrap().to_owned());
-            format!("[[pattern]]\nid = \"{id}\"\nregex = {regex}\n\n")
-        })
-        .collect()
+    ids.iter().fold(String::new(), |mut out, id| {
+        use std::fmt::Write as _;
+        let row = rows
+            .iter()
+            .find(|row| row["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("batten.toml declares pattern `{id}`"));
+        let regex = toml::Value::String(row["regex"].as_str().unwrap().to_owned());
+        let _ = write!(out, "[[pattern]]\nid = \"{id}\"\nregex = {regex}\n\n");
+        out
+    })
 }
 
 fn pipefail_repo(name: &str, program: &str) -> PathBuf {
