@@ -1643,6 +1643,10 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
     point(&dir, "refs/heads/main", base);
     point(&dir, "refs/heads/master", base);
     materialise(&dir, &[("shared.txt", "base\n")]);
+    // AN INDEX, AS EVERY LAP'S CHECKOUT HAS (CLOUD-2781): `verify` compares the
+    // tree's dirty count at the gate's start and return, and a status nobody can
+    // read is a move, never a clean answer. The other cases here never read it.
+    common::git_in(&dir, &["reset", "-q"]);
 
     // A gate that passes only when the variable carries the expected value. The
     // gate is the assertion, so a dropped pair reddens the case rather than
@@ -1668,12 +1672,11 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
         batten::speculation::PUBLISHED_AS.to_owned(),
         String::from("speculated-base"),
     )];
+    let verified =
+        batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate");
     assert!(
-        matches!(
-            batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate"),
-            batten::land::Verified::Clean(_)
-        ),
-        "the published pair did not reach the gate"
+        matches!(verified, batten::land::Verified::Clean(_)),
+        "the published pair did not reach the gate: {verified:?}"
     );
 
     // THE MIRROR, and it is not hygiene: without it the case passes over a

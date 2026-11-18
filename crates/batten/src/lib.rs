@@ -14933,6 +14933,19 @@ fn stall_progress(git_dir: &Path, pid: u32) -> Option<String> {
     Some(format!("{advance} {phase}"))
 }
 
+/// The one line a voided gate prints (CLOUD-2781): both heads and the dirty
+/// count as pointers, then the lap goes round. Never the refusal line, which
+/// would read as a verdict about this tree.
+fn say_tree_moved(out: &mut dyn Write, sha: &str, to: &str, dirty: usize) -> Result<()> {
+    writeln!(
+        out,
+        "land: the tree moved under the gate ({} -> {}, {dirty} dirty); lapping",
+        short(sha),
+        short(to)
+    )?;
+    Ok(())
+}
+
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the
 /// one fact the lap needs that the exit code cannot carry (CLOUD-2369).
 fn run_land_verify_seen(
@@ -15069,6 +15082,15 @@ fn run_land_verify_seen(
             )?;
             Ok((ExitCode::Internal, false))
         }
+        // THE CHECKOUT MOVED UNDER THE GATE (CLOUD-2781): laps, like a moved
+        // trunk, and for the same reason it is not a verdict about this tree.
+        land::Verified::Refused {
+            sha,
+            cause: land::Refusal::Voided { to, dirty },
+        } => {
+            say_tree_moved(out, &sha, &to, dirty)?;
+            Ok((ExitCode::Internal, false))
+        }
         land::Verified::Refused { sha, cause } => {
             // ONE CLASSED LINE ON STDERR (CLOUD-2078): the head is a subject
             // of `check run red`, and the cause's advice is its remedy.
@@ -15104,7 +15126,7 @@ fn verify_refusal(
 ) -> refusal::Refusal {
     let advice = match (cause, published) {
         // Handled by the caller: it is not a refusal about anything.
-        (land::Refusal::Moved, _) => String::new(),
+        (land::Refusal::Moved | land::Refusal::Voided { .. }, _) => String::new(),
         (land::Refusal::Environment { remedy }, _) => {
             format!("the gate died of the environment rather than of this tree: {remedy}")
         }
