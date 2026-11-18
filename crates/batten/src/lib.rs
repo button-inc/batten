@@ -32107,11 +32107,8 @@ mod tests {
     /// letter replaced, a `-` replaced, or a `/` kept.
     #[test]
     fn a_call_id_is_one_safe_file_name() {
-        let dir = std::env::temp_dir().join(format!("batten-snapshot-name-{}", std::process::id()));
-        let _stale = std::fs::remove_dir_all(&dir);
-        gix::init(&dir).unwrap();
-        let path = super::protected_snapshot_path(&dir, "toolu_01-Ab/../x").unwrap();
-        let _removed = std::fs::remove_dir_all(&dir);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = super::protected_snapshot_path(&root, "toolu_01-Ab/../x").unwrap();
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some("toolu_01-Ab____x.json")
