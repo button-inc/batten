@@ -254,6 +254,15 @@ pub fn refresh(root: &Path, declared: &[TaskQuery]) -> TaskFacts {
             );
         }
     }
+    // A BODY LINE RUNNING `step graph run <group>` REACHES ITS GROUP'S ROWS
+    // (CLOUD-2785): the gate set moved from task bodies into `[[step]]` rows, and
+    // a reader of bodies alone would see `mise run verify` reach none of it. The
+    // authority joins the keyed configs, so a row edit moves the record too.
+    let authority = root.join(crate::config::CONFIG_FILE);
+    if let Some(groups) = graph_rows(&authority) {
+        configs.push(authority);
+        expand_graphs(&mut bodies, &groups);
+    }
     if tasks.is_empty() {
         // The manifests were declared and none of them yielded a task. That is
         // could-not-look rather than an empty answer for the reason the header
@@ -262,6 +271,57 @@ pub fn refresh(root: &Path, declared: &[TaskQuery]) -> TaskFacts {
     }
     let _recorded = write(root, &configs, &tasks, &bodies);
     Look::Is(tasks)
+}
+
+/// Each graph group's rows' `run` argvs, as shell lines, from the authority at
+/// `path`; `None` where it does not read or declares no grouped row.
+fn graph_rows(path: &Path) -> Option<BTreeMap<String, Vec<String>>> {
+    let text = crate::fsio::read_to_string(path).ok()?;
+    let node = crate::rules::parse_node(crate::facts::Format::Toml, &text).ok()?;
+    let Look::Is(Node::List(rows)) = node.at("step") else {
+        return None;
+    };
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let (Look::Is(group), Look::Is(Node::List(run))) = (row.at("group"), row.at("run")) else {
+            continue;
+        };
+        let Some(group) = group.scalar() else {
+            continue;
+        };
+        let words: Vec<String> = run
+            .iter()
+            .filter_map(Node::scalar)
+            .map(|word| crate::engine::shell_word(&word))
+            .collect();
+        if !words.is_empty() {
+            groups.entry(group).or_default().push(words.join(" "));
+        }
+    }
+    (!groups.is_empty()).then_some(groups)
+}
+
+/// Follow every body line naming `step graph run <group>` with that group's
+/// row lines, so a reader of the body reaches what the graph runs.
+fn expand_graphs(
+    bodies: &mut BTreeMap<String, Vec<String>>,
+    groups: &BTreeMap<String, Vec<String>>,
+) {
+    for lines in bodies.values_mut() {
+        let mut expanded = Vec::with_capacity(lines.len());
+        for line in lines.drain(..) {
+            let rows = graph_group(&line).and_then(|group| groups.get(group));
+            expanded.push(line.clone());
+            expanded.extend(rows.into_iter().flatten().cloned());
+        }
+        *lines = expanded;
+    }
+}
+
+/// The group a `… step graph run <group>` line names.
+fn graph_group(line: &str) -> Option<&str> {
+    let (_, rest) = line.split_once("step graph run ")?;
+    rest.split_whitespace().next()
 }
 
 /// Write `tasks` as `root`'s record, keyed to `configs` as they stand.
@@ -588,6 +648,40 @@ mod tests {
         ));
         assert_eq!(bodies["one"], vec!["cargo build"]);
         assert_eq!(bodies["seq"], vec!["a x", "mise run b", "mise run c"]);
+    }
+
+    #[test]
+    fn a_graph_line_is_followed_by_its_groups_rows_and_nothing_else_moves() {
+        let dir = std::env::temp_dir().join(format!("taskset-graph-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let authority = dir.join("batten.toml");
+        crate::durable::replace(
+            &authority,
+            "[[step]]\nid = \"a\"\ngroup = \"g\"\nrun = [\"mise\", \"run\", \"zizmor\"]\n\
+             [[step]]\nid = \"b\"\ngroup = \"g\"\nrun = [\"batten\", \"check\", \"--rule\", \"x y\"]\n\
+             [[step]]\nid = \"c\"\ngroup = \"h\"\nrun = [\"mise\", \"run\", \"other\"]\n\
+             [[step]]\nid = \"d\"\ninputs = [\".\"]\ntools = []\n",
+        )
+        .unwrap();
+        let groups = graph_rows(&authority).expect("two groups");
+        let mut bodies = BTreeMap::from([(
+            "gated".to_owned(),
+            vec![
+                "batten step graph run g --jobs 2".to_owned(),
+                "mise run ci".to_owned(),
+            ],
+        )]);
+        expand_graphs(&mut bodies, &groups);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            bodies["gated"],
+            vec![
+                "batten step graph run g --jobs 2",
+                "mise run zizmor",
+                "batten check --rule 'x y'",
+                "mise run ci",
+            ]
+        );
     }
 
     #[test]
