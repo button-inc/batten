@@ -7340,9 +7340,11 @@ fn run_static_inner(
     // process or reach the network, a property CLOUD-831 gates rather than
     // asserts. So admitting it here makes `check` MORE capable without making it
     // less honest, and the spawning refusal below is untouched.
-    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     // Refuse before any work: the read-only surface must not even begin a run
-    // it cannot complete honestly.
+    // it cannot complete honestly. BEFORE THE BUNDLES LOAD, too (#1276): loading
+    // first let an unreadable module's usage error answer for a config whose
+    // real refusal is the spawning kind, and which of the two a caller saw
+    // turned on what the loader could resolve.
     for rule in rules {
         if rule.kind.carries_ambient_authority() {
             // The refusal contract (CLOUD-122) covers this deny site too, and it
@@ -7364,6 +7366,7 @@ fn run_static_inner(
             ));
         }
     }
+    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     run(rules, &[], root, &bundles, vocabulary, opts)
 }
 
