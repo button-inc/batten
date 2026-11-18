@@ -38,17 +38,33 @@ use std::process::Output;
 
 use common::{Fixture, git_in, run, stdout};
 
+/// The committed `[[pattern]]` rows the module reads, by id, as TOML.
+///
+/// READ FROM THE COMMITTED AUTHORITY, never copied here (#1276). This fixture
+/// carried its own copy of `pipe-into-grep`, so the declared mutation of the real
+/// row could not reach these cases and survived: a second spelling of the rule
+/// that only agreed with the first by hand.
+fn committed_patterns(ids: &[&str]) -> String {
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
+    let config: toml::Value = toml::from_str(&text).unwrap();
+    let rows = config["pattern"].as_array().unwrap();
+    ids.iter()
+        .map(|id| {
+            let row = rows
+                .iter()
+                .find(|row| row["id"].as_str() == Some(id))
+                .unwrap_or_else(|| panic!("batten.toml declares pattern `{id}`"));
+            let regex = toml::Value::String(row["regex"].as_str().unwrap().to_owned());
+            format!("[[pattern]]\nid = \"{id}\"\nregex = {regex}\n\n")
+        })
+        .collect()
+}
+
 fn pipefail_repo(name: &str, program: &str) -> PathBuf {
-    let dir = Fixture::new(name)
-        .config(
-            "version = 1\n\n\
-             [[pattern]]\n\
-             id = \"shell-enables-pipefail\"\n\
-             regex = '^[[:space:]]*set[[:space:]]+-[a-z]*o?[a-z]*[[:space:]]*.*pipefail'\n\n\
-             [[pattern]]\n\
-             id = \"pipe-into-grep\"\n\
-             regex = '(^|[^|])\\|[[:space:]]*grep([[:space:]]|$)'\n\n\
-             [[verdict]]\n\
+    let config = format!(
+        "version = 1\n\n{}{}",
+        committed_patterns(&["shell-enables-pipefail", "pipe-into-grep"]),
+        "[[verdict]]\n\
              id = \"spawn read broken\"\n\
              gloss = \"a command is spelled in a way whose behaviour is not defined\"\n\
              class = \"An early-exiting grep under pipefail promotes SIGPIPE to the pipeline's status, so a MATCH reports failure.\"\n\n\
@@ -63,7 +79,9 @@ fn pipefail_repo(name: &str, program: &str) -> PathBuf {
              line_sources = [\"mise-tasks/**\"]\n\
              module = \"policy/pipefail-grep.rego\"\n\
              severity = \"deny\"\n",
-        )
+    );
+    let dir = Fixture::new(name)
+        .config(&config)
         .file("AGENTS.md", "the consumer's own authority\n")
         .file("mise-tasks/demo.sh", program)
         .git()
