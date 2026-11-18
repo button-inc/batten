@@ -184,6 +184,7 @@ dependencies = [
  "json5",
  "jsonschema",
  "mimalloc",
+ "nix",
  "proc-macro2",
  "ra_ap_syntax",
  "rable",
