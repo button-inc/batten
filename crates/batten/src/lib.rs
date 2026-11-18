@@ -19716,8 +19716,20 @@ fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<Str
     if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
         return None;
     }
+    let in_gate = std::env::var_os(land::LAP_GATE).is_some();
     let git_dir = git::git_dir(hook_authority_root()).ok()?;
-    task::singleton_holder(&git_dir, LAND_TASK)
+    live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), in_gate)
+}
+
+/// The live lap a call is held for, or `None` (CLOUD-2783).
+///
+/// A CALL MADE FROM INSIDE THE LAP'S OWN GATE IS THE LAP. The gate runs under
+/// `land::LAP_GATE`, and everything it spawns, the workspace suite's mediated
+/// cases included, inherits it. Measured on #1276's first green-clippy held lap:
+/// `git_preset`, `gh_guard`, `hook_skip_local` and `finding_sink` judged their own
+/// lap live and refused `git add` and every write, so the gate held itself.
+fn live_lap_outside_its_gate(holder: Option<String>, in_gate: bool) -> Option<String> {
+    holder.filter(|_| !in_gate)
 }
 
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
@@ -32253,6 +32265,22 @@ mod tests {
             super::moved_past(Some("v2"), &super::land::Pushed::Raced),
             None
         );
+    }
+
+    /// A LAP'S OWN GATE IS NEVER HELD BY THAT LAP (CLOUD-2783): a holder is
+    /// a live lap for a call from outside the gate and none for one inside it.
+    ///
+    /// Fails by: the gate marker ignored (the suite under a lap refuses itself),
+    /// or the holder dropped outside the gate (writes during a lap admitted).
+    #[test]
+    fn a_laps_own_gate_is_not_held_by_it() {
+        let holder = Some(String::from("4242"));
+        assert_eq!(
+            super::live_lap_outside_its_gate(holder.clone(), false),
+            holder
+        );
+        assert_eq!(super::live_lap_outside_its_gate(holder, true), None);
+        assert_eq!(super::live_lap_outside_its_gate(None, false), None);
     }
 
     /// A LAP BUILDS A MOVED ENGINE ONCE, FOR EVERY GATE STEP (CLOUD-2783): an
