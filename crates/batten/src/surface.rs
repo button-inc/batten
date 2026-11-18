@@ -3244,6 +3244,19 @@ const STEP_ARG: FlagDecl = FlagDecl {
     )
 };
 
+/// The group `step graph run` schedules, as the step table's `group` names it.
+const STEP_GROUP: FlagDecl = FlagDecl::positional(
+    "group",
+    "The graph to run, as the step table's `group` field names it",
+);
+
+/// `--jobs <n>` on `step graph run`: how many rows run at once.
+const STEP_JOBS: FlagDecl = FlagDecl::valued(
+    "jobs",
+    "jobs",
+    "Run at most this many of the group's rows at once (a positive integer; default: no bound)",
+);
+
 /// The step's own command on `step run`, after the mandatory `--`.
 const STEP_COMMAND: FlagDecl = FlagDecl::trailing(
     "command",
@@ -7865,6 +7878,30 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[STEP_NAME, STEP_ARG, STEP_COMMAND],
+    },
+    // The step graph (CLOUD-2785): the order and fan width a lap used to spell
+    // as positions in a mise array, read from the step table's `group`,
+    // `depends_on` and `run`. Unclassified for `step run`'s reason: every node
+    // runs a command the consumer declared.
+    CommandDecl {
+        path: "step graph",
+        id: "step.graph",
+        about: "Schedule the step table's rows as a graph",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `EXITS_VERDICT`: the worst node's code is the verb's, so a refusing step
+    // is a violation and a node that could not run is internal.
+    CommandDecl {
+        path: "step graph run",
+        id: "step.graph.run",
+        about: "Run a group's rows, dependencies first and at most --jobs at once, and exit with the worst row's code",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[STEP_GROUP, STEP_JOBS],
     },
     // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
     // `sbom-binary-record`). `write`: it writes the documents and runs the

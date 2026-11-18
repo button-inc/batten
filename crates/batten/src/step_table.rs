@@ -23,7 +23,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 
-/// One declared step: what its verdict depends on.
+/// One declared step: what its verdict depends on, and where it runs in a graph.
+///
+/// A KEYED ROW declares both `inputs` and `tools`; a SCHEDULE-ONLY NODE declares
+/// neither (CLOUD-2785): it is in a `batten step graph run` group, always runs,
+/// and never keys or takes a receipt. Absent and empty are different answers,
+/// which is why both lists are optional and an empty one is still refused.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
@@ -34,19 +39,78 @@ pub struct Step {
     ///
     /// The index rather than the worktree, and the worktree must agree with it
     /// over the set: a diverged or untracked path under a spec is no key at all.
-    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Vec<String>>,
     /// Programs, as argv, whose stdout is key material: a tool's version, or
     /// the declaration of the step's own command. Each must exit 0 and print
     /// something, or there is no key.
-    pub tools: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Vec<String>>>,
+    /// The argv `batten step graph run` starts this row with. Never key
+    /// material: the command a receipt covers is the one after `step run --`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Vec<String>>,
+    /// The graph this row is a node of, as `step graph run <group>` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Rows of the same group that must exit 0 before this one starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// How the step's verdict is read. One variant on purpose: it is where a
+    /// structured verdict is added, and a text pattern has none to be spelled in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    /// The per-case journal a miss runs under, chosen by the row and never by
+    /// sniffing the command's argv.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<Journal>,
 }
 
-/// Refuse a row the cache cannot act on, at LOAD rather than at the first run.
+/// How a step's verdict is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    /// The command's exit code, house-style §7.
+    Exit,
+}
+
+/// A per-case journal a step's miss runs under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Journal {
+    /// `cargo nextest run` under the case-by-case journal (CLOUD-2772).
+    Nextest,
+}
+
+impl Step {
+    /// The declared pathspecs, empty for a schedule-only node.
+    #[must_use]
+    pub fn inputs(&self) -> &[String] {
+        self.inputs.as_deref().unwrap_or_default()
+    }
+
+    /// The declared tools, empty for a schedule-only node.
+    #[must_use]
+    pub fn tools(&self) -> &[Vec<String>] {
+        self.tools.as_deref().unwrap_or_default()
+    }
+
+    /// Whether this row keys a receipt: it declares inputs and tools.
+    #[must_use]
+    pub const fn is_keyed(&self) -> bool {
+        self.inputs.is_some() && self.tools.is_some()
+    }
+}
+
+/// Refuse a row the cache or the graph cannot act on, at LOAD rather than at
+/// the first run.
 ///
 /// Each refusal is a row that would otherwise answer the wrong thing silently:
-/// no inputs would key a receipt to no file at all, so it would answer for any
-/// tree; no tools would let a receipt outlive the toolchain that earned it; a
-/// `:`-magic pathspec would select nothing and read as a clean set.
+/// empty inputs would key a receipt to no file at all; empty tools would let a
+/// receipt outlive the toolchain that earned it; a `:`-magic pathspec would
+/// select nothing; one list without the other is neither a keyed row nor a
+/// schedule-only node; a grouped row with nothing to run, a dependency outside
+/// the group, or a cycle is a graph that cannot be scheduled.
 ///
 /// # Errors
 ///
@@ -54,48 +118,129 @@ pub struct Step {
 pub fn validate(rows: &[Step]) -> Result<()> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for row in rows {
-        if row.id.trim().is_empty() {
-            return Err(UsageError::raise(String::from(
-                "[[step]]: `id` is empty, so no caller could name the row",
-            )));
-        }
-        if row.inputs.is_empty() {
-            return Err(UsageError::raise(format!(
-                "[[step]] {}: `inputs` is empty, so a receipt would answer for any tree — \
-                 declare `.` for the whole tracked tree",
-                row.id
-            )));
-        }
-        if let Some(spec) = row
-            .inputs
-            .iter()
-            .find(|spec| !crate::git::pathspec_is_supported(spec))
-        {
-            return Err(UsageError::raise(format!(
-                "[[step]] {}: `{spec}` is not a pathspec this build reads (empty, or `:` magic), \
-                 so it would select nothing and read as a clean set",
-                row.id
-            )));
-        }
-        if row.tools.is_empty() {
-            return Err(UsageError::raise(format!(
-                "[[step]] {}: `tools` is empty, so a receipt would outlive the toolchain that \
-                 earned it",
-                row.id
-            )));
-        }
-        if row.tools.iter().any(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "[[step]] {}: a `tools` entry is an empty argv, which runs nothing",
-                row.id
-            )));
-        }
+        validate_row(row)?;
         if !seen.insert(row.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "[[step]] {}: declared twice — one id, one key",
-                row.id
-            )));
+            return Err(refuse(row, "declared twice — one id, one key"));
         }
+    }
+    validate_graph(rows)
+}
+
+fn refuse(row: &Step, why: &str) -> anyhow::Error {
+    UsageError::raise(format!("[[step]] {}: {why}", row.id))
+}
+
+fn validate_row(row: &Step) -> Result<()> {
+    if row.id.trim().is_empty() {
+        return Err(UsageError::raise(String::from(
+            "[[step]]: `id` is empty, so no caller could name the row",
+        )));
+    }
+    match (&row.inputs, &row.tools) {
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(refuse(
+                row,
+                "declares one of `inputs` and `tools` without the other — a keyed row \
+                 declares both, a schedule-only node neither",
+            ));
+        }
+        (Some(inputs), Some(tools)) => {
+            if inputs.is_empty() {
+                return Err(refuse(
+                    row,
+                    "`inputs` is empty, so a receipt would answer for any tree — declare `.` \
+                     for the whole tracked tree",
+                ));
+            }
+            if let Some(spec) = inputs
+                .iter()
+                .find(|spec| !crate::git::pathspec_is_supported(spec))
+            {
+                return Err(refuse(
+                    row,
+                    &format!(
+                        "`{spec}` is not a pathspec this build reads (empty, or `:` magic), so \
+                         it would select nothing and read as a clean set"
+                    ),
+                ));
+            }
+            if tools.is_empty() {
+                return Err(refuse(
+                    row,
+                    "`tools` is empty, so a receipt would outlive the toolchain that earned it",
+                ));
+            }
+            if tools.iter().any(Vec::is_empty) {
+                return Err(refuse(
+                    row,
+                    "a `tools` entry is an empty argv, which runs nothing",
+                ));
+            }
+        }
+    }
+    if row.run.as_ref().is_some_and(Vec::is_empty) {
+        return Err(refuse(row, "`run` is an empty argv, which runs nothing"));
+    }
+    if row.group.is_some() && row.run.is_none() {
+        return Err(refuse(
+            row,
+            "is in a `group` with no `run`, so the graph has nothing to start",
+        ));
+    }
+    if row.group.is_none() && !row.depends_on.is_empty() {
+        return Err(refuse(row, "declares `depends_on` outside any `group`"));
+    }
+    Ok(())
+}
+
+/// Every dependency names a row of the same group, and no group has a cycle.
+fn validate_graph(rows: &[Step]) -> Result<()> {
+    let by_id: std::collections::BTreeMap<&str, &Step> =
+        rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    for row in rows {
+        for dependency in &row.depends_on {
+            let same_group = by_id
+                .get(dependency.as_str())
+                .is_some_and(|other| other.group.is_some() && other.group == row.group);
+            if !same_group {
+                return Err(refuse(
+                    row,
+                    &format!("depends on `{dependency}`, which is not a row of its group"),
+                ));
+            }
+        }
+    }
+    // Kahn's algorithm over the dependency edges: whatever never reaches
+    // in-degree zero sits on a cycle.
+    let mut waiting: std::collections::BTreeMap<&str, usize> = rows
+        .iter()
+        .map(|row| (row.id.as_str(), row.depends_on.len()))
+        .collect();
+    let mut ready: Vec<&str> = waiting
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| *id)
+        .collect();
+    while let Some(done) = ready.pop() {
+        waiting.remove(done);
+        for row in rows {
+            if row.depends_on.iter().any(|dependency| dependency == done)
+                && let Some(count) = waiting.get_mut(row.id.as_str())
+            {
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(row.id.as_str());
+                }
+            }
+        }
+    }
+    if let Some((id, _)) = waiting.iter().next() {
+        let row = by_id[id];
+        return Err(refuse(
+            row,
+            "is on a `depends_on` cycle, so no order can start it",
+        ));
     }
     Ok(())
 }
@@ -112,12 +257,44 @@ mod tests {
     fn row(inputs: &[&str], tools: &[&[&str]]) -> Step {
         Step {
             id: String::from("a-step"),
-            inputs: inputs.iter().map(|spec| (*spec).to_owned()).collect(),
-            tools: tools
-                .iter()
-                .map(|argv| argv.iter().map(|word| (*word).to_owned()).collect())
-                .collect(),
+            inputs: Some(inputs.iter().map(|spec| (*spec).to_owned()).collect()),
+            tools: Some(
+                tools
+                    .iter()
+                    .map(|argv| argv.iter().map(|word| (*word).to_owned()).collect())
+                    .collect(),
+            ),
+            run: None,
+            group: None,
+            depends_on: Vec::new(),
+            verdict: None,
+            journal: None,
         }
+    }
+
+    /// A schedule-only node of group `g`, running `true`, after `after`.
+    fn node(id: &str, after: &[&str]) -> Step {
+        Step {
+            id: id.to_owned(),
+            inputs: None,
+            tools: None,
+            run: Some(vec![String::from("true")]),
+            group: Some(String::from("g")),
+            depends_on: after.iter().map(|id| (*id).to_owned()).collect(),
+            verdict: None,
+            journal: None,
+        }
+    }
+
+    /// The load error a `[[step]]` table parsed from `toml` gives, if any.
+    fn loaded(toml: &str) -> Result<Vec<Step>, String> {
+        #[derive(serde::Deserialize)]
+        struct Table {
+            step: Vec<Step>,
+        }
+        let table: Table = toml::from_str(toml).map_err(|error| error.to_string())?;
+        validate(&table.step).map_err(|error| error.to_string())?;
+        Ok(table.step)
     }
 
     #[test]
@@ -156,5 +333,71 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(refused.contains("declared twice"), "{refused}");
+    }
+
+    // A VERDICT HAS NO TEXT FORM (CLOUD-2785): the only value is `exit`, so a
+    // pattern over a log has nothing to be spelled in.
+    #[test]
+    fn a_text_verdict_is_refused_at_load() {
+        let base = "[[step]]\nid = \"s\"\ninputs = [\"a\"]\ntools = [[\"t\"]]\n";
+        assert!(loaded(&format!("{base}verdict = \"exit\"\n")).is_ok());
+        for bad in ["verdict = \"stdout\"\n", "verdict = { pattern = \"ok\" }\n"] {
+            assert!(loaded(&format!("{base}{bad}")).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_schedule_only_row_loads() {
+        validate(&[node("a", &[]), node("b", &["a"])]).unwrap();
+    }
+
+    #[test]
+    fn inputs_without_tools_is_refused() {
+        let mut half = row(&["a"], &[&["t"]]);
+        half.tools = None;
+        let refused = validate(&[half]).unwrap_err().to_string();
+        assert!(refused.contains("without the other"), "{refused}");
+        let mut other = row(&["a"], &[&["t"]]);
+        other.inputs = None;
+        let refused = validate(&[other]).unwrap_err().to_string();
+        assert!(refused.contains("without the other"), "{refused}");
+    }
+
+    #[test]
+    fn a_grouped_row_without_run_is_refused() {
+        let mut bare = node("a", &[]);
+        bare.run = None;
+        let refused = validate(&[bare]).unwrap_err().to_string();
+        assert!(refused.contains("no `run`"), "{refused}");
+    }
+
+    #[test]
+    fn a_dependency_outside_the_group_is_refused() {
+        let mut elsewhere = node("b", &[]);
+        elsewhere.group = Some(String::from("h"));
+        let refused = validate(&[node("a", &["b"]), elsewhere])
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not a row of its group"), "{refused}");
+        let refused = validate(&[node("a", &["missing"])])
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not a row of its group"), "{refused}");
+    }
+
+    #[test]
+    fn a_dependency_cycle_is_refused() {
+        let refused = validate(&[node("a", &["c"]), node("b", &["a"]), node("c", &["b"])])
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("cycle"), "{refused}");
+        // A diamond is not a cycle.
+        validate(&[
+            node("a", &[]),
+            node("b", &["a"]),
+            node("c", &["a"]),
+            node("d", &["b", "c"]),
+        ])
+        .unwrap();
     }
 }

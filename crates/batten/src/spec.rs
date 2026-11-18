@@ -1376,6 +1376,8 @@ mod tests {
             // are unclassified: `run` executes the command it is handed.
             "step".to_owned(),
             "step check".to_owned(),
+            "step graph".to_owned(),
+            "step graph run".to_owned(),
             "step record".to_owned(),
             "step run".to_owned(),
             // The build-tree noun (CLOUD-1030), ported off

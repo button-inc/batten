@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-graph 1  batten 
+.SH NAME
+batten\-step\-graph \- Schedule the step table\*(Aqs rows as a graph
+.SH SYNOPSIS
+\fBbatten step graph\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Schedule the step table\*(Aqs rows as a graph
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-step\-graph\-run(1)
+Run a group\*(Aqs rows, dependencies first and at most \-\-jobs at once, and exit with the worst row\*(Aqs code
+.TP
+batten\-step\-graph\-help(1)
+Print this message or the help of the given subcommand(s)
