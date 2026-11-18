@@ -1980,6 +1980,8 @@ pub fn verify(
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
+    // THE GATE'S OWN WINDOW: the low-water mark it is judged by is read from here.
+    crate::disk_watch::reset_low_water();
     let classified =
         crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
             .map(|(code, found, handles)| {
@@ -1987,7 +1989,7 @@ pub fn verify(
                 (code, found)
             });
     let verified = match classified {
-        Ok(ran) => gate_said(head, ran, environment),
+        Ok(ran) => gate_said(head, ran, environment, crate::disk_watch::low_water()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
     };
     let mut lines = vec![verified.line()];
@@ -2024,6 +2026,7 @@ fn gate_said(
     head: String,
     ran: (i32, Vec<crate::outputs::Hit>),
     environment: &[crate::outputs::OutputPattern],
+    low_water: Option<u64>,
 ) -> Verified {
     match ran {
         (0, _) => Verified::Clean(head),
@@ -2058,6 +2061,20 @@ fn gate_said(
             cause: Refusal::Environment {
                 remedy: format!(
                     "the verify command exited {code}, which is not a verdict about this tree — check that it names a task this checkout declares and that its runner is on PATH"
+                ),
+            },
+        },
+        // A FULL VOLUME IS MEASURED, NEVER MATCHED IN TEXT (#1276). The disk
+        // watcher read the volume throughout the gate ([`disk_watch::low_water`]);
+        // a gate that refused while free space reached zero refused for the
+        // environment, whatever its log says, and one that refused with space to
+        // spare refused the tree, whatever its log says. The `disk-full` text row
+        // matched a mutant's diff on #1276 while the watcher read gigabytes free.
+        (_, _) if low_water == Some(0) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Environment {
+                remedy: String::from(
+                    "the volume's free space reached 0 MiB while the gate ran, as the disk watcher measured it, so this is the environment rather than your branch: free space outside the declared [prune] roots, or lower [prune] max_free_mb so collection starts sooner",
                 ),
             },
         },
@@ -4484,9 +4501,68 @@ mod forge_tests {
         );
     }
 
+    /// A FULL VOLUME IS WHAT THE WATCHER MEASURED, NOT WHAT THE LOG SAYS (#1276).
+    ///
+    /// Fails by: the measured arm removed (a full volume reads as the tree's), or
+    /// the comparison loosened (a volume with space read as full). The text that
+    /// misread lap 2 has no row to match any more (CLOUD-2781), so a gate whose
+    /// log says `No space left on device` over a volume with room is the tree's.
+    #[test]
+    fn a_full_volume_is_measured_and_never_read_from_the_log() {
+        let tree = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused {
+                    cause: Refusal::Tree,
+                    ..
+                }
+            )
+        };
+        let measured_full = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused { cause: Refusal::Environment { ref remedy }, .. }
+                    if remedy.contains("disk watcher measured")
+            )
+        };
+        // The volume filled, and the log never said so.
+        assert!(measured_full(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(0)
+        )));
+        // A megabyte left is not full.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(1)
+        )));
+        // The log says full, no row reads it, and the volume had room: the tree's.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(5_000)
+        )));
+        // Unwatched decides nothing about the volume.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            None
+        )));
+        // A clean gate is clean on a full volume.
+        assert!(matches!(
+            gate_said(String::from("h"), (0, Vec::new()), &[], Some(0)),
+            Verified::Clean(_)
+        ));
+    }
+
     #[test]
     fn a_gate_that_could_not_judge_is_an_environment_refusal_and_not_the_tree_s() {
-        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[]);
+        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[], None);
         assert!(matches!(said(0), Verified::Clean(_)));
         assert!(matches!(
             said(2),

@@ -46,6 +46,33 @@ pub const TICK: f64 = 5.0;
 /// bound. Checked at unit boundaries; the next pressed call resumes.
 pub const HOOK_COLLECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// The lowest free space, in MiB, any watcher in this process has read since the
+/// last [`reset_low_water`]; `u64::MAX` while none has.
+///
+/// MEASURED, NEVER INFERRED FROM TEXT (#1276). A gate's failure was classified
+/// disk-full by matching `No space left on device` in its log, and on #1276 that
+/// phrase sat inside a mutant's diff while this watcher had read gigabytes free.
+/// Whether the volume filled is what this reading answers; the log is not asked.
+static LOW_WATER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Start a new measurement window: the gate about to run is judged by what is
+/// read from here on.
+pub fn reset_low_water() {
+    LOW_WATER.store(u64::MAX, Ordering::Release);
+}
+
+/// The lowest free space read since [`reset_low_water`], or `None` where no
+/// watcher read the volume in the window, which decides nothing about it.
+#[must_use]
+pub fn low_water() -> Option<u64> {
+    Some(LOW_WATER.load(Ordering::Acquire)).filter(|low| *low != u64::MAX)
+}
+
+/// Record one reading against the window.
+fn observe(free_mb: u64) {
+    LOW_WATER.fetch_min(free_mb, Ordering::AcqRel);
+}
+
 /// A free-space reader both the watcher and its collection thread take turns on.
 type Reader<'a> = Arc<Mutex<Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>>>;
 
@@ -113,6 +140,7 @@ pub fn watch<'scope>(
         while !stop.load(Ordering::Relaxed) {
             let reading = reader.lock().ok().and_then(|mut read| read().ok());
             if let Some(free) = reading {
+                observe(free);
                 if trace {
                     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let _ = std::io::Write::write_all(
@@ -228,6 +256,57 @@ impl Drop for Stop<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE WATCHER'S READING IS THE MEASUREMENT A GATE IS JUDGED BY (CLOUD-2781):
+    /// a 0 the loop reads is the window's low-water mark, and a reset opens a new
+    /// window with nothing in it.
+    ///
+    /// The reader signals on its SECOND call, which the loop makes only after it
+    /// has observed the first, so the order is an event, never a clock.
+    ///
+    /// Fails by: the loop's `observe` removed (the mark never moves), or a reset
+    /// that does not clear it.
+    #[test]
+    fn a_reading_the_watcher_takes_is_the_windows_low_water_mark() {
+        use std::sync::atomic::AtomicUsize;
+        let repo = crate::scratch::scratch("disk-watch-low-water");
+        let config = crate::prune::Prune {
+            root: "target".to_owned(),
+            keep: 2,
+            warm: None,
+            cold: None,
+            regrowable: None,
+            min_free_mb: Some(0),
+            max_free_mb: Some(1),
+        };
+        let (second, observed) = std::sync::mpsc::channel();
+        let reads = AtomicUsize::new(0);
+        let watch = DiskWatch {
+            repo,
+            config: &config,
+            free_mb: Box::new(move || {
+                if reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                    let _ = second.send(());
+                }
+                Ok(0)
+            }),
+            kept: Vec::new(),
+        };
+        reset_low_water();
+        let (seen, _) = around(Some(watch), || {
+            // Bounded by the event: two of the watcher's ticks at the outside.
+            observed
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .map(|()| low_water())
+        });
+        assert_eq!(
+            seen.ok().flatten(),
+            Some(0),
+            "the loop's 0 is the window's mark"
+        );
+        reset_low_water();
+        assert_eq!(low_water(), None, "a reset opens an empty window");
+    }
 
     /// Fails by: a watcher printing nothing of what it watches, or printing its
     /// reader rather than naming it.
