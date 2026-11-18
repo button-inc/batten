@@ -75,6 +75,9 @@ fn observe(free_mb: u64) {
     LOW_WATER.fetch_min(free_mb, Ordering::AcqRel);
 }
 
+/// Where a watcher hands each collection's lines as it ends (CLOUD-2782).
+pub type RecordSink<'a> = Box<dyn Fn(&[String]) + Send + Sync + 'a>;
+
 /// A free-space reader both the watcher and its collection thread take turns on.
 type Reader<'a> = Arc<Mutex<Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>>>;
 
@@ -95,7 +98,7 @@ pub struct DiskWatch<'a> {
     pub kept: Vec<crate::collect::Kept>,
     /// Where each collection's lines go the moment it ends (CLOUD-2782):
     /// `land` points it at the lap record. `None` keeps them for the join alone.
-    pub record: Option<Box<dyn Fn(&[String]) + Send + Sync + 'a>>,
+    pub record: Option<RecordSink<'a>>,
 }
 
 impl std::fmt::Debug for DiskWatch<'_> {
@@ -135,7 +138,7 @@ struct Sampler<'scope, 'env> {
     last_wake: std::cell::Cell<Option<std::time::Instant>>,
 }
 
-impl<'scope> Sampler<'scope, '_> {
+impl Sampler<'_, '_> {
     /// Keep `new` in the watcher's record and hand it to the sink at once.
     fn emit(&self, new: &[String]) {
         if new.is_empty() {
@@ -775,7 +778,7 @@ mod tests {
     }
 
     /// Every driver the watcher's runtime can be built on here: the platform's
-    /// default, and on Linux the forced polling driver beside io_uring.
+    /// default, and on Linux the forced polling driver beside `io_uring`.
     fn drivers() -> Vec<Option<compio::driver::DriverType>> {
         if cfg!(target_os = "linux") {
             vec![
@@ -793,7 +796,7 @@ mod tests {
         repo: PathBuf,
         config: &'a crate::prune::Prune,
         readings: Vec<u64>,
-        sink: Option<Box<dyn Fn(&[String]) + Send + Sync + 'a>>,
+        sink: Option<RecordSink<'a>>,
     ) -> DiskWatch<'a> {
         let mut taken = 0_usize;
         DiskWatch {
@@ -891,6 +894,7 @@ mod tests {
     /// sampling after its first wake never reaches it.
     #[test]
     fn the_achieved_period_is_measured() {
+        use std::io::Write as _;
         const SAMPLES: usize = 1000;
         let (repo, _stale, config) = stale_repo("disk-watch-period");
         let stamps = Arc::new(Mutex::new(Vec::with_capacity(SAMPLES)));
@@ -928,7 +932,8 @@ mod tests {
             .collect();
         gaps.sort_unstable();
         let p99 = gaps.get(gaps.len() * 99 / 100).copied().unwrap_or_default();
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "disk-watch-period samples={} p50-us={} p99-us={p99}",
             stamps.len(),
             gaps.get(gaps.len() / 2).copied().unwrap_or_default()
