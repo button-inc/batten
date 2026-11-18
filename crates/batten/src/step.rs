@@ -576,11 +576,9 @@ pub fn run_step(
     // up runs the command as declared, because the journal is an economy and
     // the step's verdict is the command's alone.
     // BY THE ROW, NEVER BY THE ARGV (CLOUD-2785): `journal = "nextest"`.
-    let journaled = Some(command)
-        .filter(|_| {
-            declared(step)
-                .is_some_and(|row| row.journal == Some(crate::step_table::Journal::Nextest))
-        })
+    let journaled = declared(step)
+        .is_some_and(|row| row.journal == Some(crate::step_table::Journal::Nextest))
+        .then_some(command)
         .and_then(|_| crate::git::repo_root(Path::new(".")).ok())
         .and_then(|root| Some((crate::mutate::resume::journaled(&root, command).ok()?, root)));
     let running = journaled
@@ -609,7 +607,6 @@ pub fn run_step(
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && let Some((_, file)) = &traced {
         match lint_trace(step, file) {
-            Linted::Declared => {}
             Linted::Undeclared(count, listing) => {
                 let _ = writeln!(
                     err,
@@ -620,7 +617,7 @@ pub fn run_step(
             }
             // The row no longer reads (the command moved the authority): the
             // record below recomputes the key and refuses on its own words.
-            Linted::RowUnread => {}
+            Linted::Declared | Linted::RowUnread => {}
             Linted::Unread => {
                 // A trace that cannot be read whole proves nothing about the
                 // declaration, so no receipt: the step's own verdict stands.
@@ -655,18 +652,20 @@ pub fn run_step(
     ran
 }
 
-/// Where a step's traced run writes its trace, emptied first; `None` where the
-/// git dir cannot be found or the directory not made, which runs untraced.
+/// Where a step's traced run writes its trace: a file directly under the git
+/// dir, which exists, so nothing is created here, and `strace -o` truncates it,
+/// so nothing is removed. `None` where the git dir cannot be found, which runs
+/// the step untraced.
 fn trace_file(step: &str) -> Option<std::path::PathBuf> {
     let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
-    let dir = git_dir.join(TRACES);
-    std::fs::create_dir_all(&dir).ok()?;
-    let file = dir.join(format!("{}.trace", crate::tools::digest(step.as_bytes())));
-    let _ = std::fs::remove_file(&file);
-    Some(file)
+    Some(git_dir.join(format!(
+        "{TRACES}-{}.trace",
+        crate::tools::digest(step.as_bytes())
+    )))
 }
 
-/// Under the git dir: each step's last trace and its undeclared listing.
+/// The prefix of each step's last trace, and its undeclared listing, under the
+/// git dir.
 const TRACES: &str = "batten-step-trace";
 
 /// What a traced run's reads say about its row's declaration.
@@ -753,7 +752,7 @@ fn undeclared(
                 .map(|(at, _)| &relative[..at])
                 .collect();
             ancestors.push(relative);
-            !ancestors.into_iter().any(|path| ignored(path))
+            !ancestors.into_iter().any(&mut *ignored)
         })
         .collect()
 }
