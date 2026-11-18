@@ -2159,6 +2159,93 @@ pub(crate) fn keyed_write(git_dir: &Path, family: &str, key: &str, value: &str) 
     store(&keyed_path(git_dir, family, key), value)
 }
 
+/// Remove one keyed record, where an absent one is already the answer.
+///
+/// # Errors
+///
+/// An internal error when a present record cannot be removed.
+pub(crate) fn keyed_remove(git_dir: &Path, family: &str, key: &str) -> Result<()> {
+    remove_stale(&keyed_path(git_dir, family, key))
+}
+
+/// The directory one group of a grouped family occupies.
+///
+/// A GROUPED FAMILY holds many records per group, one per key (CLOUD-2784): a
+/// step's receipts, one per key it passed under, so a return to a tree it
+/// already judged finds its receipt. Both components are digests, on
+/// [`keyed_path`]'s reason.
+fn keyed_group_dir(git_dir: &Path, family: &str, group: &str) -> PathBuf {
+    git_dir
+        .join(KEYED_STORE)
+        .join(family)
+        .join(crate::tools::digest(group.as_bytes()))
+}
+
+/// The record path for one (family, group, key) triple.
+fn keyed_group_path(git_dir: &Path, family: &str, group: &str, key: &str) -> PathBuf {
+    keyed_group_dir(git_dir, family, group).join(crate::tools::digest(key.as_bytes()))
+}
+
+/// One grouped record's value, or `None` where it is absent or unreadable.
+pub(crate) fn keyed_group_read(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    key: &str,
+) -> Option<String> {
+    crate::fsio::read_to_string(keyed_group_path(git_dir, family, group, key)).ok()
+}
+
+/// Write one grouped record's value whole.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub(crate) fn keyed_group_write(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    store(&keyed_group_path(git_dir, family, group, key), value)
+}
+
+/// Every record of one group, as (file name, value) pairs. An unreadable entry
+/// is left out: it is no receipt, and eviction ranks only what it can read.
+pub(crate) fn keyed_group_entries(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(keyed_group_dir(git_dir, family, group)) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let value = crate::fsio::read_to_string(entry.path()).ok()?;
+            Some((name, value))
+        })
+        .collect()
+}
+
+/// Remove one grouped record by its file name, as [`keyed_group_entries`]
+/// names it. An absent one is already the answer.
+///
+/// # Errors
+///
+/// An internal error when a present record cannot be removed.
+pub(crate) fn keyed_group_remove(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    name: &str,
+) -> Result<()> {
+    remove_stale(&keyed_group_dir(git_dir, family, group).join(name))
+}
+
 /// Put one value into the keyed family, read from stdin.
 ///
 /// # Errors
