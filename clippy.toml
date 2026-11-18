@@ -116,4 +116,10 @@ disallowed-methods = [
   { path = "std::io::copy", reason = "the one copy loop is `batten::stream::pump` (#1276): it flushes each chunk to every sink before the next read, which `io::copy` does not" },
   { path = "std::thread::sleep", reason = "a delay is an inventory row (CLOUD-1177): a poll bounded by a real terminal state is legitimate, a timer standing in for an exit condition is not. Annotate the site with #[expect(clippy::disallowed_methods, reason = \"...\")] naming the bound the delay comes from, in backticks" },
   { path = "tokio::time::sleep", reason = "the async half of the same inventory (CLOUD-1177); it RESOLVES today, because the workspace tokio entry enables `time`" },
+  # compio's timers resolve since the disk watcher enabled its `time` feature
+  # (CLOUD-2782); the one use is `pr_watch::clock`, the crate's one clock.
+  { path = "compio::time::sleep", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::sleep_until", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::interval", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::interval_at", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
 ]

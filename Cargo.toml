@@ -159,6 +159,8 @@ compio = { version = "0.19", default-features = false, features = [
   "io",
   "io-uring",
   "polling",
+  # The disk watcher's 1 ms floor (CLOUD-2782): pulls only `compio-runtime/time`.
+  "time",
 ] }
 # CURRENT-THREAD ONLY, and `clippy.toml` already refuses the multi-thread builder
 # (CLOUD-747): measured out of tree, current-thread costs +0.14ms over
@@ -631,6 +633,11 @@ fs4 = "1.1"
 # it only stops the version being decided by a transitive edge. `process` is the
 # one feature this needs; the default `std`/`use-libc-auxv` come with it.
 rustix = { version = "1.1", features = ["fs", "param", "process"] }
+# The disk watcher's filesystem mark (CLOUD-2782), Linux only. rustix marks
+# `fanotify_init` and `fanotify_mark` `not_implemented!`, and `unsafe_code` is
+# forbidden, so the safe wrapper is nix's; 0.31.3 was already in the lock
+# through `zip`.
+nix = { version = "0.31", default-features = false, features = ["fanotify"] }
 # `signal-hook` receives. Installing a disposition is `sigaction(2)`, which
 # `unsafe_code = "forbid"` puts out of reach, and rustix's own spelling lives
 # behind its private `runtime` feature — so a safe registry is not a convenience
