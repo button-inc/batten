@@ -18192,6 +18192,9 @@ tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
 
 [[step]]
 id = "test:cargo"
+# KEEPS `.` (CLOUD-2784): its cases read across the tree (fixtures, policy,
+# rules, tasks), more than half the top-level entries; it narrows when plan
+# steps 5-6 key it by case.
 inputs = ["."]
 tools = [
   ["rustc", "--version"],
@@ -18212,6 +18215,7 @@ tools = [
 # every lap. Every live row runs in `enforce --half live`, unreceipted.
 [[step]]
 id = "enforce-tree"
+# KEEPS `.` (CLOUD-2784): every tree rule globs the whole tracked tree.
 inputs = ["."]
 tools = [
   ["rustc", "--version"],
@@ -18233,7 +18237,7 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "perf-gate"
-inputs = ["."]
+inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", "bench", "batten.toml"]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18308,6 +18312,9 @@ tools = [
 # (CLOUD-2253's breakdown).
 [[step]]
 id = "test-replay"
+# KEEPS `.` (CLOUD-2784): it replays modified cases in a repository borrowed
+# from the checkout, reading what they read; it narrows when plan step 6 keys
+# it by case.
 inputs = ["."]
 tools = [
   ["rustc", "--version"],
@@ -18318,10 +18325,13 @@ tools = [
 
 # THE THREE NARROW `it` TIERS hk reaches by name (CLOUD-1164). Each runs a filter
 # of the one test binary `test:cargo` runs whole, so each is keyed exactly as
-# `test:cargo` is: the whole tree, the toolchain and the task's own declaration.
+# `test:cargo` is: the toolchain and the task's own declaration. NARROWED FROM
+# THE WHOLE TREE (CLOUD-2784) to the build's inputs plus what each suite reads;
+# a traced miss on Linux refuses any read outside them, so a wrong guess fails
+# the step rather than minting a false hit.
 [[step]]
 id = "test:reference-coverage"
-inputs = ["."]
+inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml"]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18330,7 +18340,15 @@ tools = [
 
 [[step]]
 id = "test:skill-contract"
-inputs = ["."]
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".config/nextest.toml",
+  "batten.toml",
+  "hk.pkl",
+  "skills",
+]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18339,7 +18357,16 @@ tools = [
 
 [[step]]
 id = "test:config-schema"
-inputs = ["."]
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".config/nextest.toml",
+  "batten.toml",
+  "batten.example.toml",
+  "hk.pkl",
+  "schema",
+]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18347,12 +18374,12 @@ tools = [
 ]
 
 # THE PLAN PROJECTION (CLOUD-947): the working tree's engine projecting `hk.pkl`
-# under the pinned runner. Keyed on the whole tree rather than a guessed subset:
-# a superset only costs a miss, a missed input mints a false hit. hk's own
-# version is the tool.
+# under the pinned runner. Keyed on what the projection reads (CLOUD-2784): the
+# trace lint now refuses a missed input, so a guessed subset fails loudly
+# instead of minting a false hit. hk's own version is the tool.
 [[step]]
 id = "hk-drift"
-inputs = ["."]
+inputs = ["hk.pkl", "mise.toml", "batten.toml", "crates", "Cargo.toml", "Cargo.lock"]
 tools = [
   ["hk", "--version"],
   ["rustc", "--version"],
