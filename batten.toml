@@ -1726,6 +1726,15 @@ regex = '^[[:space:]]*set[[:space:]]+-[a-z]*o?[a-z]*[[:space:]]*.*pipefail'
 # `\|[[:space:]]*grep`, which matched `a || grep -q ... <<<"$x"` — the very
 # remedy the gate recommends — and reported it as the defect. Measured on
 # `ready-lint.sh` (CLOUD-852).
+#
+# ITS MUTATION LIVES HERE, BESIDE THE REGEX IT MUTATES (#1276). It sat in
+# `policy/pipefail-grep.rego` as a swap to an inline `"grep"`, which the loader
+# refuses (an inline regex is a consumer fact out of place), so the row could
+# never judge. The `||` exclusion lives only in this regex, so deleting its
+# `(^|[^|])` prefix is the mutation that reaches it; `.` stands in for `|`, which
+# a row cannot carry.
+#MUTANT-SUITE crates/batten/tests/it/pipefail_grep.rs
+#MUTANT pipefail-or-is-a-pipe|s@^regex = '(^.\[^.\])@regex = '@|an_or_before_grep_is_not_a_pipe
 [[pattern]]
 id = "pipe-into-grep"
 regex = '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)'
