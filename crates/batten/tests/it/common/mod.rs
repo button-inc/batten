@@ -2418,7 +2418,7 @@ fn copy_tree(from: &Path, to: &Path) {
 /// (`collect::fixtures_since`), dating each by its newest write. The template
 /// is written once and only read after, so once the process that published it
 /// exited, a pass dated it stale and removed it under a live mutation sweep:
-/// lap 9 failed `copy_tree`'s "read the template directory" on NotFound. Each
+/// lap 9 failed `copy_tree`'s "read the template directory" on `NotFound`. Each
 /// copy now rewrites `HEAD`'s mtime, a child `newest_write` reads, from a
 /// process that is itself in the window. `HEAD`, not the directory: opening a
 /// directory to set its time needs write-attribute access on Windows. A failed

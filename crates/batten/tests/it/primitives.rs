@@ -2106,7 +2106,7 @@ fn a_fixture_copy_marks_the_shared_template_in_use() {
         // there is nothing shared for a collector to remove.
         return;
     };
-    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
     fs::OpenOptions::new()
         .write(true)
         .open(template.join("HEAD"))
