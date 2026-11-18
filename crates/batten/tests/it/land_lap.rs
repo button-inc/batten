@@ -771,7 +771,16 @@ fn held(dir: &std::path::Path, path: &str) -> bool {
         "tool_input": {"file_path": path, "content": "x\n"},
     })
     .to_string();
-    let answer = common::run_with_stdin(dir, &["adjudicate", "--harness", "claude-code"], &payload);
+    // NOT THE LAP'S OWN GATE (CLOUD-2783): under a real lap this suite inherits
+    // its gate marker, and a call from inside the gate is never held.
+    let mut command = common::batten();
+    command.env_remove(batten::land::LAP_GATE);
+    let answer = common::stdin_run(
+        &mut command,
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
     format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
 }
 
