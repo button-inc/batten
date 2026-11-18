@@ -15035,6 +15035,19 @@ fn say_tree_moved(out: &mut dyn Write, sha: &str, to: &str, dirty: usize) -> Res
     Ok(())
 }
 
+/// The two markers a lap's gate runs under, set on every step it dispatches.
+///
+/// THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
+/// the gate's first step, reads [`land::LAP_GATE`] and lets the run through. And
+/// it is never held by its own lap (CLOUD-2783): the write hold exempts a call
+/// whose [`land::LAP_PID`] is the singleton's holder, this process.
+fn lap_markers() -> [(String, String); 2] {
+    [
+        (land::LAP_GATE.to_owned(), "1".to_owned()),
+        (land::LAP_PID.to_owned(), std::process::id().to_string()),
+    ]
+}
+
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the
 /// one fact the lap needs that the exit code cannot carry (CLOUD-2369).
 fn run_land_verify_seen(
@@ -15078,10 +15091,7 @@ fn run_land_verify_seen(
         .published()
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
-    // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
-    // the gate's first step, reads this and lets the run through.
-    published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
-    published.push((land::LAP_PID.to_owned(), std::process::id().to_string()));
+    published.extend(lap_markers());
     // BUILT ONCE PER LAP, NEVER PER STEP (CLOUD-2783): the record says which.
     if let Some((engine, used)) = lap_engine(root) {
         let digest = engine::digest(root).unwrap_or_else(|_| String::from("-"));
