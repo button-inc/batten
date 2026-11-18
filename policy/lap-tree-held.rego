@@ -62,9 +62,12 @@ held contains path if {
 	inside(path)
 }
 
+# THE TARGET, NEVER THE TOKEN (#1276): `redirects` holds the raw tokens, so
+# `2>/dev/null` and a lone `>` read as relative paths and every read that
+# discarded its stderr was held. `redirect-writes` is the targets alone.
 held contains target if {
 	some segment in input.call.segments
-	some target in segment.redirects
+	some target in segment["redirect-writes"]
 	inside(target)
 }
 
@@ -103,12 +106,18 @@ test_no_live_lap_admits_every_write if {
 }
 
 test_a_relative_redirect_is_held if {
-	some v in violation with input as {"facts": live_lap, "call": {"segments": [{"redirects": ["out.txt"]}]}}
+	some v in violation with input as {"facts": live_lap, "call": {"segments": [{"redirects": [">", "out.txt"], "redirect-writes": ["out.txt"]}]}}
 	v.verdict == "path write held"
 }
 
 test_a_redirect_outside_or_to_an_fd_is_admitted if {
-	count(violation) == 0 with input as {"facts": live_lap, "call": {"segments": [{"redirects": ["/dev/null", "&1"]}]}}
+	count(violation) == 0 with input as {"facts": live_lap, "call": {"segments": [{"redirects": ["2>/dev/null", "2>&1"], "redirect-writes": ["/dev/null"]}]}}
+}
+
+# THE OPERATOR TOKENS ALONE NEVER HOLD (#1276): an input redirection writes
+# nothing, whatever its raw tokens look like.
+test_an_input_redirect_is_admitted if {
+	count(violation) == 0 with input as {"facts": live_lap, "call": {"segments": [{"redirects": ["<", "in.txt"], "redirect-writes": []}]}}
 }
 
 test_a_head_moving_git_command_is_held if {
@@ -122,7 +131,7 @@ test_a_head_moving_git_command_is_held if {
 test_a_redirect_after_a_list_operator_is_held if {
 	some v in violation with input as {"facts": live_lap, "call": {
 		"command": "cd src && echo x > out.txt",
-		"segments": [{"redirects": []}, {"redirects": ["out.txt"]}],
+		"segments": [{"redirects": [], "redirect-writes": []}, {"redirects": [">", "out.txt"], "redirect-writes": ["out.txt"]}],
 	}}
 	v.verdict == "path write held"
 }
