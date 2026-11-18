@@ -112,8 +112,16 @@ use crate::exit::ExitCode;
 use crate::resolve::Overrides;
 use crate::step_table::Step;
 
-/// The keyed family a passed step's receipt lives in: one record per step.
-pub const RECEIPTS: &str = "steps";
+/// The grouped family a passed step's receipts live in: one record per (step,
+/// key), so a return to a tree the step already judged is a hit (CLOUD-2784).
+pub const RECEIPTS: &str = "step-receipts";
+
+/// The family that held ONE receipt per step before CLOUD-2784. A step's first
+/// write under [`RECEIPTS`] removes its record here, so none is left unread.
+const SUPERSEDED_RECEIPTS: &str = "steps";
+
+/// How many receipts a step keeps. Past it, the oldest go first ([`evict`]).
+const KEPT_RECEIPTS: usize = 32;
 
 /// The keyed family `check` files the key under that a `record` must match.
 pub const PENDING: &str = "step-pending";
@@ -172,6 +180,7 @@ impl Answer {
     }
 
     /// Whether the step may be answered from its receipt.
+    #[cfg(test)]
     const fn is_hit(&self) -> bool {
         matches!(self, Answer::Hit(_))
     }
@@ -363,7 +372,13 @@ fn check(step: &str, args: &[String], command: Option<&[String]>) -> Answer {
         }
         return Answer::NoKey;
     };
-    let stored = read_key(git_dir.as_deref(), RECEIPTS, step);
+    // THE RECEIPT FOR THIS KEY, among the step's many (CLOUD-2784): one record
+    // per key it passed under, so the lookup is by the fresh key itself, and its
+    // last field still has to equal that key for a hit.
+    let stored = git_dir
+        .as_deref()
+        .and_then(|git_dir| crate::record::keyed_group_read(git_dir, RECEIPTS, step, &key))
+        .and_then(|value| stored_key(&value));
     if stored.as_deref() == Some(key.as_str()) {
         return Answer::Hit(key);
     }
@@ -420,15 +435,28 @@ fn record(
         || format!("{stamp} {expected}\n"),
         |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
     );
-    let written = git_dir
-        .as_deref()
-        .map(|git_dir| crate::record::keyed_write(git_dir, RECEIPTS, step, &receipt));
+    let written = git_dir.as_deref().map(|git_dir| {
+        crate::record::keyed_group_write(git_dir, RECEIPTS, step, &expected, &receipt)
+    });
     if !matches!(written, Some(Ok(()))) {
         writeln!(
             err,
             "step record: {step} — could not write the receipt; the next run re-derives"
         )?;
         return Ok(ExitCode::Internal);
+    }
+    if let Some(git_dir) = git_dir.as_deref() {
+        // Housekeeping after the receipt is durable, so its failure costs disk,
+        // never the receipt just written.
+        let _ = crate::record::keyed_remove(git_dir, SUPERSEDED_RECEIPTS, step);
+        let entries: Vec<(String, String)> =
+            crate::record::keyed_group_entries(git_dir, RECEIPTS, step)
+                .into_iter()
+                .map(|(name, value)| (name, receipt_stamp(&value)))
+                .collect();
+        for name in evict(&entries, KEPT_RECEIPTS) {
+            let _ = crate::record::keyed_group_remove(git_dir, RECEIPTS, step, &name);
+        }
     }
     writeln!(said, "step record: {step} — recorded {}", shown(&expected))?;
     Ok(ExitCode::Success)
@@ -493,12 +521,13 @@ pub fn run_step(
 ) -> Result<ExitCode> {
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
-    if answer.is_hit() {
+    if let Answer::Hit(key) = &answer {
         // A HIT REPORTS THE RUN IT STANDS FOR (CLOUD-2776), never its own few
         // milliseconds: a resumed lap must not look faster than the work was.
+        // The matched record is the one for this key (CLOUD-2784).
         let recorded = crate::git::git_dir(Path::new("."))
             .ok()
-            .and_then(|git_dir| crate::record::keyed_read(&git_dir, RECEIPTS, step))
+            .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
             .and_then(|body| recorded_millis(&body));
         let _ = writeln!(err, "{}", stage_line(step, "hit", recorded));
         return Ok(ExitCode::Success);
@@ -554,6 +583,34 @@ pub fn run_step(
     let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// A receipt's stamp: the first field of its first line, RFC 3339 in UTC, so
+/// it orders as text. A receipt without one sorts first, as the oldest.
+fn receipt_stamp(value: &str) -> String {
+    value
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The names to drop so at most `cap` of `entries` remain: the oldest by stamp,
+/// ties broken by name, first in first out. A hit writes nothing, so recency
+/// is the write, never a read, and the read path stays write-free under
+/// concurrent runs of one step.
+fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
+    let mut ranked: Vec<&(String, String)> = entries.iter().collect();
+    ranked.sort_by(|(a_name, a_stamp), (b_name, b_stamp)| {
+        a_stamp.cmp(b_stamp).then_with(|| a_name.cmp(b_name))
+    });
+    let excess = ranked.len().saturating_sub(cap);
+    ranked
+        .into_iter()
+        .take(excess)
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// The run time a receipt recorded: the `<n>ms` field of its first line, or
@@ -620,6 +677,40 @@ mod tests {
         assert_eq!(stage_line("s", "ran", Some(1250)), "stage s ran 1.250");
         assert_eq!(stage_line("s", "ran", Some(7)), "stage s ran 0.007");
         assert_eq!(stage_line("s", "hit", None), "stage s hit -");
+    }
+
+    // FIRST IN, FIRST OUT, AND EXACTLY THE EXCESS (CLOUD-2784): an off-by-one
+    // keeps 33 or drops 2, newest-first drops the receipt just written, and an
+    // unstable tie drops whichever the directory listed first.
+    #[test]
+    fn evict_drops_only_the_oldest_past_the_cap() {
+        let stamp = |n: usize| format!("2026-11-18T10:{:02}:{:02}Z", n / 60, n % 60);
+        let entries: Vec<(String, String)> = (0..33)
+            .rev()
+            .map(|n| (format!("r{n:02}"), stamp(n)))
+            .collect();
+        assert_eq!(super::evict(&entries, 32), vec!["r00".to_owned()]);
+        assert!(
+            super::evict(&entries[..32], 32).is_empty(),
+            "at the cap, none"
+        );
+
+        let tied = vec![
+            ("b".to_owned(), stamp(0)),
+            ("a".to_owned(), stamp(0)),
+            ("c".to_owned(), stamp(5)),
+        ];
+        assert_eq!(super::evict(&tied, 2), vec!["a".to_owned()]);
+        assert_eq!(super::evict(&tied, 1), vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    #[test]
+    fn a_receipts_stamp_is_its_first_field() {
+        assert_eq!(
+            super::receipt_stamp("2026-11-18T10:00:00Z 12ms abc\n"),
+            "2026-11-18T10:00:00Z"
+        );
+        assert_eq!(super::receipt_stamp(""), "");
     }
 
     #[test]
