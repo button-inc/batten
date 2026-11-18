@@ -4950,6 +4950,42 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "step graph",
+          "id": "step.graph",
+          "about": "Schedule the step table's rows as a graph",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": [
+            {
+              "path": "step graph run",
+              "id": "step.graph.run",
+              "about": "Run a group's rows, dependencies first and at most --jobs at once, and exit with the worst row's code",
+              "effect": "unclassified",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "group",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "The graph to run, as the step table's `group` field names it"
+                },
+                {
+                  "name": "jobs",
+                  "short": null,
+                  "long": "jobs",
+                  "takes_value": true,
+                  "positional": false,
+                  "help": "Run at most this many of the group's rows at once (a positive integer; default: no bound)"
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "path": "step record",
           "id": "step.record",
           "about": "Record that a step passed, refusing when its inputs changed since the paired check",
