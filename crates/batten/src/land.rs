@@ -588,7 +588,9 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
 }
 
 /// Append the disk watcher's lines (`disk-collected …`, `disk-unlink-ms …`) to
-/// this branch's lap record, once the landing has returned (CLOUD-2197).
+/// this branch's lap record as each collection ends (CLOUD-2197, CLOUD-2782):
+/// the watcher's record sink calls it from the collection's own thread, one
+/// batched append per collection, so its lines never interleave with a lap's.
 ///
 /// # Errors
 ///
@@ -615,7 +617,7 @@ pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
 /// lap reading both sides would also produce.
 ///
 /// The one public door is [`record_disk`]: the watcher's lines reach the record
-/// through it, after the landing, so the record keeps one writer.
+/// through it as each collection ends, so the record keeps one writer.
 fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());

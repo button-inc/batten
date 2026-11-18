@@ -871,8 +871,8 @@ pub fn pause(seconds: f64) {
 /// cadence, so an arm that is NOT stopped behaves exactly as it did.
 const STOP_CHECK_SLICE: f64 = 1.0;
 
-/// [`pause`], abandoned early when `stop` is raised. A real sleep, and the
-/// only clock in the crate.
+/// [`pause`], abandoned early when `stop` is raised. A real wait on the crate's
+/// only clock, [`clock`].
 ///
 /// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
 /// `land::wait` check their stop flag at the top of the loop and then sleep the
@@ -885,21 +885,48 @@ const STOP_CHECK_SLICE: f64 = 1.0;
 ///
 /// **One clock still, which is the constraint that shapes this.** `clippy.toml`
 /// bans timers precisely so a second arm cannot grow one, and the crate's single
-/// exemption lives on the sleep below. So this does not add a wait — it serves
+/// exemption lives on [`clock`]. So this does not add a wait — it serves
 /// the same one in slices, checking between them. An arm that is never stopped
 /// sleeps the identical total.
 pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
+    let runtime = compio::runtime::Runtime::new().ok();
     sliced(seconds, stop, &|slice| {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval between conditional requests, and the interval is the SERVER'S: \
-                      `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
-                      lowers it. The loop exits on the required set reaching a verdict — \
-                      `Verdict::Green`, `Verdict::Red` and `Verdict::DeadEnd` all return — never \
-                      on a clock (CLOUD-1177, CLOUD-497)"
-        )]
-        std::thread::sleep(std::time::Duration::from_secs_f64(slice));
+        clock::hold(std::time::Duration::from_secs_f64(slice), runtime.as_ref());
     });
+}
+
+/// THE CRATE'S ONE CLOCK, in its two faces, under ONE inventory row
+/// (CLOUD-1177, CLOUD-2782).
+///
+/// The async face, [`clock::pause_for`], is what the disk watcher's loop awaits
+/// on its own compio runtime; the blocking face, [`clock::hold`], serves
+/// [`pause_until`] on a runtime it builds, and falls back to the thread only
+/// where no runtime can be built, as `batten-fsio`'s reads do. Two faces of one
+/// clock rather than two clocks: `waiver add refused` holds the crate's count of
+/// exemptions where it was, and the reason below names both bounds it serves.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the crate's one clock, serving two bounded waits. The interval between conditional \
+              requests is the SERVER'S: `interval_for` raises it to whatever `X-Poll-Interval` \
+              asked for and never lowers it, and the loop exits on the required set reaching a \
+              verdict (`Verdict::Green`, `Verdict::Red`, `Verdict::DeadEnd`), never on a clock. \
+              The disk watcher's sampling floor is bounded by its band: one period must be \
+              shorter than `min_free_mb` over the volume's peak write rate, and it exits on its \
+              stop flag (CLOUD-1177, CLOUD-497, CLOUD-2782)"
+)]
+pub mod clock {
+    /// Wait `duration` on the current compio runtime.
+    pub async fn pause_for(duration: std::time::Duration) {
+        compio::time::sleep(duration).await;
+    }
+
+    /// Wait `duration` on `runtime`, or on the thread where none could be built.
+    pub fn hold(duration: std::time::Duration, runtime: Option<&compio::runtime::Runtime>) {
+        match runtime {
+            Some(runtime) => runtime.block_on(pause_for(duration)),
+            None => std::thread::sleep(duration),
+        }
+    }
 }
 
 /// [`pause_until`]'s slicing over `sleep`, which is handed each slice: every
