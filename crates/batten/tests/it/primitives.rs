@@ -2092,6 +2092,41 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
 // directly: a repository, with the identity the template bakes into its config.
 // A fallback that forked `init` alone would pass `is_template` and still hand
 // every fixture an unset identity, so the identity is asserted, not assumed.
+// A COPY DATES THE TEMPLATE AS IN USE (#1276). The disk collector keeps a
+// `target/tmp` entry only if it was written since the earliest live test
+// process started, and the template is otherwise written once and read ever
+// after: lap 9's collector removed it under a live sweep. So the template is
+// first dated far in the past, then one copy has to bring its newest write
+// forward. A sibling's copy in between only moves it further forward, so the
+// shared state this touches cannot flip the verdict.
+#[test]
+fn a_fixture_copy_marks_the_shared_template_in_use() {
+    let Some(template) = common::git_init_template() else {
+        // No template could be established: `init_repo` forks instead, and
+        // there is nothing shared for a collector to remove.
+        return;
+    };
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(template.join("HEAD"))
+        .and_then(|head| head.set_modified(old))
+        .expect("date the template's HEAD in the past");
+    let dir = common::scratch("template-in-use").join("repo");
+    fs::create_dir_all(&dir).expect("create the fixture directory");
+
+    common::init_repo(&dir);
+
+    let after = fs::metadata(template.join("HEAD"))
+        .and_then(|meta| meta.modified())
+        .expect("read the template's HEAD mtime");
+    assert!(
+        after > old,
+        "a copy has to date the shared template as written now, or the disk \
+         collector removes it under a live suite"
+    );
+}
+
 #[test]
 fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_would_have() {
     let dir = common::scratch("template-fallback").join("repo");
