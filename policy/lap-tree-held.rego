@@ -77,6 +77,23 @@ held contains sprintf("git %s", [program.subcommand]) if {
 	program.subcommand in moving
 }
 
+# THE BOARD AND THE PULL REQUEST ARE READ BY THE GATE TOO (CLOUD-2785, decided on
+# CLOUD-2781). Laps 6 and 10 on #1276 went red at `batten-check` because a row was
+# FILED and the PR body edited while the lap ran: the gate read the board before
+# the body closed the new row. So, while a lap is live, an issue creation (a
+# `save_issue` with no `id`) and a pull-request edit carrying a `body` are held.
+# A comment is not: no gate reads one. STATED GAP: the same writes made through
+# `batten mcp call` on a shell are not seen here.
+held contains "tracker issue create" if {
+	endswith(input.call.tool, "__save_issue")
+	not input.call.arguments.id
+}
+
+held contains "pull request body" if {
+	endswith(input.call.tool, "__update_pull_request")
+	input.call.arguments.body
+}
+
 violation contains {
 	"rule": "path write held",
 	"verdict": "path write held",
@@ -142,6 +159,28 @@ test_a_commit_after_a_list_operator_is_held if {
 		"programs": [{"name": "git", "subcommand": "status"}, {"name": "git", "subcommand": "commit"}],
 	}}
 	v.verdict == "path write held"
+}
+
+test_filing_an_issue_is_held_while_a_lap_is_live if {
+	some v in violation with input as {"facts": live_lap, "call": {"tool": "mcp__Linear__save_issue", "arguments": {"title": "t"}}}
+	v.verdict == "path write held"
+}
+
+test_editing_an_issue_is_admitted if {
+	count(violation) == 0 with input as {"facts": live_lap, "call": {"tool": "mcp__Linear__save_issue", "arguments": {"id": "CLOUD-1"}}}
+}
+
+test_a_pull_request_body_edit_is_held_while_a_lap_is_live if {
+	some v in violation with input as {"facts": live_lap, "call": {"tool": "mcp__github__update_pull_request", "arguments": {"body": "Closes CLOUD-1"}}}
+	v.verdict == "path write held"
+}
+
+test_a_comment_is_admitted if {
+	count(violation) == 0 with input as {"facts": live_lap, "call": {"tool": "mcp__Linear__save_comment", "arguments": {"body": "x"}}}
+}
+
+test_no_live_lap_admits_a_filing if {
+	count(violation) == 0 with input as {"facts": {"land-live": null}, "call": {"tool": "mcp__Linear__save_issue", "arguments": {"title": "t"}}}
 }
 
 test_a_reading_git_command_is_admitted if {
