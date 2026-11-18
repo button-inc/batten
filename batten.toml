@@ -11631,11 +11631,12 @@ email = "alec@wenzowski.com"
 # failure that already happened. `report_bundle` scans only on a `0` and says so
 # — "Only `0` is promotable" — so one table serving both readings would produce
 # opposite verdicts over identical bytes.
-[[verify_environment_pattern]]
-id = "disk-full"
-pattern = "No space left on device"
-stream = "both"
-reason = "the disk filled, so this is the environment rather than your branch. Run `mise run target-prune`, and consider building with CARGO_INCREMENTAL=0."
+#
+# NO `disk-full` ROW ANY MORE (CLOUD-2781). A full disk is MEASURED: the disk
+# watcher reads the volume throughout the gate, and `land` classifies a refusal
+# as disk-full only when that reading reached 0 MiB (`disk_watch::low_water`).
+# The text row it replaces matched `No space left on device` inside a mutant's
+# diff on #1276's lap 2 while the watcher read gigabytes free.
 
 # THE ROW THE PRUNE BLOCK HAS OWED SINCE ITS SIXTH MISREPORT (CLOUD-1717). Seven
 # times now `verify` has rendered a STEM-COUNT refusal as "not enough disk to run
