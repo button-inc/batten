@@ -8661,6 +8661,102 @@ trace\:"Add everything"))' \
 '*::command -- The step'\''s command, after `--`\: run only on a miss, recorded only when it exits 0:_default' \
 && ret=0
 ;;
+(graph)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__step__subcmd__graph_commands" \
+"*::: :->graph" \
+&& ret=0
+
+    case $state in
+    (graph)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-step-graph-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+'--jobs=[Run at most this many of the group'\''s rows at once (a positive integer; default\: no bound)]:jobs:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':group -- The graph to run, as the step table'\''s `group` field names it:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__step__subcmd__graph__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-step-graph-help-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__step__subcmd__help_commands" \
@@ -8684,6 +8780,26 @@ _arguments "${_arguments_options[@]}" : \
 (run)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(graph)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__step__subcmd__help__subcmd__graph_commands" \
+"*::: :->graph" \
+&& ret=0
+
+    case $state in
+    (graph)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-step-help-graph-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -10962,6 +11078,26 @@ _arguments "${_arguments_options[@]}" : \
 (run)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(graph)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__step__subcmd__graph_commands" \
+"*::: :->graph" \
+&& ret=0
+
+    case $state in
+    (graph)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-step-graph-command-$line[1]:"
+        case $line[1] in
+            (run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
         esac
     ;;
@@ -13565,6 +13701,7 @@ _batten__subcmd__help__subcmd__step_commands() {
 'check:Say hit or miss for a step'\''s inputs, arguments and tools, and remember the key a record must match' \
 'record:Record that a step passed, refusing when its inputs changed since the paired check' \
 'run:Run a step'\''s command only when its receipt misses, and record the receipt when it passes' \
+'graph:Schedule the step table'\''s rows as a graph' \
     )
     _describe -t commands 'batten help step commands' commands "$@"
 }
@@ -13572,6 +13709,18 @@ _batten__subcmd__help__subcmd__step_commands() {
 _batten__subcmd__help__subcmd__step__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help step check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__step__subcmd__graph_commands] )) ||
+_batten__subcmd__help__subcmd__step__subcmd__graph_commands() {
+    local commands; commands=(
+'run:Run a group'\''s rows, dependencies first and at most --jobs at once, and exit with the worst row'\''s code' \
+    )
+    _describe -t commands 'batten help step graph commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__step__subcmd__graph__subcmd__run_commands] )) ||
+_batten__subcmd__help__subcmd__step__subcmd__graph__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help step graph run commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__step__subcmd__record_commands] )) ||
 _batten__subcmd__help__subcmd__step__subcmd__record_commands() {
@@ -15499,6 +15648,7 @@ _batten__subcmd__step_commands() {
 'check:Say hit or miss for a step'\''s inputs, arguments and tools, and remember the key a record must match' \
 'record:Record that a step passed, refusing when its inputs changed since the paired check' \
 'run:Run a step'\''s command only when its receipt misses, and record the receipt when it passes' \
+'graph:Schedule the step table'\''s rows as a graph' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten step commands' commands "$@"
@@ -15508,12 +15658,44 @@ _batten__subcmd__step__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten step check commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__step__subcmd__graph_commands] )) ||
+_batten__subcmd__step__subcmd__graph_commands() {
+    local commands; commands=(
+'run:Run a group'\''s rows, dependencies first and at most --jobs at once, and exit with the worst row'\''s code' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten step graph commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__graph__subcmd__help_commands] )) ||
+_batten__subcmd__step__subcmd__graph__subcmd__help_commands() {
+    local commands; commands=(
+'run:Run a group'\''s rows, dependencies first and at most --jobs at once, and exit with the worst row'\''s code' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten step graph help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__graph__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__step__subcmd__graph__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step graph help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__graph__subcmd__help__subcmd__run_commands] )) ||
+_batten__subcmd__step__subcmd__graph__subcmd__help__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step graph help run commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__graph__subcmd__run_commands] )) ||
+_batten__subcmd__step__subcmd__graph__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step graph run commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__step__subcmd__help_commands] )) ||
 _batten__subcmd__step__subcmd__help_commands() {
     local commands; commands=(
 'check:Say hit or miss for a step'\''s inputs, arguments and tools, and remember the key a record must match' \
 'record:Record that a step passed, refusing when its inputs changed since the paired check' \
 'run:Run a step'\''s command only when its receipt misses, and record the receipt when it passes' \
+'graph:Schedule the step table'\''s rows as a graph' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten step help commands' commands "$@"
@@ -15522,6 +15704,18 @@ _batten__subcmd__step__subcmd__help_commands() {
 _batten__subcmd__step__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten step help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__help__subcmd__graph_commands] )) ||
+_batten__subcmd__step__subcmd__help__subcmd__graph_commands() {
+    local commands; commands=(
+'run:Run a group'\''s rows, dependencies first and at most --jobs at once, and exit with the worst row'\''s code' \
+    )
+    _describe -t commands 'batten step help graph commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__help__subcmd__graph__subcmd__run_commands] )) ||
+_batten__subcmd__step__subcmd__help__subcmd__graph__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step help graph run commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__step__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__step__subcmd__help__subcmd__help_commands() {
