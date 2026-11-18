@@ -4435,8 +4435,13 @@ run = "{{vars.batten}} receipt verified"
 # same optional positional, which mise then binds.
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
-usage = 'arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"'
-run = '{{vars.batten}} land lap "{{usage.reference}}"'
+# `--hold` (CLOUD-2783) stops at the first final verify, before the lease, the
+# push and the ready: the one way to measure a lap without landing it.
+usage = '''
+arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"
+flag "--hold" help="stop after the first final verify, never leasing, pushing or readying"
+'''
+run = '{{vars.batten}} land lap "{{usage.reference}}"{% if usage.hold %} --hold{% endif %}'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
 # Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
