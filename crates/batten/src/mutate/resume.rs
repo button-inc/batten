@@ -203,16 +203,6 @@ pub fn flags_digest(flags: &std::collections::BTreeMap<String, String>) -> Strin
     hasher.finalize().to_hex().to_string()
 }
 
-/// Whether `command` is a `cargo nextest run`: the one shape a step's miss runs
-/// under the journal.
-#[must_use]
-pub fn is_nextest_run(command: &[String]) -> bool {
-    matches!(
-        command,
-        [cargo, nextest, run, ..] if cargo == "cargo" && nextest == "nextest" && run == "run"
-    )
-}
-
 /// `command` with `--config-file <config>` ahead of its first `--`, or last.
 #[must_use]
 pub fn with_config(command: &[String], config: &str) -> Vec<String> {
@@ -806,20 +796,6 @@ mod tests {
 
     /// Fails by: a non-nextest command journaled (its argv rewritten), or a
     /// nextest run left whole.
-    #[test]
-    fn only_a_nextest_run_is_journaled() {
-        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
-        assert!(is_nextest_run(&argv(&[
-            "cargo",
-            "nextest",
-            "run",
-            "--workspace"
-        ])));
-        assert!(!is_nextest_run(&argv(&["cargo", "nextest", "list"])));
-        assert!(!is_nextest_run(&argv(&["cargo", "test"])));
-        assert!(!is_nextest_run(&argv(&["cargo"])));
-    }
-
     /// Fails by: the config named past `--` (handed to every test binary as a
     /// filter, so nextest never reads it), or not named at all.
     #[test]
