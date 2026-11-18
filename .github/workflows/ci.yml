@@ -251,8 +251,10 @@ jobs:
       # answers, so on a runner without one only the untraced arm is checked.
       # A bare step for the reclaim's reason above, and required: an install
       # that silently failed would turn every traced case into its other arm.
+      - name: Refresh the package index for the step tracer
+        run: sudo apt-get update -q
       - name: Install the step tracer
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends strace
+        run: sudo apt-get install -y -q --no-install-recommends strace
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

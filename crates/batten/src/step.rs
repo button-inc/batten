@@ -710,7 +710,7 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
     let listing = file.with_extension("undeclared");
     let mut body = found.join("\n");
     body.push('\n');
-    if std::fs::write(&listing, body).is_err() {
+    if crate::durable::replace(&listing, body).is_err() {
         return Linted::Unread;
     }
     Linted::Undeclared(found.len(), listing)
