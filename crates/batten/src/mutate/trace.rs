@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 /// The syscall tracer a case's file reads are recorded with, where the host
 /// has one: `strace` on Linux. Elsewhere no case is traced, and each keys on
 /// every non-Rust file, which is the sound answer, not a cheaper one.
+#[must_use]
 pub fn tracer() -> Option<String> {
     if !cfg!(target_os = "linux") || traced_already() {
         return None;
