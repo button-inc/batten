@@ -765,6 +765,12 @@ fn lap_tree_bench(name: &str) -> std::path::PathBuf {
 /// A Claude Code `PreToolUse` Write of `path`, judged in `dir`; whether it was
 /// refused under `path write held`.
 fn held(dir: &std::path::Path, path: &str) -> bool {
+    held_as(dir, path, None)
+}
+
+/// [`held`], judged as a call from inside the gate of the lap whose pid is
+/// `lap`, as every process that lap's gate spawns is.
+fn held_as(dir: &std::path::Path, path: &str, lap: Option<&str>) -> bool {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Write",
@@ -772,9 +778,11 @@ fn held(dir: &std::path::Path, path: &str) -> bool {
     })
     .to_string();
     // NOT THE LAP'S OWN GATE (CLOUD-2783): under a real lap this suite inherits
-    // its gate marker, and a call from inside the gate is never held.
+    // that lap's pid, which is not this case's holder, so the hold still fires.
     let mut command = common::batten();
-    command.env_remove(batten::land::LAP_GATE);
+    if let Some(lap) = lap {
+        command.env(batten::land::LAP_PID, lap);
+    }
     let answer = common::stdin_run(
         &mut command,
         dir,
@@ -816,6 +824,14 @@ fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
     assert!(
         !held(&dir, &outside),
         "a write outside the checkout is admitted"
+    );
+    assert!(
+        !held_as(&dir, &inside, Some(&pid)),
+        "a call from inside the holder's own gate is the lap, never held by it"
+    );
+    assert!(
+        held_as(&dir, &inside, Some("1")),
+        "another lap's gate is held like any other caller"
     );
 
     batten::task::singleton_release(&git_dir, "land");
