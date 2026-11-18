@@ -207,10 +207,19 @@ impl Repo {
         assert_eq!(self.record(&["mystep"]), Some(0));
     }
 
+    /// Every receipt file, across the step groups of the grouped family
+    /// (CLOUD-2784): `step-receipts/<digest(step)>/<digest(key)>`.
     fn receipts(&self) -> Vec<PathBuf> {
-        std::fs::read_dir(self.dir.join(STORE).join("steps"))
-            .map(|entries| entries.map(|entry| entry.unwrap().path()).collect())
-            .unwrap_or_default()
+        let mut found: Vec<PathBuf> = std::fs::read_dir(self.dir.join(STORE).join("step-receipts"))
+            .map(|groups| {
+                groups
+                    .flat_map(|group| std::fs::read_dir(group.unwrap().path()).unwrap())
+                    .map(|entry| entry.unwrap().path())
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        found
     }
 
     fn stage(&self, contents: &str) {
@@ -502,16 +511,37 @@ fn the_bypass_behaves_like_ci() {
     );
 }
 
+// A RETURN TO A JUDGED TREE IS A HIT (CLOUD-2784). This case used to pin the
+// opposite, `one_receipt_per_step_a_new_pass_replaces_the_old_key`: one record
+// per step, so passing B discarded A's receipt and a lap on A, B, A re-ran every
+// step on the third. Keeping a receipt per key is the change.
 #[test]
-fn one_receipt_per_step_a_new_pass_replaces_the_old_key() {
-    let repo = Repo::new("one-per-step");
+fn a_step_keeps_a_receipt_per_key_so_a_return_hits() {
+    let repo = Repo::new("per-key");
     repo.pass_once();
-    let first = read(&repo.receipts()[0]);
     repo.stage("two\n");
     repo.pass_once();
-    let receipts = repo.receipts();
-    assert_eq!(receipts.len(), 1, "{receipts:?}");
-    assert_ne!(read(&receipts[0]), first, "the new pass replaced the key");
+    assert_eq!(repo.receipts().len(), 2, "{:?}", repo.receipts());
+    repo.stage("one\n");
+    assert_eq!(
+        repo.check(&["mystep"]),
+        "hit",
+        "the first tree's receipt answers"
+    );
+}
+
+// THE SUPERSEDED STORE IS EMPTIED, NOT ORPHANED (CLOUD-2784): one receipt per
+// step lived at `steps/<digest(step)>`, and nothing reads it now.
+#[test]
+fn old_receipts_are_removed_on_the_first_new_write() {
+    let repo = Repo::new("old-store");
+    let old = repo.dir.join(STORE).join("steps");
+    std::fs::create_dir_all(&old).unwrap();
+    let digest = batten::tools::digest(b"mystep");
+    std::fs::write(old.join(&digest), "2026-01-01T00:00:00Z deadbeef\n").unwrap();
+    repo.pass_once();
+    assert!(!old.join(&digest).exists(), "the old receipt is gone");
+    assert_eq!(repo.receipts().len(), 1, "and the step recorded");
 }
 
 #[test]
