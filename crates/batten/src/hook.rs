@@ -9846,6 +9846,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         "output-redirect": redirects_to_a_file(
                             &segment.words.iter().map(String::as_str).collect::<Vec<_>>(),
                         ),
+                        // AND WHERE (#1276): the targets themselves, for a
+                        // module that judges where a write lands.
+                        "redirect-writes": redirect_writes(
+                            &segment.redirects.iter().map(String::as_str).collect::<Vec<_>>(),
+                        ),
                         // THE CONTROL-FLOW NODE THIS SEGMENT SITS INSIDE, and
                         // which half of it (CLOUD-1381). `null` at the top
                         // level, which Rego reads as undefined — so a predicate
@@ -11281,9 +11286,24 @@ fn program_entry(
 /// target counts, including one this function cannot resolve — the direction a
 /// pre-approval must err in is "not proven read-only".
 fn redirects_to_a_file(tokens: &[&str]) -> bool {
-    redirect_targets(tokens)
+    redirect_writes(tokens)
         .iter()
-        .any(|(_, target)| !target.starts_with('&') && *target != "/dev/null")
+        .any(|target| *target != "/dev/null")
+}
+
+/// The targets a line's output redirections write, as written: never an
+/// operator token and never a descriptor duplication (`2>&1`).
+///
+/// THE TARGET, NOT THE TOKEN (#1276). A segment's `redirects` are the raw
+/// tokens, operators included, so `2>/dev/null` and a lone `>` read as relative
+/// paths to a module judging targets, and `lap-tree-held` refused every read
+/// that discarded its stderr while a lap was live.
+fn redirect_writes<'a>(tokens: &[&'a str]) -> Vec<&'a str> {
+    redirect_targets(tokens)
+        .into_iter()
+        .map(|(_, target)| target)
+        .filter(|target| !target.starts_with('&'))
+        .collect()
 }
 
 /// The effect [`crate::surface`] declares for a `batten` argv, or `None` for any
@@ -17434,6 +17454,25 @@ mod tests {
             parsed["call"]["segments"][0]["words"],
             serde_json::json!(["cargo", "build", ">", "/tmp/log", "2>&1"])
         );
+        assert_eq!(
+            parsed["call"]["segments"][0]["redirect-writes"],
+            serde_json::json!(["/tmp/log"])
+        );
+    }
+
+    /// THE TARGET, NEVER THE TOKEN (#1276): a glued descriptor, a separated
+    /// operator and an append each yield the path written, a duplication none,
+    /// and an input redirection none.
+    ///
+    /// Fails by: an operator token kept (`>` or `2>/dev/null` read as a relative
+    /// path), a `&` duplication kept, or an input redirection read as a write.
+    #[test]
+    fn redirect_writes_are_targets_never_tokens() {
+        assert_eq!(super::redirect_writes(&["2>/dev/null"]), ["/dev/null"]);
+        assert_eq!(super::redirect_writes(&[">", "out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&[">>log"]), ["log"]);
+        assert!(super::redirect_writes(&["2>&1"]).is_empty());
+        assert!(super::redirect_writes(&["<", "in.txt"]).is_empty());
     }
 
     #[test]
