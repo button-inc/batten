@@ -15112,6 +15112,7 @@ fn run_land_verify_seen(
     // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
     // the gate's first step, reads this and lets the run through.
     published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
+    published.push((land::LAP_PID.to_owned(), std::process::id().to_string()));
     // BUILT ONCE PER LAP, NEVER PER STEP (CLOUD-2783): the record says which.
     if let Some((engine, used)) = lap_engine(root) {
         let digest = engine::digest(root).unwrap_or_else(|_| String::from("-"));
@@ -19747,20 +19748,22 @@ fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<Str
     if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
         return None;
     }
-    let in_gate = std::env::var_os(land::LAP_GATE).is_some();
+    let ours = std::env::var(land::LAP_PID).ok();
     let git_dir = git::git_dir(hook_authority_root()).ok()?;
-    live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), in_gate)
+    live_lap_outside_its_gate(task::singleton_holder(&git_dir, LAND_TASK), ours.as_deref())
 }
 
 /// The live lap a call is held for, or `None` (CLOUD-2783).
 ///
 /// A CALL MADE FROM INSIDE THE LAP'S OWN GATE IS THE LAP. The gate runs under
-/// `land::LAP_GATE`, and everything it spawns, the workspace suite's mediated
-/// cases included, inherits it. Measured on #1276's first green-clippy held lap:
-/// `git_preset`, `gh_guard`, `hook_skip_local` and `finding_sink` judged their own
-/// lap live and refused `git add` and every write, so the gate held itself.
-fn live_lap_outside_its_gate(holder: Option<String>, in_gate: bool) -> Option<String> {
-    holder.filter(|_| !in_gate)
+/// `land::LAP_PID`, the holder's own pid, and everything it spawns, the
+/// workspace suite's mediated cases included, inherits it. Measured on #1276's
+/// held laps: `git_preset`, `gh_guard`, `hook_skip_local` and `finding_sink`
+/// judged their own lap live and refused `git add` and every write, so the gate
+/// held itself. A boolean marker failed twice: the suite scrubs `LAP_GATE`
+/// (CLOUD-2707), and a marker cannot tell its own lap from a case's.
+fn live_lap_outside_its_gate(holder: Option<String>, ours: Option<&str>) -> Option<String> {
+    holder.filter(|pid| ours != Some(pid.as_str()))
 }
 
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
@@ -32301,17 +32304,22 @@ mod tests {
     /// A LAP'S OWN GATE IS NEVER HELD BY THAT LAP (CLOUD-2783): a holder is
     /// a live lap for a call from outside the gate and none for one inside it.
     ///
-    /// Fails by: the gate marker ignored (the suite under a lap refuses itself),
-    /// or the holder dropped outside the gate (writes during a lap admitted).
+    /// Fails by: the gate's pid ignored (the suite under a lap refuses itself),
+    /// any inherited pid exempting (another lap's gate admitted), or the holder
+    /// dropped outside the gate (writes during a lap admitted).
     #[test]
     fn a_laps_own_gate_is_not_held_by_it() {
         let holder = Some(String::from("4242"));
         assert_eq!(
-            super::live_lap_outside_its_gate(holder.clone(), false),
+            super::live_lap_outside_its_gate(holder.clone(), None),
             holder
         );
-        assert_eq!(super::live_lap_outside_its_gate(holder, true), None);
-        assert_eq!(super::live_lap_outside_its_gate(None, false), None);
+        assert_eq!(
+            super::live_lap_outside_its_gate(holder.clone(), Some("17")),
+            holder
+        );
+        assert_eq!(super::live_lap_outside_its_gate(holder, Some("4242")), None);
+        assert_eq!(super::live_lap_outside_its_gate(None, Some("4242")), None);
     }
 
     /// A LAP BUILDS A MOVED ENGINE ONCE, FOR EVERY GATE STEP (CLOUD-2783): an

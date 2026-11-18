@@ -1784,6 +1784,13 @@ fn push_commit(root: &Path, remote: &str, branch: &str, head: String) -> Result<
 /// the lap's own gate is never advised to run the lap.
 pub const LAP_GATE: &str = "BATTEN_LAND_GATE";
 
+/// The pid of the lap whose gate a process runs under (CLOUD-2783): set by
+/// `run_land_verify_seen` beside [`LAP_GATE`], and read by the write hold so a
+/// call is exempt only from ITS OWN lap. Not a marker but an identity: a suite
+/// case that takes the singleton with its own pid is still held by it, and the
+/// suite's scrub of [`LAP_GATE`] (CLOUD-2707) does not reach it.
+pub const LAP_PID: &str = "BATTEN_LAND_LAP";
+
 /// Where a gate run stands relative to `land` (CLOUD-2707).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
