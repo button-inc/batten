@@ -7910,6 +7910,17 @@ kind = "policy"
 scope = "mediated_call"
 module = "policy/shell-write-advisory.rego"
 severity = "warn"
+
+# A WRITE INTO A LIVE LAP'S CHECKOUT (CLOUD-2781). The lap's gate reads the
+# working tree, so a write made while it runs reaches the stages still to come.
+# `land::verify` voids a gate whose tree moved; this refuses the write first.
+[[rule]]
+id = "path write held"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/lap-tree-held.rego"
+severity = "deny"
 [[rule]]
 id = "diff ship early"
 no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
@@ -14615,6 +14626,18 @@ id = "shell edit early"
 gloss = "a write targets a path the retirement gate governs, said at the edit rather than at verify"
 class = """
 The same doctrine as `shell edit refused` and none of its force: this class refuses nothing and moves no exit code. It exists because ORDER changes the conclusion a reader draws. `shell-retirement` is tree-scoped, so its refusal first arrives at `mise run verify` with the edit already finished, and the cheapest reading of a finished edit plus a gate saying no is "the gate is wrong" rather than "this should have been a retirement" — measured twice in one planning session. Arriving at the write costs nothing and removes that reading. The set is deliberately WIDER than the edit-time one, because the mediated surface cannot read a file to check for a shebang: it names a path the tree gate may yet allow, which is the sanctioned direction for advice and would not be for a refusal.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "rules/toolchain.md"
+
+[[verdict]]
+id = "path write held"
+gloss = "a write into the checkout while a land lap is live"
+class = """
+A `land` lap's gate dispatches every stage against the working tree, so a write made while it runs reaches the stages still to come, and the verdict the lap records would judge a tree no stage saw whole (CLOUD-2781, measured on #1276). While the lap holds the checkout's `land` singleton, a write tool aimed inside the checkout, a shell redirect to a relative target, and a `git` command that moves HEAD or the index are refused before they run. Wait for the lap to end (`mise run alive` reports it), or write outside the checkout. A write this misses is still caught at the gate's return, which voids the lap.
 """
 
 [[verdict.route]]
