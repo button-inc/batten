@@ -100,6 +100,11 @@ tools = [["toolv"]]
 id = "declared"
 inputs = ["input.txt"]
 tools = [["toolv"], ["decl", "bin/taskfile"]]
+
+[[step]]
+id = "traced"
+inputs = ["input.txt"]
+tools = [["toolv"]]
 "#;
 
 /// Where the keyed family keeps its records.
@@ -853,4 +858,113 @@ fn a_hit_reports_the_recorded_runs_time_not_its_own() {
     let said =
         stage_seconds(&err, "mystep", "hit").unwrap_or_else(|| panic!("a hit's stage line: {err}"));
     assert!(said >= 0.3, "the hit reports the recorded run: {err}");
+}
+
+// ---- the trace lint (CLOUD-2784) -------------------------------------------
+//
+// Each case branches on the tracer INSIDE the case and never returns early: on
+// a host with `strace` the lint is what is asserted, and on one without it the
+// untraced arm is, so no host passes a case by skipping it.
+
+impl Repo {
+    /// A step command at `bin/<name>`, git-ignored with the rest of `bin/`.
+    fn script(&self, name: &str, body: &str) {
+        common::write(&self.dir, &format!("bin/{name}"), body);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(
+                self.dir.join("bin").join(name),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("chmod");
+        }
+    }
+
+    /// `step run traced -- <name>`, then the first word of the same run again:
+    /// `hit` iff the first recorded. The same command, because `step run`
+    /// keys on it and a bare `step check` does not.
+    fn traced_run(&self, name: &str) -> (Output, String) {
+        let out = self.run_step(&["traced"], &[name], &[]);
+        let again = self.run_step(&["traced"], &[name], &[]);
+        let after = common::stderr(&again)
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        (out, after)
+    }
+}
+
+#[test]
+fn an_undeclared_read_fails_a_traced_miss() {
+    let repo = Repo::new("trace-undeclared");
+    common::write(&repo.dir, "other.txt", "other\n");
+    common::git_in(&repo.dir, &["add", "other.txt"]);
+    repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
+    let (out, after) = repo.traced_run("readb");
+    if batten::mutate::trace::tracer().is_some() {
+        assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+        let stderr = common::stderr(&out);
+        assert!(
+            stderr.contains("step run: traced read 1 path(s) outside its inputs; read "),
+            "{stderr}"
+        );
+        let listing = stderr
+            .lines()
+            .find_map(|line| {
+                line.split_once("outside its inputs; read ")
+                    .map(|(_, at)| at)
+            })
+            .expect("the line points at the listing");
+        assert_eq!(
+            std::fs::read_to_string(listing.trim()).unwrap(),
+            "other.txt\n"
+        );
+        assert_eq!(after, "miss", "an undeclared read records nothing");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit", "untraced, the step records as before");
+    }
+}
+
+#[test]
+fn a_probe_for_a_missing_path_outside_the_inputs_is_undeclared() {
+    let repo = Repo::new("trace-probe");
+    repo.script(
+        "probe",
+        "#!/bin/sh\ncat input.txt >/dev/null\ntest -e c\nexit 0\n",
+    );
+    let (out, after) = repo.traced_run("probe");
+    if batten::mutate::trace::tracer().is_some() {
+        assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+        assert!(
+            common::stderr(&out).contains("read 1 path(s) outside its inputs"),
+            "{}",
+            common::stderr(&out)
+        );
+        assert_eq!(after, "miss");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit");
+    }
+}
+
+#[test]
+fn a_declared_ignored_or_outside_read_records_under_trace() {
+    // `input.txt` is declared, `bin/taskfile` is git-ignored, `/etc/passwd` is
+    // outside the worktree, and `.` is the root: none is undeclared.
+    let repo = Repo::new("trace-declared");
+    repo.script(
+        "readok",
+        "#!/bin/sh\ncat input.txt bin/taskfile /etc/passwd >/dev/null\ntest -d .\n",
+    );
+    let (out, after) = repo.traced_run("readok");
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !common::stderr(&out).contains("outside its inputs"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(after, "hit", "traced or not, a declared run records");
 }

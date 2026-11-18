@@ -33,6 +33,7 @@
 //! body returning `impl Trait` (two branches would be two types), a struct
 //! field, and anything the parser does not place.
 
+use super::trace;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -103,226 +104,26 @@ const READ: &str = "read";
 /// The tracer's raw output in a case's record, removed once read.
 const TRACE: &str = "trace";
 
-/// The syscall tracer a case's file reads are recorded with, where the host
-/// has one: `strace` on Linux. Elsewhere no case is traced, and each keys on
-/// every non-Rust file, which is the sound answer, not a cheaper one.
-fn tracer() -> Option<String> {
-    if !cfg!(target_os = "linux") || traced_already() {
-        return None;
-    }
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("strace"))
-            .find(|candidate| candidate.is_file())
-            .map(|found| found.to_string_lossy().into_owned())
-    })
-}
-
-/// Whether this process is itself under a tracer, which refuses a second one:
-/// a sweep run inside another sweep's reach (the schema's own suite does this)
-/// records untraced rather than spawning a tracer that cannot attach.
-fn traced_already() -> bool {
-    crate::fsio::read_to_string("/proc/self/status").is_ok_and(|status| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix("TracerPid:"))
-            .is_some_and(|pid| pid.trim() != "0")
-    })
-}
-
-/// The tracer's argv around one case: every syscall that names a path, in the
-/// case and every process it spawns, with each descriptor printed as the path
-/// it resolves to. `--seccomp-bpf` stops the case only at those syscalls.
-///
-/// `-DD` RUNS THE TRACER DETACHED, in its own process group: the case keeps the
-/// pid the recorder spawned it with and leads its own group, as it does
-/// untraced. Attached, strace led the group and the case was its child, so a
-/// case signalling its own group signalled the tracer, and one asserting it
-/// leads its group failed (seven baseline failures, #1276). `-q` rather than
-/// `-qq` keeps the case's own exit line, which is how the reader knows the
-/// detached tracer finished writing ([`trace_whole`]).
-fn trace_args(trace: &std::path::Path, program: &str, rest: &[String]) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "-DD",
-        "--seccomp-bpf",
-        "-f",
-        "-q",
-        "-y",
-        "-e",
-        "trace=%file,openat2",
-        "-o",
-    ]
-    .map(String::from)
-    .to_vec();
-    args.push(trace.to_string_lossy().into_owned());
-    args.push(String::from("--"));
-    args.push(program.to_owned());
-    args.extend(rest.iter().cloned());
-    args
-}
-
 /// The tree paths a trace shows touched, relative to `tree`, or `None` when
-/// the trace cannot be read whole: a relative path with no directory to
-/// resolve it against, an escape this reader does not decode, or a read of the
-/// tree's `.git`, which depends on every tracked file. Paths outside the tree
-/// and under its `target/` are a run's own, not its inputs.
+/// the trace cannot be read whole ([`trace::touched`]) or it read the tree's
+/// `.git`, which depends on every tracked file. Paths outside the tree and
+/// under its `target/` are a run's own, not its inputs.
 fn read_trace(trace: &str, tree: &[std::path::PathBuf]) -> Option<BTreeSet<String>> {
-    if !trace_whole(trace) {
-        return None;
-    }
     let mut read = BTreeSet::new();
-    for line in trace.lines() {
-        if trace_event(line).is_some() {
+    for path in trace::touched(trace, None)? {
+        let Some(relative) = tree.iter().find_map(|root| path.strip_prefix(root).ok()) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().into_owned();
+        if relative == ".git" || relative.starts_with(".git/") {
+            return None;
+        }
+        if relative == "target" || relative.starts_with("target/") {
             continue;
         }
-        let mut touched: Vec<std::path::PathBuf> = Vec::new();
-        if let Some(resolved) = line
-            .rsplit_once(") = ")
-            .and_then(|(_, result)| result.split_once('<'))
-            .and_then(|(_, rest)| rest.strip_suffix('>'))
-        {
-            touched.push(std::path::PathBuf::from(resolved));
-        }
-        if let Some(open) = line.find('(')
-            && !line[..open].contains("<...")
-            && let Some(quote) = line[open..].find('"')
-        {
-            let argument = unquote(&line[open + quote + 1..])?;
-            let path = std::path::Path::new(&argument);
-            if path.is_absolute() {
-                touched.push(path.to_path_buf());
-            } else {
-                let base = line[open + 1..open + quote]
-                    .split_once('<')
-                    .and_then(|(_, rest)| rest.split_once('>'))
-                    .map(|(dir, _)| std::path::PathBuf::from(dir))?;
-                touched.push(base.join(path));
-            }
-        }
-        for path in touched {
-            let path = lexical(&path);
-            let Some(relative) = tree.iter().find_map(|root| path.strip_prefix(root).ok()) else {
-                continue;
-            };
-            let relative = relative.to_string_lossy().into_owned();
-            if relative == ".git" || relative.starts_with(".git/") {
-                return None;
-            }
-            if relative == "target" || relative.starts_with("target/") {
-                continue;
-            }
-            read.insert(relative);
-        }
+        read.insert(relative);
     }
     Some(read)
-}
-
-/// The pid a trace line is from and the event it reports, when the line is an
-/// exit or signal report (`+++ ... +++`, `--- ... ---`) rather than a syscall.
-///
-/// THE PID COLUMN IS PADDED: strace prints a short pid left-aligned in a
-/// five-wide field (`8638  execve`), so the event starts after however many
-/// spaces follow it. Read as one space, no pid under five digits ever matched
-/// its exit, every trace read as unfinished, and every case keyed on every file.
-fn trace_event(line: &str) -> Option<(&str, &str)> {
-    let (pid, rest) = line.split_once(' ')?;
-    let rest = rest.trim_start();
-    (rest.starts_with("+++ ") || rest.starts_with("--- ")).then_some((pid, rest))
-}
-
-/// Whether a trace is whole: its first line is the case's own `execve`, and
-/// the same pid's exit is reported. The tracer runs detached ([`trace_args`]),
-/// so the case can exit before the tracer has written its last line; and a
-/// tracer that could not attach — under another trace, where ptrace is refused
-/// — writes no such line while the case runs untraced. Either way the reader
-/// has no whole picture, and the case keys on every file.
-fn trace_whole(trace: &str) -> bool {
-    let Some((root, _)) = trace.lines().next().and_then(|line| line.split_once(' ')) else {
-        return false;
-    };
-    trace.lines().filter_map(trace_event).any(|(pid, event)| {
-        pid == root
-            && (event.starts_with("+++ exited with ") || event.starts_with("+++ killed by "))
-    })
-}
-
-/// How long a recorder waits for the detached tracer to finish a case's trace
-/// once the case exited. A trace still unfinished at this bound is read as no
-/// trace, which keys the case on every file: slower, never unsound.
-#[cfg(target_os = "linux")]
-const TRACE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// The trace at `path` once whole, or whatever it holds at [`TRACE_GRACE`].
-///
-/// WOKEN BY THE TRACER'S CLOSE, NEVER BY A POLL: the watch is placed before the
-/// first read, so a close after that read is an event and one before it left a
-/// whole trace to read. A wait that could not be set up reads once — a partial
-/// trace keys the case on every file, slower and never unsound.
-#[cfg(target_os = "linux")]
-fn await_trace(path: &std::path::Path) -> Option<String> {
-    use rustix::fs::inotify;
-    let read = || crate::fsio::read_to_string(path).ok();
-    let Ok(watch) = inotify::init(inotify::CreateFlags::CLOEXEC) else {
-        return read();
-    };
-    if inotify::add_watch(&watch, path, inotify::WatchFlags::CLOSE_WRITE).is_err() {
-        return read();
-    }
-    let (closed, woken) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut events = [0_u8; 1024];
-        while rustix::io::read(&watch, &mut events).is_ok() && closed.send(()).is_ok() {}
-    });
-    let deadline = std::time::Instant::now() + TRACE_GRACE;
-    loop {
-        let text = read();
-        if text.as_deref().is_some_and(trace_whole) {
-            return text;
-        }
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() || woken.recv_timeout(left).is_err() {
-            return read();
-        }
-    }
-}
-
-/// No tracer off Linux, so nothing to wait for.
-#[cfg(not(target_os = "linux"))]
-fn await_trace(path: &std::path::Path) -> Option<String> {
-    crate::fsio::read_to_string(path).ok()
-}
-
-/// A strace string argument up to its closing quote, or `None` for an escape
-/// other than `\"` and `\\`, or a string strace cut short.
-fn unquote(text: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return (!chars.as_str().starts_with("...")).then_some(out),
-            '\\' => match chars.next()? {
-                escaped @ ('"' | '\\') => out.push(escaped),
-                _ => return None,
-            },
-            other => out.push(other),
-        }
-    }
-    None
-}
-
-/// `path` with `.` and `..` folded away, without touching the filesystem.
-fn lexical(path: &std::path::Path) -> std::path::PathBuf {
-    let mut out = std::path::PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// One mutant as `cargo mutants --list --json` names it.
@@ -2191,13 +1992,13 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     // non-Rust file. The tree the paths are taken against comes from the
     // recorder, which knows it; a case run outside one is not traced.
     let tree = std::env::var_os(TREE_ENV).map(std::path::PathBuf::from);
-    let traced = tracer().filter(|_| tree.is_some());
+    let traced = trace::tracer().filter(|_| tree.is_some());
     let trace = dir.join(TRACE);
     let ran = match traced.as_deref() {
         Some(strace) => super::spawn_as(
             &cwd,
             super::Program::Tracer(strace),
-            &trace_args(&trace, program, rest),
+            &trace::trace_args(&trace, program, rest),
             &env,
             super::runner_bound(),
             super::Said::Streamed,
@@ -2222,7 +2023,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
             .into_iter()
             .chain(std::iter::once(tree))
             .collect();
-        let read = await_trace(&trace).and_then(|text| read_trace(&text, &roots));
+        let read = trace::await_trace(&trace).and_then(|text| read_trace(&text, &roots));
         if let Some(read) = read {
             let listing = read.iter().fold(String::new(), |mut listing, path| {
                 listing.push_str(path);

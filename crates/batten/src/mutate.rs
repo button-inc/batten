@@ -100,6 +100,7 @@ use anyhow::{Context as _, Result, bail};
 pub mod cover;
 pub mod resume;
 pub mod schema;
+pub mod trace;
 
 /// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///
