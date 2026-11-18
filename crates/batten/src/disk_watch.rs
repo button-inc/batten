@@ -964,26 +964,26 @@ mod tests {
     fn a_fanotify_wake_leaves_no_descriptor_open() {
         use std::io::Write as _;
         let dir = crate::scratch::scratch("disk-watch-fid");
-        let group = match fanotify::arm(&dir) {
-            Ok(group) => group,
-            Err(errno) => {
-                assert!(!errno.is_empty(), "a refusal names its errno");
-                return;
+        // BOTH BRANCHES ASSERT AND NEITHER RETURNS EARLY (`silent_skip`): a
+        // refused mark is answered by its errno, an armed one by the drain.
+        match fanotify::arm(&dir) {
+            Err(errno) => assert!(!errno.is_empty(), "a refusal names its errno"),
+            Ok(group) => {
+                let open = || {
+                    std::fs::read_dir("/proc/self/fd")
+                        .map(Iterator::count)
+                        .expect("list fds")
+                };
+                let before = open();
+                let mut file = std::fs::File::create(dir.join("written")).expect("create");
+                for _ in 0..1000 {
+                    file.write_all(b"x").expect("write");
+                }
+                drop(file);
+                let drained = fanotify::drain(&group);
+                assert!(drained > 0, "the mark reported none of the writes");
+                assert_eq!(open(), before, "an event left a descriptor open");
             }
-        };
-        let open = || {
-            std::fs::read_dir("/proc/self/fd")
-                .map(Iterator::count)
-                .expect("list fds")
-        };
-        let before = open();
-        let mut file = std::fs::File::create(dir.join("written")).expect("create");
-        for _ in 0..1000 {
-            file.write_all(b"x").expect("write");
         }
-        drop(file);
-        let drained = fanotify::drain(&group);
-        assert!(drained > 0, "the mark reported none of the writes");
-        assert_eq!(open(), before, "an event left a descriptor open");
     }
 }
