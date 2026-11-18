@@ -236,6 +236,12 @@
               "raw": {
                 "type": "string"
               },
+              "redirect-writes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "redirects": {
                 "items": {
                   "type": "string"

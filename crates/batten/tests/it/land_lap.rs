@@ -840,3 +840,52 @@ fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
         "the same write is admitted once the lap has ended"
     );
 }
+
+/// A Claude Code `PreToolUse` Bash call of `command`, judged in `dir`; whether
+/// it was refused under `path write held`.
+fn bash_held(dir: &std::path::Path, command: &str) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+}
+
+/// **A SHELL READ IS NOT A WRITE BECAUSE IT REDIRECTS** (#1276): while a lap is
+/// live, a read that discards its stderr or reads its stdin from a file is
+/// admitted, and a redirect into the checkout is still held.
+///
+/// Measured on lap 6: `cat a 2>/dev/null` was refused as a write into the
+/// checkout, because the module read the raw token `2>/dev/null` as a relative
+/// target.
+#[test]
+fn a_redirecting_read_is_not_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-redirect-read");
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        !bash_held(&dir, "cat src/a.rs 2>/dev/null"),
+        "a read discarding its stderr is no write"
+    );
+    assert!(
+        !bash_held(&dir, "wc -l < src/a.rs"),
+        "an input redirection is no write"
+    );
+    assert!(
+        bash_held(&dir, "echo x > out.txt"),
+        "a redirect into the checkout is held"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
