@@ -1,7 +1,3 @@
-# METADATA
-# title: A write into the checkout while a lap is live
-# description: Refuse a write into the checkout while a `land` lap holds it, because every stage of the lap's gate reads the working tree.
-#
 #MUTANT-SUITE crates/batten/tests/it/land_lap.rs
 #MUTANT live-lap-edit-admitted|s@^\tis_string(input.facts\["land-live"\])$@\tfalse@|a_write_into_the_checkout_is_held_while_a_lap_is_live
 #
@@ -31,6 +27,14 @@
 # the reading `land` uses to refuse a second lap. A string while a lap is live,
 # null otherwise, so a call outside a lap is never judged here.
 
+# METADATA
+# description: |
+#   Refuse a write into the checkout while a `land` lap holds it. Bound to the
+#   MEDIATED-CALL surface: `input.facts["land-live"]` and `input.call` are that
+#   surface's. THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE
+#   `package`.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.lap_tree_held
 
 import rego.v1
