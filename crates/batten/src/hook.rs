@@ -6433,6 +6433,10 @@ pub struct Facts<'a> {
     /// `None` is both "this call starts no guarded task" and "nothing holds the
     /// lock", which are the same answer to the only question asked here.
     pub singleton: &'a Option<(String, String)>,
+    /// The pid of a live `land` lap on this checkout, or `None` (CLOUD-2781):
+    /// [`crate::facts::Fact::LandLive`]. Resolved at the boundary for the same
+    /// reason [`Self::singleton`] is: a lock is a file and a pid is a process.
+    pub land_live: &'a Option<String>,
     /// The commits a `git reset --hard` in this call would leave unreferenced,
     /// as short SHAs, and only those reachable from no remote (CLOUD-462).
     ///
@@ -6554,6 +6558,7 @@ impl<'a> Facts<'a> {
             // No collision resolved, which for this fact is the same answer a
             // caller that looked and found a free lock would give.
             singleton: &None,
+            land_live: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
@@ -9428,6 +9433,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Null
                 }
             }),
+            crate::facts::Fact::LandLive => Some(
+                facts
+                    .land_live
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |pid| serde_json::Value::from(pid.as_str())),
+            ),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
@@ -15300,6 +15311,7 @@ mod tests {
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
                 singleton: &None,
+                land_live: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
                 commit_subject: &crate::facts::Look::CouldNotLook,
                 reach: &NO_REACH,
