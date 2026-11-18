@@ -684,3 +684,61 @@ fn land_names_checks_still_running_when_it_stops_red() {
         "and with nothing running, nothing is said to be: {settled}"
     );
 }
+
+/// **A GATE JUDGES THE TREE IT STARTED ON** (CLOUD-2781).
+///
+/// Every stage a lap's gate dispatches reads the working tree, so a commit made
+/// while it ran reached the stages after it. The gate here commits and then
+/// passes: the run must come back voided, never clean, and its new head must
+/// never be recorded as verified, so no later push publishes it on this gate's
+/// word. Today the same gate comes back `Verified::Clean`.
+#[test]
+fn a_commit_made_while_the_gate_ran_voids_it() {
+    let dir = common::scratch("land-lap-tree-moved");
+    common::init_repo(&dir);
+    std::fs::write(dir.join("tracked.txt"), "base\n").expect("write the tracked file");
+    common::git_in(&dir, &["add", "tracked.txt"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base"]);
+    let start = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let command = vec![
+        String::from("sh"),
+        String::from("-c"),
+        // `-C`: the gate inherits the CALLER's working directory (`land` runs it
+        // from the checkout's root as `.`), so the fixture is named, never assumed.
+        // No hooks: the host's global ones would run inside this fixture.
+        format!(
+            "git -C {} -c core.hooksPath=/dev/null commit -q --allow-empty -m moved 2>{}",
+            dir.display(),
+            dir.with_extension("err").display()
+        ),
+    ];
+    let verified = land::verify(&dir, "work", &command, &[], &[]).expect("run the gate");
+    let moved = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    assert_ne!(
+        moved,
+        start,
+        "the gate's own commit moved HEAD: {verified:?} {}",
+        std::fs::read_to_string(dir.with_extension("err")).unwrap_or_default()
+    );
+    assert!(
+        matches!(
+            verified,
+            land::Verified::Refused {
+                cause: land::Refusal::Voided { ref to, .. },
+                ..
+            } if *to == moved
+        ),
+        "a gate whose tree moved is voided: {verified:?}"
+    );
+    assert_ne!(
+        land::last_verified(&dir, "work").as_deref(),
+        Some(moved.as_str()),
+        "the moved head is never recorded as verified"
+    );
+}
