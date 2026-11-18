@@ -35,8 +35,8 @@
 # a placement admitting one. Both are answerable from the delta, and both were
 # unanswered until now.
 #
-#MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns["nope"]@|an_added_spawn_escape_is_refused
-#MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns["nope"]@|an_added_spawn_placement_is_refused
+#MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns[placement_pattern]@|an_added_spawn_escape_is_refused
+#MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns[escape_pattern]@|an_added_spawn_placement_is_refused
 #MUTANT-SUITE crates/batten/tests/it/spawn_widening.rs
 
 # METADATA
