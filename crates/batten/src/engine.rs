@@ -448,7 +448,7 @@ pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
 
 /// `word` as one POSIX shell word: bare where it carries nothing the shell
 /// reads, single-quoted otherwise.
-fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     if !word.is_empty()
         && word
             .chars()
