@@ -326,7 +326,8 @@ jobs:
           # the whole `ci` job would fail on a missing tool instead of the rule
           # reporting a conformance level.
           #
-          # Kept out deliberately: zig and cargo-zigbuild (darwin-link only),
+          # Kept out deliberately: zig and cargo-zigbuild (`rust.yml`'s
+          # darwin-link and its musl jobs only),
           # zizmor (its own zizmor.yml workflow), and gh, release-plz and
           # serena, which back agent and release tasks that never run here.
           # `mise run ci-tools-check` fails if a name here drifts from mise.toml.

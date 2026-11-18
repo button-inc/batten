@@ -708,7 +708,9 @@ rmp-serde = "1"
 # `cc`, which the lock already carries. `no_thp` because the default commits
 # and populates whole arenas on Linux: measured, it cut page faults 3,080 -> 380
 # and RAISED system time 13.6 -> 17-21 ms with a 52 MB peak RSS, where `no_thp`
-# keeps glibc's system time and the user-time win (20-22 -> 13-14 ms).
+# keeps glibc's system time and the user-time win (20-22 -> 13-14 ms). On the
+# zigbuilt musl artifact `install.sh` ships, a warm hook call went 19.4 -> 16.7
+# ms median over six interleaved rounds (CLOUD-2344).
 mimalloc = { version = "0.1", default-features = false, features = ["no_thp"] }
 semver = "1"
 tar = "0.4"
