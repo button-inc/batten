@@ -12652,7 +12652,7 @@ fn run_land_lap(
 ) -> Result<ExitCode> {
     // THE LANDING'S FIRST INSTANT, so a held lap can say what its entry cost
     // before the first step (CLOUD-2783).
-    let started = std::time::Instant::now();
+    let hold = land::Hold::new(hold);
     let laps = std::env::var("LAND_MAX_LAPS")
         .ok()
         .and_then(|declared| declared.parse::<u32>().ok())
@@ -12750,7 +12750,6 @@ fn run_land_lap(
         pipeline,
         guard: &guard,
         hold,
-        started,
     };
     // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
     // and the CI wait, every lap. It ends with the landing, on its stop flag.
@@ -12834,10 +12833,8 @@ struct Laps<'run> {
     pipeline: pipeline::Pipeline,
     /// Held by the caller for the whole landing; each step publishes its phase.
     guard: &'run LandSingleton,
-    /// Stop at the first final verify (CLOUD-2783): `land lap --hold`.
-    hold: bool,
-    /// When the landing began, for the held lap's entry time.
-    started: std::time::Instant,
+    /// `land lap --hold` and the held lap's clock (CLOUD-2783).
+    hold: land::Hold,
 }
 
 /// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
@@ -12954,6 +12951,46 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
+/// The bet's bookkeeping after a step: note a push, read the basis ONCE, note
+/// a poison, and cool the clone down when the step poisoned it.
+///
+/// READ ONCE, HERE, BEFORE ANY ARM AFTER IT CAN MOVE IT: `unwind_lap` can
+/// settle or forget the bet, so a later read would ask about a different world
+/// than the one that answered (CLOUD-1306).
+fn after_the_step(
+    step: land::Step,
+    code: ExitCode,
+    seen: Option<land::TapVerdict>,
+    lap: Asked<'_>,
+    bet: &mut speculation::Bet,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<land::Basis> {
+    note_the_push(step, code, bet);
+    let basis = land::Basis::of(bet.live());
+    note_the_poison(step, code, basis, bet);
+    if land::poisons_this_clone(step, code, seen, basis) {
+        note_the_cooldown(lap.root, lap.reference, out, err)?;
+    }
+    Ok(basis)
+}
+
+/// End a held lap (CLOUD-2783): say where it stopped and what each phase cost,
+/// record that line, and return the verify's own code.
+fn stop_held(
+    root: &Path,
+    branch: &str,
+    hold: &land::Hold,
+    code: ExitCode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let head = git::head_commit(root).unwrap_or_else(|_| String::from("-"));
+    let line = hold.line(&head);
+    writeln!(err, "land: held after verify ({head}): {line}")?;
+    land::record_line(root, branch, &line)?;
+    Ok(code)
+}
+
 fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Laps {
         root,
@@ -12963,13 +13000,8 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         budget: laps,
         pipeline,
         guard,
-        hold,
-        started,
+        mut hold,
     } = run;
-    // WHAT EACH PHASE OF THE LAST LAP COST, for a held lap's record (CLOUD-2783):
-    // the entry before the first step, then each step's own wall time.
-    let mut entry_ms: Option<u128> = None;
-    let mut phase_ms: Vec<(land::Step, u128)> = Vec::new();
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
     // unconditional ask every time — see `land::stale`'s own header, which
@@ -13042,8 +13074,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         }
         ledger.attempt();
         writeln!(out, "land: lap {lap} — {} of {laps} charged", ledger.laps)?;
-        entry_ms.get_or_insert_with(|| started.elapsed().as_millis());
-        phase_ms.clear();
+        hold.lap();
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
         // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
         let mut seen: Option<land::TapVerdict> = None;
@@ -13080,10 +13111,9 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // minutes — so announcing it on completion would name every phase
             // exactly when it stopped being true.
             guard.phase(step.as_str(), lap);
-            let began = std::time::Instant::now();
-            let (code, verdict, asked, stalled) =
-                run_the_step(step, this_lap, &bet, &mut ledger, out, err)?;
-            phase_ms.push((step, began.elapsed().as_millis()));
+            let (code, verdict, asked, stalled) = hold.time(step, || {
+                run_the_step(step, this_lap, &bet, &mut ledger, out, err)
+            })?;
             // The wait is the only step with readings to carry, and both are
             // latched rather than acted on here — see `honour_the_notice`.
             seen = verdict.or(seen);
@@ -13101,25 +13131,13 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             if row.entered(code == ExitCode::Success) {
                 entered.push(step);
             }
-            note_the_push(step, code, &mut bet);
-            // READ ONCE, HERE, BEFORE ANY ARM BELOW CAN MOVE IT: `unwind_lap` can
-            // settle or forget the bet, so a later read would ask about a
-            // different world than the one that answered (CLOUD-1306).
-            let basis = land::Basis::of(bet.live());
-            note_the_poison(step, code, basis, &mut bet);
-            if land::poisons_this_clone(step, code, seen, basis) {
-                note_the_cooldown(root, reference, out, err)?;
-            }
+            let basis = after_the_step(step, code, seen, this_lap, &mut bet, out, err)?;
             // THE HOLD (CLOUD-2783): a final verify ends a held lap before the
             // lease, the push and the ready. Replay and verify compensate
             // nothing, so the unwind owes nothing; it runs as every exit's does.
-            if let Some(held) = land::held_after(step, code).filter(|_| hold) {
+            if let Some(held) = hold.after(step, code) {
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
-                let head = git::head_commit(root).unwrap_or_else(|_| String::from("-"));
-                let line = land::held_line(&head, entry_ms.unwrap_or_default(), &phase_ms);
-                writeln!(err, "land: held after verify ({head}): {line}")?;
-                land::record_line(root, branch, &line)?;
-                return Ok(held);
+                return stop_held(root, branch, &hold, held, err);
             }
             match land::lap_progress(step, code, stalled, seen, basis) {
                 land::Progress::Proceed => {}
