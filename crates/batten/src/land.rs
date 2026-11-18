@@ -1647,12 +1647,17 @@ pub fn last_verified(root: &Path, branch: &str) -> Option<String> {
 /// Push the head this lap's gate passed — never whatever `HEAD` is by the time
 /// the push runs (#1276).
 ///
-/// A commit made while the gate ran is this clone's next lap's to verify. The
-/// lap used to push `HEAD`, so a commit made mid-gate was published, readied
-/// and spent a matrix on with no local verdict at all; pushing a draft while a
-/// lap runs is the workflow, so the lap is what must not move with it. A
-/// remote someone pushed past the verified head refuses the swap
-/// ([`Pushed::Raced`]), and the lap goes round again.
+/// The lap used to push `HEAD`, so a commit made mid-gate was published,
+/// readied and spent a matrix on with no local verdict at all. A remote someone
+/// pushed past the verified head refuses the swap ([`Pushed::Raced`]), and the
+/// lap goes round again.
+///
+/// **A COMMIT MADE WHILE THE GATE RUNS IS NOT A WORKFLOW** (CLOUD-2781). This
+/// doc used to call pushing a draft mid-lap the workflow, which held for the
+/// push and not for the gate: every stage reads the working tree, so the edit
+/// reached the stages still to run and the verdict judged a tree no stage saw
+/// whole. [`verify`] now voids a gate whose tree moved ([`tree_moved`]), and a
+/// live lap refuses writes into its checkout.
 ///
 /// # Errors
 ///
@@ -1817,6 +1822,38 @@ pub enum Refusal {
         /// composed here: which reclaim to run is that repository's vocabulary.
         remedy: String,
     },
+    /// **THE CHECKOUT MOVED UNDER THE GATE, WHICH LAPS RATHER THAN STOPPING**
+    /// (CLOUD-2781). Every stage the gate dispatches reads the working tree, so a
+    /// commit or an edit made while it ran reached the stages after it: its
+    /// verdict is about a tree no stage saw whole. Not a refusal of the tree,
+    /// so it laps like [`Self::Moved`]; and never clean, so the moved head is
+    /// never recorded as verified.
+    Voided {
+        /// HEAD when the gate returned, or `-` where it could not be read.
+        to: String,
+        /// Paths dirty when the gate returned; `usize::MAX` where unreadable.
+        dirty: usize,
+    },
+}
+
+/// Whether the checkout moved under a gate that started at HEAD `start` with
+/// `start_dirty` dirty paths: HEAD read at its return differs, or the dirty
+/// count does. A lap's entry refuses a dirty tree, so under `land` the start is
+/// always 0 and this is "any path dirty at return"; [`verify`] is public, so the
+/// count is compared rather than assumed. A reading that could not be taken is a
+/// move, since a verdict over a tree nobody could read back is not one to record.
+#[must_use]
+pub fn tree_moved(
+    (start, start_dirty): (&str, Option<usize>),
+    end: Option<String>,
+    dirty: Option<usize>,
+) -> Option<Refusal> {
+    let to = end.unwrap_or_else(|| String::from("-"));
+    let unmoved = to == start && dirty.is_some() && dirty == start_dirty;
+    (!unmoved).then_some(Refusal::Voided {
+        to,
+        dirty: dirty.unwrap_or(usize::MAX),
+    })
 }
 
 impl Verified {
@@ -1988,9 +2025,20 @@ pub fn verify(
                 log = handles;
                 (code, found)
             });
+    let start = head.clone();
+    let start_dirty = crate::git::uncommitted(&started).ok();
     let verified = match classified {
         Ok(ran) => gate_said(head, ran, environment, crate::disk_watch::low_water()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
+    };
+    // THE TREE THE GATE JUDGED MUST BE THE TREE IT STARTED ON (CLOUD-2781).
+    let verified = match tree_moved(
+        (&start, start_dirty),
+        crate::git::head_commit(root).ok(),
+        crate::git::uncommitted(&started).ok(),
+    ) {
+        Some(cause) => Verified::Refused { sha: start, cause },
+        None => verified,
     };
     let mut lines = vec![verified.line()];
     if !log.is_empty() {
@@ -4557,6 +4605,43 @@ mod forge_tests {
         assert!(matches!(
             gate_said(String::from("h"), (0, Vec::new()), &[], Some(0)),
             Verified::Clean(_)
+        ));
+    }
+
+    /// A GATE JUDGES THE TREE IT STARTED ON (CLOUD-2781): a head that moved, a
+    /// path left dirty, or a reading that could not be taken voids it.
+    ///
+    /// Fails by: the comparison skipped (a moved tree passes), the dirty count
+    /// ignored, or an unreadable state read as unmoved.
+    #[test]
+    fn a_gate_whose_tree_moved_is_voided() {
+        let clean = ("h1", Some(0));
+        let h1 = || Some(String::from("h1"));
+        assert_eq!(tree_moved(clean, h1(), Some(0)), None);
+        // A tree that started dirty and stayed so is unmoved (a direct `verify`).
+        assert_eq!(tree_moved(("h1", Some(2)), h1(), Some(2)), None);
+        assert!(matches!(
+            tree_moved(clean, Some(String::from("h2")), Some(0)),
+            Some(Refusal::Voided { ref to, dirty: 0 }) if to == "h2"
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), Some(3)),
+            Some(Refusal::Voided { dirty: 3, .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, None, Some(0)),
+            Some(Refusal::Voided { ref to, .. }) if to == "-"
+        ));
+        assert!(matches!(
+            tree_moved(("h1", None), h1(), Some(0)),
+            Some(Refusal::Voided { .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), None),
+            Some(Refusal::Voided {
+                dirty: usize::MAX,
+                ..
+            })
         ));
     }
 
