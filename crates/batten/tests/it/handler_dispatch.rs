@@ -477,7 +477,7 @@ fn a_config_write_that_would_not_load_is_refused() {
     // Inverting either filter leaves the excerpt alone, or nothing.
     let cause = door
         .out
-        .split_once("would not load: ")
+        .split_once("unable to load: ")
         .and_then(|(_, rest)| rest.split('"').next())
         .unwrap_or_default();
     assert!(

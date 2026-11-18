@@ -2040,8 +2040,14 @@ fn spawn_as(
         .with_context(|| format!("mutate: could not run {program}"))?;
     forwarding.adopt(child.id())?;
     let pumps = [
-        child.stdout.take().map(|pipe| pump_into(pipe, &out_path)),
-        child.stderr.take().map(|pipe| pump_into(pipe, &err_path)),
+        child
+            .stdout
+            .take()
+            .map(|pipe| pump_into(pipe, &out_path, Echo::Quiet)),
+        child
+            .stderr
+            .take()
+            .map(|pipe| pump_into(pipe, &err_path, Echo::Shown)),
     ];
     let waited = wait_bounded(child, bound);
     // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
@@ -2076,17 +2082,40 @@ fn spawn_as(
     })
 }
 
-/// Pump `pipe` into `path` and this process's stderr ([`crate::stream`]).
+/// Whether a captured stream is also shown on this process's stderr.
+///
+/// **STDOUT IS THE CALLER'S DATA, STDERR ITS PROGRESS** (#1276). Echoing both
+/// put cargo-mutants' `--list --json`, every mutant's whole diff, into the gate
+/// log: 58 MB on one lap, where `disk_watch.rs`'s own text matched the
+/// `disk-full` environment row and a red baseline was reported as a full disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Echo {
+    /// Captured to its file only.
+    Quiet,
+    /// Captured, and shown as it is written.
+    Shown,
+}
+
+/// The sinks a captured stream is pumped into: its file, and this process's
+/// stderr where `echo` shows it.
+fn sinks(file: fs::File, echo: Echo) -> Vec<Box<dyn std::io::Write + Send>> {
+    let mut sinks: Vec<Box<dyn std::io::Write + Send>> = vec![Box::new(file)];
+    if echo == Echo::Shown {
+        sinks.push(Box::new(std::io::stderr()));
+    }
+    sinks
+}
+
+/// Pump `pipe` into `path`, and this process's stderr where `echo` shows it
+/// ([`crate::stream`]).
 fn pump_into<R: std::io::Read + Send + 'static>(
     pipe: R,
     path: &Path,
+    echo: Echo,
 ) -> Result<crate::stream::Pumping> {
     let file = fs::File::create(path) // stream: a child's captured stream
         .with_context(|| format!("mutate: could not open {}", path.display()))?;
-    Ok(crate::stream::spawn_pump(
-        pipe,
-        vec![Box::new(std::io::stderr()), Box::new(file)],
-    ))
+    Ok(crate::stream::spawn_pump(pipe, sinks(file, echo)))
 }
 
 /// Wait for `child` until `bound`, end its whole process group, then reap it,
@@ -2584,6 +2613,10 @@ fn overlay_features(root: &Path) -> Vec<String> {
 /// this env reaches, because it names nextest's profile ([`scrubbed`]).
 fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
     let mut env = suite_env(root);
+    env.push(trusted_staged(
+        staged,
+        std::env::var("MISE_TRUSTED_CONFIG_PATHS").ok(),
+    ));
     if let Some(overlay) = Overlay::declared(root) {
         env.push((overlay.env, overlay.dir.to_string_lossy().into_owned()));
     }
@@ -2593,6 +2626,22 @@ fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
         *value = profile;
     }
     env
+}
+
+/// `MISE_TRUSTED_CONFIG_PATHS` with `staged` added to whatever was inherited.
+///
+/// THE STAGED TREE IS A COPY OF THIS CHECKOUT'S OWN CONFIG, so trusting it adds
+/// no trust the checkout lacks. Without it, a case that resolves a pinned tool
+/// with `mise which` from the staged root read the copy as untrusted, failed
+/// before it ran, and three `hk-fix-selection.pkl` rows read `case-already-red`
+/// on every sweep in a fresh container (#1276).
+fn trusted_staged(staged: &Path, inherited: Option<String>) -> (String, String) {
+    let staged = staged.to_string_lossy();
+    let value = match inherited.filter(|paths| !paths.is_empty()) {
+        Some(paths) => format!("{paths}:{staged}"),
+        None => staged.into_owned(),
+    };
+    (String::from("MISE_TRUSTED_CONFIG_PATHS"), value)
 }
 
 /// `profile` where `staged`'s `.config/nextest.toml` declares `[profile.<it>]`,
@@ -5062,6 +5111,39 @@ pub fn job_count(machine: Machine, cost: JobCost) -> usize {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The staged copy is trusted, beside whatever the caller already trusted.
+    ///
+    /// Fails by: the staged root dropped, or an inherited list replaced.
+    #[test]
+    fn the_staged_copy_is_trusted_beside_what_was_inherited() {
+        let staged = Path::new("/repo/target/mutate");
+        assert_eq!(
+            trusted_staged(staged, None).1,
+            "/repo/target/mutate".to_owned()
+        );
+        assert_eq!(
+            trusted_staged(staged, Some(String::from("/a"))).1,
+            "/a:/repo/target/mutate".to_owned()
+        );
+        assert_eq!(
+            trusted_staged(staged, Some(String::new())).1,
+            "/repo/target/mutate"
+        );
+    }
+
+    /// A quiet stream reaches its file alone; a shown one also reaches stderr.
+    ///
+    /// Fails by: stdout echoed again, which put every mutant's diff in the gate
+    /// log, or stderr hidden, which left a long build showing nothing.
+    #[test]
+    fn only_a_shown_stream_reaches_stderr() {
+        let path = std::env::temp_dir().join(format!("batten-sinks-{}", std::process::id()));
+        let file = || fs::File::create(&path).unwrap(); // stream: a test's sink
+        assert_eq!(sinks(file(), Echo::Quiet).len(), 1);
+        assert_eq!(sinks(file(), Echo::Shown).len(), 2);
+        let _removed = fs::remove_file(&path);
+    }
 
     const COST: JobCost = JobCost {
         disk_mb: 2_000,
