@@ -187,8 +187,7 @@ winapi-util.workspace = true
 # musl — the build `install.sh` ships to every Linux consumer — it needs a musl C
 # compiler: the release zigbuilds that triple, and `cross-check` and `test:musl`
 # point cc-rs at the same zig through `cargo-zigbuild`, so what ships is what is
-# checked. Measured on the musl artifact: 19.4 -> 16.7 ms per warm hook call
-# (CLOUD-2344).
+# checked (CLOUD-2344).
 [target.'cfg(target_os = "linux")'.dependencies]
 mimalloc.workspace = true
 
