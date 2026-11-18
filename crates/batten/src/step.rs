@@ -605,8 +605,18 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
-    if passed && let Some((_, file)) = &traced {
-        match lint_trace(step, file) {
+    let linted = traced
+        .as_ref()
+        .filter(|_| passed)
+        .map(|(_, file)| lint_trace(step, file));
+    // THE TRACE IS READ ONCE, THEN REMOVED, pass or fail (lap 16): a whole
+    // test run traces to gigabytes, so one kept per step filled the disk. The
+    // listing beside it is what a reader needs, and it stays.
+    if let Some((_, file)) = &traced {
+        let _ = std::fs::remove_file(file);
+    }
+    if let Some(linted) = linted {
+        match linted {
             Linted::Undeclared(count, listing) => {
                 let _ = writeln!(
                     err,
@@ -653,9 +663,9 @@ pub fn run_step(
 }
 
 /// Where a step's traced run writes its trace: a file directly under the git
-/// dir, which exists, so nothing is created here, and `strace -o` truncates it,
-/// so nothing is removed. `None` where the git dir cannot be found, which runs
-/// the step untraced.
+/// dir, which exists, so nothing is created here; the run removes it once
+/// linted. `None` where the git dir cannot be found, which runs the step
+/// untraced.
 fn trace_file(step: &str) -> Option<std::path::PathBuf> {
     let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
     Some(git_dir.join(format!(

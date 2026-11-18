@@ -957,6 +957,12 @@ fn an_undeclared_read_fails_a_traced_miss() {
             std::fs::read_to_string(listing.trim()).unwrap(),
             "other.txt\n"
         );
+        assert!(
+            !std::path::Path::new(listing.trim())
+                .with_extension("trace")
+                .exists(),
+            "the trace is removed once read; only the listing stays"
+        );
         assert_eq!(after, "miss", "an undeclared read records nothing");
     } else {
         assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
