@@ -2091,6 +2091,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `step graph run` (CLOUD-2785) names a group and the rows' own codes, never
+    // a byte a row printed: each row's output is the row's, teed by `exec`.
+    Verb {
+        path: "step graph run",
+        args: &["a-group"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "step record",
         args: &["a-step"],
