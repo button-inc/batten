@@ -889,3 +889,67 @@ fn a_redirecting_read_is_not_held_while_a_lap_is_live() {
     );
     batten::task::singleton_release(&git_dir, "land");
 }
+
+/// Whether `adjudicate` holds a host MCP call `tool` with `arguments` in `dir`.
+fn tool_held(dir: &std::path::Path, tool: &str, arguments: &serde_json::Value) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": arguments,
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+}
+
+/// **THE BOARD AND THE PR BODY ARE THE GATE'S INPUTS TOO** (CLOUD-2785): laps 6
+/// and 10 on #1276 went red because a row was filed and the body edited while
+/// the lap ran. While a lap is live, filing and a body edit are held; editing an
+/// existing row and commenting are not; and nothing is held with no lap.
+#[test]
+fn filing_and_body_edits_are_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-tracker-writes");
+    let file = serde_json::json!({"title": "t", "team": "CLOUD"});
+    let body =
+        serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1, "body": "Closes CLOUD-1"});
+    assert!(
+        !tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "the premise: no lap, no hold"
+    );
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "filing is held"
+    );
+    assert!(
+        tool_held(&dir, "mcp__github__update_pull_request", &body),
+        "a body edit is held"
+    );
+    assert!(
+        !tool_held(
+            &dir,
+            "mcp__Linear__save_issue",
+            &serde_json::json!({"id": "CLOUD-1", "state": "Done"})
+        ),
+        "editing an existing row is not"
+    );
+    assert!(
+        !tool_held(
+            &dir,
+            "mcp__Linear__save_comment",
+            &serde_json::json!({"issueId": "CLOUD-1", "body": "x"})
+        ),
+        "a comment is not"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}

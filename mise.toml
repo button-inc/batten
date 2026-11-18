@@ -4914,14 +4914,19 @@ depends = ["tree-clean"]
 #      edges for it) are written in sequence just above, so it never judges a stale one.
 #   2. minutes: semver, the test replay, the two cross builds, clippy.
 #   3. the suite: `ci` (hk's whole suite, mutants included).
+#
+# TIERS 1 AND 2 ARE STEP GRAPHS (CLOUD-2785): their order and fan width were
+# positions in this array, which the engine could not bound, time or report.
+# They are now the `group = "verify-1"` and `group = "verify-2"` rows of
+# `batten.toml`'s step table: the five sequential writes and checks chained by
+# `depends_on` ahead of every tier-1 gate, and tier 2 run at most two at once
+# until the disk admission is sized from the measured fan (CLOUD-2781). Each
+# node is `mise run <task>`, so every template stays in its task and CI's jobs
+# call the same tasks. A failure skips only what depends on it, and each node
+# prints its code and seconds.
 run = [
-  "mise run tree-clean",
-  "mise run record-verdicts",
-  "mise run evaluator-io-record",
-  "mise run signing-posture-record",
-  "{{vars.batten}} record validate config-validator",
-  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check",
-  "mise run --continue-on-error semver ::: verify:test-replay ::: cross-check ::: darwin-link ::: lint:clippy",
+  "{{vars.batten}} step graph run verify-1",
+  "{{vars.batten}} step graph run verify-2 --jobs 2",
   "mise run ci",
   "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
   "mise run perf-gate",

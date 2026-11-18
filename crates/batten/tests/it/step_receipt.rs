@@ -801,13 +801,49 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
             "`batten step … {name}` names no `[[step]]` row, so it can never hit"
         );
     }
+    // A GRAPH NODE IS NAMED BY ITS GROUP (CLOUD-2785): a schedule-only row is
+    // reached through `step graph run <group>`, never `step run <id>`, so it is
+    // an orphan only when no line runs its group.
+    let groups: Vec<String> = manifest
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .flat_map(|line| {
+            line.match_indices("step graph run ")
+                .map(|(at, verb)| {
+                    line[at + verb.len()..]
+                        .chars()
+                        .take_while(|c| !c.is_whitespace() && *c != '"')
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let reached = |id: &str| {
+        declared["step"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|row| {
+                row["id"].as_str() == Some(id)
+                    && row
+                        .get("group")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|group| groups.iter().any(|named| named == group))
+            })
+    };
     for id in &ids {
         assert!(
-            named.iter().any(|name| name == id),
-            "`[[step]] {id}` is named by no task, so it caches nothing: {named:?}"
+            named.iter().any(|name| name == id) || reached(id),
+            "`[[step]] {id}` is named by no task and in no group a task runs, so it \
+             does nothing: {named:?} {groups:?}"
         );
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
+    assert!(
+        groups.iter().any(|group| group == "verify-1")
+            && groups.iter().any(|group| group == "verify-2"),
+        "the lap runs both graph groups: {groups:?}"
+    );
 }
 
 /// The seconds a `stage <step> <how> <seconds>` line on stderr reports.
