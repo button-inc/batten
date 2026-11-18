@@ -371,8 +371,7 @@ jobs:
           version: 2026.9.1
           # What the `cross` job installs, for its stated reason: cross-check is
           # `rustup target add` + `cargo check`, plus the zig that compiles
-          # mimalloc's C for musl (CLOUD-2344). Without it this step fails under
-          # `continue-on-error` and the family silently stops being warmed.
+          # mimalloc's musl C (CLOUD-2344).
           install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         # Read by the compile step below; `ci-local-parity` property 17 holds the
