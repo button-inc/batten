@@ -4273,6 +4273,9 @@ pub fn call_input_schema() -> Result<String> {
                                 // CLOUD-1949: output sent into a file, which
                                 // makes any reader in the segment a writer.
                                 "output-redirect": {"type": "boolean"},
+                                // #1276: the output redirections' targets,
+                                // never an operator token or a `&` duplication.
+                                "redirect-writes": {"type": "array", "items": {"type": "string"}},
                                 // CLOUD-1381. `null` at the top level; a
                                 // `kind`/`role` pair inside a control-flow node,
                                 // so a module decides from the node rather than
