@@ -18272,7 +18272,11 @@ tools = [
 # it reads; the commit range rides the command's own argv.
 [[step]]
 id = "policy-test"
-inputs = ["policy", "batten.toml", "crates", "Cargo.toml", "Cargo.lock", "schema"]
+# KEEPS `.` (CLOUD-2784), and the trace is why: lap 12's traced miss read 494
+# paths outside the six entries this row used to declare, across 45 of the 63
+# top-level entries (the bundles' documents and line sources span the tree).
+# Keyed on six, a receipt answered for edits the suite never judged.
+inputs = ["."]
 tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
