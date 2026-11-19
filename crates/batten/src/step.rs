@@ -203,19 +203,28 @@ pub(crate) fn bypassed() -> bool {
 /// Say which step a supervising task is on (CLOUD-425). Best-effort:
 /// bookkeeping never changes a verdict, and a pid nothing registered is a no-op.
 fn announce(step: &str) {
+    push_to_supervisor(crate::task::Signal::Phase, step);
+}
+
+/// Say that a long step moved forward without changing which step it is
+/// (CLOUD-2369's other half): the `Sig` field, which the self-stall arm reads
+/// beside the phase. MEASURED ON #1276: the schema sweep judged 3,723 mutants
+/// in 8,193 s inside the one `mutant:changed` step, past the 240-beat bound,
+/// and the lap was cancelled as stalled while it was still advancing.
+pub(crate) fn advanced(what: &str) {
+    push_to_supervisor(crate::task::Signal::Sig, what);
+}
+
+/// One push to the record of the task exported in [`TASK_PID`]. Best-effort,
+/// like every bookkeeping write: no supervisor, or no repository, is a no-op.
+fn push_to_supervisor(signal: crate::task::Signal, value: &str) {
     let Some(pid) = std::env::var(TASK_PID).ok().filter(|pid| !pid.is_empty()) else {
         return;
     };
     let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
         return;
     };
-    crate::task::push(
-        &git_dir,
-        &pid,
-        crate::task::Signal::Phase,
-        step,
-        crate::boundary_epoch(),
-    );
+    crate::task::push(&git_dir, &pid, signal, value, crate::boundary_epoch());
 }
 
 /// The row the keyed tree's own committed `batten.toml` declares for `step`.

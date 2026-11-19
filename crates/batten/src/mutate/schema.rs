@@ -3511,13 +3511,10 @@ fn judge_all(
         for verdict in decided {
             verdicts.push(verdict);
             if verdicts.len() % PROGRESS_EVERY == 0 || verdicts.len() == todo.len() {
-                let _ = writeln!(
-                    out,
-                    "mutate schema: judged {}/{} in {}s",
-                    verdicts.len(),
-                    todo.len(),
-                    started.elapsed().as_secs()
-                );
+                let judged = format!("mutate schema: judged {}/{}", verdicts.len(), todo.len());
+                let _ = writeln!(out, "{judged} in {}s", started.elapsed().as_secs());
+                // THE LAP SEES THE SWEEP MOVE: one step can outlast the stall bound.
+                crate::step::advanced(&judged);
             }
         }
     });
