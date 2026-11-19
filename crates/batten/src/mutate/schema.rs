@@ -1931,6 +1931,30 @@ fn batches(phase: &BTreeSet<Case>) -> Vec<BTreeSet<Case>> {
     runs
 }
 
+/// A handed-back mutant's nextest filterset and the cases its run covers.
+///
+/// The cases that observed it, while their filterset fits ONE argument
+/// ([`FILTER_BYTES`]); past that, no filter and every case: the whole suite is
+/// a superset of the observing cases, so the verdict holds and only the run is
+/// longer. Lap 25 failed the in-place spawn with `E2BIG` on a mutant nearly
+/// every case observed.
+fn handback_filter<'a>(
+    observing: Option<&BTreeSet<Case>>,
+    cases: &'a BTreeSet<Case>,
+    every: &'a BTreeSet<Case>,
+) -> (Option<String>, &'a BTreeSet<Case>) {
+    let Some(observing) = observing else {
+        return (None, cases);
+    };
+    let filter =
+        super::cover::filterset(&observing.iter().map(|(name, _)| name.as_str()).collect());
+    if filter.len() <= FILTER_BYTES {
+        (Some(filter), cases)
+    } else {
+        (None, every)
+    }
+}
+
 /// As nextest's `run-wrapper` while reach is recorded: run the case with its
 /// own record directory, which every process it spawns inherits, and exit as
 /// it did. `None` when this process is not the wrapper.
@@ -3865,10 +3889,8 @@ fn judge_handbacks(
                 sync(live, tree, &BTreeSet::new())?;
                 synced = true;
             }
-            let filter = observing.as_ref().map(|cases| {
-                super::cover::filterset(&cases.iter().map(|(name, _)| name.as_str()).collect())
-            });
-            let bound = case_bound(&cases, judging.seconds).min(super::runner_bound());
+            let (filter, ran) = handback_filter(observing.as_ref(), &cases, &every);
+            let bound = case_bound(ran, judging.seconds).min(super::runner_bound());
             let outcome = super::cargo_mutant_in_place(
                 (tree, handback.runner, handback.diff),
                 &mutant.name,
@@ -6524,6 +6546,31 @@ mod tests {
         );
         assert!(batches(&BTreeSet::new()).is_empty());
         assert_eq!(batches(&[case("one")].into()).len(), 1);
+    }
+
+    /// Fails by: a filter past one argument's cap handed to the spawn (lap 25's
+    /// `E2BIG`), the whole suite run when the observing cases' filter fits, or
+    /// the bound read off the observing cases when every case runs.
+    #[test]
+    fn a_handback_filter_past_one_argument_runs_every_case() {
+        let every: BTreeSet<Case> = (0..200)
+            .map(|n| case(&format!("{}{n:03}", "x".repeat(600))))
+            .collect();
+        let few: BTreeSet<Case> = every.iter().take(3).cloned().collect();
+        let (filter, ran) = handback_filter(Some(&few), &few, &every);
+        let filter = filter.expect("a small observing set is filtered");
+        assert!(filter.len() <= FILTER_BYTES && filter.contains(&few.first().unwrap().0));
+        assert_eq!(ran, &few, "the run covers the observing cases");
+        // 200 x ~610 bytes is past 96 KiB: no filter, and every case runs.
+        let (filter, ran) = handback_filter(Some(&every), &every, &every);
+        assert_eq!(filter, None, "an oversized filter is never handed over");
+        assert_eq!(ran.len(), every.len());
+        let sized =
+            super::super::cover::filterset(&every.iter().map(|(n, _)| n.as_str()).collect());
+        assert!(sized.len() > FILTER_BYTES, "the fixture is past the cap");
+        // Unobserved: no filter, and the cases the caller chose.
+        let (filter, ran) = handback_filter(None, &few, &every);
+        assert_eq!((filter, ran), (None, &few));
     }
 
     /// Fails by: a mutant in two shards or none, or the order not kept.
