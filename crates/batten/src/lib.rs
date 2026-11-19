@@ -32276,6 +32276,24 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    /// A split request carries the half and the keyed bases it was split on,
+    /// and keeps everything else of the request it narrows.
+    ///
+    /// Fails by: either field dropped from `split`'s struct expression (lap
+    /// 27's two survivors), which runs both halves of `enforce` or keys
+    /// nothing on its bases.
+    #[test]
+    fn a_split_request_carries_its_half_and_its_bases() {
+        let only = [String::from("row")];
+        let bases = [String::from("origin/main")];
+        let split =
+            super::RunRequest::spawning(true, &only).split(Some(super::rules::Half::Tree), &bases);
+        assert_eq!(split.half, Some(super::rules::Half::Tree));
+        assert_eq!(split.keyed_bases, bases);
+        assert!(split.json);
+        assert_eq!(split.only, only);
+    }
+
     /// Fails by: the comparison inverted, so a lap whose `HEAD` stood still says
     /// it moved, and one that moved says nothing.
     #[test]
