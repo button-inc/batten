@@ -403,7 +403,6 @@ pub fn builds_as_swept(command: &[String]) -> bool {
         matches!(
             flag,
             "--features"
-                | "-F"
                 | "--all-features"
                 | "--no-default-features"
                 | "--release"
@@ -411,7 +410,7 @@ pub fn builds_as_swept(command: &[String]) -> bool {
                 | "--cargo-profile"
                 | "--target"
                 | "--config"
-        ) || (flag.starts_with("-F") && flag.len() > 2)
+        ) || flag.starts_with("-F")
     })
 }
 
@@ -488,7 +487,8 @@ fn compiler_version(root: &Path) -> Option<Vec<u8>> {
     let argv = ["rustc", "-vV"].map(str::to_owned);
     let (code, said) =
         crate::exec::piped_argv(root, &argv, "", crate::exec::Diagnostics::Drop, &[])?;
-    (code == 0 && !said.is_empty()).then(|| said.into_bytes())
+    // A SUCCESSFUL `-vV` ALWAYS PRINTS its release line; the exit is the test.
+    (code == 0).then(|| said.into_bytes())
 }
 
 /// Whether the variable `key` may change what a case does, as the key reads
@@ -524,10 +524,23 @@ pub fn env_digest(vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsSt
 ///
 /// The directory cannot be read.
 fn collect_passes(pass: &Path, lifetime: std::time::Duration) -> Result<()> {
+    collect_passes_at(pass, lifetime, std::time::SystemTime::now())
+}
+
+/// [`collect_passes`] as of `now`: a pass is stale only once its age EXCEEDS
+/// `lifetime`.
+///
+/// # Errors
+///
+/// The directory cannot be read.
+fn collect_passes_at(
+    pass: &Path,
+    lifetime: std::time::Duration,
+    now: std::time::SystemTime,
+) -> Result<()> {
     let Ok(entries) = std::fs::read_dir(pass) else {
         return Ok(());
     };
-    let now = std::time::SystemTime::now();
     for entry in entries {
         let path = entry?.path();
         let stale = std::fs::metadata(&path)
@@ -579,7 +592,13 @@ pub fn promote(root: &Path) -> Result<usize> {
     let now = schema::resource_ids(root)
         .map(|ids| schema::tree_ids_digest(&ids))
         .ok();
-    promote_pending(&state, started.is_some() && started == now)
+    promote_pending(&state, stood(started.as_deref(), now.as_deref()))
+}
+
+/// Whether the tree a run `started` on is the tree there is `now`: never where
+/// either is unknown, which is a pass of an unknown tree.
+fn stood(started: Option<&str>, now: Option<&str>) -> bool {
+    started.is_some() && started == now
 }
 
 /// [`promote`]'s move, `stood` saying whether the run's tree still stands.
@@ -917,6 +936,119 @@ mod tests {
         assert!(pass.join("new").is_file());
     }
 
+    /// Fails by: a pass exactly its lifetime old collected (the bound is
+    /// "older than"), or one a second past it kept.
+    #[test]
+    fn a_pass_is_collected_only_past_its_lifetime() {
+        let pass = crate::scratch::scratch("test-run-collect-edge");
+        let at = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        for name in ["edge", "past"] {
+            std::fs::write(pass.join(name), "").unwrap();
+        }
+        let stamp = |name: &str, when: std::time::SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(pass.join(name))
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        };
+        stamp("edge", at);
+        stamp("past", at - std::time::Duration::from_secs(1));
+        collect_passes_at(
+            &pass,
+            std::time::Duration::from_secs(60),
+            at + std::time::Duration::from_secs(60),
+        )
+        .unwrap();
+        assert!(pass.join("edge").is_file(), "exactly the lifetime is kept");
+        assert!(
+            !pass.join("past").exists(),
+            "past the lifetime is collected"
+        );
+    }
+
+    /// Fails by: an unknown tree read as one that stood, or two different
+    /// trees read as the same.
+    #[test]
+    fn only_the_same_known_tree_stood() {
+        assert!(stood(Some("t"), Some("t")));
+        assert!(!stood(Some("t"), Some("u")));
+        assert!(!stood(Some("t"), None));
+        assert!(!stood(None, None), "two unknowns are not one tree");
+    }
+
+    /// Fails by: an earlier layout's journal kept beside the live one, or one
+    /// of this layout's own directories, or a file, removed.
+    #[test]
+    fn an_earlier_layouts_journal_is_retired() {
+        let state = crate::scratch::scratch("test-run-legacy");
+        for name in ["0123abcd", BIN, EXPECT, PASS, PENDING] {
+            std::fs::create_dir_all(state.join(name)).unwrap();
+        }
+        std::fs::write(state.join("loose"), "").unwrap();
+        retire_legacy(&state).unwrap();
+        assert!(!state.join("0123abcd").exists(), "the legacy journal goes");
+        for name in [BIN, EXPECT, PASS, PENDING, "loose"] {
+            assert!(state.join(name).exists(), "{name} stays");
+        }
+    }
+
+    /// Fails by: two flag sets digesting alike (a build under other flags
+    /// selecting on this one's record), or one set digesting two ways.
+    #[test]
+    fn the_flags_digest_is_the_flags() {
+        let flags = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        let held = flags_digest(&flags(&[("RUSTFLAGS", "-Cx")]));
+        assert_eq!(held, flags_digest(&flags(&[("RUSTFLAGS", "-Cx")])));
+        assert_ne!(held, flags_digest(&flags(&[("RUSTFLAGS", "-Cy")])));
+        assert_ne!(held, flags_digest(&flags(&[])));
+    }
+
+    /// Fails by: a cargo config, the nextest config or a file a build script
+    /// includes by `#[path]` left out of the build's key, an unrelated file
+    /// moving it, or the compiler's own release left out.
+    #[test]
+    fn the_build_key_reads_its_configs_and_what_a_build_script_includes() {
+        let root = crate::scratch::scratch("test-run-build-key");
+        std::fs::create_dir_all(root.join("crates/a")).unwrap();
+        std::fs::write(
+            root.join("crates/a/build.rs"),
+            "#[path = \"src/markers.rs\"]\nmod markers;\n",
+        )
+        .unwrap();
+        let ids = |cargo: &str, nextest: &str, included: &str, other: &str| {
+            [
+                ("crates/a/build.rs", "b"),
+                (".cargo/config.toml", cargo),
+                (".config/nextest.toml", nextest),
+                ("crates/a/src/markers.rs", included),
+                ("notes.txt", other),
+            ]
+            .map(|(path, id)| (path.to_owned(), id.to_owned()))
+            .into()
+        };
+        let held = build_digest(&root, &ids("1", "1", "1", "1")).expect("rustc answers");
+        assert_eq!(held, build_digest(&root, &ids("1", "1", "1", "2")).unwrap());
+        for moved in [
+            ids("2", "1", "1", "1"),
+            ids("1", "2", "1", "1"),
+            ids("1", "1", "2", "1"),
+        ] {
+            assert_ne!(held, build_digest(&root, &moved).unwrap());
+        }
+        let release = compiler_version(&root).expect("rustc answers");
+        assert!(
+            String::from_utf8_lossy(&release).starts_with("rustc "),
+            "the key reads the compiler's own release"
+        );
+    }
+
     /// Fails by: a run that picks its own features, profile or target selecting
     /// on a record of another build, or a plain run selecting nothing.
     #[test]
@@ -937,6 +1069,7 @@ mod tests {
         ])));
         for flag in [
             "--features=x",
+            "-F",
             "-Fx",
             "--all-features",
             "--release",

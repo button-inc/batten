@@ -4410,8 +4410,14 @@ impl Format {
 /// other values ran other code.
 #[must_use]
 pub fn build_flags() -> std::collections::BTreeMap<String, String> {
-    std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+    build_flags_in(std::env::vars_os())
+}
+
+/// [`build_flags`] over `vars`.
+fn build_flags_in(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> std::collections::BTreeMap<String, String> {
+    vars.filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(key, _)| {
             matches!(
                 key.as_str(),
@@ -7627,5 +7633,224 @@ mod tests {
             journaled,
             journal_line(Some(&key(&mutants[102])), "uncovered", "none")
         );
+    }
+
+    /// Fails by: a mutant credited to an enclosing function rather than the
+    /// innermost (a smaller span read as the larger), one on a function's own
+    /// bounds dropped, or one past a function's end credited to it.
+    #[test]
+    fn a_mutant_belongs_to_its_innermost_enclosing_function() {
+        let functions = [
+            (0..100, String::from("outer")),
+            (40..90, String::from("inner")),
+        ];
+        let placed = [
+            (1, 50..60),
+            (2, 10..20),
+            (3, 95..105),
+            (4, 40..90),
+            (5, 200..210),
+        ];
+        assert_eq!(
+            innermost(&placed, &functions),
+            vec![
+                (1, String::from("inner")),
+                (2, String::from("outer")),
+                (4, String::from("inner")),
+            ]
+        );
+    }
+
+    /// The items of `source`, parsed.
+    fn items_of(source: &str) -> Vec<ast::Item> {
+        use ast::HasModuleItem as _;
+        SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .items()
+            .collect()
+    }
+
+    /// The first token of `source` whose text is `text`.
+    fn token_of(source: &str, text: &str) -> ra_ap_syntax::SyntaxToken {
+        SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024)
+            .tree()
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .find(|token| token.text() == text)
+            .expect("the token is in the source")
+    }
+
+    /// Fails by: a named item answering to every word inside it (a struct to
+    /// its field types, a module to its functions), which reruns every case
+    /// naming any of them.
+    #[test]
+    fn a_named_item_answers_to_its_own_name_alone() {
+        let source = "struct S { f: u8 }\ntrait T { fn m(); }\n\
+            macro_rules! mac { () => { other }; }\nmod md { fn inner() {} }\n";
+        let names: Vec<Vec<String>> = items_of(source).iter().map(item_names).collect();
+        assert_eq!(
+            names,
+            [["S"], ["T"], ["mac"], ["md"]].map(|n| vec![n[0].to_owned()])
+        );
+    }
+
+    /// Fails by: an item-position macro skipped as if it were a call in an
+    /// expression, which leaves what it binds owned by nothing.
+    #[test]
+    fn an_item_position_macro_owns_its_own_tokens() {
+        let source = "thread_local! { static X: u8 = 1; }\nconst C: u8 = m!(2);\n";
+        let item = owning_item(&token_of(source, "X")).expect("owned");
+        assert!(matches!(item, ast::Item::MacroCall(_)), "{item:?}");
+        let item = owning_item(&token_of(source, "2")).expect("owned");
+        assert!(matches!(item, ast::Item::Const(_)), "{item:?}");
+    }
+
+    /// Fails by: a gate credited to a function whose span ends where it
+    /// starts, or to an enclosing function rather than the innermost.
+    #[test]
+    fn a_gate_belongs_to_the_innermost_span_holding_its_start() {
+        let source = "fn a() { let value = 1; }\n";
+        let token = token_of(source, "value");
+        let at = usize::from(token.text_range().start());
+        assert!(at > 10, "the fixture places the token past a sum's tie");
+        let inner = (7, at..at + 50);
+        let outer = (8, 0..at + 60);
+        assert!(matches!(
+            owner_of(&token, &[outer.clone(), inner]),
+            Owner::Probe(7)
+        ));
+        assert!(matches!(owner_of(&token, &[outer]), Owner::Probe(8)));
+        assert!(matches!(
+            owner_of(&token, &[(9, 0..at)]),
+            Owner::Names(names) if names == [String::from("a")]
+        ));
+    }
+
+    /// Fails by: a gate on anything but a feature read as one.
+    #[test]
+    fn only_a_feature_gate_names_a_feature() {
+        let gated = "#[cfg(feature = \"x\")]\nfn a() {}\n";
+        assert!(names_a_feature(&token_of(gated, "cfg")));
+        let plain = "#[cfg(test)]\nfn b() {}\n";
+        assert!(!names_a_feature(&token_of(plain, "cfg")));
+    }
+
+    /// Fails by: an edit to an unprobed file leaving its key standing (the
+    /// build asked again never), or two files sharing one.
+    #[test]
+    fn an_unprobed_files_key_is_its_path_and_bytes() {
+        let root = crate::scratch::scratch("schema-unprobe-key");
+        std::fs::write(root.join("a.rs"), "one").unwrap();
+        std::fs::write(root.join("b.rs"), "one").unwrap();
+        let held = unprobe_key(&root, "a.rs");
+        assert!(held.starts_with("unprobe-"), "{held}");
+        assert_eq!(held, unprobe_key(&root, "a.rs"));
+        assert_ne!(held, unprobe_key(&root, "b.rs"));
+        std::fs::write(root.join("a.rs"), "two").unwrap();
+        assert_ne!(held, unprobe_key(&root, "a.rs"));
+    }
+
+    /// Fails by: two formats naming one key, or a key that is not a digest.
+    #[test]
+    fn a_formats_key_is_a_digest_of_all_of_it() {
+        let plain = Format::default().key();
+        assert_eq!(plain.len(), 16);
+        assert!(plain.chars().all(|c| c.is_ascii_hexdigit()), "{plain}");
+        let featured = Format {
+            features: vec![String::from("x")],
+            ..Format::default()
+        };
+        assert_ne!(plain, featured.key());
+    }
+
+    /// Fails by: a profile override or a compiler flag left out of the build
+    /// key, or a variable that runs no other code moving it.
+    #[test]
+    fn the_build_flags_are_the_code_generation_variables() {
+        let vars = [
+            ("RUSTFLAGS", "-Cx"),
+            ("CARGO_PROFILE_TEST_OPT_LEVEL", "1"),
+            ("CARGO_HOME", "/h"),
+            ("PATH", "/bin"),
+        ]
+        .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)));
+        let kept: Vec<String> = build_flags_in(vars.into_iter()).into_keys().collect();
+        assert_eq!(kept, ["CARGO_PROFILE_TEST_OPT_LEVEL", "RUSTFLAGS"]);
+    }
+
+    /// Fails by: a run that left nothing to seal saying it sealed some.
+    #[test]
+    fn a_run_that_left_nothing_says_nothing() {
+        let state = crate::scratch::scratch("schema-leftovers-none");
+        let mut out = Vec::new();
+        keep_leftovers(&state, &mut out).unwrap();
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+    }
+
+    /// Fails by: a package's non-Rust file read as one of its sources.
+    #[test]
+    fn a_packages_sources_are_its_rust_files() {
+        let root = crate::scratch::scratch("schema-package-sources");
+        std::fs::create_dir_all(root.join("crates/p/src")).unwrap();
+        for file in [
+            "crates/p/src/lib.rs",
+            "crates/p/src/more.rs",
+            "crates/p/src/notes.txt",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let mut mutant = listed("binary", "x", (1, 1), (1, 2));
+        mutant.file = String::from("crates/p/src/lib.rs");
+        let sources = package_sources(&root, &[mutant]);
+        assert_eq!(
+            sources,
+            [
+                String::from("crates/p/src/lib.rs"),
+                String::from("crates/p/src/more.rs")
+            ]
+            .into()
+        );
+    }
+
+    /// Fails by: a fixture scratch that cannot be cleared passed over (a run
+    /// carrying the last one's fixtures), or a stale top-level entry of the
+    /// work tree kept because it sits at the top.
+    #[test]
+    fn a_sync_clears_what_the_checkout_lacks_and_reports_what_it_cannot() {
+        let base = crate::scratch::scratch("schema-sync-clear");
+        let (root, work) = (base.join("root"), base.join("work"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        std::fs::create_dir_all(work.join("target")).unwrap();
+        std::fs::write(work.join("stale.txt"), "gone").unwrap();
+        sync(&root, &work, &BTreeSet::new()).unwrap();
+        assert!(
+            !work.join("stale.txt").exists(),
+            "a stale top-level file goes"
+        );
+        std::fs::write(work.join("target").join("tmp"), "a file, not a dir").unwrap();
+        assert!(
+            sync(&root, &work, &BTreeSet::new()).is_err(),
+            "a scratch that cannot be cleared is an error"
+        );
+    }
+
+    /// Fails by: a gate in a file after the first credited to another probe,
+    /// because the second file's ids were placed off its own offset.
+    #[test]
+    fn a_gate_in_a_later_file_is_credited_to_its_own_function() {
+        let (root, mut format) = selection_tree(
+            "schema-gate-later-file",
+            SELECTED,
+            "pub fn a() {}\npub fn b() {\n    #[cfg(feature = \"x\")]\n    let _ = 0;\n}\n",
+        );
+        format.probed.insert(String::from("src/more.rs"));
+        let index = dependency_index(&root, &format).unwrap();
+        assert_eq!(
+            index.gated_probes, index.own_names["b"],
+            "the gate is b's, and only b's"
+        );
+        assert!(index.gated_probes.is_disjoint(&index.own_names["a"]));
     }
 }

@@ -109,17 +109,36 @@ fn the_keep_recipe_names_exactly_the_streams_a_chain_set() {
 fn run() {
     let a = c().stdin(f).stderr(p).streamed_output();
     let b = c().arg(\"x\").streamed_output();
+    let d = c().stdin(f).streamed_output();
+    let e = c().stdout(o).streamed_output();
 }
 ";
     let recipe = batten_codemods::named("stream-keep-set").expect("saved");
     let edited = (recipe.apply)(source, "batten").unwrap();
+    let keeping = |stdin: bool, stdout: bool, stderr: bool| {
+        format!(
+            "streamed_output_keeping(batten::exec::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
+        )
+    };
+    // ONE STREAM ALONE IS ENOUGH: each of the three is its own reason to keep.
     assert_eq!(
         edited,
-        source.replacen(
-            ".stderr(p).streamed_output()",
-            ".stderr(p).streamed_output_keeping(batten::exec::Keep { stdin: true, stdout: false, stderr: true })",
-            1
-        )
+        source
+            .replacen(
+                ".stderr(p).streamed_output()",
+                &format!(".stderr(p).{}", keeping(true, false, true)),
+                1
+            )
+            .replacen(
+                ".stdin(f).streamed_output()",
+                &format!(".stdin(f).{}", keeping(true, false, false)),
+                1
+            )
+            .replacen(
+                ".stdout(o).streamed_output()",
+                &format!(".stdout(o).{}", keeping(false, true, false)),
+                1
+            )
     );
     assert_eq!(
         (recipe.apply)(&edited, "batten").unwrap(),
