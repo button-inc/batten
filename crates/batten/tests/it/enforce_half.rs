@@ -661,3 +661,49 @@ fn the_defect_ledger_answers_in_the_live_half_only() {
         stdout(&live)
     );
 }
+
+#[test]
+fn a_narrowed_half_holds_only_its_selected_rows_entries() {
+    // A HALF NARROWED BY `--rule` JUDGES THAT ROW ALONE, so another tree row's
+    // baseline entry is neither applied nor reported held (step 13a).
+    let root = scratch("enforce-half-baseline-narrowed");
+    let config = FORBID.replacen(
+        "scope = [\"**\"]\n",
+        "scope = [\"**\"]\nmust_land_on = \"refs/remotes/origin/main\"\n",
+        1,
+    ) + "\n[[rule]]\nid = \"no-fixme\"\nkind = \"forbid\"\nglob = \"**/*.txt\"\n\
+         pattern = \"FIXME\"\nseverity = \"deny\"\nscope = \"tree\"\n";
+    let dir = Fixture::at(root.join("repo"))
+        .config(&config)
+        .files(&[("a.txt", "BANNED\n"), ("b.txt", "FIXME\n")])
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    let run = |args: &[&str]| {
+        common::batten()
+            .state_home(&home)
+            .args(args)
+            .current_dir(&dir)
+            .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+            .env_remove("BATTEN_FAIL_ON_WARNING")
+            .streamed_output()
+            .expect("run batten")
+    };
+    assert_eq!(code(&run(&["state", "adopt"])), Some(0));
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let minted = run(&["baseline"]);
+    assert_eq!(code(&minted), Some(0), "{}", stderr(&minted));
+    let narrowed = run(&["enforce", "--half", "tree", "--rule", "no-banned"]);
+    assert_eq!(
+        code(&narrowed),
+        Some(0),
+        "the selected row is held, and no other row's entry is judged: {}",
+        stderr(&narrowed)
+    );
+    assert!(
+        !stderr(&narrowed).contains("no-fixme"),
+        "the unselected row's entry is not this run's: {}",
+        stderr(&narrowed)
+    );
+}

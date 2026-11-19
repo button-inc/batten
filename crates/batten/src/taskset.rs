@@ -789,3 +789,40 @@ mod tests {
         assert!(matches!(cached(&dir), Look::CouldNotLook));
     }
 }
+
+/// The `{{vars.X}}` render's depth bound (#1276).
+#[cfg(test)]
+mod render_depth_tests {
+    use super::render;
+    use std::collections::BTreeMap;
+
+    /// Fails by: a chain of four vars left unrendered at its end, one past the
+    /// bound rendered (or the bound underflowing), or a self-naming var never
+    /// ending.
+    #[test]
+    fn a_var_chain_renders_to_its_bound_and_no_further() {
+        let vars = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        let four = vars(&[
+            ("a", "{{vars.b}}"),
+            ("b", "{{vars.c}}"),
+            ("c", "{{vars.d}}"),
+            ("d", "x"),
+        ]);
+        assert_eq!(render("{{vars.a}}", &four), "x");
+        let five = vars(&[
+            ("a", "{{vars.b}}"),
+            ("b", "{{vars.c}}"),
+            ("c", "{{vars.d}}"),
+            ("d", "{{vars.e}}"),
+            ("e", "x"),
+        ]);
+        assert_eq!(render("{{vars.a}}", &five), "{{vars.e}}");
+        let own = vars(&[("a", "{{vars.a}}")]);
+        assert_eq!(render("{{vars.a}}", &own), "{{vars.a}}");
+    }
+}
