@@ -66,6 +66,9 @@ declared_modules := {
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",
+	# `module_graph` arrived with CLOUD-2789: the crate's own module graph read
+	# off the syntax tree, for the gate that holds its largest cycle.
+	"module_graph",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
@@ -1148,6 +1151,11 @@ forbidden[from] contains to if {
 		# is the class `rules/policy-modules.md` records for parsers. The source is
 		# injected so that edge is unwritable rather than merely unwise.
 		"graph": {"rules", "hook", "facts"},
+		# `module_graph -> {rules, hook, facts}` (CLOUD-2789): it reads Rust
+		# source for its structure, as `codemod` does, and judges nothing; an
+		# edge to a decider would make the gate over the crate's cycles depend
+		# on a module inside the cycle it measures.
+		"module_graph": {"rules", "hook", "facts"},
 		# `register -> {rules, hook}` (CLOUD-2005): the key-set module JOINS and
 		# never acquires. `rules` reads each declared path through `acquire`
 		# and hands over lines or parsed frontmatter, so an edge back would make

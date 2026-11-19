@@ -3737,6 +3737,14 @@ description = "Gate: the always-loaded context (AGENTS.md + anything else declar
 # working tree's engine and config together, the pair that ships.
 run = "{{vars.batten}} policy budget"
 
+[tasks.modules-cycle]
+description = "Gate: the crate's largest module cycle holds no more modules than the committed bound (CLOUD-2789)"
+# A workspace crate must be dependency-closed, so while one cycle spans most of
+# `crates/batten/src` no package cut exists. The bound is the count measured when
+# this gate landed (148); a commit that breaks a cycle lowers it in the same
+# change, and a commit that grows one is refused here.
+run = "{{vars.batten}} modules cycle --root crates/batten/src --max 148"
+
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
 # The aggregate half of the gate above, and the reason it is a separate task

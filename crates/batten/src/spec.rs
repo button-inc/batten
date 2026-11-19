@@ -653,6 +653,11 @@ mod tests {
                 // host's logs and the spawn ledger. Neither starts a program.
                 "mcp grant".to_owned(),
                 "mcp posture".to_owned(),
+                // The module-graph noun AND verb (CLOUD-2789), `census`'s
+                // reading: its whole subtree parses the crate's source and
+                // writes nothing.
+                "modules".to_owned(),
+                "modules cycle".to_owned(),
                 // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
                 // pass over the declarations, reading what each gate declares
                 // and answering whether every one is enforced or exempt. Both
@@ -1107,6 +1112,10 @@ mod tests {
             // name, so a second server meant a second copy of the script. Here it
             // is an argument.
             "mcp spawn".to_owned(),
+            // The module-graph noun and its verb (CLOUD-2789): the gate that
+            // holds the crate's largest cycle from growing.
+            "modules".to_owned(),
+            "modules cycle".to_owned(),
             // CLOUD-1267's noun and its two verbs, retired out of
             // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
             // Stated here rather than regenerated, on the terms `checks`

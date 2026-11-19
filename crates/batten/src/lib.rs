@@ -121,6 +121,7 @@ pub mod mcp_grant;
 pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
+pub mod module_graph;
 pub mod mutate;
 pub mod o200k;
 pub mod outcome;
@@ -624,6 +625,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 crate::step::run_graph(&group, jobs.as_deref(), err)
             }
         },
+        Some(Command::Modules {
+            command: cli::ModulesCommand::Cycle { root, max },
+        }) => crate::module_graph::run_cycle(Path::new(&root), max.as_deref(), out, err),
         // The §8 chain supplies the `[sbom]` declarations from the committed
         // authority alone; the tree is the repository root's.
         Some(Command::Sbom(request)) => {
