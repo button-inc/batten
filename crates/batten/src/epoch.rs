@@ -439,8 +439,15 @@ fn project(contents: &[u8], rule: &str, verdict: &str) -> Result<(Vec<u8>, Optio
     if let Some(toml::Value::Array(rows)) = value.get_mut("verdict") {
         rows.retain(|row| id_is(row, &[rule, verdict]));
     }
+    // A RULE WITH NO MODULE READS NEITHER TABLE. `[[pattern]]` rows are read by
+    // id from a module, and `[[step]]` rows are the step cache's and the lap
+    // graph's, which a module may read as a tree document (`ci-parity.rego`
+    // does) and nothing else decides a verdict from. Kept whole, a step row's
+    // `ci` mapping unbound every held admission of a `command` rule, and the
+    // `filed-row-settled` handler then refused every Edit after it (#1276).
     if module.is_none() {
         value.remove("pattern");
+        value.remove("step");
     }
     let projected = serde_json::to_vec(&value)
         .map_err(|err| UsageError::raise(format!("batten.toml will not project: {err}")))?;
@@ -677,5 +684,29 @@ mod module_digest_tests {
         assert_ne!(a, module_digest(&dir, Some("b.rego")));
         assert_ne!(a, module_digest(&dir, None));
         assert_eq!(a.len(), 64, "a hex digest");
+    }
+
+    /// A step row's edit leaves a module-less rule's epoch alone, and still
+    /// moves a module rule's, which may read the step table as a document.
+    ///
+    /// Fails by: `[[step]]` kept in a command rule's projection (every edit to
+    /// the lap graph unbinding its admissions), or dropped from a module rule's
+    /// (an admission outliving a change its module reads).
+    #[test]
+    fn a_step_row_moves_only_a_module_rules_epoch() {
+        let rows = |ci: &str| {
+            format!(
+                "version = 1\n\n[[rule]]\nid = \"plain\"\nkind = \"command\"\n\n\
+                 [[rule]]\nid = \"moduled\"\nkind = \"policy\"\nmodule = \"m.rego\"\n\n\
+                 [[step]]\nid = \"s\"\nrun = [\"true\"]\ngroup = \"g\"\nci = [\"{ci}\"]\n"
+            )
+        };
+        let (before, _) = super::project(rows("a").as_bytes(), "plain", "plain").unwrap();
+        let (after, _) = super::project(rows("b").as_bytes(), "plain", "plain").unwrap();
+        assert_eq!(before, after, "a command rule does not read the step table");
+        let (before, module) = super::project(rows("a").as_bytes(), "moduled", "moduled").unwrap();
+        let (after, _) = super::project(rows("b").as_bytes(), "moduled", "moduled").unwrap();
+        assert_eq!(module.as_deref(), Some("m.rego"));
+        assert_ne!(before, after, "a module may read the step table");
     }
 }
