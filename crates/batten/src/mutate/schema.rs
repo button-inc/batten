@@ -3810,9 +3810,18 @@ fn handback_cases(
     )
 }
 
-/// A handed-back mutant's verdict from cargo-mutants' exit and its outcome
-/// files: a kill only where `caught.txt` names it (an `--re` that matched
-/// nothing exits 0 too), and a survivor no case observed is uncovered.
+/// A handed-back mutant's verdict from the outcome file that NAMES it:
+/// `unviable.txt`, `caught.txt`, `timeout.txt` or `missed.txt`, in that order,
+/// and a survivor no case observed is uncovered. A run that named it in none —
+/// an `--re` that matched nothing exits 0 too — is an error, unless the runner
+/// bound stopped it first, which is a timeout.
+///
+/// NEVER THE RUN'S EXIT. cargo-mutants 27.1.0 applies neither `--re` nor
+/// `--exclude-re` to its field-deletion mutants (measured on #1276, lap 27:
+/// `--list --re '^…proc_table…$'` listed all twelve `delete field` mutants of
+/// the diff beside it), so a run judges its target AND every field mutant
+/// `--file` lets through, and its exit is the worst of them. Read off the exit,
+/// a caught target beside a surviving extra was journaled missed.
 fn handback_verdict(
     outcome: super::Outcome,
     output: &std::path::Path,
@@ -3824,14 +3833,15 @@ fn handback_verdict(
             .is_ok_and(|text| text.lines().any(|line| line.trim() == name))
     };
     if listed("unviable.txt") {
-        return "unviable";
-    }
-    match outcome {
-        super::Outcome::Passed if listed("caught.txt") => "caught",
-        super::Outcome::Failed(Some(2)) if unobserved => "uncovered",
-        super::Outcome::Failed(Some(2)) => "missed",
-        super::Outcome::Failed(Some(3)) | super::Outcome::TimedOut => "timeout",
-        _ => "error",
+        "unviable"
+    } else if listed("caught.txt") {
+        "caught"
+    } else if listed("timeout.txt") || matches!(outcome, super::Outcome::TimedOut) {
+        "timeout"
+    } else if listed("missed.txt") {
+        if unobserved { "uncovered" } else { "missed" }
+    } else {
+        "error"
     }
 }
 
@@ -7225,53 +7235,54 @@ mod tests {
         );
     }
 
-    /// A handed-back verdict is a kill only where cargo-mutants' `caught.txt`
-    /// names the mutant; unviable wins; a survivor no case observed is
-    /// uncovered; anything else is an error, never a kill.
+    /// A handed-back verdict is read from the outcome file that names the
+    /// mutant, never the run's exit; unviable wins; a survivor no case observed
+    /// is uncovered; a mutant no file names is an error, never a kill.
     ///
     /// Fails by: an `--re` that matched nothing read as a kill (exit 0 with no
-    /// outcome line), an unviable mutant read as caught, or an unobserved
-    /// survivor read as missed.
+    /// outcome line), an unviable mutant read as caught, an unobserved survivor
+    /// read as missed, or — lap 27's measured case — a target `caught.txt`
+    /// names read as missed because an extra field mutant in the same run
+    /// survived and the run exited 2.
     #[test]
     fn a_handed_back_verdict_is_read_from_the_outcome_files() {
+        use super::super::Outcome::{Failed, Passed, TimedOut};
         let output = crate::scratch::scratch("schema-handback-verdict");
         let outcomes = output.join("mutants.out");
         std::fs::create_dir_all(&outcomes).unwrap();
         std::fs::write(outcomes.join("caught.txt"), "src/lib.rs:2:7: kill\n").unwrap();
         std::fs::write(outcomes.join("unviable.txt"), "src/lib.rs:9:1: dead\n").unwrap();
+        std::fs::write(outcomes.join("missed.txt"), "src/lib.rs:4:1: live\n").unwrap();
+        std::fs::write(outcomes.join("timeout.txt"), "src/lib.rs:6:1: slow\n").unwrap();
         let verdict =
             |outcome, name, unobserved| handback_verdict(outcome, &output, name, unobserved);
+        assert_eq!(verdict(Passed, "src/lib.rs:2:7: kill", false), "caught");
         assert_eq!(
-            verdict(super::super::Outcome::Passed, "src/lib.rs:2:7: kill", false),
-            "caught"
+            verdict(Failed(Some(2)), "src/lib.rs:2:7: kill", false),
+            "caught",
+            "a caught target beside a missed extra"
         );
+        assert_eq!(verdict(Passed, "src/lib.rs:5:1: absent", false), "error");
         assert_eq!(
-            verdict(
-                super::super::Outcome::Passed,
-                "src/lib.rs:5:1: absent",
-                false
-            ),
+            verdict(Failed(Some(2)), "src/lib.rs:5:1: absent", false),
             "error"
         );
         assert_eq!(
-            verdict(super::super::Outcome::Passed, "src/lib.rs:9:1: dead", false),
-            "unviable"
+            verdict(TimedOut, "src/lib.rs:5:1: absent", false),
+            "timeout"
         );
+        assert_eq!(verdict(Passed, "src/lib.rs:9:1: dead", false), "unviable");
         assert_eq!(
-            verdict(super::super::Outcome::Failed(Some(2)), "m", false),
+            verdict(Failed(Some(2)), "src/lib.rs:4:1: live", false),
             "missed"
         );
         assert_eq!(
-            verdict(super::super::Outcome::Failed(Some(2)), "m", true),
+            verdict(Failed(Some(2)), "src/lib.rs:4:1: live", true),
             "uncovered"
         );
         assert_eq!(
-            verdict(super::super::Outcome::Failed(Some(3)), "m", false),
+            verdict(Failed(Some(3)), "src/lib.rs:6:1: slow", false),
             "timeout"
-        );
-        assert_eq!(
-            verdict(super::super::Outcome::Failed(Some(4)), "m", false),
-            "error"
         );
     }
 
