@@ -306,3 +306,23 @@ fn a_moved_head_judges_again() {
     assert!(second.status.success(), "{}", text(&second));
     assert!(second.stdout.is_empty(), "{}", text(&second));
 }
+
+/// A FAILED UNION BUILD NAMES WHERE ITS COMPILER OUTPUT IS KEPT (#1276), in
+/// the plain report: HEAD drops the function the base body calls.
+#[test]
+fn a_union_build_that_failed_names_its_kept_output() {
+    let (dir, base) = repo("replay-kept-log");
+    head(
+        &dir,
+        &BASE.replace("pub fn add(", "pub fn plus(").replace(
+            "super::add(2, 2), 4);",
+            "super::plus(2, 2), 4);\n        let _ = 0;",
+        ),
+    );
+    let output = replay(&dir, &base);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("test replay: a union build failed"),
+        "{}",
+        text(&output)
+    );
+}

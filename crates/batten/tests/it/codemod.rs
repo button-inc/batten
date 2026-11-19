@@ -371,3 +371,14 @@ fn not_an_escape() {}
         1
     );
 }
+
+/// Fails by: an attribute's line counted from zero.
+#[test]
+fn a_lint_attribute_names_the_line_it_opens_on() {
+    let source = "fn a() {}\n\n#[expect(clippy::x, reason = \"r\")]\nfn b() {}\n";
+    let lines: Vec<usize> = codemod::lint_attributes(source, Edition::E2024, "clippy::x")
+        .iter()
+        .map(|attribute| attribute.line)
+        .collect();
+    assert_eq!(lines, [3]);
+}

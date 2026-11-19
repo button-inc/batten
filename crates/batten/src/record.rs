@@ -2723,4 +2723,26 @@ mod tests {
         assert!(out.is_empty());
         assert!(corpus.is_file());
     }
+
+    /// Fails by: a group's records not listed (eviction ranks nothing and
+    /// the store grows a receipt per key), listed under another name than the
+    /// one `keyed_group_remove` takes, or another group's listed with them.
+    #[test]
+    fn a_groups_records_are_listed_by_the_name_that_removes_them() {
+        let git_dir = crate::scratch::scratch("record-keyed-group");
+        keyed_group_write(&git_dir, "fam", "g", "k1", "one").unwrap();
+        keyed_group_write(&git_dir, "fam", "g", "k2", "two").unwrap();
+        keyed_group_write(&git_dir, "fam", "other", "k3", "three").unwrap();
+        let mut listed = keyed_group_entries(&git_dir, "fam", "g");
+        listed.sort();
+        let mut expected = vec![
+            (crate::tools::digest(b"k1"), String::from("one")),
+            (crate::tools::digest(b"k2"), String::from("two")),
+        ];
+        expected.sort();
+        assert_eq!(listed, expected);
+        keyed_group_remove(&git_dir, "fam", "g", &crate::tools::digest(b"k1")).unwrap();
+        assert_eq!(keyed_group_read(&git_dir, "fam", "g", "k1"), None);
+        assert_eq!(keyed_group_entries(&git_dir, "fam", "g").len(), 1);
+    }
 }
