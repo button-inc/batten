@@ -282,7 +282,11 @@ fn a_sweep_under_a_supervising_task_moves_its_signal() {
         .current_dir(&repo)
         .streamed_output()
         .expect("register the supervising task");
-    assert!(registered.status.success(), "{}", common::stderr(&registered));
+    assert!(
+        registered.status.success(),
+        "{}",
+        common::stderr(&registered)
+    );
     let output = common::batten()
         .args(["__mutate-schema", &file, "2"])
         .env("BATTEN_TASK_PID", "515151")
@@ -290,7 +294,12 @@ fn a_sweep_under_a_supervising_task_moves_its_signal() {
         .streamed_output()
         .expect("run the sweep");
     let said = common::stdout(&output);
-    assert_eq!(output.status.code(), Some(2), "{said}\n{}", common::stderr(&output));
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{said}\n{}",
+        common::stderr(&output)
+    );
     assert_eq!(
         batten::task::read_field(&repo.join(".git"), "515151", "sig").as_deref(),
         Some("mutate schema: judged 5/5"),
