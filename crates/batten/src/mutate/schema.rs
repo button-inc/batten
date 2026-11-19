@@ -1656,12 +1656,15 @@ fn run_cases(
         ),
         (String::from(ACTIVE), id.to_string()),
     ]);
-    let ran = super::spawn(
+    // KEPT, NEVER ECHOED: the verdict is the report and an error keeps its
+    // words below, so the run's output is shown nowhere ([`super::Said::Kept`]).
+    let ran = super::spawn_as(
         judging.work,
         super::Program::Cargo,
         &args,
         &env,
         case_bound(cases, judging.seconds).min(super::runner_bound()),
+        super::Said::Kept,
     );
     let report = crate::fsio::read_to_string(store.join(JUDGE_PROFILE).join(JUDGE_REPORT))
         .ok()
