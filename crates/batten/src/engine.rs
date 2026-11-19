@@ -2230,3 +2230,18 @@ mod tests {
         Ok(())
     }
 }
+
+/// Where the engine pin may sit (#1276).
+#[cfg(test)]
+mod pin_order_tests {
+    use super::pin_out_of_order;
+
+    /// Fails by: `version` counted as a key that buries the pin, another key
+    /// not counted, or an empty key read as one.
+    #[test]
+    fn only_a_key_other_than_version_buries_the_pin() {
+        assert_eq!(pin_out_of_order("version = 1\nengine = \"x\"\n"), None);
+        assert_eq!(pin_out_of_order("other = 1\nengine = \"x\"\n"), Some(2));
+        assert_eq!(pin_out_of_order("= 1\nengine = \"x\"\n"), None);
+    }
+}
