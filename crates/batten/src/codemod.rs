@@ -460,7 +460,7 @@ pub fn import_for_calls(
     let root = parse.syntax_node();
     // Each scope a call sits in, once: an inline module's item list, or the file.
     let mut scopes: Vec<Vec<ast::Item>> = Vec::new();
-    let mut seen: Vec<usize> = Vec::new();
+    let mut seen: Vec<Option<usize>> = Vec::new();
     for call in root
         .descendants()
         .filter_map(ast::MethodCallExpr::cast)
@@ -471,12 +471,14 @@ pub fn import_for_calls(
             .ancestors()
             .filter_map(ast::Module::cast)
             .find_map(|module| module.item_list());
-        let (key, items): (usize, Vec<ast::Item>) = match module {
+        // A SCOPE'S IDENTITY: the module's item list by where it starts, or
+        // the file itself, which no item list can be mistaken for.
+        let (key, items): (Option<usize>, Vec<ast::Item>) = match module {
             Some(list) => (
-                usize::from(list.syntax().text_range().start()) + 1,
+                Some(usize::from(list.syntax().text_range().start())),
                 list.items().collect(),
             ),
-            None => (0, parse.tree().items().collect()),
+            None => (None, parse.tree().items().collect()),
         };
         if !seen.contains(&key) {
             seen.push(key);

@@ -2243,7 +2243,7 @@ fn carry_forward(
 
 /// Write the selection digest ([`TESTED`]) of every record of `carried` over
 /// the live tree `over` names, wherever it holds none or holds one read in the
-/// same [`Format`]; how many hold one now. A record holding a digest read in
+/// same [`Format`]. A record holding a digest read in
 /// another format keeps it: that digest is compared only in its own format.
 ///
 /// SOUND AS A CARRY IS: [`carry_forward`] keeps a record only where every
@@ -2260,7 +2260,7 @@ fn retest_carried(
     base: &std::path::Path,
     carried: &[(std::path::PathBuf, Case, Ran)],
     (root, resources, format): Over<'_>,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<()> {
     let key = format.key();
     let due: Vec<&(std::path::PathBuf, Case, Ran)> = carried
         .iter()
@@ -2275,7 +2275,7 @@ fn retest_carried(
         })
         .collect();
     if due.is_empty() {
-        return Ok(0);
+        return Ok(());
     }
     format.store(base)?;
     let index = dependency_index(root, format)?;
@@ -2284,7 +2284,6 @@ fn retest_carried(
         .map(|(_, case, ran)| (case.clone(), ran.clone()))
         .collect();
     let digests = test_digests(root, &index, &format.dirs, &cases, resources);
-    let mut written = 0;
     for (dir, case, _) in due {
         let Some(Some(digest)) = digests.get(case) else {
             continue;
@@ -2294,9 +2293,8 @@ fn retest_carried(
         if held.as_deref().map(str::trim_end) != Some(line.as_str()) {
             crate::durable::replace(dir.join(TESTED), &line)?;
         }
-        written += 1;
     }
-    Ok(written)
+    Ok(())
 }
 
 /// Whether a case recorded at `dir` finished and passed: the one record a
@@ -4103,7 +4101,10 @@ pub fn sweep(
         out,
         mutants,
         &verdicts,
-        (unviable.len() + handed_unviable, classic.len()),
+        (
+            unviable_total(unviable.len(), handed_unviable),
+            classic.len(),
+        ),
         &state,
         started.elapsed().as_secs(),
     )?;
@@ -4294,6 +4295,12 @@ fn reached(
         started.elapsed().as_secs()
     )?;
     Ok((reach, digests, seconds))
+}
+
+/// Every unviable mutant a sweep reports: the schema build's and the
+/// handbacks' that would not build either.
+const fn unviable_total(schema: usize, handed: usize) -> usize {
+    schema + handed
 }
 
 /// The [`Format`] a sweep of `mutants` from the checkout at `live` reads its
@@ -7852,5 +7859,38 @@ mod tests {
             "the gate is b's, and only b's"
         );
         assert!(index.gated_probes.is_disjoint(&index.own_names["a"]));
+    }
+
+    /// Fails by: the handbacks' unviable mutants left out of the reported
+    /// count, or subtracted from it.
+    #[test]
+    fn the_unviable_count_is_both_builds() {
+        assert_eq!(unviable_total(3, 2), 5);
+    }
+
+    /// Fails by: the reach suite built for no package, under another profile,
+    /// or reading its records in a format that names none of the schema's
+    /// probed files.
+    #[test]
+    fn a_sweeps_format_names_its_packages_and_probed_files() {
+        let live = crate::scratch::scratch("schema-sweep-format");
+        let mut mutant = listed("binary", "x", (1, 1), (1, 2));
+        mutant.file = String::from("crates/p/src/lib.rs");
+        let schema = Schema {
+            probed: [String::from("crates/p/src/lib.rs")].into(),
+            ..Schema::default()
+        };
+        let format = sweep_format(&live, &[mutant], &schema, [String::from("u.rs")].into());
+        assert_eq!(
+            format.cargo_args,
+            ["--cargo-profile", "test", "-p", "p"].map(String::from)
+        );
+        assert_eq!(
+            format.dirs,
+            [(String::from("p"), String::from("crates/p"))].into()
+        );
+        assert_eq!(format.probed, schema.probed);
+        assert_eq!(format.unprobed, [String::from("u.rs")].into());
+        assert_eq!(format.flags, build_flags());
     }
 }

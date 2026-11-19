@@ -1203,6 +1203,62 @@ mod tests {
         }
     }
 
+    /// Fails by: a spent admission answering a protected write it does not
+    /// bind on any one of its five terms — another rule, verdict, path,
+    /// call or policy epoch — or an issued one answering at all.
+    #[test]
+    fn a_path_admission_binds_every_term() {
+        let scratch = crate::scratch::scratch("admission-admitted-path");
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let spent = |binding: Binding| Record {
+            state: State::Spent,
+            ..Record::issue(binding)
+        };
+        let bound = binding();
+        let anchor = bound.anchor.token();
+        store(&root, &spent(bound.clone())).unwrap();
+        store(
+            &root,
+            &Record::issue(Binding {
+                subject: "c.rs".to_owned(),
+                ..bound.clone()
+            }),
+        )
+        .unwrap();
+        let ask = |rule: &str, verdict: &str, path: &str, anchor: &str, epoch: &str| {
+            admitted_path(&root, rule, verdict, path, anchor, epoch).unwrap()
+        };
+        let (rule, verdict, epoch) = (bound.rule.as_str(), bound.verdict.as_str(), "epoch-1");
+        assert!(
+            ask(rule, verdict, "a.rs", &anchor, epoch).is_some(),
+            "the premise"
+        );
+        assert_eq!(
+            ask(rule, verdict, "b.rs", &anchor, epoch),
+            None,
+            "not its first path"
+        );
+        assert_eq!(
+            ask(rule, verdict, "c.rs", &anchor, epoch),
+            None,
+            "issued, not spent"
+        );
+        assert_eq!(ask("other", verdict, "a.rs", &anchor, epoch), None, "rule");
+        assert_eq!(ask(rule, "other", "a.rs", &anchor, epoch), None, "verdict");
+        assert_eq!(
+            ask(rule, verdict, "a.rs", "call:other", epoch),
+            None,
+            "anchor"
+        );
+        assert_eq!(
+            ask(rule, verdict, "a.rs", &anchor, "epoch-2"),
+            None,
+            "epoch"
+        );
+    }
+
     #[test]
     fn the_address_does_not_depend_on_map_insertion_order() {
         // The property that makes the address well-defined at all. Two maps built

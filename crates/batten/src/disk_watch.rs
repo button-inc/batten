@@ -196,13 +196,12 @@ impl Sampler<'_, '_> {
             let _ = done.join();
         }
         let (repo, kept, config) = (self.repo.clone(), self.kept.clone(), self.config);
-        let (reader, lines, collecting, sink, settled, min) = (
+        let (reader, lines, collecting, sink, settled) = (
             Arc::clone(&self.reader),
             Arc::clone(&self.lines),
             Arc::clone(&self.collecting),
             self.sink.clone(),
             Arc::clone(&self.settled),
-            self.min,
         );
         *self.pending.borrow_mut() = Some(self.scope.spawn(move || {
             let mut read = || {
@@ -232,11 +231,11 @@ impl Sampler<'_, '_> {
                     sink(&new);
                 }
             }
-            // WHERE THIS PASS LEFT THE VOLUME, read once more: below the floor,
-            // it is what the next pass waits to see the volume fall under.
-            if let Ok(after) = read()
-                && after < min
-            {
+            // WHERE THIS PASS LEFT THE VOLUME, read once more: what the next
+            // pass waits to see the volume fall under. A reading at or above
+            // the floor needs no case of its own: the next sample there resets
+            // it, and any sample below the floor is below it too.
+            if let Ok(after) = read() {
                 settled.store(after, Ordering::Release);
             }
             collecting.store(false, Ordering::Release);
@@ -458,16 +457,18 @@ mod fanotify {
 
     /// [`arm`] in nix's own error.
     fn armed(path: &std::path::Path) -> nix::Result<Fanotify> {
+        // `union`, never `|`: the bits are disjoint, so a flipped operator
+        // could not be told from this one by any outcome.
         let flags = InitFlags::FAN_CLASS_NOTIF
-            | InitFlags::FAN_NONBLOCK
-            | InitFlags::FAN_CLOEXEC
-            | InitFlags::from_bits_retain(nix::libc::FAN_REPORT_FID);
+            .union(InitFlags::FAN_NONBLOCK)
+            .union(InitFlags::FAN_CLOEXEC)
+            .union(InitFlags::from_bits_retain(nix::libc::FAN_REPORT_FID));
         let group = Fanotify::init(flags, EventFFlags::O_RDONLY)?;
         let dir = crate::durable::open_handle(path)
             .map_err(|why| nix::errno::Errno::from_raw(why.raw_os_error().unwrap_or(0)))?;
         group.mark(
-            MarkFlags::FAN_MARK_ADD | MarkFlags::FAN_MARK_FILESYSTEM,
-            MaskFlags::FAN_MODIFY | MaskFlags::FAN_CLOSE_WRITE,
+            MarkFlags::FAN_MARK_ADD.union(MarkFlags::FAN_MARK_FILESYSTEM),
+            MaskFlags::FAN_MODIFY.union(MaskFlags::FAN_CLOSE_WRITE),
             &dir,
             None::<&std::path::Path>,
         )?;
@@ -967,7 +968,12 @@ mod tests {
         // BOTH BRANCHES ASSERT AND NEITHER RETURNS EARLY (`silent_skip`): a
         // refused mark is answered by its errno, an armed one by the drain.
         match fanotify::arm(&dir) {
-            Err(errno) => assert!(!errno.is_empty(), "a refusal names its errno"),
+            // ONLY A HOST'S OWN REFUSAL: no privilege, or no mark. A mark
+            // this code built wrong is `EINVAL`, and fails here.
+            Err(errno) => assert!(
+                ["EPERM", "EACCES", "ENOSYS", "EOPNOTSUPP"].contains(&errno.as_str()),
+                "a refusal names the host's errno: {errno}"
+            ),
             Ok(group) => {
                 let open = || {
                     std::fs::read_dir("/proc/self/fd")
@@ -975,15 +981,43 @@ mod tests {
                         .expect("list fds")
                 };
                 let before = open();
-                let mut file = std::fs::File::create(dir.join("written")).expect("create");
-                for _ in 0..1000 {
-                    file.write_all(b"x").expect("write");
+                for name in ["written", "also"] {
+                    let mut file = std::fs::File::create(dir.join(name)).expect("create");
+                    for _ in 0..1000 {
+                        file.write_all(b"x").expect("write");
+                    }
                 }
-                drop(file);
                 let drained = fanotify::drain(&group);
-                assert!(drained > 0, "the mark reported none of the writes");
+                assert!(drained >= 2, "two files, two events at least: {drained}");
                 assert_eq!(open(), before, "an event left a descriptor open");
             }
         }
+    }
+
+    /// Fails by: the second wait never driven (the first, waiting on it,
+    /// never ends), or driven again once it finished.
+    #[test]
+    fn the_first_wait_ends_it_and_the_second_is_driven_once() {
+        use std::cell::Cell;
+        let ran = Cell::new(false);
+        let polls = Cell::new(0);
+        let first = std::future::poll_fn(|_| {
+            polls.set(polls.get() + 1);
+            if ran.get() && polls.get() >= 3 {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        });
+        let second = async {
+            ran.set(true);
+        };
+        let mut both = std::pin::pin!(until_first(first, second));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        for _ in 0..2 {
+            assert!(both.as_mut().poll(&mut cx).is_pending());
+        }
+        assert!(both.as_mut().poll(&mut cx).is_ready(), "the first ends it");
+        assert!(ran.get(), "the second was driven");
     }
 }

@@ -7072,3 +7072,29 @@ mod tests {
         );
     }
 }
+
+/// The sweep's row record (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod record_row_tests {
+    use super::{Verdict, record_row};
+
+    /// Fails by: a survivor whose expectation holds a tab or a newline written
+    /// whole, which tears the record into rows that were never judged.
+    #[test]
+    fn a_survivor_that_would_tear_the_record_is_not_written() {
+        let record = crate::scratch::scratch("mutate-record-row").join("record");
+        let survived = |want: &str| Verdict::Survived {
+            want: want.to_owned(),
+        };
+        record_row(&record, "k1", &survived("a\tb"));
+        record_row(&record, "k2", &survived("a\nb"));
+        assert!(!record.exists(), "nothing torn is written");
+        record_row(&record, "k3", &survived("ok"));
+        record_row(&record, "k4", &Verdict::Caught);
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            "k3\tsurvived\tok\nk4\tcaught\n"
+        );
+    }
+}

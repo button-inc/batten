@@ -6981,3 +6981,23 @@ mod tests {
         );
     }
 }
+
+/// The held landing's timings (CLOUD-2783).
+#[cfg(test)]
+mod hold_tests {
+    use super::{Hold, Step};
+
+    /// Fails by: a lap that keeps the last lap's phases, or records no entry.
+    #[test]
+    fn a_lap_opens_with_its_entry_and_no_phases() {
+        let mut hold = Hold::new(true);
+        hold.time(Step::Verify, || ());
+        assert_eq!(hold.phases.len(), 1);
+        hold.lap();
+        assert!(hold.phases.is_empty(), "each lap's phases start afresh");
+        assert!(
+            hold.entry_ms.is_some(),
+            "the entry is the time to the first lap"
+        );
+    }
+}

@@ -1941,4 +1941,213 @@ mod tests {
             "exit 3\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10"
         );
     }
+
+    /// Fails by: a file's case placed in the wrong target or module, a
+    /// binary's file given a case no record holds, or a nested package's file
+    /// read against the outer package.
+    #[test]
+    fn a_tests_case_is_its_targets_module_path() {
+        let root = crate::scratch::scratch("replay-case-of");
+        for (manifest, name) in [("Cargo.toml", "pkg"), ("crates/c/Cargo.toml", "c")] {
+            let at = root.join(manifest);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, format!("[package]\nname = \"{name}\"\n")).unwrap();
+        }
+        let case = |path: &str| case_of(&root, path);
+        let some = |module: &str, binary: &str| Some((module.to_owned(), binary.to_owned()));
+        assert_eq!(case("src/lib.rs"), some("", "pkg"));
+        assert_eq!(case("src/a/b.rs"), some("a::b", "pkg"));
+        assert_eq!(case("src/a/mod.rs"), some("a", "pkg"));
+        assert_eq!(case("src/main.rs"), None);
+        assert_eq!(case("src/bin/x.rs"), None);
+        assert_eq!(case("tests/it-x.rs"), some("", "pkg::it_x"));
+        assert_eq!(case("tests/it/main.rs"), some("", "pkg::it"));
+        assert_eq!(case("tests/it/a.rs"), some("a", "pkg::it"));
+        assert_eq!(case("crates/c/src/x.rs"), some("x", "c"));
+        assert_eq!(case("examples/e.rs"), None);
+    }
+
+    /// Fails by: a tree materialised for another HEAD kept (a replay of the
+    /// wrong code), or the tree of this HEAD materialised again.
+    #[test]
+    fn a_tree_is_kept_only_for_the_head_it_was_made_from() {
+        let base = crate::scratch::scratch("replay-place-tree");
+        let (root, state, tree) = (base.join("root"), base.join("state"), base.join("tree"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "init").unwrap();
+        let after = BTreeMap::new();
+        place_tree(&root, &state, &tree, "head-1", &after).unwrap();
+        assert!(tree.join("a.txt").is_file(), "materialised");
+        std::fs::write(tree.join("sentinel"), "").unwrap();
+        place_tree(&root, &state, &tree, "head-1", &after).unwrap();
+        assert!(
+            tree.join("sentinel").is_file(),
+            "the same head's tree is kept"
+        );
+        place_tree(&root, &state, &tree, "head-2", &after).unwrap();
+        assert!(
+            !tree.join("sentinel").exists(),
+            "another head's is made afresh"
+        );
+        assert_eq!(
+            crate::fsio::read_to_string(state.join(TREE_ID)).unwrap(),
+            "head-2"
+        );
+    }
+
+    /// Fails by: a refusal no body holds journaled against a test (it would
+    /// outlive the body that caused it) or sent to the control run, or a
+    /// passing union build that failed to link left unjournaled.
+    #[test]
+    fn only_a_compile_refusal_no_body_holds_is_the_unions() {
+        let (splices, _) = two_modified(KEPT_BASE);
+        let tree = judged_tree("replay-unattributed");
+        let unplaced_journal = journal("replay-unattributed-journal");
+        let passed_journal = journal("replay-unattributed-passed");
+        let controlled = std::cell::Cell::new(false);
+        let control = |_: &Splices| {
+            controlled.set(true);
+            None
+        };
+        let unplaced =
+            |_: &Splices| Some((BUILD_FAILED, String::from("error: could not compile `x`\n")));
+        let findings = judge(&tree, &splices, &unplaced_journal, &unplaced, &control).unwrap();
+        assert_eq!(keys(&findings).len(), 2, "every test still standing fails");
+        assert!(!controlled.get(), "the union's refusal is not controlled");
+        for (path, (_, tests)) in &splices {
+            for test in tests {
+                assert_eq!(unplaced_journal.read(path, test), None, "nor journaled");
+            }
+        }
+        let passed = |_: &Splices| {
+            Some((
+                BUILD_FAILED,
+                String::from(
+                    "        PASS [   0.010s] batten::it tests::kept\n        \
+                     PASS [   0.010s] batten::it tests::narrowed\n",
+                ),
+            ))
+        };
+        assert!(
+            judge(&tree, &splices, &passed_journal, &passed, &control)
+                .unwrap()
+                .is_empty()
+        );
+        for (path, (_, tests)) in &splices {
+            for test in tests {
+                assert_eq!(passed_journal.read(path, test), Some(Verdict::Passed));
+            }
+        }
+    }
+}
+
+/// The replay's dependency keys over a sealed reach record (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod dependency_key_tests {
+    use super::{compare, dependency_keys};
+    use crate::mutate::schema;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// The base body, then HEAD's: HEAD's names every name the base body does.
+    const BASE: &str = "pub fn helper() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn kept() {\n        assert_eq!(super::helper(), 1);\n    }\n}\n";
+    const HEAD: &str = "pub fn helper() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn kept() {\n        let one = super::helper();\n        assert_eq!(one, 1);\n    }\n}\n";
+
+    /// A committed crate at HEAD, with one sealed reach record for its case
+    /// in the state the replay reads.
+    fn sealed(name: &str) -> std::path::PathBuf {
+        let scratch = crate::scratch::scratch(name);
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"fix\"\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), HEAD).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("Cargo.toml"), String::from("src/lib.rs")],
+            "head",
+        )
+        .unwrap();
+        let resources = schema::resource_ids(&root).unwrap();
+        let format = schema::Format {
+            dirs: [(String::from("fix"), String::new())].into(),
+            probed: [String::from("src/lib.rs")].into(),
+            flags: schema::build_flags(),
+            ..schema::Format::default()
+        };
+        let base = crate::state::repo_state_dir(&root)
+            .unwrap()
+            .join("mutate")
+            .join("schema")
+            .join("reach");
+        let record = base.join("c1");
+        std::fs::create_dir_all(&record).unwrap();
+        std::fs::write(
+            base.join(format!("format-{}.json", format.key())),
+            serde_json::to_string(&format).unwrap(),
+        )
+        .unwrap();
+        let index = schema::dependency_index(&root, &format).unwrap();
+        let functions: BTreeSet<String> = ["kept", "helper"]
+            .iter()
+            .flat_map(|name| index.digests_of(name))
+            .collect();
+        let case = (String::from("tests::kept"), String::from("fix"));
+        let cases = [(case.clone(), (functions.clone(), None))].into();
+        let tested = schema::test_digests(&root, &index, &format.dirs, &cases, &resources)
+            .remove(&case)
+            .flatten()
+            .expect("the case's selection digest");
+        let depends: String = std::iter::once(String::from("Dd\n"))
+            .chain(functions.iter().map(|function| format!("F{function}\n")))
+            .collect();
+        for (file, text) in [
+            ("tested", format!("{}\t{tested}", format.key())),
+            ("depends", depends),
+            ("case", String::from("tests::kept\tfix")),
+            ("done", String::from("0")),
+        ] {
+            std::fs::write(record.join(file), text).unwrap();
+        }
+        root
+    }
+
+    /// The splices of `base` against the committed HEAD.
+    fn splices(base: &str) -> BTreeMap<String, (String, Vec<super::Modified>)> {
+        [(
+            String::from("src/lib.rs"),
+            (HEAD.to_owned(), compare(base, HEAD).modified),
+        )]
+        .into()
+    }
+
+    /// Fails by: a modified test the reach store holds keyed on the tree (every
+    /// unrelated edit judges it again), a working tree that is not HEAD keyed
+    /// (the store was read off the checkout, and the replay runs HEAD), or a
+    /// base body naming what HEAD's does not keyed on HEAD's trace.
+    #[test]
+    fn a_held_cases_test_keys_on_its_dependencies() {
+        let root = sealed("replay-dependency-keys");
+        let resources = schema::resource_ids(&root).unwrap();
+        let keys = dependency_keys(&root, &resources, &splices(BASE));
+        assert_eq!(
+            keys.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["src/lib.rs::tests::kept"],
+            "the held case keys its test"
+        );
+        let wider = BASE.replace("super::helper(), 1", "super::helper(), other()");
+        assert!(
+            dependency_keys(&root, &resources, &splices(&wider)).is_empty(),
+            "a base body naming more than HEAD's"
+        );
+        std::fs::write(root.join("src/lib.rs"), format!("{HEAD}// edited\n")).unwrap();
+        assert!(
+            dependency_keys(&root, &resources, &splices(BASE)).is_empty(),
+            "a working tree that is not HEAD"
+        );
+    }
 }

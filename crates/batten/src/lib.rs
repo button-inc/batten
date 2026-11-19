@@ -12580,6 +12580,13 @@ fn engine_use(built_from: &str, now: &str, built: Option<bool>) -> EngineUse {
     }
 }
 
+/// The digest the lap's engine now stands at: `now`, only when this lap built
+/// it. A reused engine already stands there, and a fallback built nothing, so
+/// the next lap must try again rather than read the old binary as current.
+fn rebuilt_at(used: EngineUse, now: &str) -> Option<&str> {
+    (used == EngineUse::Built).then_some(now)
+}
+
 /// Build the tree's engine once, where `cargo run` would have built it per
 /// step. The output path is the running lap binary's: Linux and macOS keep the
 /// running image, and later spawns get the tree's engine. Windows cannot
@@ -12604,8 +12611,8 @@ fn lap_engine(root: &Path) -> Option<(Option<String>, EngineUse)> {
     let now = engine::digest(root).ok()?;
     let built = (built_from != now).then(|| build_engine(root));
     let used = engine_use(&built_from, &now, built);
-    if used == EngineUse::Built {
-        *cell = Some((exe.clone(), now.clone()));
+    if let Some(now) = rebuilt_at(used, &now) {
+        *cell = Some((exe.clone(), now.to_owned()));
     }
     let engine = (used != EngineUse::Fallback)
         .then(|| engine_for_gate(&exe, &now, &now))
@@ -33288,5 +33295,21 @@ mod tests {
             !spills_admitted(&inline, &over, default + 1),
             "raised, but the result does not fit"
         );
+    }
+}
+
+/// The lap's engine bookkeeping (CLOUD-2783).
+#[cfg(test)]
+mod rebuilt_at_tests {
+    use super::{EngineUse, rebuilt_at};
+
+    /// Fails by: a fallback recorded as the current engine (the next lap reads
+    /// a stale binary as the tree's), or a build not recorded (every lap
+    /// rebuilds).
+    #[test]
+    fn only_a_built_engine_moves_the_lap_record() {
+        assert_eq!(rebuilt_at(EngineUse::Built, "d"), Some("d"));
+        assert_eq!(rebuilt_at(EngineUse::Reused, "d"), None);
+        assert_eq!(rebuilt_at(EngineUse::Fallback, "d"), None);
     }
 }
