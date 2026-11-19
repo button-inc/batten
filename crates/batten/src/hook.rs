@@ -10656,13 +10656,14 @@ fn spawns_in(language: Language, text: &str, source: &str, trusted: bool) -> Vec
     };
     let mut found = Vec::new();
     for (at, call) in spawn_calls(language, text) {
-        let line_start = text[..at].rfind('\n').map_or(0, |newline| newline + 1);
+        // THE CALL'S OWN LINE, up to the call: a marker on it comments it out.
+        let line = text[..at].rsplit('\n').next().unwrap_or_default();
         let marker = if language == Language::Node {
             "//"
         } else {
             "#"
         };
-        if text[line_start..at].contains(marker) {
+        if line.contains(marker) {
             continue;
         }
         let spawned = match call {
@@ -24578,5 +24579,181 @@ deny contains "refused by themodule" if {
         let mut after = write_envelope("Write", "CLAUDE.md");
         after.event = Event::PostTool;
         assert!(policy.budget_sets_for(&after).is_empty());
+    }
+
+    /// Fails by: `env`'s options or assignments read as its program (an
+    /// `-S` after them missed), or an `-S` after the program read as `env`'s.
+    #[test]
+    fn only_envs_own_split_string_is_its_command() {
+        assert_eq!(
+            split_strings(&["env", "-i", "-S", "git push"]),
+            ["git push"]
+        );
+        assert_eq!(
+            split_strings(&["env", "A=1", "-S", "git push"]),
+            ["git push"]
+        );
+        assert_eq!(
+            split_strings(&["env", "prog", "-S", "x"]),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Fails by: a word the crude read emptied, or a lone `$`, taken for the
+    /// program of an unread text.
+    #[test]
+    fn an_unread_texts_program_skips_emptied_words() {
+        for text in ["'' git push", "$ git push"] {
+            let reached = unread_reach(text, false, None, REACH_DEPTH);
+            assert_eq!(
+                reached.first().map(|entry| &entry["name"]),
+                Some(&serde_json::json!("git")),
+                "{text}: {reached:?}"
+            );
+        }
+    }
+
+    /// Fails by: `watch`'s valued option read past the end of its argv.
+    #[test]
+    fn a_watch_of_only_options_runs_nothing() {
+        assert_eq!(inner_scripts("watch", &["-n", "2"]), Vec::<String>::new());
+        assert_eq!(
+            inner_scripts("watch", &["-n", "2", "git", "push"]),
+            ["git push"]
+        );
+    }
+
+    /// Fails by: a script file exactly at the bound left unread.
+    #[test]
+    fn a_script_file_at_the_bound_is_read() {
+        let dir = crate::scratch::scratch("hook-script-bound");
+        let at = dir.join("at.sh");
+        let past = dir.join("past.sh");
+        let size = usize::try_from(SCRIPT_FILE_MAX).unwrap();
+        std::fs::write(&at, "#".repeat(size)).unwrap();
+        std::fs::write(&past, "#".repeat(size + 1)).unwrap();
+        assert!(script_file_text(&at.to_string_lossy()).is_some());
+        assert!(script_file_text(&past.to_string_lossy()).is_none());
+    }
+
+    /// Fails by: either name `node` answers to left out.
+    #[test]
+    fn both_node_names_are_node() {
+        assert_eq!(language_of("node"), Some(Language::Node));
+        assert_eq!(language_of("nodejs"), Some(Language::Node));
+        assert_eq!(language_of("deno"), None);
+    }
+
+    /// Fails by: a bare spawn name read only when both modules are imported, a
+    /// quoted comma or a list's comma splitting an argument, a raw string's
+    /// prefix read as code, an empty literal refused, or a string read as a
+    /// shell command without `shell=True`.
+    #[test]
+    fn a_spawns_literals_are_read_whole() {
+        let argv = |words: &[&str]| Spawned::Argv(words.iter().map(|w| (*w).to_owned()).collect());
+        let shell = |text: &str| Spawned::Shell(text.to_owned());
+        for (text, expected) in [
+            (
+                "from os import system\nsystem('git push')\n",
+                shell("git push"),
+            ),
+            (
+                "from subprocess import run\nrun(['git', 'push'])\n",
+                argv(&["git", "push"]),
+            ),
+            ("import os\nos.system('echo a, b')\n", shell("echo a, b")),
+            ("import os\nos.system(r'a\\nb')\n", shell("a\\nb")),
+            ("import os\nos.system('')\n", shell("")),
+            (
+                "import subprocess\nsubprocess.run('git push')\n",
+                argv(&["git push"]),
+            ),
+            (
+                "import subprocess\nsubprocess.run(['git', 'push'], check=True)\n",
+                argv(&["git", "push"]),
+            ),
+            (
+                "import subprocess\nsubprocess.run(['echo', 'a,b'])\n",
+                argv(&["echo", "a,b"]),
+            ),
+            (
+                "x = 1 #\nimport os\nos.system('git push')\n",
+                shell("git push"),
+            ),
+        ] {
+            assert_eq!(
+                spawns_in(Language::Python, text, "s.py", false),
+                vec![expected],
+                "{text}"
+            );
+        }
+        // A PARENTHESIS-LESS CALL ENDS AT ITS STATEMENT, never at a `)`.
+        assert_eq!(
+            spawns_in(
+                Language::Perl,
+                "(system \"git\", \"push\");\n",
+                "s.pl",
+                false
+            ),
+            vec![Spawned::Opaque {
+                source: "s.pl".into(),
+                trusted: false
+            }]
+        );
+    }
+
+    /// Fails by: an unclosed or mismatched quote read as a literal.
+    #[test]
+    fn only_a_closed_quote_is_a_literal() {
+        assert_eq!(string_literal(Language::Node, "\"abc"), None);
+        assert_eq!(string_literal(Language::Node, "aba"), None);
+        assert_eq!(string_literal(Language::Node, "\""), None);
+        assert_eq!(string_literal(Language::Node, "\"\"").as_deref(), Some(""));
+    }
+
+    /// Fails by: a `batten step` verb other than `run` reached as a step run.
+    #[test]
+    fn only_step_run_reaches_what_follows_its_separator() {
+        let reached = program_reach("batten step record s -- git push");
+        assert!(
+            !reached.iter().any(|entry| entry["name"] == "git"),
+            "{reached:?}"
+        );
+        let reached = program_reach("batten step run s -- git push");
+        assert!(
+            reached.iter().any(|entry| entry["name"] == "git"),
+            "{reached:?}"
+        );
+    }
+
+    /// Fails by: a package's declared binaries passed over for its own name.
+    #[test]
+    fn a_packages_declared_binaries_are_its_binaries() {
+        let dir = crate::scratch::scratch("hook-package-binaries");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let declared: toml::Table =
+            toml::from_str("[package]\nname = \"pkg\"\n[[bin]]\nname = \"tool\"\n").unwrap();
+        let package = declared["package"].as_table().unwrap().clone();
+        assert_eq!(package_binaries(&declared, &package, &dir), ["tool"]);
+        let plain: toml::Table = toml::from_str("[package]\nname = \"pkg\"\n").unwrap();
+        let package = plain["package"].as_table().unwrap().clone();
+        assert_eq!(package_binaries(&plain, &package, &dir), ["pkg"]);
+    }
+
+    /// Fails by: the protected walk stopping a visit early, or never.
+    #[test]
+    fn the_protected_walk_visits_exactly_its_bound() {
+        let root = crate::scratch::scratch("hook-protected-bound");
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        for at in 0..PROTECTED_WALK_BOUND + 5 {
+            std::fs::write(root.join("d").join(at.to_string()), "").unwrap();
+        }
+        let state = protected_state_of(&root, &[String::from("d/**")]).unwrap();
+        assert_eq!(
+            state.len(),
+            PROTECTED_WALK_BOUND - 1,
+            "the directory is a visit"
+        );
     }
 }
