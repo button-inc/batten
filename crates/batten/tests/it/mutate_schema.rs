@@ -269,6 +269,35 @@ const STOPPER: &str = "    #[test]\n    fn zz_stop() {\n\
 /// Fails by: a finished case's record lost to the kill (it records again, so
 /// fewer are carried), a leftover sealed over the wrong snapshot (its digest
 /// moves, so it is not carried), or verdicts that differ from an unkilled run.
+/// A SWEEP UNDER A LAP SAYS IT MOVED (CLOUD-2369): one `mutant:changed` step
+/// outlasted the 240-beat stall bound on #1276 while judging, and the lap was
+/// cancelled as stalled. Each progress line is the supervising task's `Sig`.
+#[test]
+fn a_sweep_under_a_supervising_task_moves_its_signal() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seeded("mutate-schema-signal");
+    let file = listing("mutate-schema-signal-listing");
+    let registered = common::batten()
+        .args(["task", "register", "land", "515151", "verify"])
+        .current_dir(&repo)
+        .streamed_output()
+        .expect("register the supervising task");
+    assert!(registered.status.success(), "{}", common::stderr(&registered));
+    let output = common::batten()
+        .args(["__mutate-schema", &file, "2"])
+        .env("BATTEN_TASK_PID", "515151")
+        .current_dir(&repo)
+        .streamed_output()
+        .expect("run the sweep");
+    let said = common::stdout(&output);
+    assert_eq!(output.status.code(), Some(2), "{said}\n{}", common::stderr(&output));
+    assert_eq!(
+        batten::task::read_field(&repo.join(".git"), "515151", "sig").as_deref(),
+        Some("mutate schema: judged 5/5"),
+        "the last progress line is the task's signal: {said}"
+    );
+}
+
 #[test]
 fn a_sweep_killed_in_reach_keeps_every_case_it_finished() {
     if !cfg!(target_os = "linux") {
