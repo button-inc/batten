@@ -3251,6 +3251,20 @@ const STEP_GROUP: FlagDecl = FlagDecl::positional(
 );
 
 /// `--jobs <n>` on `step graph run`: how many rows run at once.
+/// `--root <dir>` on `modules cycle` (CLOUD-2789).
+const MODULES_ROOT: FlagDecl = FlagDecl::valued(
+    "root",
+    "root",
+    "The crate's source root, the directory holding lib.rs",
+);
+
+/// `--max <n>` on `modules cycle` (CLOUD-2789).
+const MODULES_MAX: FlagDecl = FlagDecl::valued(
+    "max",
+    "max",
+    "Refuse when the largest cycle holds more than this many modules (a non-negative integer)",
+);
+
 const STEP_JOBS: FlagDecl = FlagDecl::valued(
     "jobs",
     "jobs",
@@ -7902,6 +7916,27 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[STEP_GROUP, STEP_JOBS],
+    },
+    // The module-graph noun (CLOUD-2789). `cycle` reads the crate's source and
+    // writes nothing: `read`. Its refusal over `--max` is a statement about the
+    // tree, so its exits are a verdict's.
+    CommandDecl {
+        path: "modules",
+        id: "modules",
+        about: "Measure the crate's module graph",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "modules cycle",
+        id: "modules.cycle",
+        about: "Print how many modules the largest cycle of the module graph holds, refusing more than --max",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MODULES_ROOT, MODULES_MAX],
     },
     // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
     // `sbom-binary-record`). `write`: it writes the documents and runs the
