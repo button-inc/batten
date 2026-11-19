@@ -35,4 +35,20 @@ exclude_re = [
   # `ExitCode` is a fieldless enum: two values with equal codes are the same
   # value, so which of them `worse` answers on a tie cannot be told apart.
   'replace > with >= in worse',
+  # `map_blobs`' argument again: the serial path and the threaded one fold
+  # each rule's own buffers in declaration order, so `workers == 1` only
+  # decides whether a thread is worth spawning (#1276).
+  'replace == with != in evaluate_due',
+  # A tree-half run's live stores are cost only: `null_live_keys` nulls every
+  # key that is not a tree fact before any module reads the document, so
+  # reading a sink, the findings store or a recorder's records under the tree
+  # half changes no verdict, and skipping one off the live half reads a store
+  # nothing declared (#1276).
+  'rules\.rs:\d+:\d+: replace && with \|\| in run$',
+  'rules\.rs:\d+:\d+: replace \|\| with && in run$',
+  'replace match guard !tree_half with true in recorded_stores',
+  # At `after == min` the step admits either way: the wait loop only waits on
+  # a collector or a build and collects again, and its exit test is
+  # `after >= min`, which already holds (#1276).
+  'replace < with <= in disk_admits',
 ]

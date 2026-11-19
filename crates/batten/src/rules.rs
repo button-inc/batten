@@ -7638,6 +7638,16 @@ pub fn null_live_keys(document: &str) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| document.to_owned())
 }
 
+/// How many threads evaluate a surface's due rules: one on the hook, which
+/// `rules/rust.md` holds to a single thread, else every core.
+fn workers_for(surface: crate::facts::Surface) -> usize {
+    if surface == crate::facts::Surface::Hook {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+    }
+}
+
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
 /// findings sorted for byte-stability plus the rules that never looked.
 ///
@@ -8031,11 +8041,7 @@ fn evaluate_rules(
     // order the table declares, so the output is byte-for-byte what the serial
     // loop produced (§6). The hook surface stays on one thread: `rules/rust.md`
     // holds `batten hook` to at most one runtime and never a multi-thread one.
-    let workers = if inputs.surface == crate::facts::Surface::Hook {
-        1
-    } else {
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-    };
+    let workers = workers_for(inputs.surface);
     let evaluated = evaluate_due(&due, root, inputs, workers);
     for (rule, done) in due.iter().zip(evaluated) {
         scan.findings.extend(done.findings);
@@ -23347,6 +23353,49 @@ mod half_tests {
             };
             assert_eq!(blank.half(None, KEYED), got, "{}", kind.as_str());
         }
+    }
+
+    /// Fails by: a tree fact read as live (a tree row re-run every lap), a
+    /// live fact read as tree (a receipt standing in for a live verdict), or
+    /// the row's declared facts not read at all.
+    #[test]
+    fn a_rows_declared_facts_decide_its_half() {
+        let lines = row(RuleKind::Forbid, &serde_json::json!({"lines": ["x"]}));
+        assert_eq!(lines.half(None, KEYED), Half::Tree);
+        let symbols = row(RuleKind::Forbid, &serde_json::json!({"symbols": true}));
+        assert_eq!(symbols.half(None, KEYED), Half::Live);
+        assert_eq!((Half::Tree.as_str(), Half::Live.as_str()), ("tree", "live"));
+    }
+
+    /// Fails by: a lint count taking a `regex` beside its lint, or one naming
+    /// no lint.
+    #[test]
+    fn a_lint_count_names_its_lint_and_nothing_else() {
+        let count = |extra: serde_json::Value| {
+            let mut fields = serde_json::json!({"counts": "lint_escapes"});
+            fields
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            row(RuleKind::Ratchet, &fields).validate_ratchet_measure()
+        };
+        assert!(count(serde_json::json!({"pattern": "clippy::x"})).is_ok());
+        assert!(count(serde_json::json!({})).is_err(), "no lint");
+        assert!(
+            count(serde_json::json!({"pattern": "clippy::x", "regex": "y"})).is_err(),
+            "a regex beside the lint"
+        );
+    }
+
+    /// Fails by: the hook evaluating on more than one thread, or another
+    /// surface on one.
+    #[test]
+    fn only_the_hook_evaluates_on_one_thread() {
+        assert_eq!(super::workers_for(crate::facts::Surface::Hook), 1);
+        assert_eq!(
+            super::workers_for(crate::facts::Surface::Check),
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        );
     }
 
     #[test]

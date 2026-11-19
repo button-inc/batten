@@ -659,3 +659,23 @@ mod tests {
         );
     }
 }
+
+/// The module half of a rule's digest (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod module_digest_tests {
+    use super::module_digest;
+
+    /// Fails by: two modules, or a module and none, digesting alike.
+    #[test]
+    fn a_modules_digest_is_its_bytes() {
+        let dir = crate::scratch::scratch("epoch-module-digest");
+        std::fs::write(dir.join("a.rego"), "package a").unwrap();
+        std::fs::write(dir.join("b.rego"), "package b").unwrap();
+        let a = module_digest(&dir, Some("a.rego"));
+        assert_eq!(a, module_digest(&dir, Some("a.rego")));
+        assert_ne!(a, module_digest(&dir, Some("b.rego")));
+        assert_ne!(a, module_digest(&dir, None));
+        assert_eq!(a.len(), 64, "a hex digest");
+    }
+}
