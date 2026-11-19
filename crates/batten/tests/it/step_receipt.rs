@@ -970,6 +970,43 @@ fn an_undeclared_read_fails_a_traced_miss() {
     }
 }
 
+/// A STEP RUN ALREADY UNDER A TRACER RUNS UNTRACED (CLOUD-2784): ptrace takes
+/// one tracer, so a second `strace` cannot attach. The read is undeclared, so a
+/// run that tried to trace anyway fails either way — it could not attach, or it
+/// saw the read — and only the untraced arm exits 0.
+#[test]
+fn a_step_run_already_under_a_tracer_runs_untraced() {
+    let repo = Repo::new("trace-nested");
+    common::write(&repo.dir, "other.txt", "other\n");
+    common::git_in(&repo.dir, &["add", "other.txt"]);
+    repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
+    let Some(strace) = batten::mutate::trace::tracer() else {
+        // NO TRACER ON THIS HOST: nothing is nested, and the plain run records.
+        let (out, after) = repo.traced_run("readb");
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit");
+        return;
+    };
+    let out = common::task_bash(
+        &repo.dir,
+        &format!(
+            "exec {strace} -f -qq -o /dev/null {} step run traced -- readb",
+            env!("CARGO_BIN_EXE_batten")
+        ),
+    )
+    .env_remove("CI")
+    .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+    .env_remove("BATTEN_TASK_PID")
+    .streamed_output()
+    .expect("run batten under a tracer");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a nested run is untraced and passes: {}",
+        common::stderr(&out)
+    );
+}
+
 #[test]
 fn a_probe_for_a_missing_path_outside_the_inputs_is_undeclared() {
     let repo = Repo::new("trace-probe");

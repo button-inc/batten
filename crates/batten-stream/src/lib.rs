@@ -310,6 +310,25 @@ mod tests {
         assert_eq!(seen.bytes(), b"z");
     }
 
+    /// Fails by: a read error other than an interruption retried, which never
+    /// ends on a pipe that keeps failing.
+    #[test]
+    fn a_failing_read_stops_the_pump_with_its_error() {
+        struct Fails(u8);
+        impl Read for Fails {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                if self.0 > 1 {
+                    return Ok(0);
+                }
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let mut seen = Shared::<Vec<u8>>::default();
+        let failed = pump(Fails(0), &mut [&mut seen]).expect_err("the read error is returned");
+        assert_eq!(failed.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
     /// Fails by: a spawned pump's result lost, its sinks unwritten, or a
     /// finished pump reported as still running when asked without waiting.
     #[test]
