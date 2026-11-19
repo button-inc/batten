@@ -18225,6 +18225,11 @@ inputs = [
   ".clippy.toml",
   "policy",
   "bench",
+  # Cargo probes `.cargo/config{,.toml}` on every build, and `--all-targets`
+  # compiles `tests/it/fuzz_corpus.rs`, which `include!`s the fuzz crate's
+  # shared properties: lap 25's trace refused both as undeclared reads.
+  ".cargo",
+  "fuzz/properties.rs",
 ]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
 
