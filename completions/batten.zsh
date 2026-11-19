@@ -8813,6 +8813,102 @@ esac
     ;;
 esac
 ;;
+(modules)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__modules_commands" \
+"*::: :->modules" \
+&& ret=0
+
+    case $state in
+    (modules)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-modules-command-$line[1]:"
+        case $line[1] in
+            (cycle)
+_arguments "${_arguments_options[@]}" : \
+'--root=[The crate'\''s source root, the directory holding lib.rs]:root:_default' \
+'--max=[Refuse when the largest cycle holds more than this many modules (a non-negative integer)]:max:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__modules__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-modules-help-command-$line[1]:"
+        case $line[1] in
+            (cycle)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (sbom)
 _arguments "${_arguments_options[@]}" : \
 '--binary=[Inventory this built binary from its own bytes instead of the tree]:binary:_default' \
@@ -11103,6 +11199,26 @@ esac
     ;;
 esac
 ;;
+(modules)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__modules_commands" \
+"*::: :->modules" \
+&& ret=0
+
+    case $state in
+    (modules)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-modules-command-$line[1]:"
+        case $line[1] in
+            (cycle)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (sbom)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11327,6 +11443,7 @@ _batten_commands() {
 'lease:The landing lease\: one branch spends a matrix at a time' \
 'land:The landing lap\: replay this branch onto a base that moved' \
 'step:Answer a step from its receipt when its exact inputs, arguments and tools already passed' \
+'modules:Measure the crate'\''s module graph' \
 'sbom:Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry' \
 'dist:Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both' \
 'board:Whether the board'\''s columns and graph tell the truth about the work' \
@@ -12403,6 +12520,7 @@ _batten__subcmd__help_commands() {
 'lease:The landing lease\: one branch spends a matrix at a time' \
 'land:The landing lap\: replay this branch onto a base that moved' \
 'step:Answer a step from its receipt when its exact inputs, arguments and tools already passed' \
+'modules:Measure the crate'\''s module graph' \
 'sbom:Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry' \
 'dist:Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both' \
 'board:Whether the board'\''s columns and graph tell the truth about the work' \
@@ -13102,6 +13220,18 @@ _batten__subcmd__help__subcmd__mcp__subcmd__posture_commands() {
 _batten__subcmd__help__subcmd__mcp__subcmd__spawn_commands() {
     local commands; commands=()
     _describe -t commands 'batten help mcp spawn commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__modules_commands] )) ||
+_batten__subcmd__help__subcmd__modules_commands() {
+    local commands; commands=(
+'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
+    )
+    _describe -t commands 'batten help modules commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__modules__subcmd__cycle_commands] )) ||
+_batten__subcmd__help__subcmd__modules__subcmd__cycle_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help modules cycle commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__mutate_commands] )) ||
 _batten__subcmd__help__subcmd__mutate_commands() {
@@ -14323,6 +14453,37 @@ _batten__subcmd__mcp__subcmd__posture_commands() {
 _batten__subcmd__mcp__subcmd__spawn_commands() {
     local commands; commands=()
     _describe -t commands 'batten mcp spawn commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules_commands] )) ||
+_batten__subcmd__modules_commands() {
+    local commands; commands=(
+'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten modules commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__cycle_commands] )) ||
+_batten__subcmd__modules__subcmd__cycle_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules cycle commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__help_commands] )) ||
+_batten__subcmd__modules__subcmd__help_commands() {
+    local commands; commands=(
+'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten modules help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__help__subcmd__cycle_commands] )) ||
+_batten__subcmd__modules__subcmd__help__subcmd__cycle_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules help cycle commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__modules__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate_commands] )) ||
 _batten__subcmd__mutate_commands() {
