@@ -1937,6 +1937,22 @@ enum Said {
     /// #1132, capturing it left fifteen shards' logs silent for 111 minutes and
     /// lost every mutant they judged when their bound stopped them.
     Streamed,
+    /// Into [`Ran::output`] only, shown nowhere: for a run whose verdict is a
+    /// report it writes and whose sweep prints its own progress (the schema's
+    /// judging runs). MEASURED ON #1276: teed, 4,797 judging runs replayed
+    /// cargo's warnings into the sweep's stderr, and `hk`, which holds a
+    /// step's output, was killed by the OOM killer at 7.4 GB.
+    Kept,
+}
+
+impl Said {
+    /// Whether the child's stderr is shown as it is written.
+    const fn stderr_echo(self) -> Echo {
+        match self {
+            Self::Captured | Self::Streamed => Echo::Shown,
+            Self::Kept => Echo::Quiet,
+        }
+    }
 }
 
 fn spawn_as(
@@ -2024,7 +2040,7 @@ fn spawn_as(
             command.stdout(std::process::Stdio::from(std::io::stderr()));
             command.stderr(std::process::Stdio::from(std::io::stderr()));
         }
-        Said::Captured => {
+        Said::Captured | Said::Kept => {
             command.stdout(std::process::Stdio::piped());
             command.stderr(std::process::Stdio::piped());
         }
@@ -2048,7 +2064,7 @@ fn spawn_as(
         child
             .stderr
             .take()
-            .map(|pipe| pump_into(pipe, &err_path, Echo::Shown)),
+            .map(|pipe| pump_into(pipe, &err_path, said.stderr_echo())),
     ];
     let waited = wait_bounded(child, bound);
     // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
@@ -5112,6 +5128,17 @@ pub fn job_count(machine: Machine, cost: JobCost) -> usize {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A kept run's stderr is shown nowhere; a captured or streamed one's is.
+    ///
+    /// Fails by: a kept run echoing its output again, the volume that had `hk`
+    /// killed for memory on #1276, or a captured run going silent.
+    #[test]
+    fn only_a_kept_run_is_shown_nowhere() {
+        assert_eq!(Said::Kept.stderr_echo(), Echo::Quiet);
+        assert_eq!(Said::Captured.stderr_echo(), Echo::Shown);
+        assert_eq!(Said::Streamed.stderr_echo(), Echo::Shown);
+    }
 
     /// The staged copy is trusted, beside whatever the caller already trusted.
     ///
