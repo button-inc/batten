@@ -980,13 +980,19 @@ fn a_step_run_already_under_a_tracer_runs_untraced() {
     common::write(&repo.dir, "other.txt", "other\n");
     common::git_in(&repo.dir, &["add", "other.txt"]);
     repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
-    let Some(strace) = batten::mutate::trace::tracer() else {
-        // NO TRACER ON THIS HOST: nothing is nested, and the plain run records.
+    // NO TRACER ON THIS HOST: nothing is nested, and the plain run records.
+    // Both arms assert; neither returns early (`silent_skip`).
+    if let Some(strace) = batten::mutate::trace::tracer() {
+        nested_run_passes(&repo, &strace);
+    } else {
         let (out, after) = repo.traced_run("readb");
         assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
         assert_eq!(after, "hit");
-        return;
-    };
+    }
+}
+
+/// `readb` run by batten under `strace -f`: the nested run is untraced.
+fn nested_run_passes(repo: &Repo, strace: &str) {
     let out = common::task_bash(
         &repo.dir,
         &format!(
