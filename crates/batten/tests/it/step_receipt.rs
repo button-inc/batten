@@ -1011,6 +1011,17 @@ fn nested_run_passes(repo: &Repo, strace: &str) {
         "a nested run is untraced and passes: {}",
         common::stderr(&out)
     );
+    // UNTRACED, NOT TRACED BADLY: a nested run that tried a second tracer
+    // could not attach, read its trace as unfinished and minted no receipt
+    // (lap 27's survivors in `tracer`/`traced_already`), so the next run must
+    // be a hit.
+    let again = repo.run_step(&["traced"], &["readb"], &[]);
+    assert_eq!(
+        common::stderr(&again).split_whitespace().next(),
+        Some("hit"),
+        "the nested run recorded its receipt: {}",
+        common::stderr(&out)
+    );
 }
 
 #[test]
