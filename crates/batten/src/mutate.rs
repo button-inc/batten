@@ -5038,6 +5038,34 @@ pub fn cargo_mutant_in_place(
     timeout: std::time::Duration,
     output: &Path,
 ) -> Result<Outcome> {
+    let args = cargo_mutants_argv(diff, in_place_rest(name, filter, timeout, output));
+    let runner = runner.to_string_lossy();
+    let ran = spawn_as(
+        tree,
+        Program::Command(&runner),
+        &args,
+        &[],
+        runner_bound(),
+        Said::Streamed,
+    )?;
+    Ok(ran.outcome)
+}
+
+/// The arguments after `cargo_mutants_argv`'s own for one in-place run over
+/// `name`, its tests narrowed to `filter` when one is given.
+///
+/// `--file` AS WELL AS `--re`: cargo-mutants 27.1.0 applies neither `--re` nor
+/// `--exclude-re` to field-deletion mutants, so `--re` alone judged every
+/// `delete field` mutant of the diff in every run (lap 27: twelve extras per
+/// handback, about 28 minutes each). `--file` does reach them, so the extras
+/// shrink to the field mutants of the target's own file. A name with no
+/// `path:` prefix adds no `--file`.
+fn in_place_rest(
+    name: &str,
+    filter: Option<&str>,
+    timeout: std::time::Duration,
+    output: &Path,
+) -> Vec<String> {
     let mut rest: Vec<String> = [
         "--in-place",
         "--baseline",
@@ -5055,6 +5083,9 @@ pub fn cargo_mutant_in_place(
         String::from("--re"),
         exactly(name),
     ]);
+    if let Some((file, _)) = name.split_once(':').filter(|(file, _)| !file.is_empty()) {
+        rest.extend([String::from("--file"), file.to_owned()]);
+    }
     if let Some(filter) = filter {
         rest.extend([
             String::from("--"),
@@ -5063,17 +5094,7 @@ pub fn cargo_mutant_in_place(
             String::from("--no-tests=pass"),
         ]);
     }
-    let args = cargo_mutants_argv(diff, rest);
-    let runner = runner.to_string_lossy();
-    let ran = spawn_as(
-        tree,
-        Program::Command(&runner),
-        &args,
-        &[],
-        runner_bound(),
-        Said::Streamed,
-    )?;
-    Ok(ran.outcome)
+    rest
 }
 
 /// cargo-mutants' exit read onto the house contract (§6): 0 every mutant
@@ -5297,6 +5318,33 @@ mod tests {
             "^src/a\\.rs:3:5: replace a \\-> u8 with 0$"
         );
         assert_eq!(exactly("a|b(c)"), "^a\\|b\\(c\\)$");
+    }
+
+    /// An in-place run names its target's file as well as its name, and its
+    /// filter only when there is one.
+    ///
+    /// Fails by: the `--file` dropped (every field mutant of the diff judged in
+    /// every run again), the path cut anywhere but at the first `:`, a `--file`
+    /// with an empty path, or the filter passed without its `--`.
+    #[test]
+    fn an_in_place_run_is_narrowed_to_its_targets_file() {
+        let output = Path::new("/o");
+        let bound = std::time::Duration::from_secs(9);
+        let name = "crates/a/src/b.rs:3:5: delete field x from struct C expression in d";
+        let rest = in_place_rest(name, Some("test(=t)"), bound, output);
+        let at = rest.iter().position(|arg| arg == "--file").unwrap();
+        assert_eq!(rest[at + 1], "crates/a/src/b.rs");
+        assert_eq!(
+            rest[rest.len() - 4..],
+            ["--", "-E", "test(=t)", "--no-tests=pass"]
+        );
+        let at = rest.iter().position(|arg| arg == "--re").unwrap();
+        assert_eq!(rest[at + 1], exactly(name));
+        let at = rest.iter().position(|arg| arg == "--timeout").unwrap();
+        assert_eq!(rest[at + 1], "9");
+        let bare = in_place_rest(": no path", None, bound, output);
+        assert!(!bare.iter().any(|arg| arg == "--file"), "{bare:?}");
+        assert!(!bare.iter().any(|arg| arg == "--"), "{bare:?}");
     }
 
     /// Fails by: the first field read, kilobytes reported as megabytes.
