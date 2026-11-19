@@ -521,6 +521,28 @@ pub enum Command {
         /// The sub-verb selected.
         command: ForgeCommand,
     },
+    /// The crate's module graph (CLOUD-2789): the size of its largest cycle.
+    ///
+    /// APPENDED LAST, for the reason above.
+    Modules {
+        /// The sub-verb selected.
+        command: ModulesCommand,
+    },
+}
+
+/// The `modules` sub-verbs (CLOUD-2789).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ModulesCommand {
+    /// Print the largest strongly connected component of the module graph
+    /// under `root`, refusing a count above `max`.
+    Cycle {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most modules the component may hold, as written; `None` never
+        /// refuses. The verb parses it, so a bad value is its usage error.
+        max: Option<String>,
+    },
 }
 
 /// `batten forge`'s sub-verbs.
@@ -4062,6 +4084,18 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
         "forge" => forge_of(matches).map(|command| Command::Forge { command }),
+        "modules" => modules_of(matches).map(|command| Command::Modules { command }),
+        _ => None,
+    }
+}
+
+/// The `modules` sub-verb a parse resolved to (CLOUD-2789).
+fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
+    match matches.subcommand()? {
+        ("cycle", matches) => Some(ModulesCommand::Cycle {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
         _ => None,
     }
 }

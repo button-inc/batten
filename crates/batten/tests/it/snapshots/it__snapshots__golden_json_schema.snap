@@ -2694,6 +2694,42 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "modules",
+      "id": "modules",
+      "about": "Measure the crate's module graph",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "modules cycle",
+          "id": "modules.cycle",
+          "about": "Print how many modules the largest cycle of the module graph holds, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when the largest cycle holds more than this many modules (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "mutate",
       "id": "mutate",
       "about": "Decide whether this repository's gates discriminate, rather than merely parse",
@@ -5670,6 +5706,14 @@ expression: stdout_of(&output)
     {
       "id": "mcp.posture",
       "path": "mcp posture"
+    },
+    {
+      "id": "modules",
+      "path": "modules"
+    },
+    {
+      "id": "modules.cycle",
+      "path": "modules cycle"
     },
     {
       "id": "mutate.census",
