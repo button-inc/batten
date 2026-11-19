@@ -3281,36 +3281,56 @@ pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
     use std::process::{Command, Stdio};
 
     mint_ca_and_server_certificate(tls);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
-    )]
-    let child = Command::new("openssl")
-        .args(["s_server", "-accept", &port.to_string(), "-cert"])
-        .arg(tls.join("cert.pem"))
-        .arg("-key")
-        .arg(tls.join("key.pem"))
-        .args(["-WWW", "-quiet"])
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start the local TLS listener");
-    let mut host = TlsWww { port, child };
-    // 600 x 50ms: under the full suite's load `s_server` measured slower than
-    // the 5s `provision.rs` allowed one listener alone. A listener that EXITED is
-    // reported at once rather than waited out.
-    for _ in 0..600 {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
-            return host;
+    // The port is free when chosen and released before `s_server` takes it, so
+    // a parallel case can take it in between. `s_server` then exits 0 without
+    // listening (measured: `BIO_bind: Address already in use`, status 0), which
+    // is a lost race, not a broken listener: a fresh port is tried, a bounded
+    // number of times. Lap 24's schema sweep failed `engine_pin` on it.
+    let mut exits = Vec::new();
+    for _ in 0..TLS_PORT_TRIES {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
+        )]
+        let child = Command::new("openssl")
+            .args(["s_server", "-accept", &port.to_string(), "-cert"])
+            .arg(tls.join("cert.pem"))
+            .arg("-key")
+            .arg(tls.join("key.pem"))
+            .args(["-WWW", "-quiet"])
+            .current_dir(root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the local TLS listener");
+        match tls_listening(TlsWww { port, child }) {
+            Ok(host) => return host,
+            Err(status) => exits.push(status),
         }
+    }
+    panic!("the TLS listener exited before it bound on {TLS_PORT_TRIES} ports: {exits:?}");
+}
+
+/// Fresh ports `tls_www` tries before a listener that keeps exiting is a failure.
+const TLS_PORT_TRIES: usize = 8;
+
+/// `host` once its listener holds its port, or the status it exited with first.
+///
+/// 600 x 50ms: under the full suite's load `s_server` measured slower than the
+/// 5s `provision.rs` allowed one listener alone. The exit is read before the
+/// port, so a port some other process took is never mistaken for this one's.
+fn tls_listening(mut host: TlsWww) -> Result<TlsWww, std::process::ExitStatus> {
+    for _ in 0..600 {
         if let Ok(Some(status)) = host.child.try_wait() {
-            panic!("the TLS listener exited before it bound: {status}");
+            return Err(status);
+        }
+        if std::net::TcpListener::bind(("127.0.0.1", host.port)).is_err() {
+            return Ok(host);
         }
         #[expect(
             clippy::disallowed_methods,
