@@ -273,6 +273,49 @@ fn rust_files(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
     Ok(files)
 }
 
+/// Where each base Rust file is at HEAD: its own path, the one path it MOVED
+/// to, or `None` when it is gone (CLOUD-2789).
+///
+/// A file that moved between crates (`crates/a/src/x.rs` to `crates/b/src/x.rs`)
+/// is paired with the one HEAD file that is new since base and ends in the same
+/// path below its last `src/`. The pairing used to be by path alone, and a base
+/// path missing at HEAD was skipped: every test in a moved or deleted file
+/// escaped the replay, so a test could be weakened by moving its file. Now a
+/// moved file is compared at its new path, and a file with no successor (gone,
+/// or ambiguous between two) has every base test `test-removed`.
+#[must_use]
+pub fn successors(
+    before: &BTreeMap<String, String>,
+    after: &BTreeMap<String, String>,
+) -> BTreeMap<String, Option<String>> {
+    let below_src = |path: &str| -> Option<String> {
+        path.rfind("src/")
+            .map(|at| path[at + "src/".len()..].to_owned())
+    };
+    let mut fresh: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+    for path in after.keys().filter(|path| !before.contains_key(*path)) {
+        if let Some(tail) = below_src(path) {
+            fresh.entry(tail).or_default().push(path);
+        }
+    }
+    before
+        .keys()
+        .map(|path| {
+            let at_head = if after.contains_key(path) {
+                Some(path.clone())
+            } else {
+                below_src(path)
+                    .and_then(|tail| fresh.get(&tail))
+                    .and_then(|paths| match paths.as_slice() {
+                        [only] => Some((*only).clone()),
+                        _ => None,
+                    })
+            };
+            (path.clone(), at_head)
+        })
+        .collect()
+}
+
 /// The base half of the journal key (CLOUD-2787): one `base <path> <id>` line
 /// per Rust file read at the merge base, `<id>` its content's digest — `step
 /// base`'s line shape over exactly what the replay reads there. NO COMMIT ID:
@@ -366,10 +409,15 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     let mut findings = Vec::new();
     // The head text each modified file is spliced from, by path.
     let mut splices: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
+    let moved = successors(&before, &after);
     for (path, base_text) in &before {
-        let Some(head_text) = after.get(path) else {
-            continue;
-        };
+        // A file gone at HEAD is compared against nothing, so each of its base
+        // tests is removed; a moved one is compared at the path it moved to.
+        let head_path = moved.get(path).cloned().flatten();
+        let head_text = head_path
+            .as_ref()
+            .and_then(|head_path| after.get(head_path))
+            .map_or("", String::as_str);
         if head_text == base_text {
             continue;
         }
@@ -382,8 +430,10 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
                 id: SmellId::TestRemoved,
             });
         }
-        if !changed.modified.is_empty() {
-            splices.insert(path.clone(), (head_text.clone(), changed.modified));
+        if let Some(head_path) = head_path
+            && !changed.modified.is_empty()
+        {
+            splices.insert(head_path, (head_text.to_owned(), changed.modified));
         }
     }
 
@@ -1365,6 +1415,46 @@ mod tests {
         let changed = compare(BASE, &head);
         assert_eq!(changed.removed, vec![(String::from("tests::dropped"), 16)]);
         assert!(changed.modified.is_empty());
+    }
+
+    fn files(paths: &[&str]) -> BTreeMap<String, String> {
+        paths
+            .iter()
+            .map(|path| ((*path).to_owned(), String::new()))
+            .collect()
+    }
+
+    /// Fails by: a base path missing at HEAD skipped rather than followed, the
+    /// hole that let every test in a moved file escape the replay.
+    #[test]
+    fn a_file_moved_between_crates_is_compared_at_its_new_path() {
+        let before = files(&["crates/a/src/x.rs", "crates/a/src/kept.rs"]);
+        let after = files(&["crates/b/src/x.rs", "crates/a/src/kept.rs"]);
+        let moved = successors(&before, &after);
+        assert_eq!(
+            moved["crates/a/src/x.rs"].as_deref(),
+            Some("crates/b/src/x.rs")
+        );
+        assert_eq!(
+            moved["crates/a/src/kept.rs"].as_deref(),
+            Some("crates/a/src/kept.rs")
+        );
+    }
+
+    /// Fails by: a deleted file, or one whose move two new files could explain,
+    /// paired with something rather than having its tests removed.
+    #[test]
+    fn a_gone_or_ambiguous_file_has_no_successor() {
+        let before = files(&["crates/a/src/gone.rs", "crates/a/src/twice.rs"]);
+        let after = files(&["crates/b/src/twice.rs", "crates/c/src/twice.rs"]);
+        let moved = successors(&before, &after);
+        assert_eq!(moved["crates/a/src/gone.rs"], None);
+        assert_eq!(moved["crates/a/src/twice.rs"], None);
+        assert_eq!(
+            compare(BASE, "").removed.len(),
+            compare(BASE, BASE).removed.len() + tests_in(BASE).unwrap().len(),
+            "a file with no successor is compared against nothing: every test removed"
+        );
     }
 
     #[test]
