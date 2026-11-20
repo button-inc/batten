@@ -443,17 +443,8 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
             })
         }
         serde_json::Value::Object(map) => {
-            // A FIXED ORDER, declared here rather than taken from the map: two
-            // runs over one value must produce one digest (§6), and iteration
-            // order is not a promise a caller can rely on.
-            let mut bytes = Vec::new();
-            let mut blocks = 0;
-            for key in ["stdout", "stderr"] {
-                if let Some(text) = map.get(key).and_then(serde_json::Value::as_str) {
-                    bytes.extend_from_slice(text.as_bytes());
-                    blocks += 1;
-                }
-            }
+            // `stdout` then `stderr`, in the fixed order `shell_streams` declares.
+            let (bytes, blocks) = crate::facts::shell_streams(map);
             // An empty object is zero bytes, for the empty array's reason. An
             // object with members but none we read is a shape, not an absence.
             if blocks == 0 && !map.is_empty() {
