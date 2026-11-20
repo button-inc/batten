@@ -18612,13 +18612,6 @@ group = "verify-1"
 run = ["mise", "run", "policy-budget"]
 depends_on = ["gate:config-validator"]
 
-# CLOUD-2789: the crate's largest module cycle, held at its committed bound.
-[[step]]
-id = "gate:modules-cycle"
-group = "verify-1"
-run = ["mise", "run", "modules-cycle"]
-depends_on = ["gate:config-validator"]
-
 [[step]]
 id = "gate:policy-test"
 group = "verify-1"

@@ -65,6 +65,7 @@ row here, so a new module lands with its line.
 - `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
 - `fetch.rs` — one HTTPS request, in process (CLOUD-745).
 - `graph.rs` — the bounded, call-by-need walk (CLOUD-1866).
+- `module_graph.rs` — the crate's own module graph read off the syntax tree, and its largest strongly connected component, which `modules cycle` holds at a committed bound (CLOUD-2789).
 - `traversal.rs` — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
 - `register.rs` — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
 - `propose.rs` — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
