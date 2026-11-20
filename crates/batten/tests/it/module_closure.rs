@@ -78,8 +78,8 @@ const PLUMBING_CEILING: usize = 9;
 /// The smallest closure that counts as the decision core.
 ///
 /// Twenty-four, the bottom of the upper population. Together with
-/// [`PLUMBING_CEILING`] this brackets the gap that
-/// [`the_gap_between_the_two_populations_stays_empty`] holds open.
+/// [`PLUMBING_CEILING`] this brackets the gap
+/// [`the_gap_holds_only_the_recorded_middle`] reads ([`MIDDLE`]).
 const CORE_FLOOR: usize = 24;
 
 /// Every module that is plumbing today. None of them may stop being plumbing.
@@ -220,7 +220,15 @@ fn module_graph() -> BTreeMap<String, BTreeSet<String>> {
             // boundary inside this crate. A `RootItem` left unresolved is
             // could-not-look at the edge level, never an edge onto nothing, so
             // it is skipped rather than counted as a reach.
-            if edge.origin == Origin::Internal && edge.to != module && !edge.to.is_empty() {
+            // A root re-export of ANOTHER crate (`pub use batten_fsio as fsio`)
+            // is spelled `crate::fsio` but is no module of this one: the split
+            // crates are exactly what a closure exists to measure leaving.
+            let external = matches!(exports.get(&edge.to), Some(None));
+            if edge.origin == Origin::Internal
+                && !external
+                && edge.to != module
+                && !edge.to.is_empty()
+            {
                 reached.insert(edge.to.clone());
             }
         }
@@ -335,29 +343,55 @@ fn no_module_reaches_deeper_than_the_recorded_worst() {
     );
 }
 
+/// Every module the cycle break moved out of the core into the gap (CLOUD-2789).
+///
+/// The gap was empty while the crate's largest cycle held 148 modules: every
+/// module reaching the core reached all of it. Breaking that cycle to 128 left
+/// these with closures of 12 to 23 — a tier a crate boundary can now be drawn
+/// under, which is what the split is for. Same discipline as [`PLUMBING`]: a
+/// subset, recorded by [`print_the_distribution`], and a module LEAVING it for
+/// the core is the regression, while a module arriving is progress.
+const MIDDLE: &[&str] = &[
+    "agent", "baseline", "budget", "census", "config", "contract", "decision", "defects", "design",
+    "drain", "emission", "epoch", "findings", "init", "journal", "judge", "lint", "markers",
+    "policy", "preset", "receipt", "record", "redirect", "replay", "resolve", "rules", "sbom",
+    "secrets", "session", "sink", "step", "stop", "trust", "waiver",
+];
+
 #[test]
-fn the_gap_between_the_two_populations_stays_empty() {
-    // The distribution is two populations, not a gradient — but the gap is
-    // between 8 and 24, NOT between the rim and everything else, which is what
-    // a line scan reported and what a split plan was written on. Asserted here
-    // so the shape is a checked claim rather than a remembered one.
+fn the_gap_holds_only_the_recorded_middle() {
+    // The distribution was two populations, not a gradient, with the gap between
+    // 9 and 24 — NOT between the rim and everything else, which is what a line
+    // scan reported and what a split plan was written on. The cycle break
+    // (CLOUD-2789) put [`MIDDLE`] in it, which is the plan working.
     //
-    // A module landing in the gap is news rather than a defect: something
-    // partially decoupled, and a crate boundary may be drawable where it was
-    // not. Redden so somebody looks.
+    // Two failures are still news. A module of [`MIDDLE`] climbing back to the
+    // core undoes a break. A module arriving in the gap from the core is
+    // progress, reported and recorded deliberately, never asserted on.
     let sizes = distribution(&module_graph());
+    let middle: BTreeSet<&str> = MIDDLE.iter().copied().collect();
 
-    let straddling: Vec<&(usize, String)> = sizes
+    let climbed: Vec<&(usize, String)> = sizes
         .iter()
-        .filter(|(size, _)| *size > PLUMBING_CEILING && *size < CORE_FLOOR)
+        .filter(|(size, module)| *size >= CORE_FLOOR && middle.contains(module.as_str()))
         .collect();
-
     assert!(
-        straddling.is_empty(),
-        "modules now sit between plumbing and core: {straddling:?}. Re-read the \
-         split plan before moving either boundary — this is the shape it rests \
-         on.",
+        climbed.is_empty(),
+        "these modules were below the core and reach it again: {climbed:?}. Each \
+         grew an edge back into the largest cycle; re-read the split plan.",
     );
+
+    let arrived: Vec<&(usize, String)> = sizes
+        .iter()
+        .filter(|(size, module)| {
+            *size > PLUMBING_CEILING && *size < CORE_FLOOR && !middle.contains(module.as_str())
+        })
+        .collect();
+    if !arrived.is_empty() {
+        report(&format!(
+            "arrived in the gap since MIDDLE was recorded: {arrived:?}"
+        ));
+    }
 }
 
 #[test]

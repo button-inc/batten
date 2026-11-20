@@ -272,9 +272,23 @@ fn verify_declares_no_depends() {
     );
 }
 
+/// The `mise run …` a step runs: the step itself, or the statement a
+/// receipted `step run <id> -- mise run …` wraps (CLOUD-2788).
+fn mise_run(step: &str) -> Option<&str> {
+    if step.starts_with("mise run ") {
+        return Some(step);
+    }
+    step.split_once("step run ")
+        .and_then(|(_, rest)| rest.split_once(" -- "))
+        .map(|(_, statement)| statement)
+        .filter(|statement| statement.starts_with("mise run "))
+}
+
 /// The tasks one `mise run` step reaches: each `:::` member's first word.
 fn members(step: &str) -> Vec<String> {
-    step.trim_start_matches("mise run ")
+    mise_run(step)
+        .unwrap_or(step)
+        .trim_start_matches("mise run ")
         .trim_start_matches("--continue-on-error ")
         .split(" ::: ")
         .filter_map(|task| task.split_whitespace().next())
@@ -304,7 +318,7 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
                 Some(group) => common::group_rows(&group)
                     .iter()
                     .any(|row| row.task.as_deref() == Some(task)),
-                None => step.starts_with("mise run ") && members(step).iter().any(|m| m == task),
+                None => mise_run(step).is_some() && members(step).iter().any(|m| m == task),
             })
             .unwrap_or_else(|| panic!("verify:gated runs {task}: {gated:?}"))
     };
@@ -405,14 +419,18 @@ fn the_receipt_is_the_last_step() {
     );
 }
 
-/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last step before the
+/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last gate before the
 /// receipt, so every other body step has exited when it starts, and it is not a
-/// `depends` entry, which mise would run beside the rest of the fan.
+/// `depends` entry, which mise would run beside the rest of the fan. Only the
+/// coverage read (CLOUD-2788) sits between it and the receipt: it reads the pass
+/// records, `perf-gate`'s among them, so it must follow, and it runs nothing.
 #[test]
 fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
     let gated = steps("verify:gated");
     let perf = step_at(&gated, "mise run perf-gate");
-    assert_eq!(perf, gated.len() - 2, "{gated:?}");
+    let cover = step_at(&gated, "step cover");
+    assert_eq!(perf, gated.len() - 3, "{gated:?}");
+    assert_eq!(cover, gated.len() - 2, "{gated:?}");
     assert!(
         !depends_of("verify:gated")
             .iter()
@@ -455,11 +473,31 @@ fn the_receipted_tasks_name_their_own_step_rows() {
         );
         assert!(rows.contains(&id), "{id} has a [[step]] row: {rows:?}");
     }
-    // The replay keys the base it was handed, not only the default trunk's.
+    // The replay keys the base it was handed, not only the default trunk's: the
+    // task replays against `TEST_REPLAY_BASE`, and the row keys the merge base
+    // of the same override in-process (`step base --ref-env`, CLOUD-2787).
     assert!(
-        steps("verify:test-replay")[0].contains("--arg {{env.TEST_REPLAY_BASE}} --"),
+        steps("verify:test-replay")[0].contains("--base {{env.TEST_REPLAY_BASE}}"),
         "{:?}",
         steps("verify:test-replay")
+    );
+    assert!(
+        env_of("verify:test-replay", "TEST_REPLAY_BASE").contains("BATTEN_SPEC_BASE"),
+        "the task's base is the override the row keys"
+    );
+    let replay_tools = table["step"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(toml::Value::as_str) == Some("test-replay"))
+        })
+        .and_then(|row| row.get("tools"))
+        .map(toml::Value::to_string)
+        .unwrap_or_default();
+    assert!(
+        replay_tools.contains(r#""step", "base""#)
+            && replay_tools.contains(r#""--ref-env", "BATTEN_SPEC_BASE""#),
+        "the test-replay row keys its base through `step base --ref-env`: {replay_tools}"
     );
 }
 
