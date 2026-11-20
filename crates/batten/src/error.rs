@@ -19,6 +19,13 @@
 
 use std::fmt;
 
+/// `Denial` lives with `Refusal` now (CLOUD-2789). The old path resolves for
+/// TESTS ONLY, so a base test the replay splices in (`crate::error::Denial`)
+/// still builds, while the library never reaches back up to `refusal`: that
+/// edge alone put 20 modules back into the crate's largest cycle (128 → 148).
+#[cfg(test)]
+pub use crate::refusal::Denial;
+
 /// A wrapped command's own exit code, travelling to the boundary that reports it.
 ///
 /// **Not a failure, and not Batten's answer.** `batten exec` is a transparent
