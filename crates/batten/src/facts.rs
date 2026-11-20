@@ -4118,59 +4118,6 @@ pub enum Extraction {
     PlanExits,
 }
 
-impl Extraction {
-    /// This extraction's answer over a parsed stream, or `None` where this host
-    /// records none of the events it reduces.
-    ///
-    /// **`None` is COULD-NOT-LOOK and it is decided here** (CLOUD-1344). Zero is
-    /// a real answer meaning the extractor ran, so an extraction whose underlying
-    /// event kind never appears must not report one: "zero repeats" over a
-    /// two-hundred-call session is a false green over a session nobody measured.
-    /// Deciding it in the engine rather than as a per-module conjunct is what
-    /// keeps it from being a dead gate on every harness but the one its author
-    /// tested.
-    ///
-    /// Takes the whole `Stream` rather than `Counts` because the members divide:
-    /// the totals come from [`Stream::counts`] and the runs from
-    /// [`Stream::repeats`], and `Counts` is the `-J` capability report's own
-    /// shape rather than this family's.
-    ///
-    /// Exhaustive with no wildcard arm, like every other axis match in this
-    /// module: a member added later decides here or fails to compile, rather than
-    /// defaulting to a count of something else.
-    ///
-    /// Generic over [`crate::transcript::Summary`] so the hook's incremental
-    /// [`crate::transcript::Tally`] is read by this same decision (CLOUD-2315).
-    #[must_use]
-    pub fn of(self, stream: &impl crate::transcript::Summary) -> Option<usize> {
-        use crate::transcript::Kind;
-        let records = stream.records();
-        let recorded = |kind: Kind| records.contains(&kind);
-        match self {
-            Extraction::Turns => recorded(Kind::Turns).then(|| stream.counts().turns),
-            Extraction::ToolCalls => recorded(Kind::ToolCalls).then(|| stream.counts().tool_calls),
-            Extraction::ToolErrors => {
-                recorded(Kind::ToolResults).then(|| stream.counts().tool_errors)
-            }
-            Extraction::HookDecisions => {
-                recorded(Kind::HookDecisions).then(|| stream.counts().hook_decisions)
-            }
-            Extraction::HookDenials => {
-                recorded(Kind::HookDecisions).then(|| stream.counts().hook_denials)
-            }
-            Extraction::AgentTurnRun => {
-                recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run)
-            }
-            Extraction::UnansweredHumanCalls => {
-                recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
-            }
-            // Gated on the kind it counts, as `ToolCalls` is: a host recording no
-            // tool calls cannot say a plan was never presented.
-            Extraction::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Task manifests (CLOUD-856)
 // ---------------------------------------------------------------------------
@@ -4900,15 +4847,15 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
         // `rows 1`. Normalising buffers was necessary and not sufficient,
         // because the buffer never arrived as one.
         //
-        // `capture::decode_response` is the ONE authority on that shape. It
-        // already reads `stdout` then `stderr` in a declared order, already
-        // says so against the measured corpus, and is already the reader the
-        // capture store trusts. A second copy of the field list here is the
-        // "two copies drifted" failure this repository keeps recording — so
-        // this defers to it rather than restating it.
-        serde_json::Value::Object(_) => match crate::capture::decode_response(result) {
+        // [`shell_streams`] is the ONE authority on that shape. It reads
+        // `stdout` then `stderr` in a declared order, and is the same reader
+        // `capture::decode_response` stores an object response through. A second
+        // copy of the field list here is the "two copies drifted" failure this
+        // repository keeps recording — so this defers to it rather than
+        // restating it.
+        serde_json::Value::Object(map) => match shell_streams(map) {
             // A shell envelope: count what the tool actually printed.
-            Ok(decoded) if decoded.blocks > 0 => match std::str::from_utf8(&decoded.bytes) {
+            (bytes, blocks) if blocks > 0 => match std::str::from_utf8(&bytes) {
                 Ok(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
                 // Bytes that are not text are a shape this build did not read,
                 // never a buffer that carried nothing.
@@ -4916,7 +4863,7 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
             },
             // An object carrying no readable stream member is not an envelope at
             // all — it is a single JSON row, which is one element wrapped.
-            Ok(_) | Err(_) => Look::Is(1),
+            _ => Look::Is(1),
         },
         // A single number or boolean is one element. Wrapping it is what makes
         // the count obvious rather than making the caller project.
@@ -5046,10 +4993,12 @@ pub fn rows_declared(result: &serde_json::Value, returns: Returns) -> Look<usize
 fn buffer_text(result: &serde_json::Value) -> Option<String> {
     match result {
         serde_json::Value::String(text) => Some(text.clone()),
-        serde_json::Value::Object(_) => crate::capture::decode_response(result)
-            .ok()
-            .filter(|decoded| decoded.blocks > 0)
-            .and_then(|decoded| String::from_utf8(decoded.bytes).ok()),
+        serde_json::Value::Object(map) => {
+            let (bytes, blocks) = shell_streams(map);
+            (blocks > 0)
+                .then_some(bytes)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        }
         serde_json::Value::Array(items) if items.iter().all(is_text_block) => {
             let mut joined = String::new();
             for block in items {
@@ -5238,7 +5187,7 @@ pub struct Declared {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// The tool whose RESULT answers it, matched by
-    /// [`crate::rules::selects_tool_name`] (CLOUD-690).
+    /// [`selects_tool_name`] (CLOUD-690).
     ///
     /// The alternative to `command`, and it exists because a command's transport
     /// can be unavailable where the same data reaches a tool. Measured: the
@@ -5425,7 +5374,7 @@ pub fn counted(result: &serde_json::Value, declared: &Declared) -> Look<usize> {
     let selected = if path == "." {
         vec![&payload]
     } else {
-        let Some(selected) = crate::mint::select(&payload, path) else {
+        let Some(selected) = select(&payload, path) else {
             return Look::CouldNotLook;
         };
         selected
@@ -5467,7 +5416,7 @@ pub fn counted(result: &serde_json::Value, declared: &Declared) -> Look<usize> {
 /// nothing rather than refusing every call, so the failure is a gate that is no
 /// stronger than before rather than one nobody can clear.
 fn holds_over(payload: &serde_json::Value, path: &str, wanted: &Literal) -> bool {
-    let Some(found) = crate::mint::select(payload, path) else {
+    let Some(found) = select(payload, path) else {
         return false;
     };
     let [only] = found.as_slice() else {
@@ -5495,7 +5444,7 @@ fn matches_every_clause(
     clauses: &std::collections::BTreeMap<String, Literal>,
 ) -> bool {
     clauses.iter().all(|(path, wanted)| {
-        let Some(found) = crate::mint::select(element, path) else {
+        let Some(found) = select(element, path) else {
             return false;
         };
         // Exactly one value, for `counted`'s reason one level up: a clause path
@@ -5539,7 +5488,7 @@ impl Declared {
     ///
     /// The two selectors, and their two different forgery controls: a `command`
     /// row is byte-equality against what the agent ran, because the agent chooses
-    /// the command; a `tool` row is [`crate::rules::selects_tool_name`], because
+    /// the command; a `tool` row is [`selects_tool_name`], because
     /// the agent does not choose what the host calls the tool it just ran.
     #[must_use]
     pub fn answered_here(&self, raw_tool: &str, command: &str) -> bool {
@@ -5548,7 +5497,7 @@ impl Declared {
             // As `answered_by`: refused at load, and the command's byte-equality is
             // the stricter of the two controls, so it is the one that decides.
             (Some(declared), Some(_ignored_tool)) => declared == command,
-            (None, Some(selector)) => crate::rules::selects_tool_name(selector, raw_tool),
+            (None, Some(selector)) => selects_tool_name(selector, raw_tool),
             (None, None) => false,
         }
     }
@@ -5805,7 +5754,7 @@ fn validate_one(fact: &Declared) -> anyhow::Result<()> {
     }
     // THE OTHER `returns`/`counts` CONTRADICTION, and it is mutually
     // unsatisfiable rather than merely contradictory. `json-array` requires the
-    // PAYLOAD ITSELF to be the array, and `crate::mint::select` resolves a
+    // PAYLOAD ITSELF to be the array, and `select` resolves a
     // named segment with `Value::get`, which answers `None` on an array — so
     // the pair reaches `Look::CouldNotLook` on every payload there can ever be,
     // and a check naming the row denies forever with no read that clears it.
@@ -5846,47 +5795,108 @@ fn validate_one(fact: &Declared) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Refuse a keying an agent-sourced record cannot be filed under (CLOUD-859).
+/// Every value a path selects, or `None` where the path does not resolve.
 ///
-/// `key` became load-bearing on this path when the record started honouring it,
-/// and exactly one of the three values is unreachable here. **The two halves run
-/// on different envelopes**: the record is WRITTEN on the post-tool event of the
-/// fact's own command — a shell call carrying a command line and nothing else —
-/// and READ on the mediated call the receipt row selects. A `head` or `branch`
-/// subject is a fact about the checkout and resolves identically at both moments;
-/// a `named` subject is projected out of the reading call's own arguments, which
-/// the writing call does not have.
+/// The grammar is dotted segments, where a segment ending `[]` iterates the array
+/// there. `None` and an EMPTY vector are different answers and the difference is
+/// what makes a zero-hit search still mint: a path that does not resolve is a
+/// payload this mint cannot read, while a path resolving to no elements is a real
+/// reading of nothing.
 ///
-/// So a `named` agent-sourced check would deny with a `Fix::Run`, the agent would
-/// run the command it names, and no record would be filed — a gate nobody can
-/// satisfy by doing what it asks. That is the failure this whole row exists to
-/// end, so it is refused at load rather than shipped as a column that reads as
-/// configured and files nothing.
+/// A `null` at the end of a path is `None` rather than a value, because every
+/// caller here is asking whether the result actually said something.
+/// `pub(crate)` since CLOUD-690: `facts::counted` walks a declared path over a
+/// tool result, and it is the SAME question this module already answers. A second
+/// walker would be a second path grammar — one accepting `[]` where the other
+/// does not, one treating an absent segment as null where the other refuses — and
+/// a config path meaning two things depending on which column it appears in is
+/// the drift this crate keeps recording.
 ///
-/// # Errors
-///
-/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the fact and the
-/// row. Pointer-only: two ids, never a command.
-pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyhow::Result<()> {
-    for rule in rules {
-        if rule.kind != crate::rules::RuleKind::Receipt
-            || rule.receipt_key() != crate::rules::ReceiptKey::Named
-        {
-            continue;
-        }
-        for check in rule.receipt_names() {
-            if facts.iter().any(|fact| &fact.name == check) {
-                return Err(crate::error::UsageError::raise(format!(
-                    "rule {}: `key = \"named\"` over the agent-sourced fact `{check}` — a named \
-                     subject is projected from the call this row SELECTS, and the record is \
-                     written on the post-tool event of the fact's own command, which carries no \
-                     such subject. No record could ever be filed, so the check would deny \
-                     forever and running the command it names would not satisfy it. Key it \
-                     `head` or `branch`.",
-                    rule.id
-                )));
+/// Housed in `facts` and re-exported from `crate::mint` (CLOUD-2789), so the
+/// module the engine reads facts through names no module above it.
+pub(crate) fn select<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<Vec<&'a serde_json::Value>> {
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        let (name, iterate) = match segment.strip_suffix("[]") {
+            Some(name) => (name, true),
+            None => (segment, false),
+        };
+        let mut next = Vec::new();
+        for value in current {
+            // An empty name is the top-level array's spelling (`[].id`), so the
+            // value is already the thing to iterate.
+            let value = if name.is_empty() {
+                value
+            } else {
+                value.get(name)?
+            };
+            if iterate {
+                next.extend(value.as_array()?);
+            } else {
+                next.push(value);
             }
         }
+        current = next;
     }
-    Ok(())
+    if current.iter().any(|value| value.is_null()) {
+        return None;
+    }
+    Some(current)
+}
+
+/// Whether `selector` names `raw_tool`: the whole name, or its whole final
+/// `__`-delimited segment.
+///
+/// **One authority, because two callers need the identical answer** (CLOUD-1024).
+/// [`crate::rules::Rule::selects_tool`] decides which rows adjudicate a call and
+/// [`crate::mint::Declared::tool`] decides which results mint a receipt; a rule
+/// that fires on a call whose result minted nothing is a gate nobody can satisfy,
+/// and that is exactly what two hand-rolled matchers would eventually produce.
+///
+/// Never a bare suffix: that would make `Edit` select `NotebookEdit`, widening a
+/// row onto a tool nobody named. The delimiter is what lets a selector survive
+/// the host rotating the server label it was minted under (CLOUD-178, CLOUD-665,
+/// CLOUD-684) — measured on one connector exposed under three names across
+/// registration episodes, where a row naming one matched none of the others and
+/// the miss was silent.
+///
+/// An empty selector is refused at load by both callers, so it cannot reach here
+/// and match the empty final segment of a name ending in `__`.
+#[must_use]
+pub fn selects_tool_name(selector: &str, raw_tool: &str) -> bool {
+    if raw_tool == selector {
+        return true;
+    }
+    // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
+    // built by formatting: the same answer without allocating a string per row
+    // per call, on the hottest path in the binary.
+    raw_tool
+        .strip_suffix(selector)
+        .is_some_and(|prefix| prefix.ends_with("__"))
+}
+
+/// A shell envelope's `stdout` then `stderr` members, concatenated, and how many
+/// of the two were strings.
+///
+/// A FIXED ORDER, declared here rather than taken from the map: two runs over one
+/// value must produce one digest (§6), and iteration order is not a promise a
+/// caller can rely on.
+///
+/// The one reader of that shape: [`crate::capture::decode_response`] stores an
+/// object response through it and the row counters here read a buffer through
+/// it. Housed in `facts` (CLOUD-2789) so `facts` names no module above it.
+#[must_use]
+pub fn shell_streams(map: &serde_json::Map<String, serde_json::Value>) -> (Vec<u8>, usize) {
+    let mut bytes = Vec::new();
+    let mut blocks = 0;
+    for key in ["stdout", "stderr"] {
+        if let Some(text) = map.get(key).and_then(serde_json::Value::as_str) {
+            bytes.extend_from_slice(text.as_bytes());
+            blocks += 1;
+        }
+    }
+    (bytes, blocks)
 }
