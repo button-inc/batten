@@ -224,7 +224,7 @@ fn push_to_supervisor(signal: crate::task::Signal, value: &str) {
     let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
         return;
     };
-    crate::task::push(&git_dir, &pid, signal, value, crate::boundary_epoch());
+    crate::task::push(&git_dir, &pid, signal, value, crate::clock::now_unix());
 }
 
 /// The row the keyed tree's own committed `batten.toml` declares for `step`.
@@ -332,7 +332,7 @@ fn material(
 
 /// The tool line the cache answers in-process rather than spawning: the
 /// digest `enforce --half tree --inputs-digest` prints, by the same function
-/// ([`crate::tree_inputs_digest_in`]).
+/// ([`tree_inputs_digest_in`]).
 pub const INPUTS_DIGEST: [&str; 5] = ["batten", "enforce", "--half", "tree", "--inputs-digest"];
 
 /// What `tool` says run in `root`, as its exit code and stdout: answered
@@ -344,7 +344,7 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
     let answered =
         |said: Option<String>| Some(said.map_or_else(|| (1, String::new()), |said| (0, said)));
     if tool.iter().map(String::as_str).eq(INPUTS_DIGEST) {
-        return answered(crate::tree_inputs_digest_in(root).ok());
+        return answered(tree_inputs_digest_in(root).ok());
     }
     if let Some(words) = after(tool, &BASE) {
         let var = |name: &str| std::env::var(name).ok();
@@ -635,7 +635,7 @@ fn record(
     // THE RUN'S WALL TIME RIDES THE RECEIPT (CLOUD-2776), between the stamp and
     // the key, so a hit can say what the run it stands for cost. The key stays
     // the last field, which is all `stored_key` reads.
-    let stamp = crate::receipt::rfc3339_utc(crate::boundary_epoch());
+    let stamp = crate::receipt::rfc3339_utc(crate::clock::now_unix());
     let receipt = elapsed.map_or_else(
         || format!("{stamp} {expected}\n"),
         |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
@@ -1442,6 +1442,107 @@ fn stage_line(step: &str, how: &str, millis: Option<u64>) -> String {
     format!("stage {step} {how} {seconds}")
 }
 
+/// The digest `enforce --half tree --inputs-digest` prints when run in `dir`,
+/// taken in-process: what the `[[step]]` cache keys that tool line on without
+/// spawning a build and a policy load for it (step 17, this module).
+///
+/// # Errors
+///
+/// As [`tree_inputs_digest`].
+pub fn tree_inputs_digest_in(dir: &Path) -> Result<String> {
+    tree_inputs_digest(&crate::config::anchor_at(dir))
+}
+
+/// The digest `run_inputs_digest` prints.
+///
+/// # Errors
+///
+/// When the baseline's path does not resolve under `root`.
+pub fn tree_inputs_digest(root: &Path) -> Result<String> {
+    fn frame(hasher: &mut blake3::Hasher, label: &str, bytes: Option<&[u8]>) {
+        hasher.update(label.as_bytes());
+        hasher.update(b"\0");
+        match bytes {
+            Some(bytes) => {
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
+            None => {
+                hasher.update(b"none");
+            }
+        }
+        hasher.update(b"\n");
+    }
+    let read =
+        |path: Option<std::path::PathBuf>| path.and_then(|path| crate::fsio::read(path).ok());
+    let mut hasher = blake3::Hasher::new();
+    frame(
+        &mut hasher,
+        "baseline",
+        read(crate::baseline::path(root)?).as_deref(),
+    );
+    let mut records: Vec<(String, Vec<u8>)> = crate::admission::store_dir(root)
+        .ok()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            Some((name, crate::fsio::read(entry.path()).ok()?))
+        })
+        .collect();
+    records.sort();
+    frame(
+        &mut hasher,
+        "admissions",
+        Some(&(records.len() as u64).to_le_bytes()),
+    );
+    for (name, bytes) in &records {
+        frame(&mut hasher, &format!("admission {name}"), Some(bytes));
+    }
+    for rev in ["HEAD", "HEAD^2"] {
+        let blocks = crate::git::commit_record(root, rev).ok().map(|record| {
+            let mut text = String::new();
+            for block in crate::admission::blocks(&record.body) {
+                text.push_str(&block.claimed);
+                text.push('\t');
+                text.push_str(&crate::admission::canonical(&block.binding));
+                text.push('\n');
+            }
+            text
+        });
+        frame(
+            &mut hasher,
+            &format!("blocks {rev}"),
+            blocks.as_deref().map(str::as_bytes),
+        );
+    }
+    frame(
+        &mut hasher,
+        "secret-key",
+        read(crate::secrets::key_path(root).ok()).as_deref(),
+    );
+    frame(
+        &mut hasher,
+        crate::resolve::LOCAL_CONFIG_FILE,
+        read(Some(root.join(crate::resolve::LOCAL_CONFIG_FILE))).as_deref(),
+    );
+    for name in crate::resolve::SETTINGS
+        .iter()
+        .filter_map(|setting| setting.env)
+    {
+        let value = std::env::var_os(name);
+        frame(
+            &mut hasher,
+            name,
+            value.as_ref().map(|value| value.as_encoded_bytes()),
+        );
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1852,7 +1953,7 @@ mod tests {
             .iter()
             .map(|word| (*word).to_owned())
             .collect();
-        let digest = crate::tree_inputs_digest_in(&root).unwrap();
+        let digest = tree_inputs_digest_in(&root).unwrap();
         assert_eq!(tool_said(&root, &native), Some((0, digest.clone())));
         let row = Step {
             id: String::from("s"),

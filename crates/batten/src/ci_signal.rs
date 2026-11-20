@@ -773,7 +773,7 @@ fn day_before(now: u64) -> Option<(String, i64)> {
 /// The repository slug and git directory, or the could-not-look a missing remote is.
 fn locate() -> Result<(Option<String>, std::path::PathBuf)> {
     let root = Path::new(".");
-    Ok((crate::repo_slug(root), crate::git::git_dir(root)?))
+    Ok((crate::race::repo_slug(root), crate::git::git_dir(root)?))
 }
 
 /// `batten record divergence`: measure the window and write `land-divergence`.
@@ -815,7 +815,7 @@ pub fn run_divergence(
         };
         (text.trim().to_owned(), at)
     } else {
-        let Some(window) = day_before(crate::now_unix()) else {
+        let Some(window) = day_before(crate::clock::now_unix()) else {
             crate::record::clear_named(DIVERGENCE, DIVERGENCE_FAMILY)?;
             writeln!(
                 err,

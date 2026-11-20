@@ -722,7 +722,7 @@ fn slug_or_say(
     verb: &str,
     err: &mut dyn std::io::Write,
 ) -> std::io::Result<Option<String>> {
-    let slug = crate::repo_slug(here);
+    let slug = crate::race::repo_slug(here);
     if slug.is_none() {
         writeln!(
             err,
@@ -822,7 +822,7 @@ pub fn run_in_flight(
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let now = i64::try_from(crate::now_unix()).unwrap_or(i64::MAX);
+    let now = i64::try_from(crate::clock::now_unix()).unwrap_or(i64::MAX);
     let flight = trunk(here)
         .and_then(|(_, short)| read_flight(&slug, (&short, workflows), now, LAND_HOLD_SECS, &get));
     match flight.map(|flight| in_flight(&flight)) {
