@@ -18,73 +18,73 @@ pub mod action;
 pub mod admission;
 pub mod advisory;
 pub mod agent;
-pub mod arm;
+pub use batten_base::arm;
 pub mod asked;
 pub mod attestation;
 pub mod attribution;
-pub mod background;
+pub use batten_base::background;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
 /// engine constants (non-negotiable rule 1, CLOUD-1623).
-pub mod board;
+pub use batten_base::board;
 /// Whether the board's columns, its dependency graph and its citations tell the
 /// truth about the work (CLOUD-1221).
 pub mod board_check;
 pub mod bot;
-pub mod brief;
+pub use batten_base::brief;
 pub mod budget;
 pub mod bypass;
 pub use batten_facts::cache;
 pub mod capture;
 /// Declared reductions over responses the agent already captured.
 pub mod captured;
-pub mod cargo_graph;
-pub mod carry;
+pub use batten_base::cargo_graph;
+pub use batten_base::carry;
 pub mod census;
-pub mod checks_green;
-pub mod ci;
+pub use batten_base::checks_green;
+pub use batten_base::ci;
 /// The CI-signal producers — landing divergence and non-verdict failures —
 /// walked over the forge and recorded for a module to decide over (CLOUD-843).
 pub mod ci_signal;
 pub mod ci_step;
 pub mod claim;
 pub mod cli;
-pub mod clock;
-pub mod codemod;
+pub use batten_base::clock;
+pub use batten_base::codemod;
 pub use batten_fsio as fsio;
 pub use batten_stream as stream;
 pub mod collect;
 pub mod commit;
 pub mod completion;
 pub mod config;
-pub mod config_edit;
+pub use batten_base::config_edit;
 pub mod contract;
 pub mod decision;
 pub mod defects;
-pub mod deferral;
+pub use batten_base::deferral;
 pub mod design;
 pub mod disk_watch;
 pub use batten_facts::dispatch;
 pub mod dist;
-pub mod doc;
+pub use batten_base::doc;
 pub mod doctor;
 pub mod drain;
+pub use batten_base::effect;
 pub use batten_facts::durable;
-pub mod effect;
 pub mod emission;
 pub mod engine;
-pub mod environment;
+pub use batten_base::environment;
 pub mod epoch;
 pub mod error;
 pub mod exec;
-pub mod exit;
-pub use batten_facts::facts;
+pub use batten_base::exit;
 /// Asking the fast-forward bot to land a head, and reading the answer keyed to
 /// THIS request rather than to a timestamp (CLOUD-1338).
-pub mod fast_forward;
-pub mod fetch;
+pub use batten_base::fast_forward;
+pub use batten_base::fetch;
+pub use batten_facts::facts;
 pub mod findings;
-pub mod forge;
+pub use batten_base::forge;
 /// Declared `[[forge.query]]` reads, walked and reduced into a record family a
 /// module decides over (CLOUD-843).
 pub mod forge_event;
@@ -92,7 +92,7 @@ pub mod forge_query;
 pub mod git;
 pub mod githook;
 pub mod gitwrite;
-pub mod graph;
+pub use batten_base::graph;
 pub mod handler;
 pub mod history;
 pub mod hk;
@@ -111,39 +111,39 @@ pub mod land;
 /// Whether a board column is honest about what git and the forge already did —
 /// behind git in one direction, ahead of a declined key in the other
 /// (CLOUD-186, CLOUD-1127).
-pub mod landed;
+pub use batten_base::landed;
 /// The landing lease's wire half: ref discovery and a compare-and-swap over a
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;
 pub mod lint;
-pub mod low_water;
+pub use batten_base::low_water;
 pub mod main_watch;
 pub mod markers;
 pub mod mcp;
 pub mod mcp_grant;
 pub mod mcp_posture;
 pub mod mint;
+pub use batten_base::module_graph;
 pub use batten_facts::minted;
-pub mod module_graph;
 pub mod mutate;
 pub mod o200k;
-pub mod outcome;
+pub use batten_base::outcome;
 pub mod output;
 pub mod outputs;
 /// The in-process patch identity: what a change IS, independent of the commit
 /// carrying it and of the host's git configuration.
-mod patch;
-pub mod pattern;
+use batten_base::patch;
+pub use batten_base::pattern;
 pub mod perf;
 pub mod pinned;
 pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
-pub mod preflight;
+pub use batten_base::preflight;
 pub mod preset;
 pub mod probe;
-pub mod probe_verdict;
-pub mod propose;
+pub use batten_base::probe_verdict;
+pub use batten_base::propose;
 pub mod provision;
 pub mod prune;
 pub mod race;
@@ -157,22 +157,22 @@ pub mod refusal;
 pub use batten_facts::register;
 pub mod release;
 pub mod release_guard;
-pub mod release_path;
+pub use batten_base::release_path;
 pub mod release_state;
 pub mod release_verify;
 pub mod released;
-pub mod remedy;
+pub use batten_base::remedy;
 pub mod render;
 pub mod repair;
 pub mod replay;
 pub mod resolve;
-pub mod rest;
+pub use batten_base::rest;
 pub mod review;
-pub mod ripcord;
+pub use batten_base::ripcord;
 pub mod rules;
 pub mod sbom;
+pub use batten_base::secret;
 pub use batten_facts::scratch;
-pub mod secret;
 pub mod secrets;
 pub mod selfwrite;
 /// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),
@@ -204,30 +204,30 @@ pub mod stop;
 pub mod store;
 pub mod stream_input;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
-pub mod suites;
+pub use batten_base::suites;
 pub mod surface;
 pub mod sweep;
 /// What a long-running task is doing, recorded where it can be read without a log.
-pub mod task;
+pub use batten_base::task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
 pub mod taskset;
 /// Decisions the test harness makes about a spawn, swept by `batten mutate`.
 #[doc(hidden)]
 pub mod testing;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
-pub mod tools;
+pub use batten_base::tools;
 /// The `tracker-hygiene` preset's readings: tracker payloads and a pull request
 /// body, reduced to the record families its modules decide over (CLOUD-843).
 pub mod tracker_reading;
 pub mod transcript;
-pub mod traversal;
+pub use batten_base::traversal;
 pub mod trust;
-pub mod turn;
+pub use batten_base::turn;
 pub mod unsubscribe;
+pub use batten_base::verbs;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.
 pub use batten_facts::uses;
-pub mod verbs;
 pub mod verdict;
 pub mod waiver;
 pub mod wiring;
@@ -697,9 +697,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The WORKTREE's tree, `census`' reasoning: the tests a branch changed
         // are the ones its checkout carries (CLOUD-2090).
         Some(Command::Test { command }) => match command {
-            cli::TestCommand::Replay { base, json } => {
+            cli::TestCommand::Replay {
+                base,
+                json,
+                structural,
+            } => {
                 let root = git::worktree_root(Path::new("."))?;
-                replay::run(&root, &base, json, out)
+                replay::run(&root, &base, json, structural, out)
             }
         },
         Some(Command::Forge { command }) => match command {

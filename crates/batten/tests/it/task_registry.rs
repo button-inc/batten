@@ -930,14 +930,14 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // the wrong root never reports a crash and looks exactly like one with nothing
 // to report.
 //
-// carried: mise-tasks/alive.sh crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
-// carried: tests/alive.bats crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
+// carried: mise-tasks/alive.sh crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
+// carried: tests/alive.bats crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
 //
 // carried: "nothing registered is a real answer, and exit 0" crates/batten/tests/it/task_registry.rs
 // carried: "a registry that exists but is empty still reports nothing registered" crates/batten/tests/it/task_registry.rs
 // carried: "a running task reports its task, phase, pid and age" crates/batten/tests/it/task_registry.rs
 // carried: "a line says how long the task has been in its phase, not only how long it has run" crates/batten/tests/it/task_registry.rs
-// carried: "an entry written before the phase stamp existed still renders" crates/batten/src/task.rs kind:mechanism
+// carried: "an entry written before the phase stamp existed still renders" crates/batten-base/src/task.rs kind:mechanism
 // carried: "N running tasks report one line each" crates/batten/tests/it/task_registry.rs
 // changed: "THE ACCEPTANCE CASE: an entry whose pid is gone reports crashed, and is reaped" crates/batten/tests/it/task_registry.rs the reader no longer reaps; the next land's reap_abandoned does (CLOUD-2372)
 // carried: "a live pid that is no longer the task that registered it reports crashed" crates/batten/tests/it/task_registry.rs
@@ -948,8 +948,8 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // carried: "output is byte-stable across runs for the same registry state" crates/batten/tests/it/task_registry.rs
 // carried: "THE PROPERTY: output is a pointer — never a line of any log" crates/batten/tests/it/task_registry.rs
 // carried: "THE PROPERTY: the reader never sends a signal" crates/batten/tests/it/task_registry.rs
-// carried: "CLOUD-901: a task whose FILE carries .sh and whose NAME does not is running" crates/batten/src/task.rs kind:mechanism
-// carried: "CLOUD-901: a sibling task whose name EXTENDS this one does not corroborate" crates/batten/src/task.rs kind:mechanism
+// carried: "CLOUD-901: a task whose FILE carries .sh and whose NAME does not is running" crates/batten-base/src/task.rs kind:mechanism
+// carried: "CLOUD-901: a sibling task whose name EXTENDS this one does not corroborate" crates/batten-base/src/task.rs kind:mechanism
 // carried: "CLOUD-901: a live pid that fails corroboration is reported, never reaped" crates/batten/tests/it/task_registry.rs
 // carried: "CLOUD-901: two consecutive calls over one live task say the same thing" crates/batten/tests/it/task_registry.rs
 //
@@ -974,8 +974,8 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // is for the READ codes, which callers branch on — and hiding a usage error
 // behind a policy verdict is the conflation the table exists to prevent.
 //
-// carried: mise-tasks/task-registry.sh crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs runs:batten+task
-// carried: tests/task-registry.bats crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
+// carried: mise-tasks/task-registry.sh crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs runs:batten+task
+// carried: tests/task-registry.bats crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
 //
 // carried: "register writes one entry per pid, carrying task, pid, pgid and a start time" crates/batten/tests/it/task_registry.rs
 // carried: "register defaults the phase rather than writing an empty one" crates/batten/tests/it/task_registry.rs

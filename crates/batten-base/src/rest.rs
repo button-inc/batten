@@ -73,7 +73,6 @@ const ACCEPT: &str = "application/vnd.github+json";
     Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
 #[serde(deny_unknown_fields)]
-#[non_exhaustive]
 pub struct Forge {
     /// The environment variables that may carry the forge credential, in
     /// precedence order.
@@ -462,7 +461,7 @@ static DECLARED: std::sync::OnceLock<Forge> = std::sync::OnceLock::new();
 /// Later calls are ignored rather than refused: a process loads one config, and a
 /// second load of the same file must not be able to change the credential a
 /// request in flight would use.
-pub(crate) fn declare(forge: Forge) {
+pub fn declare(forge: Forge) {
     let _ = DECLARED.set(forge);
 }
 
@@ -473,7 +472,7 @@ pub(crate) fn declare(forge: Forge) {
 /// own `Authorization` line over a different endpoint family — but it reads the
 /// credential through here, which is what keeps one answer to "which variable
 /// holds it" rather than two.
-pub(crate) fn declared_credential() -> Option<String> {
+pub fn declared_credential() -> Option<String> {
     credential(DECLARED.get())
 }
 
@@ -484,7 +483,7 @@ pub const NOTHING_GRADED_DEFAULT: &[u16] = &[422];
 /// Whether the consumer's effective `nothing_graded` covers `status`
 /// (CLOUD-2080). With no `[forge]`, or no key in it, that is
 /// [`NOTHING_GRADED_DEFAULT`].
-pub(crate) fn declared_nothing_graded(status: u16) -> bool {
+pub fn declared_nothing_graded(status: u16) -> bool {
     nothing_graded(DECLARED.get(), status)
 }
 
@@ -501,8 +500,8 @@ fn nothing_graded(forge: Option<&Forge>, status: u16) -> bool {
 }
 
 /// The forge this process declared, for a case asserting the declaration.
-#[cfg(test)]
-pub(crate) fn declared() -> Option<&'static Forge> {
+#[cfg(any(test, feature = "seam"))]
+pub fn declared() -> Option<&'static Forge> {
     DECLARED.get()
 }
 
@@ -541,7 +540,8 @@ pub(crate) fn declared() -> Option<&'static Forge> {
 /// **This is still the one reader**, promoted rather than copied — a second would
 /// be a second answer to "which variable holds the credential", and the four
 /// spawns this module replaces existed because nobody looked for the first.
-pub(crate) fn credential(forge: Option<&Forge>) -> Option<String> {
+#[must_use]
+pub fn credential(forge: Option<&Forge>) -> Option<String> {
     // **THE EMPTINESS TEST IS INSIDE THE CLOSURE, and outside it the fallback
     // above was a sentence the code did not implement** (review of #848).
     // `find_map` commits to the first variable that EXISTS, so a trailing
@@ -915,8 +915,8 @@ thread_local! {
 ///
 /// The previous scope is restored on the way out, unwinding included, so a
 /// case that panics leaves no fixture behind for the next one on the thread.
-#[cfg(test)]
-pub(crate) fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
+#[cfg(any(test, feature = "seam"))]
+pub fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
     /// Puts the scope it replaced back when dropped.
     struct Restore(Option<std::path::PathBuf>);
     impl Drop for Restore {
@@ -958,9 +958,15 @@ pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
 /// A fixture directory for [`with_fixture`] answering by endpoint: each
 /// `(needle, status, body)` answers the first request whose `<METHOD> <url>`
 /// contains `needle`, and a request no needle matches finds no answer.
-#[cfg(test)]
+///
+/// # Panics
+///
+/// When the fixture directory or its routes cannot be written, which fails
+/// the case that asked for it.
+#[cfg(any(test, feature = "seam"))]
 #[allow(clippy::expect_used)]
-pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::PathBuf {
+#[must_use]
+pub fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::PathBuf {
     use std::fmt::Write as _;
     let dir = crate::scratch::scratch(case);
     let mut table = String::new();
@@ -975,8 +981,9 @@ pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::Pat
 }
 
 /// What [`routed`]'s fixture was asked, one `<METHOD> <url>` per line.
-#[cfg(test)]
-pub(crate) fn asked(dir: &std::path::Path) -> String {
+#[cfg(any(test, feature = "seam"))]
+#[must_use]
+pub fn asked(dir: &std::path::Path) -> String {
     crate::fsio::read_to_string(dir.join("args")).unwrap_or_default()
 }
 

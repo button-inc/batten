@@ -18,7 +18,7 @@
 //! Apple framework and never compiled, made this gate refuse a link
 //! `darwin-link` then completed on the same tree (CLOUD-718).
 //!
-//! The walk is `crates/batten/src/cargo_graph.rs`, shared with
+//! The walk is `crates/batten-base/src/cargo_graph.rs`, shared with
 //! `evaluator-closure`; this gate's own half is the roots it starts from and the
 //! two `[[pattern]]` rows it reads once there. Both
 //! programs used to carry their own copy and both headers said "if one is
@@ -34,15 +34,15 @@
 // carried: tests/macos-link-check.bats policy/macos-link.rego kind:mechanism crates/batten/tests/it/macos_link.rs
 // carried: "the repo as it stands has no SDK-requiring dependency" policy/macos-link.rego kind:mechanism
 // carried: "a package declaring a native links key is caught without being listed" policy/macos-link.rego kind:mechanism
-// carried: "an optional dependency nobody enabled is not reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
-// carried: "the same optional dependency, once enabled, is reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
-// carried: "A WEAK REFERENCE IS NOT AN ACTIVATION: dep-question-mark leaves the dep dormant" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
+// carried: "an optional dependency nobody enabled is not reported" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
+// carried: "the same optional dependency, once enabled, is reported" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
+// carried: "A WEAK REFERENCE IS NOT AN ACTIVATION: dep-question-mark leaves the dep dormant" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/macos_link.rs
 // carried: "rule 2 still fires through the reachability walk" policy/macos-link.rego kind:mechanism
 // carried: "a vendored-C links crate is exempt from rule 1" policy/macos-link.rego kind:mechanism
 // carried: "an unvetted links crate is still reported, so the exemption is a list not a switch" policy/macos-link.rego kind:mechanism
 // carried: "the walk starts at the workspace members" policy/macos-link.rego kind:mechanism
 // changed: "the graph is resolved for macOS, not for the host" mise.toml the `--filter-platform aarch64-apple-darwin` flag is a property of the SPAWN, so it moved to `[tasks.macos-link-record]` with the `cargo metadata` call it qualifies, and since CLOUD-1991 it is that task's `resolve=aarch64-apple-darwin` input to the verb, which makes the spawn. The module reads whatever graph the producer recorded and cannot observe which platform it was resolved for; a case here would assert over input this surface cannot vary
-// withdrawn: "the framework crate list covers the ones that actually bit us" the case grepped the shell program's FRAMEWORK_CRATES literal for four names. The list is `crates/batten/src/cargo_graph.rs`'s now and the assertion was over a spelling rather than a behaviour — `rule_2_still_fires_through_the_reachability_walk` pins what the list is FOR, and a second case re-reading its text would re-break on every legitimate addition
+// withdrawn: "the framework crate list covers the ones that actually bit us" the case grepped the shell program's FRAMEWORK_CRATES literal for four names. The list is `crates/batten-base/src/cargo_graph.rs`'s now and the assertion was over a spelling rather than a behaviour — `rule_2_still_fires_through_the_reachability_walk` pins what the list is FOR, and a second case re-reading its text would re-break on every legitimate addition
 // withdrawn: "every vendored-links entry names a crate, so the pattern cannot be widened to a wildcard" the same shape one list over: it asserted that the VENDORED_LINKS regex contains no `.*`. `an_unvetted_links_crate_is_still_reported` is the behavioural statement of the same property — the exemption is a list rather than a switch — and it survives a rewrite of the pattern that the text assertion would not
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -142,7 +142,7 @@ fn record(dir: &std::path::Path, lines: &str) {
 
 /// Drive the REAL walk over a `cargo metadata` document, through the REAL verb.
 ///
-/// The activated-edge reachability lives in `crates/batten/src/cargo_graph.rs`
+/// The activated-edge reachability lives in `crates/batten-base/src/cargo_graph.rs`
 /// and is asserted by that module's own `#[cfg(test)] mod tests` — ONE walk,
 /// shared with `evaluator-closure`. Both programs used to carry their own copy
 /// and both headers said so in prose: *"if one is corrected, correct both."*

@@ -155,6 +155,7 @@ name = "batten"
 version = "0.0.222"
 dependencies = [
  "anyhow",
+ "batten-base",
  "batten-facts",
  "batten-fsio",
  "batten-stream",
@@ -221,6 +222,40 @@ dependencies = [
  "x509-cert",
  "yaml-rust2",
  "zip",
+]
+
+[[package]]
+name = "batten-base"
+version = "0.0.220"
+dependencies = [
+ "anyhow",
+ "batten-facts",
+ "batten-fsio",
+ "gix",
+ "gix-diff",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "imara-diff",
+ "ra_ap_syntax",
+ "regex",
+ "regex-syntax",
+ "rustix",
+ "rustls",
+ "rustls-graviola",
+ "rustls-pki-types",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 3.0.10",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -575,6 +575,8 @@ pub enum TestCommand {
         base: String,
         /// Emit the findings as one JSON document.
         json: bool,
+        /// Judge only removed tests, without building (CLOUD-2789).
+        structural: bool,
     },
 }
 
@@ -4179,6 +4181,7 @@ fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
         ("replay", matches) => Some(TestCommand::Replay {
             base: matches.get_one::<String>("base")?.clone(),
             json: matches.get_flag("json"),
+            structural: matches.get_flag("structural"),
         }),
         _ => None,
     }

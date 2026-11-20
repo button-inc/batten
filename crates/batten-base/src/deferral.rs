@@ -68,7 +68,6 @@ pub struct Deferral {
 /// The facts a deferral may compare against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum Fact {
     /// The workspace's `rust-version`.
     RustVersion,

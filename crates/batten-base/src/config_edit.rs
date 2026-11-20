@@ -277,7 +277,7 @@ fn split(path: &[String]) -> Result<(&[String], &str)> {
 ///
 /// The one spelling of that rule, for [`set`] and for every other TOML writer
 /// that edits a value in place (`engine update`, CLOUD-2279).
-pub(crate) fn replace_value(existing: &mut toml_edit::Value, new: toml_edit::Value) {
+pub fn replace_value(existing: &mut toml_edit::Value, new: toml_edit::Value) {
     let decor = existing.decor().clone();
     *existing = new;
     *existing.decor_mut() = decor;

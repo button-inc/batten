@@ -3532,7 +3532,8 @@ pub struct BaseDelta {
     ///
     /// # Bounded to `edited`, which is what keeps it affordable
     ///
-    /// Not `added` (there is no base side), not `deleted` (the head side is
+    /// Not `added` (there is no base side, save for a MOVED file, which carries
+    /// its old path's lines under its new one), not `deleted` (the head side is
     /// gone), and not every declared path — only the handful a branch actually
     /// moved. That is the same bound the remainder comparison above already
     /// pays: the blob is fetched for a path that changed, and this reuses the
@@ -3685,6 +3686,94 @@ pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The part of `path` below its last `src/`, which a file keeps when it moves
+/// between crates (`crates/a/src/x.rs` and `crates/b/src/x.rs` share `x.rs`):
+/// the one key [`base_delta`] and the test replay pair a move by (CLOUD-2789).
+#[must_use]
+pub fn below_src(path: &str) -> Option<&str> {
+    path.rfind("src/").map(|at| &path[at + "src/".len()..])
+}
+
+/// Each deleted path paired with the added path it MOVED to: the two share
+/// [`below_src`]'s tail, and each is the only one on its side with it
+/// (CLOUD-2789). Two new homes for one old file, or two old files for one new
+/// home, pair nothing: a copy or a merge is not a move.
+///
+/// The one pairing rule the test replay, [`base_delta`] and `config lint`'s
+/// move-aware comparison share, so the three gates cannot disagree about
+/// which file went where.
+#[must_use]
+pub fn pair_moves<'a>(
+    deleted: impl IntoIterator<Item = &'a String>,
+    added: impl IntoIterator<Item = &'a String>,
+) -> BTreeMap<String, String> {
+    let by_tail = |paths: &mut dyn Iterator<Item = &'a String>| {
+        let mut tails: BTreeMap<&'a str, Vec<&'a String>> = BTreeMap::new();
+        for path in paths {
+            if let Some(tail) = below_src(path) {
+                tails.entry(tail).or_default().push(path);
+            }
+        }
+        tails
+    };
+    let gone = by_tail(&mut deleted.into_iter());
+    let fresh = by_tail(&mut added.into_iter());
+    gone.iter()
+        .filter_map(
+            |(tail, olds)| match (olds.as_slice(), fresh.get(tail)?.as_slice()) {
+                ([old], [new]) => Some(((*old).clone(), (*new).clone())),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Every file moved between `rev` and the working tree's tracked set, old path
+/// to new, by [`pair_moves`].
+///
+/// # Errors
+///
+/// `dir` is not a repository, or `rev` does not resolve.
+pub fn moves_since(dir: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
+    let repository = open(dir)?;
+    let mut at_base: BTreeSet<String> = BTreeSet::new();
+    walk_blob_ids(&repository, rev, "**", |path, _| {
+        at_base.insert(path.to_owned());
+    })?;
+    let now = tracked_paths(dir)?;
+    Ok(pair_moves(
+        at_base.difference(&now),
+        now.difference(&at_base),
+    ))
+}
+
+/// `path` as it was spelled before `moves`: its old path when it moved, else
+/// the same path under the old directory where every move into its directory
+/// came from one directory (a file ADDED beside moved ones, like a new module
+/// in a crate cut out of another), else `path` itself.
+#[must_use]
+pub fn unmoved(path: &str, moves: &BTreeMap<String, String>) -> String {
+    if let Some((old, _)) = moves.iter().find(|(_, new)| new.as_str() == path) {
+        return old.clone();
+    }
+    let prefix = |full: &str| -> Option<String> {
+        let tail = below_src(full)?;
+        Some(full[..full.len() - tail.len()].to_owned())
+    };
+    let Some(here) = prefix(path) else {
+        return path.to_owned();
+    };
+    let sources: BTreeSet<String> = moves
+        .iter()
+        .filter(|(_, new)| prefix(new).as_deref() == Some(here.as_str()))
+        .filter_map(|(old, _)| prefix(old))
+        .collect();
+    match sources.into_iter().collect::<Vec<_>>().as_slice() {
+        [only] => format!("{only}{}", &path[here.len()..]),
+        _ => path.to_owned(),
+    }
+}
+
 /// Classify every path a declared glob selects as added, edited or deleted
 /// against `base` (CLOUD-1059).
 ///
@@ -3829,6 +3918,19 @@ pub fn base_delta(
         .filter(|path| selects(path) && !present.contains(*path))
         .cloned()
         .collect();
+    // A MOVED path keeps its base side (CLOUD-2789). An added path that is the
+    // one new home of a deleted one (the same path below its last `src/`, as a
+    // file moved between crates is) carries that file's base lines under its new
+    // path. Without them a module asking whether an edit GREW something reads a
+    // moved file as born whole: the `batten-base` cut moved a platform-gated
+    // test, and `test cover unseen` refused it as added.
+    for (source, path) in pair_moves(&delta.deleted, &delta.added) {
+        if let Some(id) = at_base.get(&source).copied() {
+            delta
+                .base_lines
+                .insert(path, base_text(id).lines().map(str::to_owned).collect());
+        }
+    }
     // A deleted path's head remainder is the empty one, which is what lets a
     // pure-prose deletion differ from a module deletion — see `code_changed`.
     for path in &delta.deleted {
@@ -7859,6 +7961,78 @@ mod tests {
         assert_eq!(delta.patch_id, None, "not asked for");
         assert!(delta.base_date.is_some());
         assert!(base_delta(&dir, "nope", &globs, false).unwrap().is_none());
+    }
+
+    /// Fails by: a move left unpaired, a copy or a merge paired as a move, or a
+    /// file added beside moved ones not traced to the directory they came from.
+    #[test]
+    fn a_move_pairs_one_to_one_and_an_added_neighbour_follows_its_directory() {
+        let own = |paths: &[&str]| paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        let deleted = own(&[
+            "crates/a/src/x.rs",
+            "crates/a/src/split.rs",
+            "crates/a/src/m1.rs",
+        ]);
+        let added = own(&[
+            "crates/b/src/x.rs",
+            "crates/b/src/split.rs",
+            "crates/c/src/split.rs",
+            "crates/b/src/new.rs",
+        ]);
+        let moves = pair_moves(&deleted, &added);
+        assert_eq!(
+            moves,
+            BTreeMap::from([(
+                "crates/a/src/x.rs".to_owned(),
+                "crates/b/src/x.rs".to_owned()
+            )])
+        );
+        assert_eq!(unmoved("crates/b/src/x.rs", &moves), "crates/a/src/x.rs");
+        assert_eq!(
+            unmoved("crates/b/src/new.rs", &moves),
+            "crates/a/src/new.rs"
+        );
+        assert_eq!(
+            unmoved("crates/c/src/split.rs", &moves),
+            "crates/c/src/split.rs"
+        );
+        assert_eq!(unmoved("README.md", &moves), "README.md");
+    }
+
+    /// Fails by: a file moved between crates read as born whole (no base
+    /// lines), or a deletion two new files could explain paired with one.
+    #[test]
+    fn a_moved_file_carries_its_base_lines_under_its_new_path() {
+        let dir = scratch("base-delta-moved");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        for path in ["a/src/x.rs", "a/src/twice.rs"] {
+            fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            fs::write(dir.join(path), "#[cfg(unix)]\n#[test]\nfn t() {}\n").unwrap();
+        }
+        let base = ["a/src/x.rs", "a/src/twice.rs"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&dir, &base, "base").expect("commit");
+        for path in ["a/src/x.rs", "a/src/twice.rs"] {
+            fs::remove_file(dir.join(path)).unwrap();
+        }
+        for path in ["b/src/x.rs", "b/src/twice.rs", "c/src/twice.rs"] {
+            fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            fs::write(dir.join(path), "#[cfg(unix)]\n#[test]\nfn t() {}\n").unwrap();
+        }
+        let delta = base_delta(&dir, "HEAD", &["**/*.rs".to_owned()], false)
+            .unwrap()
+            .expect("a delta");
+        assert_eq!(
+            delta.base_lines.get("b/src/x.rs").map(Vec::len),
+            Some(3),
+            "the one new home of a deleted file carries its base lines"
+        );
+        assert!(!delta.base_lines.contains_key("b/src/twice.rs"));
+        assert!(!delta.base_lines.contains_key("c/src/twice.rs"));
+        assert_eq!(
+            below_src("crates/batten/src/forge/mod.rs"),
+            Some("forge/mod.rs")
+        );
+        assert_eq!(below_src("README.md"), None);
     }
 
     /// Fails by: a repository with no `origin` asked about `origin` rather than

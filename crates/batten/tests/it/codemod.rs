@@ -11,7 +11,7 @@
 //! 8-space indentation are all there to be left alone.
 //
 // The obligations CLOUD-1580's Ready block binds. The rows themselves are swept
-// from `crates/batten/src/codemod.rs`, the file they mutate:
+// from `crates/batten-base/src/codemod.rs`, the file they mutate:
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -50,7 +50,7 @@ These load when you touch Rust; they do not need to be in context otherwise.
   `policy/nextest-slow.rego` refuses `retries` in the runner config. An
   override that schedules one case apart (`threads-required`, `test-group`)
   owes a tracker row directly above it, as a slow-timeout override does.
-- Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
+- Branch on the named `ExitCode` variants in `crates/batten-base/src/exit.rs`, never
   integer literals. One table, no per-verb exception: `2` is the policy verdict
   everywhere — a `check` violation and a `hook` deny alike — and `1`/`3` are the
   only codes a Batten failure produces, so no failure path can block a call.

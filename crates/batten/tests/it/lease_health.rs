@@ -28,7 +28,7 @@
 //! Giving the verb a body-injection lever to close that gap was considered and
 //! not done: it would be a second route to a verdict, present in every shipped
 //! binary, whose only consumer is a test — which is the shape
-//! `crates/batten/src/rest.rs`'s fixture seam is scoped to a client for
+//! `crates/batten-base/src/rest.rs`'s fixture seam is scoped to a client for
 //! deliberately. The exit-code mapping over all four `Health` arms is asserted
 //! instead where it lives, in `lib.rs`'s own module.
 

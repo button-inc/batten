@@ -17,7 +17,7 @@
 //! exit from `cargo test` means a compile error just as readily as a falsified
 //! assertion.
 //!
-//! Those three are now pinned where they belong: `crates/batten/src/probe_verdict.rs`
+//! Those three are now pinned where they belong: `crates/batten-base/src/probe_verdict.rs`
 //! carries the classification and asserts all of them — plus two the retired
 //! program never had, an unindented occurrence of the name and a longer name
 //! containing it — in its own `#[cfg(test)] mod tests`, over fabricated
@@ -33,15 +33,15 @@
 //!
 // carried: mise-tasks/evaluator-io-check.sh policy/evaluator-io-probe.rego kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: tests/evaluator-io-check.bats policy/evaluator-io-probe.rego kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "a probe build in which the test PASSES is the finding, not a pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "a probe build in which the test FAILS is the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "a probe build that failed to COMPILE is could-not-look, not the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "a probe build where the named test never ran is could-not-look" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "the probe build's own output never reaches the gate's output" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: tests/fixtures/evaluator-io/failing-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: tests/fixtures/evaluator-io/broken-build crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: tests/fixtures/evaluator-io/other-test-failed crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: tests/fixtures/evaluator-io/noisy-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build in which the test PASSES is the finding, not a pass" crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build in which the test FAILS is the pass" crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build that failed to COMPILE is could-not-look, not the pass" crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build where the named test never ran is could-not-look" crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "the probe build's own output never reaches the gate's output" crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/failing-probe crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/broken-build crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/other-test-failed crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/noisy-probe crates/batten-base/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "[tasks.evaluator-io-record] body" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "the probe's exit status and output reach the reading, never the record" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "a derivation that could not run is not a probe that said nothing" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
@@ -202,7 +202,7 @@ fn an_absent_record_says_nothing_rather_than_refusing() {
 
 /// Drive the REAL reading the producer runs, through the REAL verb.
 ///
-/// `crates/batten/src/probe_verdict.rs` is the one authority on the three
+/// `crates/batten-base/src/probe_verdict.rs` is the one authority on the three
 /// branches, and its own `#[cfg(test)] mod tests` asserts them directly over
 /// fabricated `(status, log)` pairs — that is where the classification is
 /// pinned, because a unit test can produce an arbitrary pair and a build cannot.
