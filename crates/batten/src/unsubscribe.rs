@@ -325,7 +325,7 @@ pub fn drop_subscription(
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
-                crate::repo_slug(Path::new("."))
+                crate::race::repo_slug(Path::new("."))
                     .as_deref()
                     .and_then(owner_repo)
             },

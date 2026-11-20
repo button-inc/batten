@@ -786,6 +786,53 @@ static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"(?i)^\s*refs:\s*\S+").unwrap()
 });
 
+/// The repository this lap is landing in, as the forge spells it.
+///
+/// # THE PLACEHOLDER WAS A GUARANTEED 404, NOT A FALLBACK
+///
+/// Nine sites read `$GH_REPO` and fell back to [`pr_watch::REPO_PLACEHOLDER`].
+/// That literal is the forge CLI's own substitution, performed inside the client
+/// the retirement removed — `rest::get` sends the path it is given, so
+/// `{owner}/{repo}` reached the endpoint verbatim, every read 404'd, and
+/// `open_pull_request` answered `None`. The caller then printed *"no open pull
+/// request for `<branch>`"*, which is a could-not-look wearing a fact about the
+/// branch, and `mise run land` stopped on it before its first lap (review of
+/// #848). One site had already been corrected in place; the fallback was the
+/// defect, so it is the fallback that moves.
+///
+/// **The remote is the answer, and it is one this clone already has.**
+/// [`slug_of`] reduces both spellings the forge hands out, and it refuses
+/// to guess rather than deriving a slug that would ask the forge confidently
+/// about a DIFFERENT repository. `$GH_REPO` still wins where it is set, because
+/// a fork landing into an upstream is a fact only the operator has.
+///
+/// `None` is could-not-look and callers must say so rather than reporting a
+/// verdict about the branch.
+///
+/// `pub(crate)` since CLOUD-843: `forge_query` binds a `[[forge.query]]` row's
+/// `{owner}`/`{repo}` from it, and a second derivation of the slug would be a
+/// second answer to which repository a forge read is about.
+pub fn repo_slug(root: &std::path::Path) -> Option<String> {
+    if let Ok(declared) = std::env::var("GH_REPO")
+        && !declared.trim().is_empty()
+    {
+        return Some(declared);
+    }
+    // `LAND_LOCK_REMOTE`, which is what every sibling reads — `lease::terms`,
+    // the `lease` dispatch and `run_land_fast_forward` all resolve the remote by
+    // that name. This said `LAND_REMOTE`, a name appearing nowhere else in the
+    // tree, so a consumer pointing the lease at `upstream` would take the lease,
+    // fetch, push and delete against `upstream` while this looked up `origin` —
+    // resolving the wrong slug, or none, and falling back to the placeholder this
+    // function exists to remove (review of #848).
+    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
+    let remotes = crate::git::remotes(root).ok()?;
+    remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .and_then(|(_, url)| slug_of(url))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

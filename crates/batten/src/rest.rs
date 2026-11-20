@@ -851,7 +851,7 @@ pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
                 body: None,
             },
             None,
-            crate::now_unix(),
+            crate::clock::now_unix(),
         )?;
         return Some((answer.status, answer.body.into_bytes()));
     }
@@ -951,7 +951,7 @@ pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
             body: None,
         },
         None,
-        crate::now_unix(),
+        crate::clock::now_unix(),
     )
 }
 
@@ -1137,7 +1137,7 @@ fn wire(etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Wire {
 }
 
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
-    let now = crate::now_unix();
+    let now = crate::clock::now_unix();
     let url = format!("{API}/{path}");
     if let Some(dir) =
         scoped_fixture().or_else(|| std::env::var_os(FIXTURE).map(std::path::PathBuf::from))
