@@ -651,7 +651,7 @@ fn sourced_store_in(
         None
     };
     // `named` over an agent-sourced check is REFUSED AT LOAD
-    // (`facts::validate_keying`), so this is reachable only from a policy
+    // (`rules::validate_keying`), so this is reachable only from a policy
     // assembled in-process. Resolved anyway rather than left to a wildcard arm
     // below: `_ =>` would silently absorb a fourth keying, which is the shape
     // `facts.rs`'s own no-wildcard scan exists to refuse.
@@ -667,7 +667,7 @@ fn sourced_store_in(
             ReceiptKey::Branch => branch.clone()?,
             ReceiptKey::Named => named.clone()?,
             // `delta` over an agent-sourced check is REFUSED AT LOAD
-            // (`facts::validate_keying`) for the reason `named` is, one step
+            // (`rules::validate_keying`) for the reason `named` is, one step
             // further along: the identity needs the row's `key_base`, and a
             // `[[fact]]` row has no such column to read one from. So this is
             // reachable only from a policy assembled in-process, and it answers
@@ -687,7 +687,7 @@ fn sourced_store_in(
 /// sides ask on different calls: the read resolves subjects for the checks a
 /// mediated call requires, and the write resolves one for the fact whose command
 /// just ran. That difference is exactly why
-/// [`crate::facts::validate_keying`] refuses `named` for an agent-sourced
+/// [`crate::rules::validate_keying`] refuses `named` for an agent-sourced
 /// check — this envelope carries no subject to project — so the third arm is
 /// unreachable through a loaded config and is written out rather than wildcarded.
 fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
