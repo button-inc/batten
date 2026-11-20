@@ -860,6 +860,57 @@ impl Summary for Tally {
     }
 }
 
+// `Extraction::of` lives here rather than in `crate::facts` (CLOUD-2789): the
+// decision reads this module's `Summary`, and housing it beside `Summary`
+// keeps `facts` from naming `transcript`. The method path is unchanged.
+impl crate::facts::Extraction {
+    /// This extraction's answer over a parsed stream, or `None` where this host
+    /// records none of the events it reduces.
+    ///
+    /// **`None` is COULD-NOT-LOOK and it is decided here** (CLOUD-1344). Zero is
+    /// a real answer meaning the extractor ran, so an extraction whose underlying
+    /// event kind never appears must not report one: "zero repeats" over a
+    /// two-hundred-call session is a false green over a session nobody measured.
+    /// Deciding it in the engine rather than as a per-module conjunct is what
+    /// keeps it from being a dead gate on every harness but the one its author
+    /// tested.
+    ///
+    /// Takes the whole `Stream` rather than `Counts` because the members divide:
+    /// the totals come from [`Stream::counts`] and the runs from
+    /// [`Stream::repeats`], and `Counts` is the `-J` capability report's own
+    /// shape rather than this family's.
+    ///
+    /// Exhaustive with no wildcard arm, like every other axis match in this
+    /// module: a member added later decides here or fails to compile, rather than
+    /// defaulting to a count of something else.
+    ///
+    /// Generic over [`Summary`] so the hook's incremental
+    /// [`Tally`] is read by this same decision (CLOUD-2315).
+    #[must_use]
+    pub fn of(self, stream: &impl Summary) -> Option<usize> {
+        let records = stream.records();
+        let recorded = |kind: Kind| records.contains(&kind);
+        match self {
+            Self::Turns => recorded(Kind::Turns).then(|| stream.counts().turns),
+            Self::ToolCalls => recorded(Kind::ToolCalls).then(|| stream.counts().tool_calls),
+            Self::ToolErrors => recorded(Kind::ToolResults).then(|| stream.counts().tool_errors),
+            Self::HookDecisions => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_decisions)
+            }
+            Self::HookDenials => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_denials)
+            }
+            Self::AgentTurnRun => recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run),
+            Self::UnansweredHumanCalls => {
+                recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
+            }
+            // Gated on the kind it counts, as `ToolCalls` is: a host recording no
+            // tool calls cannot say a plan was never presented.
+            Self::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
+        }
+    }
+}
+
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {

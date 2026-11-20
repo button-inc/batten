@@ -43,6 +43,51 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+/// A mediated call refused by policy: maps to [`ExitCode::Violation`] (exit `2`)
+/// with the reason on stderr, which is what a hook host reads as the deny.
+///
+/// [`ExitCode::Violation`]: crate::ExitCode::Violation
+///
+/// **ONLY A [`Refusal`] MAKES ONE (CLOUD-2078).** The field is private and both
+/// constructors take a classed refusal and the arm to render, so nothing
+/// outside this module can build a verdict from prose, which the compiler
+/// rather than a review decides.
+///
+/// It lives here, beside [`Refusal`], rather than in [`crate::error`], so the
+/// module every other one reports through names no refusal (CLOUD-2789).
+#[derive(Debug)]
+pub struct Denial(String);
+
+impl std::fmt::Display for Denial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Denial {}
+
+impl Denial {
+    /// Build a [`Denial`] as an [`anyhow::Error`], ready to `return Err(..)`.
+    ///
+    /// Named `raise` for symmetry with [`crate::UsageError::raise`]: it returns an
+    /// [`anyhow::Error`] wrapping the `Denial`, not `Self`.
+    #[must_use]
+    pub fn raise(refusal: &Refusal, arm: Arm) -> anyhow::Error {
+        anyhow::Error::new(Denial(refusal.render_finding(arm)))
+    }
+
+    /// [`Denial::raise`] opening with the reading legend, for the first finding
+    /// of a context's epoch (CLOUD-2145).
+    #[must_use]
+    pub fn raise_opened(refusal: &Refusal, arm: Arm, legend: Option<&str>) -> anyhow::Error {
+        let rendered = refusal.render_finding(arm);
+        anyhow::Error::new(Denial(match legend {
+            Some(legend) => format!("{legend}\n{rendered}"),
+            None => rendered,
+        }))
+    }
+}
+
 /// The `[refusal]` table: what one emitted mediated line may cost.
 ///
 /// **Declared, never a literal in the crate** (non-negotiable rule 2, and the
@@ -1021,7 +1066,7 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
 
 /// A CLI failure as one classed finding (CLOUD-2078), plus the diagnosis lines
 /// that follow it: `None` for a [`crate::error::Passthrough`] (no output of
-/// Batten's own) or a [`crate::error::Denial`] (already a rendered finding).
+/// Batten's own) or a [`crate::refusal::Denial`] (already a rendered finding).
 ///
 /// A [`crate::UsageError`] is its declared class, or `input parse refused`; any
 /// other error is `verb run broken` with its chain as subjects, outermost first.
@@ -1032,7 +1077,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     if failure
         .downcast_ref::<crate::error::Passthrough>()
         .is_some()
-        || failure.downcast_ref::<crate::error::Denial>().is_some()
+        || failure.downcast_ref::<crate::refusal::Denial>().is_some()
     {
         return None;
     }
@@ -1933,7 +1978,7 @@ mod tests {
     fn a_passthrough_or_a_denial_is_no_failure_to_render() {
         assert!(of_failure(&crate::error::Passthrough::raise(3)).is_none());
         let refusal = Refusal::new("g", "r", Fix::None);
-        assert!(of_failure(&crate::error::Denial::raise(&refusal, Arm::Full)).is_none());
+        assert!(of_failure(&crate::refusal::Denial::raise(&refusal, Arm::Full)).is_none());
     }
 
     /// Fails by: two refusals that differ in more than their subjects folded

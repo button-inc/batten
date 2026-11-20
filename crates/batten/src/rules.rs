@@ -3163,35 +3163,54 @@ pub enum SinkKey {
     Branch,
 }
 
-/// Whether `selector` names `raw_tool`: the whole name, or its whole final
-/// `__`-delimited segment.
+// Housed in `crate::facts` (CLOUD-2789), which reads it too; the path here is
+// unchanged.
+pub use crate::facts::selects_tool_name;
+
+/// Refuse a keying an agent-sourced record cannot be filed under (CLOUD-859).
 ///
-/// **One authority, because two callers need the identical answer** (CLOUD-1024).
-/// [`Rule::selects_tool`] decides which rows adjudicate a call and
-/// [`crate::mint::Declared::tool`] decides which results mint a receipt; a rule
-/// that fires on a call whose result minted nothing is a gate nobody can satisfy,
-/// and that is exactly what two hand-rolled matchers would eventually produce.
+/// `key` became load-bearing on this path when the record started honouring it,
+/// and exactly one of the three values is unreachable here. **The two halves run
+/// on different envelopes**: the record is WRITTEN on the post-tool event of the
+/// fact's own command — a shell call carrying a command line and nothing else —
+/// and READ on the mediated call the receipt row selects. A `head` or `branch`
+/// subject is a fact about the checkout and resolves identically at both moments;
+/// a `named` subject is projected out of the reading call's own arguments, which
+/// the writing call does not have.
 ///
-/// Never a bare suffix: that would make `Edit` select `NotebookEdit`, widening a
-/// row onto a tool nobody named. The delimiter is what lets a selector survive
-/// the host rotating the server label it was minted under (CLOUD-178, CLOUD-665,
-/// CLOUD-684) — measured on one connector exposed under three names across
-/// registration episodes, where a row naming one matched none of the others and
-/// the miss was silent.
+/// So a `named` agent-sourced check would deny with a `Fix::Run`, the agent would
+/// run the command it names, and no record would be filed — a gate nobody can
+/// satisfy by doing what it asks. That is the failure this whole row exists to
+/// end, so it is refused at load rather than shipped as a column that reads as
+/// configured and files nothing.
 ///
-/// An empty selector is refused at load by both callers, so it cannot reach here
-/// and match the empty final segment of a name ending in `__`.
-#[must_use]
-pub fn selects_tool_name(selector: &str, raw_tool: &str) -> bool {
-    if raw_tool == selector {
-        return true;
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the fact and the
+/// row. Pointer-only: two ids, never a command.
+///
+/// Housed in `rules` rather than `crate::facts` (CLOUD-2789): it reads rule rows,
+/// and `facts` names no module above it.
+pub fn validate_keying(facts: &[crate::facts::Declared], rules: &[Rule]) -> anyhow::Result<()> {
+    for rule in rules {
+        if rule.kind != RuleKind::Receipt || rule.receipt_key() != ReceiptKey::Named {
+            continue;
+        }
+        for check in rule.receipt_names() {
+            if facts.iter().any(|fact| &fact.name == check) {
+                return Err(crate::error::UsageError::raise(format!(
+                    "rule {}: `key = \"named\"` over the agent-sourced fact `{check}` — a named \
+                     subject is projected from the call this row SELECTS, and the record is \
+                     written on the post-tool event of the fact's own command, which carries no \
+                     such subject. No record could ever be filed, so the check would deny \
+                     forever and running the command it names would not satisfy it. Key it \
+                     `head` or `branch`.",
+                    rule.id
+                )));
+            }
+        }
     }
-    // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
-    // built by formatting: the same answer without allocating a string per row
-    // per call, on the hottest path in the binary.
-    raw_tool
-        .strip_suffix(selector)
-        .is_some_and(|prefix| prefix.ends_with("__"))
+    Ok(())
 }
 
 /// A git fact a rule declares reading, for the three variants that take no
@@ -7024,7 +7043,7 @@ enum Isolated {
 ///   "Batten could not answer" about a file they can fix, and would silently
 ///   move a landed contract (`enforce`'s missing-binary refusal) from `1` to
 ///   `3`;
-/// * a [`crate::error::Denial`] is a **verdict**. Containing it would downgrade
+/// * a [`crate::refusal::Denial`] is a **verdict**. Containing it would downgrade
 ///   a decided refusal into an infrastructure complaint — the identical mistake
 ///   CLOUD-126's own precedence row exists to refuse, arriving one layer down.
 ///
@@ -7048,7 +7067,7 @@ fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolat
         Ok(Ok(Some(why))) => Isolated::NotEvaluated(why),
         Ok(Err(failure)) => {
             if failure.downcast_ref::<UsageError>().is_some()
-                || failure.downcast_ref::<crate::error::Denial>().is_some()
+                || failure.downcast_ref::<crate::refusal::Denial>().is_some()
             {
                 Isolated::Propagate(failure)
             } else {
@@ -17483,7 +17502,7 @@ mod tests {
             Isolated::Propagate(_)
         ));
         assert!(matches!(
-            isolate(|| Err(crate::error::Denial::raise(
+            isolate(|| Err(crate::refusal::Denial::raise(
                 &crate::refusal::Refusal::new("r", "refused", crate::refusal::Fix::None),
                 crate::refusal::Arm::Full,
             ))),

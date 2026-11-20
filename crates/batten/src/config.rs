@@ -2881,7 +2881,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // The cross-table half (CLOUD-859), which needs both lists and so cannot live
     // in either one's own validator: a `named` receipt row over an agent-sourced
     // check is a gate no record can satisfy.
-    crate::facts::validate_keying(&config.facts, &config.rules)?;
+    crate::rules::validate_keying(&config.facts, &config.rules)?;
     under(
         Native::MintTableRefused,
         crate::mint::validate(&config.mints),

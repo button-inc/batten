@@ -993,7 +993,7 @@ pub fn authority_violations(
 /// [`Layered::raise`] refuses an **invocation**, which is exit `1`, where this
 /// refuses what the **repository** resolved to — the statement exit `2` is for.
 ///
-/// [`Denial`]: crate::error::Denial
+/// [`Denial`]: crate::refusal::Denial
 #[must_use]
 pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Error> {
     let first = violations.first()?;
@@ -1012,7 +1012,7 @@ pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Er
         &subjects,
         crate::refusal::Fix::None,
     );
-    Some(crate::error::Denial::raise(
+    Some(crate::refusal::Denial::raise(
         &refusal,
         crate::refusal::Arm::Full,
     ))

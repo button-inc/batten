@@ -380,54 +380,9 @@ fn piece_for(token: &str) -> Result<Piece, String> {
     }
 }
 
-/// Every value a path selects, or `None` where the path does not resolve.
-///
-/// The grammar is dotted segments, where a segment ending `[]` iterates the array
-/// there. `None` and an EMPTY vector are different answers and the difference is
-/// what makes a zero-hit search still mint: a path that does not resolve is a
-/// payload this mint cannot read, while a path resolving to no elements is a real
-/// reading of nothing.
-///
-/// A `null` at the end of a path is `None` rather than a value, because every
-/// caller here is asking whether the result actually said something.
-/// `pub(crate)` since CLOUD-690: `facts::counted` walks a declared path over a
-/// tool result, and it is the SAME question this module already answers. A second
-/// walker would be a second path grammar — one accepting `[]` where the other
-/// does not, one treating an absent segment as null where the other refuses — and
-/// a config path meaning two things depending on which column it appears in is
-/// the drift this crate keeps recording.
-pub(crate) fn select<'a>(
-    value: &'a serde_json::Value,
-    path: &str,
-) -> Option<Vec<&'a serde_json::Value>> {
-    let mut current = vec![value];
-    for segment in path.split('.') {
-        let (name, iterate) = match segment.strip_suffix("[]") {
-            Some(name) => (name, true),
-            None => (segment, false),
-        };
-        let mut next = Vec::new();
-        for value in current {
-            // An empty name is the top-level array's spelling (`[].id`), so the
-            // value is already the thing to iterate.
-            let value = if name.is_empty() {
-                value
-            } else {
-                value.get(name)?
-            };
-            if iterate {
-                next.extend(value.as_array()?);
-            } else {
-                next.push(value);
-            }
-        }
-        current = next;
-    }
-    if current.iter().any(|value| value.is_null()) {
-        return None;
-    }
-    Some(current)
-}
+// Housed in `crate::facts` (CLOUD-2789), which walks the same paths; the path
+// here is unchanged.
+pub(crate) use crate::facts::select;
 
 /// The single scalar a path selects, rendered as a bare string.
 ///
