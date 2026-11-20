@@ -2555,7 +2555,11 @@ mod tests {
         }
         // UNIQUE TO THIS RUN, so no record an earlier run left behind can
         // answer the read-back for this one.
-        let name = format!("batten-unit-{}-{}", std::process::id(), crate::now_unix());
+        let name = format!(
+            "batten-unit-{}-{}",
+            std::process::id(),
+            crate::clock::now_unix()
+        );
         let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let _written = Removed(store.path(&name).unwrap());
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();

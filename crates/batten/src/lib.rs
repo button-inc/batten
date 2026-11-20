@@ -49,6 +49,7 @@ pub mod ci_signal;
 pub mod ci_step;
 pub mod claim;
 pub mod cli;
+pub mod clock;
 pub mod codemod;
 pub use batten_fsio as fsio;
 pub use batten_stream as stream;
@@ -6776,9 +6777,7 @@ fn run_singleton(
 /// verdict — and `--instant` is what lets a caller take the clock out even of
 /// that, so two calls over one registry state produce identical bytes.
 fn boundary_epoch() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
+    clock::now_unix()
 }
 
 /// The instant a reader measures ages against: supplied, or the boundary's.
@@ -8933,13 +8932,11 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
 /// The out-of-tree receipt directory both halves of the claim protocol share.
 const RECEIPT_DIR: &str = "batten-receipts";
 
-/// Seconds since the epoch, or zero where the clock will not read — a timestamp
-/// nobody can produce is recorded as one rather than refusing the claim.
-pub(crate) fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-}
+use clock::now_unix;
+use config::anchor_at;
+use lease::identity as lease_identity;
+pub use policy::case as policy_case;
+use race::repo_slug;
 
 /// Standard base64, unpadded-free (RFC 4648 with `=` padding).
 ///
@@ -9720,113 +9717,6 @@ impl SuiteReport {
             bare_only_modules: Vec::new(),
         }
     }
-}
-
-/// Run each registered module's own `test_` rules (CLOUD-835).
-///
-/// **The gap this closes.** `crates/batten/tests/it/policy_modules.rs` exercises
-/// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
-/// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
-/// cases onto policy rows, and CLOUD-202 measured the trap that makes an
-/// untested port worse than none — the shell tasks spell `1 = violation,
-/// 2 = could not read` and this contract is the exact inverse.
-///
-/// **The fixture is the row's own `documents`.** No new config key: CLOUD-833
-/// already gave a tree-scoped policy row the documents it hands its bundle, and
-/// `rules::tree_document` already parses them and returns the ones the tree does
-/// not carry rather than guessing. Non-negotiable 6 keeps configuration narrow,
-/// and this is the reuse that honours it.
-///
-/// # Exit codes, and the two faults kept apart
-///
-/// `2` when a test failed or a published predicate went unexercised — the row's
-/// §7(b) is explicit that the latter is *"reported, not green"*. `1` when the
-/// suite could not run: a declared fixture the tree does not carry, or a sweep
-/// that did not happen. Separating them is CLOUD-202's whole lesson, and
-/// `tests/policy_test.rs` asserts each independently so the port cannot
-/// reintroduce the inversion it exists to avoid.
-///
-/// # Errors
-///
-/// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
-/// module will not load — both refused by [`policy::load`] with their own
-/// message, at the boundary where a config fault belongs.
-/// The tree input one policy suite runs against.
-///
-/// Split out of [`run_policy_test`] so that function reads as a loop over rows;
-/// what it holds is the pair of deliberate omissions, which are easier to see
-/// stated together than buried in an argument list.
-///
-/// **A SUITE RUNS AGAINST NO PRODUCED RECORD** (CLOUD-851). A module's tests must
-/// decide the same way on every machine, and the sink store is per-checkout state
-/// that differs between them — so a test that wants a baseline supplies it with
-/// `with input as`, the same way a mediated-call suite supplies its call.
-///
-/// **AND AGAINST NO GIT FACT**, for exactly the same reason (CLOUD-907). HEAD, the
-/// branch, the remotes and whether a ref resolves are all per-checkout state: a
-/// suite that read them would pass on the author's machine and fail in CI's
-/// detached, remote-less clone, which is a test asserting its environment rather
-/// than its module.
-fn suite_input(
-    rule: &rules::Rule,
-    documents: &std::collections::BTreeMap<(String, rules::Wanted), rules::Acquired>,
-    tracked: &[String],
-) -> Result<(String, Vec<(String, rules::NotAcquired)>)> {
-    // A mediated-call row declares no documents, so its tests run against `{}`
-    // and supply their own input with `with input as` — OPA and Conftest's own
-    // shape, and the reason neither surface needs a fixture key.
-    Ok(rules::tree_document(
-        documents,
-        &rules::Declared {
-            documents: &rules::declared_documents(rule, tracked)?,
-            lines: &rules::declared_lines(rule, tracked)?,
-            invocations: &rules::declared_invocations(rule, tracked)?,
-            uses: &rules::declared_uses(rule, tracked)?,
-            // EMPTY, unlike its neighbours above, and the asymmetry is the
-            // point (CLOUD-1167). `documents` and the three beside it name paths
-            // INSIDE the repository, so a declared one that is missing is a
-            // fixture the author owes. An `[[rule.external]]` row names a file
-            // outside it — a launcher's settings, a toolchain's data directory —
-            // which is legitimately absent on a CI runner, in a fresh container,
-            // and on any host that does not run that launcher. Resolving the
-            // declared list here would report every such host as a missing
-            // fixture and fail `policy test` for a file the module's own `test_`
-            // rules never read: they supply their input with `with input as`,
-            // which is what this call is building the SHAPE for.
-            //
-            // Whether a declared out-of-root file actually resolves is `check`'s
-            // question, and `check` answers it the way the family requires — the
-            // id goes to `input.tree.missing` with its cause and the row is
-            // skipped, rather than running against a fabricated empty document.
-            // EMPTY for `external`'s reason: a staged read needs an index this
-            // shape-building call has no reason to open.
-            staged: &[],
-            // Nothing to fall back FOR: the list above is empty, so no path ever
-            // reaches the extension test this would answer.
-            staged_format: None,
-            external: &[],
-        },
-        tracked,
-        // A module's own `test_` rules supply their input with `with input as`,
-        // so every member here is empty for one reason: this call builds the
-        // SHAPE, and the case chooses the values.
-        &rules::Resolved {
-            traversals: &serde_json::Value::Null,
-            review: &crate::facts::Look::IsNot,
-            produced: &std::collections::BTreeMap::new(),
-            records: &std::collections::BTreeMap::new(),
-            records_blocked: &std::collections::BTreeMap::new(),
-            git: &git::GitFacts::default(),
-            symbols: &facts::Look::IsNot,
-            external: &std::collections::BTreeMap::new(),
-            state: None,
-            forge: None,
-            tool_verdicts: None,
-            plan: None,
-            minted: None,
-            captured: None,
-        },
-    ))
 }
 
 /// Print the tool names the `mediated_call` rows decide (CLOUD-312 row 4).
@@ -11066,69 +10956,6 @@ fn explain_json(
     })
 }
 
-/// Whether one policy module's own `test_<case>` rule passes under `root`'s
-/// committed config: `Some(true)` passed, `Some(false)` failed, `None` when no
-/// registered rule's module is `module` or the module declares no such test
-/// (CLOUD-2255).
-///
-/// THE MUTATION SWEEP'S REGO SUITE, IN PROCESS. A `#MUTANT` row in a module
-/// that names one of the module's own tests is judged by that test, the way
-/// `opa test --run` selects one: through the same load, input and evaluator
-/// `policy test` uses, over the staged (mutated) tree, so the registry data the
-/// module reads is supplied and nothing is spawned. Conftest, the other `.rego`
-/// suite, supplies none of it.
-///
-/// # Errors
-///
-/// When the config under `root` does not resolve or a bundle does not load:
-/// could-not-look, never a pass.
-pub fn policy_case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
-    let config = resolve::resolve(root, &resolve::Overrides::default())?;
-    let Some(rule) = config.rules.iter().find(|rule| {
-        rule.kind == rules::RuleKind::Policy && rule.module.as_deref() == Some(module)
-    }) else {
-        return Ok(None);
-    };
-    // EVERY ROW LOADED, ONE EVALUATED: the registry check holds the declared
-    // verdicts against the raisers among the loaded bundles, so loading the one
-    // row would refuse every class another module raises.
-    let bundles = policy::load(
-        root,
-        &config.rules,
-        policy::Vocabulary {
-            patterns: &config.patterns,
-            verdicts: &config.verdicts,
-            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
-            recorders: &config.recorders,
-            registers: &config.registers,
-            traversals: &config.traversals,
-            records: &config.records,
-        },
-        policy::ModuleChecks::Run,
-        None,
-    )?;
-    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
-        return Ok(None);
-    };
-    let tracked = rules::tree_files(root)?;
-    let documents = rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
-    let (input, _) = suite_input(rule, &documents, &tracked)?;
-    let facts::Look::Is(suite) =
-        policy::test(bundle, &input, rule.scope == rules::RuleScope::MediatedCall)?
-    else {
-        return Ok(None);
-    };
-    let name = format!("test_{case}");
-    let named = |ids: &[policy::TestId]| ids.iter().any(|id| id.name == name);
-    Ok(if named(&suite.passed) {
-        Some(true)
-    } else if named(&suite.failed) {
-        Some(false)
-    } else {
-        None
-    })
-}
-
 // The length is the four report terms rendered in two output shapes, and the
 // exit derivation beneath them. Splitting the rendering out would separate the
 // terms from the verdict they feed, which is exactly the drift the exit
@@ -11192,7 +11019,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let (input, not_acquired) = suite_input(rule, &documents, &tracked)?;
+        let (input, not_acquired) = policy::suite_input(rule, &documents, &tracked)?;
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four
@@ -14327,53 +14154,6 @@ fn landed_for_real(
     }
 }
 
-/// The repository this lap is landing in, as the forge spells it.
-///
-/// # THE PLACEHOLDER WAS A GUARANTEED 404, NOT A FALLBACK
-///
-/// Nine sites read `$GH_REPO` and fell back to [`pr_watch::REPO_PLACEHOLDER`].
-/// That literal is the forge CLI's own substitution, performed inside the client
-/// the retirement removed — `rest::get` sends the path it is given, so
-/// `{owner}/{repo}` reached the endpoint verbatim, every read 404'd, and
-/// `open_pull_request` answered `None`. The caller then printed *"no open pull
-/// request for `<branch>`"*, which is a could-not-look wearing a fact about the
-/// branch, and `mise run land` stopped on it before its first lap (review of
-/// #848). One site had already been corrected in place; the fallback was the
-/// defect, so it is the fallback that moves.
-///
-/// **The remote is the answer, and it is one this clone already has.**
-/// [`race::slug_of`] reduces both spellings the forge hands out, and it refuses
-/// to guess rather than deriving a slug that would ask the forge confidently
-/// about a DIFFERENT repository. `$GH_REPO` still wins where it is set, because
-/// a fork landing into an upstream is a fact only the operator has.
-///
-/// `None` is could-not-look and callers must say so rather than reporting a
-/// verdict about the branch.
-///
-/// `pub(crate)` since CLOUD-843: `forge_query` binds a `[[forge.query]]` row's
-/// `{owner}`/`{repo}` from it, and a second derivation of the slug would be a
-/// second answer to which repository a forge read is about.
-pub(crate) fn repo_slug(root: &Path) -> Option<String> {
-    if let Ok(declared) = std::env::var("GH_REPO")
-        && !declared.trim().is_empty()
-    {
-        return Some(declared);
-    }
-    // `LAND_LOCK_REMOTE`, which is what every sibling reads — `lease::terms`,
-    // the `lease` dispatch and `run_land_fast_forward` all resolve the remote by
-    // that name. This said `LAND_REMOTE`, a name appearing nowhere else in the
-    // tree, so a consumer pointing the lease at `upstream` would take the lease,
-    // fetch, push and delete against `upstream` while this looked up `origin` —
-    // resolving the wrong slug, or none, and falling back to the placeholder this
-    // function exists to remove (review of #848).
-    let name = std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"));
-    let remotes = git::remotes(root).ok()?;
-    remotes
-        .iter()
-        .find(|(configured, _)| *configured == name)
-        .and_then(|(_, url)| race::slug_of(url))
-}
-
 /// The same reading with the placeholder kept for the sites that only ever
 /// RENDER it, so a message naming the repository still has something to name.
 fn repo_or_placeholder(root: &Path) -> String {
@@ -17173,17 +16953,6 @@ fn run_lease_held(
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
-}
-
-/// This clone's bookkeeping directory and its holder id.
-fn lease_identity(root: &Path) -> std::result::Result<(lease::Local, String), String> {
-    let git_dir =
-        git::git_dir(root).map_err(|err| format!("cannot read this repository: {err}"))?;
-    let local = lease::Local::under(&git_dir);
-    let holder = local
-        .holder()
-        .map_err(|err| format!("cannot mint a holder id: {err}"))?;
-    Ok((local, holder))
 }
 
 /// `lease acquire`: one observation, one decision, one compare-and-swap.
@@ -28986,18 +28755,6 @@ fn anchor() -> PathBuf {
     anchor_at(Path::new("."))
 }
 
-/// [`anchor`] as resolved from the directory `here` rather than the working
-/// directory, so an in-process caller resolves what a child spawned in `here`
-/// would.
-fn anchor_at(here: &Path) -> PathBuf {
-    if here.join(config::CONFIG_FILE).is_file() {
-        return here.to_path_buf();
-    }
-    // The worktree's own authority before the repository's (CLOUD-2532): from a
-    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
-    config::authority_root(here).unwrap_or_else(|_| here.to_path_buf())
-}
-
 /// Filter `findings` against this checkout's baseline, and fold what drifted
 /// back in (CLOUD-67).
 ///
@@ -29038,101 +28795,8 @@ fn run_inputs_digest(flags: &cli::EnforceFlags, out: &mut dyn Write) -> Result<E
         ));
     }
     let root = anchor();
-    writeln!(out, "{}", tree_inputs_digest(&root)?)?;
+    writeln!(out, "{}", step::tree_inputs_digest(&root)?)?;
     Ok(ExitCode::Success)
-}
-
-/// The digest `enforce --half tree --inputs-digest` prints when run in `dir`,
-/// taken in-process: what the `[[step]]` cache keys that tool line on without
-/// spawning a build and a policy load for it (step 17, `crate::step`).
-///
-/// # Errors
-///
-/// As [`tree_inputs_digest`].
-pub(crate) fn tree_inputs_digest_in(dir: &Path) -> Result<String> {
-    tree_inputs_digest(&anchor_at(dir))
-}
-
-/// The digest [`run_inputs_digest`] prints.
-fn tree_inputs_digest(root: &Path) -> Result<String> {
-    fn frame(hasher: &mut blake3::Hasher, label: &str, bytes: Option<&[u8]>) {
-        hasher.update(label.as_bytes());
-        hasher.update(b"\0");
-        match bytes {
-            Some(bytes) => {
-                hasher.update(&(bytes.len() as u64).to_le_bytes());
-                hasher.update(bytes);
-            }
-            None => {
-                hasher.update(b"none");
-            }
-        }
-        hasher.update(b"\n");
-    }
-    let read = |path: Option<PathBuf>| path.and_then(|path| fsio::read(path).ok());
-    let mut hasher = blake3::Hasher::new();
-    frame(
-        &mut hasher,
-        "baseline",
-        read(baseline::path(root)?).as_deref(),
-    );
-    let mut records: Vec<(String, Vec<u8>)> = admission::store_dir(root)
-        .ok()
-        .and_then(|dir| std::fs::read_dir(dir).ok())
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            Some((name, fsio::read(entry.path()).ok()?))
-        })
-        .collect();
-    records.sort();
-    frame(
-        &mut hasher,
-        "admissions",
-        Some(&(records.len() as u64).to_le_bytes()),
-    );
-    for (name, bytes) in &records {
-        frame(&mut hasher, &format!("admission {name}"), Some(bytes));
-    }
-    for rev in ["HEAD", "HEAD^2"] {
-        let blocks = git::commit_record(root, rev).ok().map(|record| {
-            let mut text = String::new();
-            for block in admission::blocks(&record.body) {
-                text.push_str(&block.claimed);
-                text.push('\t');
-                text.push_str(&admission::canonical(&block.binding));
-                text.push('\n');
-            }
-            text
-        });
-        frame(
-            &mut hasher,
-            &format!("blocks {rev}"),
-            blocks.as_deref().map(str::as_bytes),
-        );
-    }
-    frame(
-        &mut hasher,
-        "secret-key",
-        read(secrets::key_path(root).ok()).as_deref(),
-    );
-    frame(
-        &mut hasher,
-        resolve::LOCAL_CONFIG_FILE,
-        read(Some(root.join(resolve::LOCAL_CONFIG_FILE))).as_deref(),
-    );
-    for name in resolve::SETTINGS.iter().filter_map(|setting| setting.env) {
-        let value = std::env::var_os(name);
-        frame(
-            &mut hasher,
-            name,
-            value.as_ref().map(|value| value.as_encoded_bytes()),
-        );
-    }
-    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn apply_baseline(

@@ -987,14 +987,14 @@ pub fn run(
     let inputs = crate::record::inputs_of(VERB, inputs)?;
     let root = Path::new(".");
     let git_dir = crate::git::git_dir(root)?;
-    let slug = crate::repo_slug(root);
+    let slug = crate::race::repo_slug(root);
     let transport = |path: &str, etag: Option<&str>| crate::rest::get(path, etag);
     let produced = match &query.each {
         None => produce(
             query,
             &inputs,
             slug.as_deref(),
-            crate::now_unix(),
+            crate::clock::now_unix(),
             &git_dir,
             &transport,
         )?,
@@ -1013,7 +1013,7 @@ pub fn run(
                     &inputs,
                     &members,
                     slug.as_deref(),
-                    crate::now_unix(),
+                    crate::clock::now_unix(),
                     &git_dir,
                     &transport,
                 )?,
