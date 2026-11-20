@@ -501,7 +501,7 @@ pub fn placement(target: &Path, file: &str) -> Placement {
             if probe.join(file).is_file() {
                 return Placement::Root(probe);
             }
-            crate::config::authority_root(&probe).map_or(Placement::Unplaceable, |root| {
+            authority_root(&probe, file).map_or(Placement::Unplaceable, |root| {
                 Placement::Root(canonical(&root))
             })
         }
@@ -579,6 +579,24 @@ pub fn worktree_root(start: &Path) -> Result<PathBuf> {
         )));
     };
     Ok(canonical(workdir))
+}
+
+/// The root an authority named `file` governs `start` from: the linked
+/// worktree's own when it carries `file`, else the repository's
+/// ([`crate::config::authority_root`] names `batten.toml`). Here, not in
+/// `config`, because it is git discovery alone, and [`placement`] needs it
+/// without reaching the config model (CLOUD-2789).
+///
+/// # Errors
+///
+/// As [`repo_root`].
+pub fn authority_root(start: &Path, file: &str) -> Result<PathBuf> {
+    if let Ok(worktree) = worktree_root(start)
+        && worktree.join(file).is_file()
+    {
+        return Ok(worktree);
+    }
+    repo_root(start)
 }
 
 /// Resolve the root of the repository containing `start`: the working-tree

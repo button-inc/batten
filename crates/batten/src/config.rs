@@ -5372,12 +5372,7 @@ pub struct AuthoritySite {
 /// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
 /// layout with no working tree to root.
 pub fn authority_root(start: &Path) -> Result<PathBuf> {
-    if let Ok(worktree) = crate::git::worktree_root(start)
-        && worktree.join(CONFIG_FILE).is_file()
-    {
-        return Ok(worktree);
-    }
-    crate::git::repo_root(start)
+    crate::git::authority_root(start, CONFIG_FILE)
 }
 
 /// Locate the one committed authority for a run anchored at `anchor`.

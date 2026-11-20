@@ -251,6 +251,7 @@ fn every_class_arm_names_its_own_const() {
     // at any other `const`, value-identical or not.
     let source = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../batten-facts")
             .join("src")
             .join("facts.rs"),
     )
@@ -425,7 +426,8 @@ fn no_axis_match_carries_a_wildcard_arm() {
     // wildcard shapes, the way `primitives.rs` scans for a basic-string path.
     //
     // Fails by: replacing any arm in `facts.rs` with `_ =>` or `_ if`.
-    let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/facts.rs");
+    let source_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../batten-facts/src/facts.rs");
     let source = fs::read_to_string(&source_path).expect("read src/facts.rs");
     // Collected rather than panicked on at the first hit: a wildcard introduced
     // in one axis is usually introduced in both, and one offender per run turns

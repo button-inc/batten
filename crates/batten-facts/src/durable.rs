@@ -315,7 +315,7 @@ pub fn create_exclusive_as(
 /// # Errors
 ///
 /// `AlreadyExists` when the name is taken, else any I/O error.
-pub(crate) fn create_empty(path: &Path) -> std::io::Result<()> {
+pub fn create_empty(path: &Path) -> std::io::Result<()> {
     std::fs::File::create_new(path).map(drop)
 }
 
@@ -326,7 +326,11 @@ pub(crate) fn create_empty(path: &Path) -> std::io::Result<()> {
 /// plain `File::open` locked no directory and set no time (the rule `perf.rs`'s
 /// sibling stamp records). Elsewhere a read-only handle does both, and is the
 /// only handle a directory takes.
-pub(crate) fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
+///
+/// # Errors
+///
+/// The path cannot be opened (missing, or not permitted).
+pub fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
@@ -393,7 +397,7 @@ fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
 /// the mark: `temp_name` always draws one, and a target named with one is not a
 /// target these writes serve.
 #[must_use]
-pub(crate) fn is_temp(name: &str) -> bool {
+pub fn is_temp(name: &str) -> bool {
     name.starts_with('.')
 }
 
@@ -434,7 +438,7 @@ fn sync_directory(directory: &Path) {
 /// skipped sync leaves the same bytes in the page cache as one that ran, so the
 /// call, counted, is the only observable before a power loss.
 #[cfg(test)]
-pub(crate) mod synced {
+pub mod synced {
     use std::cell::Cell;
 
     thread_local! {
@@ -452,7 +456,7 @@ pub(crate) mod synced {
     }
 
     /// `(files, directories)` synced on this thread so far.
-    pub(crate) fn counts() -> (u64, u64) {
+    pub fn counts() -> (u64, u64) {
         (FILES.with(Cell::get), DIRECTORIES.with(Cell::get))
     }
 }

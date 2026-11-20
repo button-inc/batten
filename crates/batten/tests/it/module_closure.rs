@@ -98,6 +98,10 @@ const CORE_FLOOR: usize = 24;
 /// that is what a subset check catches — including the leaving half of a swap.
 ///
 /// Recorded by running [`print_the_distribution`], never by hand.
+///
+/// `durable`, `identity`, `scratch` and `source` left this list by leaving the
+/// crate (CLOUD-2789): they are `batten-facts` now, with nothing above them, so
+/// a closure can no longer be drawn over them here — which is the split working.
 const PLUMBING: &[&str] = &[
     "admission",
     "advisory",
@@ -115,7 +119,6 @@ const PLUMBING: &[&str] = &[
     "commit",
     "deferral",
     "dist",
-    "durable",
     "effect",
     "environment",
     "error",
@@ -127,7 +130,6 @@ const PLUMBING: &[&str] = &[
     "git",
     "gitwrite",
     "graph",
-    "identity",
     "install",
     "land",
     "landed",
@@ -156,12 +158,10 @@ const PLUMBING: &[&str] = &[
     "repair",
     "rest",
     "ripcord",
-    "scratch",
     "secret",
     "semver",
     "severity",
     "signer_posture",
-    "source",
     "spec",
     "speculation",
     "startup",
