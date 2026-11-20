@@ -7973,6 +7973,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `step base` (CLOUD-2787): reads object ids at the merge base of HEAD and
     // a ref, and writes nothing: `read`. A ref that does not resolve is
     // could-not-look, never a verdict, so its exits are the standard set.
+    // unreached: "step base" CLOUD-2787 a [[step]] tools line the step cache answers in-process; nothing spawns it.
     CommandDecl {
         path: "step base",
         id: "step.base",
@@ -7985,6 +7986,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `step env` (CLOUD-2786): reads this process's environment and writes
     // nothing: `read`. A malformed declaration is usage, never a verdict, so
     // its exits are the standard set.
+    // unreached: "step env" CLOUD-2786 a [[step]] tools line the step cache answers in-process; nothing spawns it.
     CommandDecl {
         path: "step env",
         id: "step.env",

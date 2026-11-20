@@ -4951,6 +4951,7 @@ depends = ["tree-clean"]
 # prints its code and seconds.
 run = [
   "{{vars.batten}} step graph run verify-1",
+  "mise run modules-cycle",
   "{{vars.batten}} step graph run verify-2 --jobs 2",
   "{{vars.batten}} step run ci-suite -- mise run ci",
   "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
