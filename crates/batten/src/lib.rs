@@ -8,11 +8,12 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
-// FIRST, because a `macro_rules!` is in scope only for modules declared after
-// it. `verdict::Native` and `rules::NativeGate` declare through `token_enum!`;
-// moving the crate's other hand-kept tokened enums onto it is CLOUD-2454.
+// `token_enum!` lives in `batten-facts` with `error::Native`, the first enum
+// declared through it (CLOUD-2789); `rules::NativeGate` and `lint` declare
+// through it here. Moving the crate's other hand-kept tokened enums onto it is
+// CLOUD-2454.
 #[macro_use]
-mod token_enum;
+extern crate batten_facts;
 pub mod action;
 pub mod admission;
 pub mod advisory;
@@ -33,7 +34,7 @@ pub mod bot;
 pub mod brief;
 pub mod budget;
 pub mod bypass;
-pub mod cache;
+pub use batten_facts::cache;
 pub mod capture;
 /// Declared reductions over responses the agent already captured.
 pub mod captured;
@@ -62,12 +63,12 @@ pub mod defects;
 pub mod deferral;
 pub mod design;
 pub mod disk_watch;
-pub mod dispatch;
+pub use batten_facts::dispatch;
 pub mod dist;
 pub mod doc;
 pub mod doctor;
 pub mod drain;
-pub mod durable;
+pub use batten_facts::durable;
 pub mod effect;
 pub mod emission;
 pub mod engine;
@@ -76,7 +77,7 @@ pub mod epoch;
 pub mod error;
 pub mod exec;
 pub mod exit;
-pub mod facts;
+pub use batten_facts::facts;
 /// Asking the fast-forward bot to land a head, and reading the answer keyed to
 /// THIS request rather than to a timestamp (CLOUD-1338).
 pub mod fast_forward;
@@ -96,11 +97,11 @@ pub mod history;
 pub mod hk;
 pub mod hook;
 pub mod hookcost;
-pub mod identity;
+pub use batten_facts::identity;
 pub mod init;
 pub mod install;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
-pub mod invocation;
+pub use batten_facts::invocation;
 pub mod journal;
 pub mod judge;
 /// The landing lap's replay half: advance the base, replay the branch onto it,
@@ -120,7 +121,7 @@ pub mod mcp;
 pub mod mcp_grant;
 pub mod mcp_posture;
 pub mod mint;
-pub mod minted;
+pub use batten_facts::minted;
 pub mod module_graph;
 pub mod mutate;
 pub mod o200k;
@@ -151,7 +152,7 @@ pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
-pub mod register;
+pub use batten_facts::register;
 pub mod release;
 pub mod release_guard;
 pub mod release_path;
@@ -168,7 +169,7 @@ pub mod review;
 pub mod ripcord;
 pub mod rules;
 pub mod sbom;
-pub mod scratch;
+pub use batten_facts::scratch;
 pub mod secret;
 pub mod secrets;
 pub mod selfwrite;
@@ -180,7 +181,7 @@ pub mod session;
 pub mod severity;
 pub mod signer_posture;
 pub mod sink;
-pub mod source;
+pub use batten_facts::source;
 pub mod spec;
 pub mod speculation;
 /// Resolved-symbol facts, from a delegated analyser's structured output
@@ -223,7 +224,7 @@ pub mod turn;
 pub mod unsubscribe;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.
-pub mod uses;
+pub use batten_facts::uses;
 pub mod verbs;
 pub mod verdict;
 pub mod waiver;
@@ -23834,7 +23835,10 @@ fn extracted_facts(
     facts::Look::Is(
         declared
             .iter()
-            .filter_map(|row| row.count.of(&stream).map(|count| (row.id.clone(), count)))
+            .filter_map(|row| {
+                crate::transcript::ExtractionOf::of(row.count, &stream)
+                    .map(|count| (row.id.clone(), count))
+            })
             .collect(),
     )
 }

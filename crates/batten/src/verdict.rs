@@ -1236,45 +1236,6 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 // Its path here is unchanged.
 pub use crate::error::Native;
 
-impl Native {
-    /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
-    ///
-    /// One authority with three readers, which is what stops the set drifting
-    /// where it is used (CLOUD-1313): `config.rs`'s census holds its own
-    /// per-table list equal to this one in both directions, and the
-    /// compiled-binary tier holds its fixture set to it — so a fourteenth table
-    /// cannot arrive wrapped-but-untested, and a class cannot be dropped from
-    /// the loader while a fixture still claims to reach it.
-    ///
-    /// A subset of [`Native::ALL`] rather than a separate enum, because these
-    /// are resolved from the same vendored table by the same `explain` — the
-    /// only thing that distinguishes them is who raises them.
-    pub const CONFIG_FAULTS: &'static [Native] = &[
-        Native::VerbTableRefused,
-        Native::OutcomeTableRefused,
-        Native::PatternTableRefused,
-        Native::TraversalTableRefused,
-        Native::VerdictTableRefused,
-        Native::RedirectTableRefused,
-        Native::DeferralTableRefused,
-        Native::RemedyUnresolved,
-        Native::MarkerTableRefused,
-        Native::RuleTableRefused,
-        Native::OutputTableRefused,
-        Native::VerifyEnvironmentTableRefused,
-        Native::WaiverTableRefused,
-        Native::FactTableRefused,
-        Native::MintTableRefused,
-        Native::RecorderTableRefused,
-        Native::RecordTableRefused,
-        Native::ProvisionTableRefused,
-        Native::StartupTableRefused,
-        Native::StepTableRefused,
-        Native::ProseColumnRefused,
-        Native::RegisterTableRefused,
-    ];
-}
-
 /// Every token the crate's own refusal sites may raise.
 ///
 /// Read by `policy::load` for the half of registry equality that asks whether a

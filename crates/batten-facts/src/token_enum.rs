@@ -13,7 +13,8 @@
 //! spelling and the token cannot diverge either.
 
 /// Panic — at compile time, from a `const` — when two tokens are equal.
-pub(crate) const fn assert_unique(tokens: &[&str]) {
+#[doc(hidden)]
+pub const fn assert_unique(tokens: &[&str]) {
     // Each token against every EARLIER one, so the outer bound indexes
     // `tokens[i]` directly: an off-by-one there reads past the end rather than
     // running an empty inner loop no test could tell apart.
@@ -59,6 +60,7 @@ const fn same(a: &str, b: &str) -> bool {
 ///     }
 /// }
 /// ```
+#[macro_export]
 macro_rules! token_enum {
     // The `serde` arm is the plain one with a rename on each variant, so the
     // enum is generated in one place.

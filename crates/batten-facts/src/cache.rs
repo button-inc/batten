@@ -530,7 +530,7 @@ pub fn now() -> std::time::Duration {
 /// may not assert the real clock (`wall_clock.rs`), so pinned, the reading is an
 /// input and the conversion of it is what a case holds to account.
 fn wall_clock() -> std::time::SystemTime {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "seam"))]
     if let Some(pinned) = clock::reading() {
         return pinned;
     }
@@ -538,8 +538,8 @@ fn wall_clock() -> std::time::SystemTime {
 }
 
 /// The instant [`wall_clock`] answers on this thread while a case holds it.
-#[cfg(test)]
-pub(crate) mod clock {
+#[cfg(any(test, feature = "seam"))]
+pub mod clock {
     use std::cell::Cell;
     use std::time::SystemTime;
 
@@ -552,7 +552,7 @@ pub(crate) mod clock {
     }
 
     /// Run `body` with the wall clock reading `at` on this thread.
-    pub(crate) fn at<T>(at: SystemTime, body: impl FnOnce() -> T) -> T {
+    pub fn at<T>(at: SystemTime, body: impl FnOnce() -> T) -> T {
         let previous = PINNED.with(|pinned| pinned.replace(Some(at)));
         let out = body();
         PINNED.with(|pinned| pinned.set(previous));
@@ -561,7 +561,8 @@ pub(crate) mod clock {
 }
 
 /// `path`'s [`Stamp::fields`], or `None` when it cannot be stat'ed.
-pub(crate) fn stat_identity(path: &Path) -> Option<String> {
+#[must_use]
+pub fn stat_identity(path: &Path) -> Option<String> {
     stamp(path).map(|stamp| stamp.fields)
 }
 

@@ -4389,7 +4389,7 @@ id = "path write unsafe"
 no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
-line_sources = ["crates/batten/src/**/*.rs"]
+line_sources = ["crates/batten/src/**/*.rs", "crates/batten-facts/src/**/*.rs"]
 module = "policy/durable-write.rego"
 severity = "deny"
 
@@ -4406,7 +4406,7 @@ line, with its commit point named (CLOUD-1919).
 [[verdict.route]]
 id = "module read first"
 kind = "document"
-target = "crates/batten/src/durable.rs"
+target = "crates/batten-facts/src/durable.rs"
 
 # CLOUD-1924. A function RETURNING `std::process::Command` moves the one
 # `#[expect(clippy::disallowed_types)]` off every spawn onto the factory, so each
@@ -6134,7 +6134,7 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
-glob = "crates/batten/src/**/*.rs"
+glob = "crates/{batten,batten-facts}/src/**/*.rs"
 pattern = "clippy::disallowed_methods"
 direction = "non_increasing"
 base = "origin/main"
@@ -7592,6 +7592,7 @@ line_sources = [
   "mise-tasks/**",
   "mise.toml",
   "crates/batten/src/**/*.rs",
+  "crates/batten-facts/src/**/*.rs",
 ]
 module = "policy/obligations-bound.rego"
 severity = "deny"
@@ -7989,6 +7990,7 @@ line_sources = [
   "policy/*.rego",
   "rules/*.md",
   "crates/batten/src/*.rs",
+  "crates/batten-facts/src/*.rs",
   "mise-tasks/*.sh",
   "batten.toml",
 ]
@@ -8000,7 +8002,7 @@ id = "patch judge wrong"
 no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
-invocation_sources = ["crates/batten/src/*.rs"]
+invocation_sources = ["crates/batten/src/*.rs", "crates/batten-facts/src/*.rs"]
 module = "policy/ancestry-decides-nothing.rego"
 severity = "deny"
 
@@ -9881,7 +9883,11 @@ severity = "deny"
 # it, both clauses run over a map that never held its lines, and the gate reports
 # clean. That is the same silence the two paragraphs above record being caught by
 # seeding rather than by reading. Found in review of PR #848.
-delta_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
+delta_sources = [
+  "crates/batten/src/**/*.rs",
+  "crates/batten-facts/src/**/*.rs",
+  "policy/spawn-adapters.rego",
+]
 # AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
 # halves and the module subtracts one from the other. `delta_sources` alone gave
 # a base with nothing to compare against it: `input.tree.lines` was filled by
@@ -9894,7 +9900,11 @@ delta_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 # two halves the module subtracts, so a glob that reached one and not the other
 # would leave a nested module's lines on one side only — which is the same read
 # as not seeing it at all.
-line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
+line_sources = [
+  "crates/batten/src/**/*.rs",
+  "crates/batten-facts/src/**/*.rs",
+  "policy/spawn-adapters.rego",
+]
 
 # CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
 # — the wave's first gate, and the one whose end-to-end cost sizes the rest.
@@ -18207,6 +18217,26 @@ inputs = [
 ]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
 
+# THE FIRST PER-PACKAGE ROW (CLOUD-2789). `batten-facts` reaches nothing in
+# `batten`, so its lint verdict depends on its own sources and `batten-fsio`'s,
+# plus what cargo reads to load the workspace; `lint:clippy` excludes it, so an
+# edit confined to `batten` is a hit here.
+[[step]]
+id = "lint:clippy:facts"
+inputs = [
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "crates/batten-stream/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "clippy.toml",
+  ".clippy.toml",
+  ".cargo",
+]
+tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
+
 [[step]]
 id = "test:cargo"
 # KEEPS `.` (CLOUD-2784): its cases read across the tree (fixtures, policy,
@@ -18351,6 +18381,26 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 [[step]]
 id = "cross-check"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "policy", "bench"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "cross-check", "--json"],
+]
+
+# `cross-check`'s per-package half (CLOUD-2789), keyed as `lint:clippy:facts`
+# is: the other targets' type-check of `batten-facts` alone.
+[[step]]
+id = "cross-check:facts"
+inputs = [
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "crates/batten-stream/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo",
+]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18656,7 +18706,7 @@ run = ["mise", "run", "lint:clippy"]
 [[rule]]
 id = "path read loose"
 kind = "ratchet"
-glob = "crates/batten/src/**/*.rs"
+glob = "crates/{batten,batten-facts}/src/**/*.rs"
 pattern = 'fs::read('
 direction = "non_increasing"
 base = "origin/main"
@@ -18667,7 +18717,7 @@ no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio
 [[rule]]
 id = "source read loose"
 kind = "ratchet"
-glob = "crates/batten/src/**/*.rs"
+glob = "crates/{batten,batten-facts}/src/**/*.rs"
 pattern = 'fs::read_to_string('
 direction = "non_increasing"
 base = "origin/main"

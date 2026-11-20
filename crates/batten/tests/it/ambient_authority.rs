@@ -278,7 +278,7 @@ const WALL_CLOCK: &str = "SystemTime::now";
 /// Every other module is either the boundary — which MAY read a clock, and does —
 /// or downstream of the verdict.
 const EVALUATION_PATH: &[&str] = &[
-    "crates/batten/src/facts.rs",
+    "crates/batten-facts/src/facts.rs",
     "crates/batten/src/rules.rs",
     "crates/batten/src/policy.rs",
 ];
