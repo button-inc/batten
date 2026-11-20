@@ -1436,31 +1436,10 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
     hex
 }
 
-/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`).
-///
-/// The date half comes from [`crate::waiver::Date::from_unix_seconds`] — one
-/// hand-written civil-from-days conversion in the tree rather than two, so a date
-/// still costs no dependency and cannot be right in one module and wrong in the
-/// other. Only the time-of-day arithmetic is here.
-///
-/// **The receipt's validity never reads this timestamp — expiry is a git fact,
-/// never a clock.** That is right *here* and does not generalise: a receipt's
-/// claim is about a specific SHA, so a SHA comparison is the invalidator. A
-/// waiver's claim is a human judgement whose warrant decays in calendar time and
-/// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
-/// its boundary, with the date threaded in as data. Different claims, different
-/// invalidators (CLOUD-208).
-#[must_use]
-pub fn rfc3339_utc(unix_seconds: u64) -> String {
-    let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
-    let second_of_day = unix_seconds % 86_400;
-    let (hour, minute, second) = (
-        second_of_day / 3_600,
-        (second_of_day % 3_600) / 60,
-        second_of_day % 60,
-    );
-    format!("{}T{hour:02}:{minute:02}:{second:02}Z", date.text())
-}
+/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`):
+/// the one formatter, kept in the `clock` leaf beside the civil-date arithmetic
+/// it reads (CLOUD-2789).
+pub use crate::clock::rfc3339_utc;
 
 /// How many paths differ from HEAD, or [`None`] when the tree matches it.
 ///
