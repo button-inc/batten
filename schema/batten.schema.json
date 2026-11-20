@@ -1314,6 +1314,13 @@
             "maxLength": 1536
           }
         },
+        "exempt": {
+          "description": "Required CI checks with no local counterpart, each with its reason\n(CLOUD-2788). `step cover` counts a check matched here as covered.\n\nCONSUMER DATA for `slow_inert`'s reason: which checks a repository can\nonly run on another OS or a release runner is that repository's. An entry\nwhose `check` ends in `*` matches every check it prefixes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Exempt"
+          }
+        },
         "release_workflow": {
           "description": "The workflow whose matrix names the targets a release builds.\n\nCONSUMER DATA (rule 1): `release install` compares three authorities that\nagree on an asset NAME, and which file declares the build matrix is a\nfact about this repository's lane rather than about the comparison.\nAbsent is could-not-look — the verb refuses rather than guessing a path,\nbecause a guessed path that does not exist reads as \"no matrix\" and a\ngate that checks nothing must not report green.",
           "type": [
@@ -1729,7 +1736,7 @@
           "$ref": "#/$defs/Returns"
         },
         "tool": {
-          "description": "The tool whose RESULT answers it, matched by\n[`crate::rules::selects_tool_name`] (CLOUD-690).\n\nThe alternative to `command`, and it exists because a command's transport\ncan be unavailable where the same data reaches a tool. Measured: the\ndeclared `gh api graphql` behind CLOUD-859's review gate is refused by a\nproxy that serves the same review threads through an MCP tool, so the gate\nwas unsatisfiable and running the command its own deny printed returned\n403.\n\n**The forgery control changes shape rather than disappearing.** A `command`\nrow is protected by byte-equality against what the agent ran; a `tool` row\nis protected by the selector, because the agent does not choose which tool\na host reports. It is the same control `[[mint]]` relies on, through the\nsame function, so there is no second matcher to drift.",
+          "description": "The tool whose RESULT answers it, matched by\n[`selects_tool_name`] (CLOUD-690).\n\nThe alternative to `command`, and it exists because a command's transport\ncan be unavailable where the same data reaches a tool. Measured: the\ndeclared `gh api graphql` behind CLOUD-859's review gate is refused by a\nproxy that serves the same review threads through an MCP tool, so the gate\nwas unsatisfiable and running the command its own deny printed returned\n403.\n\n**The forgery control changes shape rather than disappearing.** A `command`\nrow is protected by byte-equality against what the agent ran; a `tool` row\nis protected by the selector, because the agent does not choose which tool\na host reports. It is the same control `[[mint]]` relies on, through the\nsame function, so there is no second matcher to drift.",
           "type": [
             "string",
             "null"
@@ -2641,6 +2648,27 @@
         }
       },
       "additionalProperties": false
+    },
+    "Exempt": {
+      "description": "One required check `step cover` accepts without a local pass (CLOUD-2788).",
+      "type": "object",
+      "properties": {
+        "check": {
+          "description": "The check's name, or a prefix ending in `*`.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "reason": {
+          "description": "Why no local run stands for it, for the reader of the table.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "check",
+        "reason"
+      ]
     },
     "ExtractQuery": {
       "description": "One `[[rule.extract]]` row: a named extraction over the session's own\ntranscript (CLOUD-1172).\n\n**A declaration of WHAT TO COUNT, never of what to read.** The row cannot ask\nfor a span, a match, or a line, because [`Extraction`] has no member that\nyields one — which is how rule 4 is decided here rather than trusted to every\nconsumer.",
@@ -6300,6 +6328,14 @@
       "description": "One declared step: what its verdict depends on, and where it runs in a graph.\n\nA KEYED ROW declares both `inputs` and `tools`; a SCHEDULE-ONLY NODE declares\nneither (CLOUD-2785): it is in a `batten step graph run` group, always runs,\nand never keys or takes a receipt. Absent and empty are different answers,\nwhich is why both lists are optional and an empty one is still refused.",
       "type": "object",
       "properties": {
+        "ci": {
+          "description": "The required CI checks a pass of this row stands for (CLOUD-2788):\n`step cover` counts a check covered when the row passed at `HEAD`'s\ntree. Never key material: it names what the pass is evidence of, not\nwhat the verdict depends on.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "depends_on": {
           "description": "Rows of the same group that must exit 0 before this one starts.",
           "type": "array",

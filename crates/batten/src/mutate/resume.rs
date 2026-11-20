@@ -103,6 +103,7 @@ pub fn journaled(root: &Path, command: &[String]) -> Result<Vec<String>> {
     let resources = schema::resource_ids(root)?;
     let inputs = build_inputs(root, &resources)?;
     retire_legacy(&state)?;
+    clear_report(root);
     // THE SELECTION IS AN ECONOMY: a store that cannot be read or a digest
     // that cannot be taken leaves every case on the build key, never a skip.
     let _ = select(root, &state, &resources, command);
@@ -240,7 +241,11 @@ fn select(
     if !builds_as_swept(command) {
         return Ok(0);
     }
-    let held = held_cases(root, resources, &env_digest(std::env::vars_os()))?;
+    let held = held_cases(
+        root,
+        resources,
+        &env_digest(std::env::vars_os(), &journal_env(root)),
+    )?;
     for ((name, binary), key) in &held {
         crate::durable::replace(expect.join(expect_name(name, binary)), key)?;
     }
@@ -491,22 +496,135 @@ fn compiler_version(root: &Path) -> Option<Vec<u8>> {
     (code == 0).then(|| said.into_bytes())
 }
 
-/// Whether the variable `key` may change what a case does, as the key reads
-/// it: Batten's own, Rust's and cargo's, CI, home and path. A fixed list:
-/// a case reading anything else outside it is the selection's known limit.
-#[must_use]
-pub fn keyed_variable(key: &str) -> bool {
-    key.starts_with("BATTEN_")
-        || key.starts_with("RUST")
-        || key.starts_with("CARGO_")
-        || matches!(key, "CI" | "HOME" | "PATH")
+/// The variables a journaled case is keyed on where no step declares its own
+/// ([`journal_env`]): Batten's own, Rust's and cargo's, CI, home and path —
+/// the fixed list the journal read before a step could declare one.
+pub const DEFAULT_ENV: [&str; 6] = ["BATTEN_*", "RUST*", "CARGO_*", "CI", "HOME", "PATH"];
+
+/// The tool line a step declares its keyed environment with (CLOUD-2786):
+/// `batten step env [--exclude NAME]... -- PATTERN...`, an entry of the row's
+/// committed `tools` array, answered in-process by the step cache as
+/// `step base` is. ONE COMMITTED AUTHORITY: the declaration is the row's own
+/// tool line, so it needs no key of its own and no task-runner variable.
+pub const ENV: [&str; 3] = ["batten", "step", "env"];
+
+/// A step's declared environment: the names and `PREFIX*` patterns its key
+/// reads, and the names it leaves out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeclaredEnv {
+    /// Names, or prefixes ending `*`, whose variables are keyed.
+    pub env: Vec<String>,
+    /// Names a pattern of `env` matches that are never keyed.
+    pub exclude: Vec<String>,
 }
 
-/// The digest of every variable of `vars` [`keyed_variable`] keeps.
+impl DeclaredEnv {
+    /// Whether the variable `name` is keyed: a declaration matches it and no
+    /// exclusion names it.
+    #[must_use]
+    pub fn keys(&self, name: &str) -> bool {
+        self.env.iter().any(|pattern| env_matches(name, pattern))
+            && !self.exclude.iter().any(|excluded| excluded == name)
+    }
+
+    /// [`DEFAULT_ENV`], excluding nothing.
+    #[must_use]
+    pub fn fallback() -> Self {
+        Self {
+            env: DEFAULT_ENV.map(String::from).to_vec(),
+            exclude: Vec::new(),
+        }
+    }
+}
+
+/// Whether `name` is `pattern`, or begins with what precedes its `*`.
 #[must_use]
-pub fn env_digest(vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>) -> String {
+pub fn env_matches(name: &str, pattern: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map_or(name == pattern, |prefix| name.starts_with(prefix))
+}
+
+/// Whether `name` is `^[A-Z_][A-Z0-9_]*$`.
+fn variable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase() || first == '_')
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// The declaration `env` and `exclude` make, `None` when `env` is empty, an
+/// entry of `env` is neither a name nor a `PREFIX*` pattern, or an entry of
+/// `exclude` is not a name (an exclusion never carries a `*`).
+#[must_use]
+pub fn declare(env: Vec<String>, exclude: Vec<String>) -> Option<DeclaredEnv> {
+    let patterns_valid = env
+        .iter()
+        .all(|entry| variable_name(entry.strip_suffix('*').unwrap_or(entry)));
+    let names_valid = exclude.iter().all(|entry| variable_name(entry));
+    (!env.is_empty() && patterns_valid && names_valid).then_some(DeclaredEnv { env, exclude })
+}
+
+/// The [`DeclaredEnv`] a tool line's words after [`ENV`] spell, or `None` for
+/// any other shape — which keys nothing, so the step runs. Only the canonical
+/// spelling is read: `--exclude NAME` as separate tokens, then `--`.
+#[must_use]
+pub fn env_ask(words: &[String]) -> Option<DeclaredEnv> {
+    let mut exclude = Vec::new();
+    let mut rest = words.iter();
+    loop {
+        match rest.next()?.as_str() {
+            "--exclude" => exclude.push(rest.next()?.clone()),
+            "--" => break,
+            _ => return None,
+        }
+    }
+    declare(rest.cloned().collect(), exclude)
+}
+
+/// The environment a row's `tools` declare: its first entry spelled
+/// `batten step env ...` ([`ENV`], [`env_ask`]); `None` when it has none or
+/// that entry does not parse.
+#[must_use]
+pub fn declared_env(tools: &[Vec<String>]) -> Option<DeclaredEnv> {
+    tools
+        .iter()
+        .find_map(|tool| {
+            tool.get(..ENV.len())
+                .filter(|head| head.iter().map(String::as_str).eq(ENV))
+                .and_then(|_| tool.get(ENV.len()..))
+        })
+        .and_then(env_ask)
+}
+
+/// The environment a journaled case is keyed on in the checkout at `root`:
+/// what the committed `[[step]]` row with `journal = "nextest"` declares in
+/// its `tools` ([`declared_env`]), or [`DeclaredEnv::fallback`] where no row
+/// is journaled, the authority will not load, or the row declares nothing
+/// readable.
+#[must_use]
+pub fn journal_env(root: &Path) -> DeclaredEnv {
+    crate::resolve::committed(root, &crate::resolve::Overrides::default())
+        .ok()
+        .and_then(|config| {
+            config
+                .steps
+                .into_iter()
+                .find(|row| row.journal == Some(crate::step_table::Journal::Nextest))
+        })
+        .and_then(|row| declared_env(row.tools()))
+        .unwrap_or_else(DeclaredEnv::fallback)
+}
+
+/// The digest of every variable of `vars` that `declared` keys.
+#[must_use]
+pub fn env_digest(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    declared: &DeclaredEnv,
+) -> String {
     let kept: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> = vars
-        .filter(|(key, _)| key.to_str().is_some_and(keyed_variable))
+        .filter(|(key, _)| key.to_str().is_some_and(|key| declared.keys(key)))
         .collect();
     let mut hasher = blake3::Hasher::new();
     for (key, value) in kept {
@@ -646,7 +764,34 @@ fn prune_others(state: &Path, keep: &Path) -> Result<()> {
 ///
 /// The repository's nextest config does not parse.
 pub fn config_text(root: &Path, wrapper: &Path, journal: &Path) -> Result<String> {
-    let mut config = super::cover::wrapper_experimental(root)?;
+    let mut doc: toml_edit::DocumentMut = super::cover::wrapper_experimental(root)?
+        .parse()
+        .context("parse nextest.toml")?;
+    // A `JUnit` REPORT ON EVERY JOURNALED RUN (CLOUD-2786): a failing run's
+    // cases are read from it ([`flaky_suspects`]). One the profile already
+    // writes is kept where it is, so no other reader of it moves.
+    // A STANZA APPENDED AS TEXT where the profile has no `junit` table: an
+    // index into a missing table makes an inline one, which the
+    // `[[profile.default.scripts]]` appended below may not extend.
+    let profile = journal_profile();
+    let mut stanza = String::new();
+    if report_name(&doc).is_none() {
+        let has_junit = doc
+            .get("profile")
+            .and_then(|profiles| profiles.get(&profile))
+            .and_then(|table| table.get("junit"))
+            .is_some();
+        if has_junit {
+            doc["profile"][&profile]["junit"]["path"] = toml_edit::value(REPORT);
+        } else {
+            stanza = format!(
+                "\n[profile.{}.junit]\npath = \"{REPORT}\"\n",
+                toml_edit::Key::new(profile.as_str())
+            );
+        }
+    }
+    let mut config = doc.to_string();
+    config.push_str(&stanza);
     let wrapper = toml_edit::Value::from(wrapper.to_string_lossy().into_owned());
     let journal = toml_edit::Value::from(journal.to_string_lossy().into_owned());
     let _ = write!(
@@ -655,6 +800,109 @@ pub fn config_text(root: &Path, wrapper: &Path, journal: &Path) -> Result<String
          [[profile.default.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"{WRAPPER}\"\n"
     );
     Ok(config)
+}
+
+/// The `JUnit` report a journaled run writes where its profile names none.
+const REPORT: &str = "junit.xml";
+
+/// The nextest profile a journaled run uses: `NEXTEST_PROFILE`, or `default`.
+fn journal_profile() -> String {
+    std::env::var("NEXTEST_PROFILE")
+        .ok()
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or_else(|| String::from("default"))
+}
+
+/// The `JUnit` report name `doc` gives the journal's profile, or `default`'s,
+/// which every profile inherits.
+fn report_name(doc: &toml_edit::DocumentMut) -> Option<String> {
+    let profiles = doc.get("profile")?;
+    [journal_profile(), String::from("default")]
+        .iter()
+        .find_map(|profile| {
+            profiles
+                .get(profile)?
+                .get("junit")?
+                .get("path")?
+                .as_str()
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+/// Where a journaled run in the checkout at `root` leaves its `JUnit` report:
+/// nextest's store (the config's `store.dir`, else `<target>/nextest`), the
+/// profile, then the report's name ([`config_text`]).
+fn report_path(root: &Path) -> Option<PathBuf> {
+    let text = super::cover::wrapper_experimental(root).ok()?;
+    let doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let store = doc
+        .get("store")
+        .and_then(|store| store.get("dir"))
+        .and_then(toml_edit::Item::as_str)
+        .map_or_else(
+            || {
+                let target = std::env::var_os("CARGO_TARGET_DIR")
+                    .filter(|dir| !dir.is_empty())
+                    .unwrap_or_else(|| "target".into());
+                root.join(target).join("nextest")
+            },
+            |dir| root.join(dir),
+        );
+    let name = report_name(&doc).unwrap_or_else(|| REPORT.to_owned());
+    Some(store.join(journal_profile()).join(name))
+}
+
+/// Remove the last journaled run's report, so a run that writes none (a build
+/// that failed) is never read as the last run's verdicts.
+pub fn clear_report(root: &Path) {
+    if let Some(report) = report_path(root) {
+        let _ = std::fs::remove_file(report);
+    }
+}
+
+/// Every case a nextest `JUnit` report names as failed (a `<failure>` or
+/// `<error>` child), by name and binary id; `None` when it is not XML.
+fn failed_cases(xml: &str) -> Option<std::collections::BTreeSet<(String, String)>> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter(|case| {
+                case.children()
+                    .any(|child| child.has_tag_name("failure") || child.has_tag_name("error"))
+            })
+            .filter_map(|case| {
+                Some((
+                    case.attribute("name")?.to_owned(),
+                    case.attribute("classname")?.to_owned(),
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// After a failing journaled run in the checkout at `root`: the failed cases
+/// whose sealed reach record still holds on this tree — nothing any of them
+/// ran or read moved since it was recorded, so no change here can have caused
+/// the failure (`DeFlaker`, Bell et al. ICSE 2018) — and how many cases failed.
+/// `None` where the run's report cannot be read.
+///
+/// A LABEL, NEVER A VERDICT: red is never reused, and the step's exit stands.
+#[must_use]
+pub fn flaky_suspects(root: &Path) -> Option<(Vec<(String, String)>, usize)> {
+    let report = crate::fsio::read_to_string(report_path(root)?).ok()?;
+    let failed = failed_cases(&report)?;
+    let held = schema::resource_ids(root)
+        .ok()
+        .and_then(|resources| held_cases(root, &resources, "").ok())
+        .unwrap_or_default();
+    let suspects = failed
+        .iter()
+        .filter(|case| held.contains_key(*case))
+        .cloned()
+        .collect();
+    Some((suspects, failed.len()))
 }
 
 /// Run one case as the wrapper, or report its journaled pass: under its
@@ -1082,10 +1330,12 @@ mod tests {
         }
     }
 
-    /// Fails by: a variable outside the list moving the key (every shell's
-    /// noise rerunning the suite), or one inside it not moving it.
+    /// Fails by: an undeclared variable moving the key (every shell's noise
+    /// rerunning the suite), a declared name or pattern not moving it, an
+    /// excluded per-run variable moving it, or the fallback reading anything
+    /// but the list the journal read before a step could declare one.
     #[test]
-    fn the_environment_key_reads_only_its_list() {
+    fn a_declared_pattern_keys_and_an_undeclared_name_does_not() {
         let vars = |pairs: &[(&str, &str)]| {
             pairs
                 .iter()
@@ -1093,16 +1343,84 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into_iter()
         };
-        let base = env_digest(vars(&[("PATH", "/bin"), ("TERM", "a")]));
-        assert_eq!(base, env_digest(vars(&[("PATH", "/bin"), ("TERM", "b")])));
-        assert_ne!(
+        let owned = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let declared = env_ask(&owned(&[
+            "--exclude",
+            "APP_PID",
+            "--",
+            "DATABASE_URL",
+            "APP_*",
+        ]))
+        .unwrap();
+        let digest = |pairs: &[(&str, &str)]| env_digest(vars(pairs), &declared);
+        let base = digest(&[("DATABASE_URL", "a"), ("TERM", "x")]);
+        assert_eq!(base, digest(&[("DATABASE_URL", "a"), ("TERM", "y")]));
+        assert_eq!(base, digest(&[("DATABASE_URL", "a"), ("APP_PID", "9")]));
+        assert_ne!(base, digest(&[("DATABASE_URL", "b"), ("TERM", "x")]));
+        assert_ne!(base, digest(&[("DATABASE_URL", "a"), ("APP_MODE", "1")]));
+        assert_eq!(
             base,
-            env_digest(vars(&[("PATH", "/usr/bin"), ("TERM", "a")]))
+            digest(&[("DATABASE_URL", "a"), ("PATH", "/bin")]),
+            "PATH is undeclared here"
         );
-        assert_ne!(
-            base,
-            env_digest(vars(&[("PATH", "/bin"), ("BATTEN_X", "1")]))
+        // TODAY'S LIST, BYTE FOR BYTE, where nothing is declared: a journal's
+        // passes keyed before declarations existed stay keyed the same.
+        let fallback = DeclaredEnv::fallback();
+        let today = env_digest(
+            vars(&[("PATH", "/bin"), ("BATTEN_X", "1"), ("TERM", "a")]),
+            &fallback,
         );
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"BATTEN_X=1\x1ePATH=/bin\x1e");
+        assert_eq!(today, hasher.finalize().to_hex().to_string());
+        for refused in ["lower", "A-B", "1X", "*"] {
+            assert_eq!(env_ask(&owned(&["--", refused])), None, "{refused}");
+        }
+        assert_eq!(
+            env_ask(&owned(&["--exclude", "B*", "--", "A"])),
+            None,
+            "no * in an exclusion"
+        );
+        assert_eq!(
+            env_ask(&owned(&["--exclude", "B", "--"])),
+            None,
+            "an exclusion alone keys nothing"
+        );
+        assert_eq!(env_ask(&owned(&["A"])), None, "the `--` is mandatory");
+        assert_eq!(
+            env_ask(&owned(&["--exclude", "--", "A"])),
+            None,
+            "an `--exclude` with no name before the `--` is no declaration"
+        );
+    }
+
+    /// Fails by: a row's `step env` entry not found among its other tools, a
+    /// row without one read as declaring something (so the journal never falls
+    /// back to [`DEFAULT_ENV`]), or a malformed entry read as a declaration.
+    #[test]
+    fn the_declaration_is_the_rows_step_env_tool_line() {
+        let line = |words: &[&str]| -> Vec<String> {
+            ENV.iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        let version = vec![String::from("rustc"), String::from("--version")];
+        let tools = vec![
+            version.clone(),
+            line(&["--exclude", "CI_PID", "--", "CI*", "HOME"]),
+        ];
+        assert_eq!(
+            declared_env(&tools),
+            Some(DeclaredEnv {
+                env: vec![String::from("CI*"), String::from("HOME")],
+                exclude: vec![String::from("CI_PID")],
+            })
+        );
+        assert_eq!(declared_env(std::slice::from_ref(&version)), None);
+        assert_eq!(declared_env(&[version, line(&["--", "lower"])]), None);
     }
 
     /// Fails by: an edit to a package the sweep never probed left out of the

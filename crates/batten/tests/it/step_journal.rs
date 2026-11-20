@@ -133,6 +133,12 @@ const HELPER: &str = "pub fn three() -> u8 { 3 }\n";
 /// function and the shared helper, `uses_beta` reading `data.txt`, and
 /// `unrecorded` absent.
 fn selected_repo(name: &str) -> std::path::PathBuf {
+    selected_repo_with(name, SELECTED)
+}
+
+/// [`selected_repo`] with `source` as the fixture's `src/lib.rs`, which must
+/// keep [`SELECTED`]'s functions and cases.
+fn selected_repo_with(name: &str, source: &str) -> std::path::PathBuf {
     use batten::mutate::schema;
     let repo = common::scratch_repo(name);
     common::write(
@@ -141,7 +147,7 @@ fn selected_repo(name: &str) -> std::path::PathBuf {
         "[package]\nname = \"fix\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
          [dependencies]\nhelper = { path = \"helper\" }\n\n[workspace]\nmembers = [\"helper\"]\n",
     );
-    common::write(&repo, "src/lib.rs", SELECTED);
+    common::write(&repo, "src/lib.rs", source);
     common::write(
         &repo,
         "helper/Cargo.toml",
@@ -339,4 +345,76 @@ fn an_edit_to_an_unprobed_workspace_package_reruns_a_recorded_case() {
         [2, 2, 2, 2],
         "an unprobed package's edit reruns every recorded case\n{err}"
     );
+}
+
+/// The cross-head fixture with `uses_alpha` failing while `FIXTURE_FAIL` is
+/// set: a failure no edit to the tree causes.
+fn flaky_source() -> String {
+    SELECTED.replace(
+        "log(\"uses_alpha\");",
+        "log(\"uses_alpha\");\n        assert!(std::env::var_os(\"FIXTURE_FAIL\").is_none(), \"asked to fail\");",
+    )
+}
+
+/// `step run suite -- cargo nextest run` in `repo` with `uses_alpha` asked to
+/// fail: whether it passed and what it said.
+fn failing_step(repo: &std::path::Path, log: &std::path::Path) -> (bool, String) {
+    let output = common::batten()
+        .args(["step", "run", "suite", "--", "cargo", "nextest", "run"])
+        .current_dir(repo)
+        .env("FIXTURE_LOG", log)
+        .env("FIXTURE_FAIL", "1")
+        .streamed_output()
+        .expect("run batten");
+    (output.status.success(), common::stderr(&output))
+}
+
+/// The listing a `flaky-suspect` line points at, and the line's counts.
+fn flaky_line(err: &str) -> (String, String) {
+    let (counts, listing) = err
+        .lines()
+        .find_map(|line| line.strip_prefix("step run: suite flaky-suspect "))
+        .and_then(|rest| rest.split_once(" failing case(s); read "))
+        .unwrap_or_else(|| panic!("a failing journaled run labels its failures: {err}"));
+    (
+        counts.to_owned(),
+        std::fs::read_to_string(listing.trim()).expect("the listing is written"),
+    )
+}
+
+/// A red journaled run says whether the change could have caused it: a
+/// failing case whose recorded reach still holds on this tree ran nothing
+/// that moved, so it is a flaky suspect; once a function it ran moves, it is
+/// not. The exit is the suite's either way: red is never reused.
+///
+/// Fails by: a failure off the change unlabelled (the reach store unread, or
+/// the report unread), a failure a moved function may have caused labelled
+/// (a real regression dismissed as flaky), or the label turning red green.
+#[test]
+fn a_failure_off_the_change_is_labelled_flaky_suspect() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let source = flaky_source();
+    let repo = selected_repo_with("step-flaky", &source);
+    let log = common::scratch("step-flaky-log");
+    let (passed, err) = failing_step(&repo, &log);
+    assert!(!passed, "the label never turns red green\n{err}");
+    let (counts, listing) = flaky_line(&err);
+    assert_eq!(counts, "1 of 1", "{err}");
+    assert_eq!(listing, "fix tests::uses_alpha\n", "{err}");
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &source.replace(
+            "u8::from(!TEMPLATE.is_empty())",
+            "u8::from(TEMPLATE.len() > 0)",
+        ),
+    );
+    let (passed, err) = failing_step(&repo, &log);
+    assert!(!passed, "{err}");
+    let (counts, listing) = flaky_line(&err);
+    assert_eq!(
+        counts, "0 of 1",
+        "a failing case whose function moved is the change's to answer for\n{err}"
+    );
+    assert_eq!(listing, "", "{err}");
 }
