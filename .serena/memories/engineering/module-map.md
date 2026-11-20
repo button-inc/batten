@@ -75,6 +75,7 @@ row here, so a new module lands with its line.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
+- `low_water.rs` — the lowest free space any disk watcher in this process read since the window opened: a leaf, so `land` judges a disk-full gate without depending on `disk_watch` (CLOUD-2789).
 - `forge.rs` — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
 - `tools.rs` — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
 - `captured.rs` — declared REDUCTIONS over responses the agent already captured (CLOUD-1188).
