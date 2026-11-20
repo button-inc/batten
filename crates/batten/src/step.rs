@@ -783,26 +783,8 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
-    // A RED JOURNALED RUN SAYS WHETHER THE CHANGE COULD HAVE CAUSED IT
-    // (CLOUD-2786): a failed case whose sealed reach still holds ran nothing
-    // that moved. A label beside the trace, never a verdict: the exit stands.
-    if let Some((_, root)) = journaled.as_ref().filter(|_| !passed)
-        && let Some((suspects, failed)) = crate::mutate::resume::flaky_suspects(root)
-        && failed > 0
-        && let Some(listing) = trace_file(step).map(|file| file.with_extension("flaky"))
-    {
-        let body: String = suspects
-            .iter()
-            .map(|(name, binary)| format!("{binary} {name}\n"))
-            .collect();
-        if crate::durable::replace(&listing, body).is_ok() {
-            let _ = writeln!(
-                err,
-                "step run: {step} flaky-suspect {} of {failed} failing case(s); read {}",
-                suspects.len(),
-                listing.display()
-            );
-        }
+    if let Some((_, root)) = journaled.as_ref().filter(|_| !passed) {
+        report_flaky(step, root, err);
     }
     let linted = traced
         .as_ref()
@@ -1026,6 +1008,36 @@ pub fn run_cover(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
         stale.len()
     )?;
     Ok(ExitCode::Violation)
+}
+
+/// A RED JOURNALED RUN SAYS WHETHER THE CHANGE COULD HAVE CAUSED IT
+/// (CLOUD-2786): a failed case whose sealed reach still holds ran nothing that
+/// moved. A label beside the trace, never a verdict: the run's exit stands.
+fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) {
+    use std::fmt::Write as _;
+    let Some((suspects, failed)) = crate::mutate::resume::flaky_suspects(root) else {
+        return;
+    };
+    let Some(listing) = trace_file(step)
+        .map(|file| file.with_extension("flaky"))
+        .filter(|_| failed > 0)
+    else {
+        return;
+    };
+    let body = suspects
+        .iter()
+        .fold(String::new(), |mut body, (name, binary)| {
+            let _ = writeln!(body, "{binary} {name}");
+            body
+        });
+    if crate::durable::replace(&listing, body).is_ok() {
+        let _ = writeln!(
+            err,
+            "step run: {step} flaky-suspect {} of {failed} failing case(s); read {}",
+            suspects.len(),
+            listing.display()
+        );
+    }
 }
 
 /// Where a step's traced run writes its trace: a file directly under the git
