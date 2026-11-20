@@ -17,8 +17,8 @@
 //! base that does not resolve, or keeps the reason off the channel a caller
 //! parses. Those are properties of the compiled binary.
 //
-// carried: mise-tasks/suite-select.sh crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// carried: tests/suite-select.bats crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs
+// carried: mise-tasks/suite-select.sh crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// carried: tests/suite-select.bats crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs
 //
 // carried: "A WIDE RUN SEES AN UNTRACKED SUITE, since the narrow path already does" crates/batten/tests/it/ci_suites.rs
 // carried: "A DELETED SUITE IS NOT HANDED TO BATS as a path that does not exist" crates/batten/tests/it/ci_suites.rs
@@ -32,16 +32,16 @@
 // carried: "a program no suite declares runs everything" crates/batten/tests/it/ci_suites.rs
 // carried: "an unresolvable base runs everything rather than guessing" crates/batten/tests/it/ci_suites.rs
 // carried: "every wide run says why, as a pointer" crates/batten/tests/it/ci_suites.rs
-// changed: "the case count of a narrow selection is the selected suites' own" crates/batten/src/suites.rs the verb emits the SELECTED PATHS and nothing else; how many cases they hold is the runner's own count, and a selector that also reported it would be a second authority over a number bats already prints
+// changed: "the case count of a narrow selection is the selected suites' own" crates/batten-base/src/suites.rs the verb emits the SELECTED PATHS and nothing else; how many cases they hold is the runner's own count, and a selector that also reported it would be a second authority over a number bats already prints
 //
-// carried: "a deny-list, never an allow-list" crates/batten/src/suites.rs
-// carried: "a shared input is one that can move a suite whose subject does not name it" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// carried: "the match is on a whole field rather than a substring" crates/batten/src/suites.rs
-// carried: "a deleted suite has nothing to run" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// carried: "an empty changed set is not nothing to run" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// carried: "fail open toward cost: a selector that cannot answer falls back to every suite" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// carried: "a path under mise-tasks that no suite declares is could-not-look" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
-// changed: "the reason goes to stderr as a pointer" crates/batten/src/suites.rs the reason is unchanged and still stderr-only, but it is now one sentence built by the engine rather than the program's own `wide()` echo, so the case asserts the channel split rather than the exact bytes
+// carried: "a deny-list, never an allow-list" crates/batten-base/src/suites.rs
+// carried: "a shared input is one that can move a suite whose subject does not name it" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// carried: "the match is on a whole field rather than a substring" crates/batten-base/src/suites.rs
+// carried: "a deleted suite has nothing to run" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// carried: "an empty changed set is not nothing to run" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// carried: "fail open toward cost: a selector that cannot answer falls back to every suite" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// carried: "a path under mise-tasks that no suite declares is could-not-look" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
+// changed: "the reason goes to stderr as a pointer" crates/batten-base/src/suites.rs the reason is unchanged and still stderr-only, but it is now one sentence built by the engine rather than the program's own `wide()` echo, so the case asserts the channel split rather than the exact bytes
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

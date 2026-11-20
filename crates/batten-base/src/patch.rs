@@ -62,18 +62,18 @@ use sha2::{Digest, Sha256};
 /// byte-stable. That ordering is what `git patch-id --stable` bought with a flag;
 /// here it is the only behaviour available.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Change {
+pub struct Change {
     /// The path, as bytes: a repository may carry a path that is not UTF-8, and
     /// an identity that could not represent one would be undefined exactly where
     /// `core.quotePath` used to make the old implementation host-dependent.
-    pub(crate) path: Vec<u8>,
+    pub path: Vec<u8>,
     /// What happened to it.
-    pub(crate) kind: Kind,
+    pub kind: Kind,
 }
 
 /// The three shapes a change takes once rename detection is refused.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Kind {
+pub enum Kind {
     /// The path did not exist and now does.
     Added { blob: Blob },
     /// The path existed and no longer does.
@@ -84,17 +84,17 @@ pub(crate) enum Kind {
 
 /// One side of a change.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Blob {
+pub struct Blob {
     /// The object id, hex. Carries the whole content by construction.
-    pub(crate) oid: String,
+    pub oid: String,
     /// The file mode, so a chmod is a change rather than a no-op.
-    pub(crate) mode: u32,
+    pub mode: u32,
     /// The content, when it is text and the hunks are what identify it.
     ///
     /// `None` for a binary blob, which is identified by [`Blob::oid`] alone —
     /// see the module doc on why that is stronger than a zlib patch body rather
     /// than weaker.
-    pub(crate) text: Option<Vec<u8>>,
+    pub text: Option<Vec<u8>>,
 }
 
 /// Whether a blob is treated as text for hunk extraction.
@@ -104,7 +104,7 @@ pub(crate) struct Blob {
 /// attributes lookup, a filter, a content-type guess — is host state, which is
 /// the whole class of input this migration removed.
 #[must_use]
-pub(crate) fn is_text(bytes: &[u8]) -> bool {
+pub fn is_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0)
 }
 
@@ -118,7 +118,7 @@ pub(crate) fn is_text(bytes: &[u8]) -> bool {
 /// Infallible: a digest absorbs bytes and cannot refuse them, so there is no
 /// error path to invent. The caller's fallibility is in READING the objects, not
 /// in hashing them.
-pub(crate) fn identity(changes: &mut [Change]) -> Option<String> {
+pub fn identity(changes: &mut [Change]) -> Option<String> {
     if changes.is_empty() {
         return None;
     }

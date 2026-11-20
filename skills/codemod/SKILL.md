@@ -7,7 +7,7 @@ description: Migrating many call sites at once with a lossless Rust codemod inst
 
 A migration of N sites by hand is N tool calls, N chances to miss one, and no
 proof the count reached zero. A codemod is one program, one run, and a number.
-The substrate is `crates/batten/src/codemod.rs` (CLOUD-1580): `ra_ap_syntax`'s
+The substrate is `crates/batten-base/src/codemod.rs` (CLOUD-1580): `ra_ap_syntax`'s
 lossless tree, so every byte outside an edit prints back identical, and a file
 the parser rejects is **could-not-look**, never silently skipped.
 
