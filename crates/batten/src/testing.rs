@@ -551,7 +551,7 @@ impl<'ast> Visit<'ast> for Exits {
 #[doc(hidden)]
 #[must_use]
 pub fn shell_commands(text: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
-    crate::hook::shell_commands(text)
+    crate::shell::shell_commands(text)
 }
 
 /// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).

@@ -558,7 +558,7 @@ fn argv(entry: &Node) -> Option<Vec<String>> {
     let spelled: Vec<String> = words
         .iter()
         .map(|word| match &word.kind {
-            rable::NodeKind::Word { value, .. } => crate::hook::unquote(value),
+            rable::NodeKind::Word { value, .. } => crate::shell::unquote(value),
             _ => String::new(),
         })
         .filter(|word| !word.is_empty())
