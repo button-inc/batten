@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-base 1  batten 
+.SH NAME
+batten\-step\-base \- Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref
+.SH SYNOPSIS
+\fBbatten step base\fR [\fB\-\-ref\-env\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-ref\fR> <\fIpaths\fR> 
+.SH DESCRIPTION
+Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref
+.SH OPTIONS
+.TP
+\fB\-\-ref\fR \fI<ref>\fR
+The ref whose merge base with HEAD the lines are read at
+.TP
+\fB\-\-ref\-env\fR \fI<ref_env>\fR
+A variable whose value, when set and non\-empty, replaces \-\-ref
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpaths\fR>
+The paths, after `\-\-`: one `base <path> <id>` line each, `absent` where missing

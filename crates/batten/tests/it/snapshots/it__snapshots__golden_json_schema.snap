@@ -4960,6 +4960,40 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "step base",
+          "id": "step.base",
+          "about": "Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "paths",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The paths, after `--`: one `base <path> <id>` line each, `absent` where missing"
+            },
+            {
+              "name": "ref",
+              "short": null,
+              "long": "ref",
+              "takes_value": true,
+              "positional": false,
+              "help": "The ref whose merge base with HEAD the lines are read at"
+            },
+            {
+              "name": "ref_env",
+              "short": null,
+              "long": "ref-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "A variable whose value, when set and non-empty, replaces --ref"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "step check",
           "id": "step.check",
           "about": "Say hit or miss for a step's inputs, arguments and tools, and remember the key a record must match",
@@ -4981,6 +5015,41 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The step's name, as the consumer's step table declares it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step cover",
+          "id": "step.cover",
+          "about": "Say whether every required CI check passed at HEAD or is exempt, naming each that did not",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "step env",
+          "id": "step.env",
+          "about": "Print the sorted `env` lines a declared environment keys, the step cache's answer to the tool line",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "exclude",
+              "short": null,
+              "long": "exclude",
+              "takes_value": true,
+              "positional": false,
+              "help": "A variable a pattern matches that is never keyed, such as a per-run pid (repeatable)"
+            },
+            {
+              "name": "patterns",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The names or PREFIX* patterns, after `--`: an `env NAME=value` line per keyed variable, `env PATTERN none` where none matches"
             }
           ],
           "subcommands": []
@@ -5826,6 +5895,18 @@ expression: stdout_of(&output)
     {
       "id": "state.list",
       "path": "state list"
+    },
+    {
+      "id": "step.base",
+      "path": "step base"
+    },
+    {
+      "id": "step.cover",
+      "path": "step cover"
+    },
+    {
+      "id": "step.env",
+      "path": "step env"
     },
     {
       "id": "task.alive",

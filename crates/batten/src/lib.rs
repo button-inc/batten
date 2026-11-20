@@ -244,10 +244,10 @@ pub use cli::{
 };
 pub use config::Config;
 pub use effect::Effect;
-pub use error::{Denial, Passthrough, UsageError};
+pub use error::{Passthrough, UsageError};
 pub use exit::ExitCode;
 pub use output::{Mode, Presentation, Verbosity};
-pub use refusal::{Fix, Refusal};
+pub use refusal::{Denial, Fix, Refusal};
 pub use resolve::{Contributor, Origin, Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 
@@ -623,6 +623,15 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             } => run_step_watched(&step, &args, &command, err),
             cli::StepCommand::Graph { group, jobs } => {
                 crate::step::run_graph(&group, jobs.as_deref(), err)
+            }
+            cli::StepCommand::Cover => crate::step::run_cover(out, err),
+            cli::StepCommand::Base {
+                reference,
+                ref_env,
+                paths,
+            } => crate::step::run_base(&reference, ref_env.as_deref(), &paths, out, err),
+            cli::StepCommand::Env { exclude, patterns } => {
+                crate::step::run_env(&exclude, &patterns, out, err)
             }
         },
         Some(Command::Modules {

@@ -18210,6 +18210,49 @@ tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["mise", "tasks", "info", "test:cargo", "--json"],
+  # THE ENVIRONMENT IT IS KEYED ON (CLOUD-2786), answered in-process: the step
+  # key and the nextest journal read every variable these patterns match, and
+  # none an `--exclude` names — the per-run values the engine itself sets (a
+  # pid, a time, a session, a ref, a bypass), which would make every lap a miss.
+  # The patterns are the journal's former fixed list.
+  [
+    "batten",
+    "step",
+    "env",
+    "--exclude",
+    "BATTEN_TASK_PID",
+    "--exclude",
+    "BATTEN_GATE_PID",
+    "--exclude",
+    "BATTEN_LAND_LAP",
+    "--exclude",
+    "BATTEN_LAND_GATE",
+    "--exclude",
+    "BATTEN_BOOT_TIME",
+    "--exclude",
+    "BATTEN_SESSION",
+    "--exclude",
+    "BATTEN_SESSION_PARENT",
+    "--exclude",
+    "BATTEN_SPEC_BASE",
+    "--exclude",
+    "BATTEN_CLAIM_CHECK_BYPASS",
+    "--exclude",
+    "BATTEN_GH_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_STEP_RECEIPT_BYPASS",
+    "--exclude",
+    "BATTEN_STOP_GUARD_BYPASS",
+    "--exclude",
+    "BATTEN_UNLANDED_CHECK_BYPASS",
+    "--",
+    "BATTEN_*",
+    "RUST*",
+    "CARGO_*",
+    "CI",
+    "HOME",
+    "PATH",
+  ],
 ]
 # THE CASE JOURNAL IS THE ROW'S CHOICE (CLOUD-2785), never read off the argv.
 journal = "nextest"
@@ -18255,10 +18298,37 @@ tools = [["rustc", "--version"], ["cargo", "--version"]]
 id = "perf-gate"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", ".config/nextest.toml", "bench", "batten.toml"]
 tools = [
-  ["rustc", "--version"],
-  ["cargo", "--version"],
-  ["hyperfine", "--version"],
-  ["git", "merge-base", "HEAD", "origin/main"],
+  [
+    "rustc",
+    "--version",
+  ],
+  [
+    "cargo",
+    "--version",
+  ],
+  [
+    "hyperfine",
+    "--version",
+  ],
+  # THE BASE BY CONTENT (CLOUD-2787): the ids of what the base build reads, at
+  # the merge base the gate benchmarks (`perf.rs` `base_commit`), never that
+  # commit's id, so a rebase onto an unrelated trunk commit still hits.
+  [
+    "batten",
+    "step",
+    "base",
+    "--ref",
+    "origin/main",
+    "--ref-env",
+    "BENCH_BASE_REF",
+    "--",
+    "crates",
+    "Cargo.toml",
+    "Cargo.lock",
+    ".config/nextest.toml",
+    "bench",
+    "batten.toml",
+  ],
 ]
 
 [[step]]
@@ -18296,14 +18366,13 @@ inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
 tools = [["cargo", "deny", "--version"]]
 
 # CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
-# inputs; the baseline's tree ids and the branch's commit messages arrive as
-# `--arg`s from the task, because neither is a path in this tree.
-# The BASELINE is part of the key: `semver` compares against `origin/main`, so a
-# receipt must not answer once the baseline moves. The three tree ids and the
-# digest of the branch's messages the retired body passed as `--arg`s are these
-# four answers now (CLOUD-1991, CLOUD-843). A baseline that cannot be read, or an
-# empty answer (a branch with no commit ahead of `main`), is no key
-# (`step.rs` `material`), so the step runs rather than hitting.
+# inputs; the baseline's side is the `step base` line (CLOUD-2787): the content
+# ids of `crates`, `Cargo.toml` and `Cargo.lock` at the merge base with
+# `origin/main`, never a commit id, so a rebase onto a trunk commit touching
+# none of them still hits. The branch's messages stay a `git log` answer
+# (content). A baseline that cannot be read, or an empty answer (a branch with
+# no commit ahead of `main`), is no key (`step.rs` `material`), so the step runs
+# rather than hitting.
 [[step]]
 id = "semver"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
@@ -18311,21 +18380,17 @@ tools = [
   ["cargo", "semver-checks", "--version"],
   ["rustc", "--version"],
   ["mise", "tasks", "info", "semver", "--json"],
-  ["git", "rev-parse", "-q", "--verify", "origin/main:crates"],
-  ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.toml"],
-  ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.lock"],
+  ["batten", "step", "base", "--ref", "origin/main", "--", "crates", "Cargo.toml", "Cargo.lock"],
   ["git", "log", "--format=%B", "origin/main..HEAD"],
 ]
 
 # THE BASE-TEST REPLAY (CLOUD-2090), keyed on both revisions it compares. HEAD's
 # side is the whole tree, `test:cargo`'s inputs: the replay builds HEAD with each
-# base test body spliced in. The base arrives two ways and both are keyed. The
-# task passes its base REF as an `--arg` (a speculative base is a commit id, so
-# the ref is the revision). `origin/main`'s commit is a tool answer, so a receipt
-# taken over the default base stops answering when trunk moves. The admissions
-# the replay reads are `asked` ledger lines added since the base, which are tree
-# content under those two keys. Measured 14 s on every lap of an unchanged head
-# (CLOUD-2253's breakdown).
+# base test body spliced in. The base side is the `step base` line (CLOUD-2787):
+# the content ids of the Rust and the `asked` ledger at the merge base with
+# `BATTEN_SPEC_BASE` (default `origin/main`), the revision the replay forks at,
+# never a commit id, so a rebase onto an unrelated trunk commit still hits.
+# Measured 14 s on every lap of an unchanged head (CLOUD-2253's breakdown).
 [[step]]
 id = "test-replay"
 # KEEPS `.` (CLOUD-2784): it replays modified cases in a repository borrowed
@@ -18333,10 +18398,34 @@ id = "test-replay"
 # it by case.
 inputs = ["."]
 tools = [
-  ["rustc", "--version"],
-  ["cargo", "--version"],
-  ["mise", "tasks", "info", "verify:test-replay", "--json"],
-  ["git", "rev-parse", "-q", "--verify", "origin/main"],
+  [
+    "rustc",
+    "--version",
+  ],
+  [
+    "cargo",
+    "--version",
+  ],
+  [
+    "mise",
+    "tasks",
+    "info",
+    "verify:test-replay",
+    "--json",
+  ],
+  [
+    "batten",
+    "step",
+    "base",
+    "--ref",
+    "origin/main",
+    "--ref-env",
+    "BATTEN_SPEC_BASE",
+    "--",
+    "crates",
+    "fuzz",
+    ".batten/asked.jsonl",
+  ],
 ]
 
 # THE THREE NARROW `it` TIERS hk reaches by name (CLOUD-1164). Each runs a filter
