@@ -73,6 +73,7 @@ row here, so a new module lands with its line.
 - `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
 - `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
+- `grammar.rs` — the finding line's grammar: `PROVENANCE`, the line `Severity`, `head` and `is_headed`, in a leaf so the modules below `refusal` spell a head without reaching up (CLOUD-2789).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
 - `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
 - `low_water.rs` (crate `batten-base`) — the lowest free space any disk watcher in this process read since the window opened: a leaf, so `land` judges a disk-full gate without depending on `disk_watch` (CLOUD-2789).
@@ -131,6 +132,7 @@ row here, so a new module lands with its line.
 - `testing.rs` — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
 - `secret.rs` (crate `batten-base`) — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
+- `selector.rs` — one compiled glob over repo-relative paths, the selector every rule and the tree walk match through: a leaf (CLOUD-2789).
 - `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
 - `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off `mise-tasks/semver.sh`.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760).

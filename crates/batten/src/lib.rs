@@ -92,6 +92,7 @@ pub mod forge_query;
 pub mod git;
 pub mod githook;
 pub mod gitwrite;
+pub mod grammar;
 pub use batten_base::graph;
 pub mod handler;
 pub mod history;
@@ -174,6 +175,7 @@ pub mod sbom;
 pub use batten_base::secret;
 pub use batten_facts::scratch;
 pub mod secrets;
+pub mod selector;
 pub mod selfwrite;
 /// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),
 /// carrying a baseline the committed lock can build when the registry can no
@@ -6927,6 +6929,25 @@ fn run_pr_unsubscribed(
     }
 }
 
+/// `pr watch --progress`'s recorder, run as a program the CALLER names
+/// (CLOUD-2789): resolved through `rules::spawn_resolving`, the engine's one way
+/// to find a program, and handed to `pr_watch` so that module names nothing
+/// above it. Every failure is ignored: progress is a signal, never a verdict.
+fn record_progress(program: &str, args: &[String]) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
+    )]
+    let _ = rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    });
+}
+
 fn run_pr(
     command: PrCommand,
     overrides: &Overrides,
@@ -6990,7 +7011,11 @@ fn run_pr(
     // landing's signals under one entry, and an identity with no recorder is a
     // caller that thinks it is being observed and is not.
     let progress = match (progress, progress_id) {
-        (Some(program), Some(id)) => Some(pr_watch::Progress { program, id }),
+        (Some(program), Some(id)) => Some(pr_watch::Progress {
+            program,
+            id,
+            spawn: record_progress,
+        }),
         (None, None) => None,
         _ => {
             writeln!(

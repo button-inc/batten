@@ -3142,25 +3142,16 @@ pub struct FieldBound {
     pub is: String,
 }
 
-/// What a rule's produced record is filed under (CLOUD-851).
-///
-/// Two, and both are answers the BOUNDARY has: the rule's own id, which is
-/// constant, and the current branch, which is a fact about the checkout. Deliberately
-/// not a free-form string — a key a config could spell arbitrarily is a filename a
-/// config could point anywhere, and the store lives under `$GIT_DIR`.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum SinkKey {
-    /// Filed under the rule's own id: one record per rule, whatever the checkout
-    /// is doing. The right key for a journal.
-    #[default]
-    Rule,
-    /// Filed under the current branch, so every commit on it continues to serve
-    /// the same record — `claim.<branch>`'s shape, and the reason
-    /// [`crate::rules::ReceiptKey::Branch`] exists for the reading half.
-    Branch,
+// A rule's declared output lives in `sink` (CLOUD-2789), so the store reads
+// it without reaching up into `rules`.
+pub use crate::sink::{Sink, SinkKey};
+
+/// Each rule that declares a sink, as its id and that sink: what `sink`'s
+/// store questions take, so the store never needs the whole `Rule`.
+fn declared_sinks(rules: &[Rule]) -> impl Iterator<Item = (&str, &Sink)> {
+    rules
+        .iter()
+        .filter_map(|rule| Some((rule.id.as_str(), rule.produces.as_ref()?)))
 }
 
 // Housed in `crate::facts` (CLOUD-2789), which reads it too; the path here is
@@ -3239,23 +3230,6 @@ pub enum GitRead {
     /// and whether each one's directory is still there (CLOUD-1424). Tree surface
     /// only: it lists the registry and stats each entry.
     Worktrees,
-}
-
-/// A rule's declared output (CLOUD-851).
-///
-/// A kind and a key, and nothing else. There is no path column on purpose: a
-/// sink that could name its own destination is a config that can write anywhere,
-/// and the store's layout is the engine's to own.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Sink {
-    /// Which of the three censused kinds this is, deciding whether the record is
-    /// appended, replaced, or merely touched — and whether a later run reads it
-    /// back as a fact.
-    pub kind: crate::facts::Production,
-    /// What the record is filed under.
-    #[serde(default)]
-    pub key: SinkKey,
 }
 
 /// How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).
@@ -6671,148 +6645,10 @@ fn validate_composition(rules: &[Rule], at: Option<Located<'_>>) -> anyhow::Resu
     Ok(())
 }
 
-/// A single policy finding: the rule that fired and where, as a pointer only.
-///
-/// A finding never carries the matched bytes (non-negotiable rule 4) — only the
-/// rule id and a `path:line` location the caller can open.
-///
-/// The `severity` is the producing rule's — the value the exit contract
-/// consumes: a `deny` finding fails the run, a `warn` finding reports without
-/// failing it (CLOUD-49 promotes it). It rides along for that decision only; it
-/// is **never** an identity input (see [`crate::identity`] — re-rating a
-/// finding must not re-mint it).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Finding {
-    /// The [`Rule::id`] that produced this finding.
-    pub rule: String,
-    /// The ROW this finding belongs to, where that is not [`Finding::rule`]
-    /// (CLOUD-1087).
-    ///
-    /// `None` means "the rule id is the owner", which is true for every kind but
-    /// `policy` — a policy finding reports the PREDICATE's id (CLOUD-832), and a
-    /// module may carry many predicates under one row.
-    ///
-    /// # Why a field and not a lookup
-    ///
-    /// This replaces `Scan::attributed`, a side map keyed on the scope
-    /// fingerprint. Review of #721 raised the same objection twice in two
-    /// shapes — keyed on the predicate id, then keyed on the fingerprint — and
-    /// re-keying a third time answers the instance rather than the class. Both
-    /// rounds were saying that the owner was being INFERRED from a value that
-    /// means something else, when it can simply be RECORDED. A construction
-    /// where a `command` row's id equals a predicate id and its glob equals the
-    /// verdict token mints the same `scope_fingerprint`, so the map could hand
-    /// one row's findings to another; a field cannot collide, because nothing
-    /// is looked up.
-    ///
-    /// [`Finding::rule`] is deliberately untouched and keeps the predicate id:
-    /// reporting and [`crate::waiver::apply`] ask a different question and their
-    /// answer is already right.
-    ///
-    /// Engine-internal — it reaches no pointer and no record, so rule 4 needs no
-    /// new decision here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    /// The producing rule's [`Rule::severity`], for the exit-contract decision.
-    pub severity: RuleSeverity,
-    /// Where the violation is. A file-scoped kind reports the repo-relative
-    /// path (`/`-separated); a rule-scoped kind — a command whose exit code
-    /// condemns a whole batch rather than one line — reports the rule's `glob`,
-    /// which is the tightest honest pointer available for it.
-    pub path: String,
-    /// The 1-based line number of the offending line, when the kind locates one.
-    /// `None` for a rule-scoped finding.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line: Option<usize>,
-    /// The finding's identity, minted **engine-side** (CLOUD-164).
-    ///
-    /// Position is deliberately not an input: `line` moves when a neighbour is
-    /// inserted and this does not, which is what lets a store recognise the same
-    /// defect across an edit. Before this field existed the churn pack read the
-    /// matched line and hashed it test-side, which could pin the identity
-    /// *function* but never the extractor — there was none. This is the
-    /// extractor, and deleting that test-side join is how the pack now proves it
-    /// picks the right span.
-    pub identity: crate::identity::StoredIdentity,
-    /// The predicate that settles this finding, captured from the producing rule
-    /// (CLOUD-81). Carried on the finding rather than looked up later, so the
-    /// store never has to reach back into a config it cannot see.
-    pub check: Check,
-    /// The fix, or the stated reason there is none. `None` only for a rule
-    /// [`Rule::validate`] would have refused; [`crate::findings::record`]
-    /// refuses to store one.
-    pub remediation: Option<Remediation>,
-    /// Which of the producing kind's answers this finding is, where the kind
-    /// has more than one (CLOUD-1787).
-    ///
-    /// `None` for every kind whose findings mean one thing. A `document` row
-    /// has three — the node differs, the node is absent, the document could not
-    /// be read, and now a fourth: there is no document here — and they were
-    /// **computed and then dropped**, reaching only
-    /// [`crate::identity::code_fingerprint`]. So two findings with opposite
-    /// remedies printed the same `path:1 rule-id`, and an author told their
-    /// `tier` was wrong went looking at a `tier` that was correct. That is the
-    /// harm CLOUD-1787 reports first, and it is an OUTPUT defect: the decision
-    /// was always right.
-    ///
-    /// # Still a pointer (rule 4)
-    ///
-    /// A closed vocabulary of `&'static str` tokens the engine owns, never a
-    /// byte of the file. `no-document` says what the reader found, not what the
-    /// file says.
-    ///
-    /// Skipped when absent, so every finding that does not set one serialises
-    /// exactly as it did before — §6 movement is confined to the kind that
-    /// gained the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<&'static str>,
-    /// A policy finding's subjects other than the one [`Finding::path`] holds,
-    /// rendered, in the module's order (CLOUD-2213).
-    ///
-    /// `path` is one slot, so `issue file same` printed `at batten.toml` and
-    /// dropped the row id it judged. These ride the line after the pointer;
-    /// identity, admission and baseline still key on `path` alone, so nothing
-    /// already recorded moves.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub carried: Vec<String>,
-}
-
-/// The renderer this type went without (CLOUD-371).
-///
-/// Every other emitted type in the engine named its own `line`/`line_text`/
-/// `summary`; the most-emitted one had none, so its pointer shape lived as an
-/// inline `match` on [`Finding::line`] at two separate call sites in
-/// `lib.rs` — `run_policy_hooks` and `run_rules` — which is the asymmetry that
-/// proved the funnel was missing. The bytes below are exactly what both sites
-/// composed, moved rather than rewritten.
-///
-/// **Pointer only, and that is this type above all** (rule 4): the location and
-/// the rule that fired, never the offending line's text. A rule-scoped finding
-/// carries no line and prints its pointer without one rather than inventing a
-/// number it does not have — the `None` arm is a different pointer, not a
-/// degraded one.
-///
-/// One finding in the grammar every Batten finding takes (CLOUD-2145):
-/// `batten <severity> <id> at <path>[:<line>][ <reason>]`. The head names the
-/// source inside a task's interleaved output, where the command a reader ran
-/// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
-impl crate::output::Line for Finding {
-    fn line(&self) -> String {
-        let head = crate::refusal::head(self.severity.finding_severity(), &self.rule);
-        let mut at = match self.line {
-            Some(line) => format!("{head} at {}:{line}", self.path),
-            None => format!("{head} at {}", self.path),
-        };
-        for subject in &self.carried {
-            at.push(' ');
-            at.push_str(subject);
-        }
-        match self.reason {
-            Some(reason) => format!("{at} {reason}"),
-            None => at,
-        }
-    }
-}
+// `Finding` lives in `findings` (CLOUD-2789), beside the `Check` and
+// `Remediation` it carries, so the modules below `rules` can name a finding
+// without reaching up here.
+pub use crate::findings::Finding;
 
 /// Whether a rule kind's predicate decides its question or approximates it
 /// (CLOUD-331).
@@ -7741,20 +7577,20 @@ fn run(
     // 4.76ms -> 10.01ms (2.103x) against the merge base — `perf-compare` refused
     // the branch — for a question no rule in the set had asked. A run whose rules
     // declare no sink now does exactly what it did before this row landed.
-    let produced = if !tree_half && crate::sink::any_declared(rules) {
+    let produced = if !tree_half && crate::sink::any_declared(declared_sinks(rules)) {
         match crate::git::git_dir(root) {
             Err(_) => BTreeMap::new(),
             Ok(git_dir) => {
                 // The branch is a second read, so it is resolved only when a sink is
                 // keyed by one — the economy `receipt::verdicts` already states.
-                let branch = if crate::sink::any_branch_keyed(rules) {
+                let branch = if crate::sink::any_branch_keyed(declared_sinks(rules)) {
                     crate::git::current_branch(root).ok().flatten()
                 } else {
                     None
                 };
                 crate::sink::store(
                     &git_dir,
-                    &crate::sink::declared_records(rules, branch.as_deref()),
+                    &crate::sink::declared_records(declared_sinks(rules), branch.as_deref()),
                 )?
             }
         }
@@ -14937,146 +14773,11 @@ pub const DECLARED_ACQUISITION: &str = "(declared documents)";
 /// on.
 const DOCUMENT_NO_DOCUMENT: &str = "no-document";
 
-/// The entry whose presence makes a directory a repository of its own — git's
-/// own boundary marker, and therefore the one this crate reads.
-///
-/// It is a *directory* in a plain clone and a *file* in a submodule or a linked
-/// worktree, which is why presence is what is tested and never the kind.
-pub const NESTED_REPOSITORY_MARKER: &str = ".git";
-
-/// Every file under `root`, as sorted repo-relative `/`-separated paths — the
-/// one tree walk the crate has.
-///
-/// Sorted, so any pass over it is deterministic (§6), and `.git` is skipped:
-/// the object store is never policy input. A second walker would be a second
-/// answer to "what does Batten look at", which is the divergence
-/// [`crate::markers`] reuses this to avoid.
-///
-/// # Ignored files are not policy input (CLOUD-214)
-///
-/// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
-/// repository consider its own" is answered by the `.gitignore` the contributors
-/// already maintain rather than by a second list here. Adopted, not rebuilt:
-/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
-/// it, and none of them is this crate's to re-implement.
-///
-/// The measurement that decided it, on this repository after one `cargo build`:
-/// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
-/// ignored build output under `target/` and only 330 were the repository's own.
-/// A `forbid` rule was one broad glob away from reporting findings against
-/// compiler artifacts, and every rule paid to walk them.
-///
-/// Two settings are load-bearing and pinned by tests rather than left to the
-/// crate's defaults:
-///
-/// * **Hidden entries are walked** (`hidden(false)`). `ignore` skips dotfiles by
-///   default, which would silently drop `.github/`, `.serena/` and `.claude/` —
-///   three directories this repository's committed rules select outright, so the
-///   default would turn live gates into dead ones with no diagnostic.
-/// * **Ignore files are honoured, `require_git` off.** A fixture that is not a
-///   git repository still reads its own `.gitignore`, so the selection does not
-///   change shape depending on whether git happens to be initialised.
-///
-/// # The selection stops at a nested repository (CLOUD-328)
-///
-/// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
-/// own, and this walk does not enter it. **This is the single statement of
-/// which files a glob selects, and the base-rev half of a ratchet
-/// ([`crate::git::count_at_rev`]) reads the same rule** — it skips gitlink
-/// entries — so the two halves select the same set by construction rather than
-/// by a consumer's care with globs.
-///
-/// Without it the two disagree, and the direction is the dangerous one: a
-/// `non_decreasing` row whose glob spans a submodule sits permanently above a
-/// base that counted one gitlink, so no deletion could ever pull it back under
-/// and **the gate cannot fail**. Measured on this repository at the commit that
-/// raised CLOUD-328: base 637 against working 1404, a fixed `+767` in a tree
-/// where nothing had been added.
-///
-/// It is not a ratchet-only property, because this is not a ratchet-only
-/// walker: it is also what stops a `forbid` rule reporting findings against
-/// vendored third-party code, and a `budget` or a marker scan from measuring a
-/// checkout that is not this one. The rule is stated in git's terms rather than
-/// as a submodule list precisely so a linked worktree — `.claude/worktrees/`,
-/// where agents work — is bounded by the same reading.
-///
-/// `root` itself is never a boundary: it carries the marker by definition, and
-/// only *descended* directories are tested.
-///
-/// # Errors
-///
-/// An I/O failure while walking propagates as an internal error (→ exit `3`).
-pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
-    let root = root.to_path_buf();
-    let mut walker = ignore::WalkBuilder::new(&root);
-    walker
-        // Dotfiles are ordinary policy input here; see the doc comment.
-        .hidden(false)
-        // A `.gitignore` means what it says whether or not `git init` has run,
-        // so the selection does not change shape under a fixture.
-        .require_git(false)
-        // The repository's own ignore surface, and only it. A developer's global
-        // excludes are a property of their machine, not of this repository, and
-        // a gate whose file set varies per workstation is not one gate.
-        .git_global(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .parents(false)
-        // One filesystem: a walk that follows a mount out of the repository is
-        // measuring somebody else's disk.
-        .same_file_system(true)
-        .follow_links(false);
-    // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
-    // root's own `.git` but knows nothing about a nested repository, so the rule
-    // this crate states has to be applied here or it would be silently dropped
-    // by the very change that adopts a better walk. `tests/submodule.rs` is what
-    // catches that, and it is why those assertions landed first.
-    let boundary = root.clone();
-    walker.filter_entry(move |entry| {
-        if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
-            return true;
-        }
-        // The object store is never policy input, and this skip cannot be left
-        // to the walker: `ignore` excludes `.git` as a *hidden* entry, and
-        // `hidden(false)` above — which this repository's own rules require, to
-        // reach `.github/` and `.serena/` — switches that off along with it.
-        // Dropping it would put every blob, ref and hook body into the file set.
-        if entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER) {
-            return false;
-        }
-        // `root` carries the marker by definition; testing it would empty every
-        // walk, so only descended directories are judged.
-        if entry.path() == boundary {
-            return true;
-        }
-        !entry.path().join(NESTED_REPOSITORY_MARKER).exists()
-    });
-
-    let mut files = Vec::new();
-    for entry in walker.build() {
-        let entry = entry?;
-        // Directories, and the root itself, are not files; a symlink is not
-        // followed, so it never contributes a path outside the tree.
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        if let Ok(rel) = entry.path().strip_prefix(&root) {
-            files.push(rel_to_slash(rel));
-        }
-    }
-    // `ignore` yields in directory order; §6 byte-stability is this sort.
-    files.sort();
-    Ok(files)
-}
-
-/// Render a relative path with `/` separators, so globbing and output are
-/// identical across platforms (§6 byte-stability spans OSes).
-fn rel_to_slash(rel: &Path) -> String {
-    rel.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
+// The tree walk and its boundary marker live in `git`, and the glob in the
+// `selector` leaf (CLOUD-2789), so `git` reads the tree without reaching up
+// into `rules`.
+pub use crate::git::{NESTED_REPOSITORY_MARKER, tree_files};
+pub use crate::selector::Selector;
 
 /// The marker that turns a glob into an exclude inside an ordered
 /// include/exclude list: gitignore's `!` prefix, so a reader who knows one knows
@@ -15113,7 +14814,7 @@ impl PathSet {
     pub fn include_patterns(&self) -> Vec<&str> {
         self.includes
             .iter()
-            .map(|selector| selector.glob.glob())
+            .map(|selector| selector.pattern())
             .collect()
     }
 
@@ -15326,78 +15027,6 @@ impl Sets {
             protected: PathSet::includes("protected", &config.protected)?,
             unlanded: PathSet::includes("unlanded", &config.unlanded)?,
         })
-    }
-}
-
-/// One compiled glob, matched against repo-relative `/`-separated paths
-/// (CLOUD-214).
-///
-/// [`globset`] rather than a hand-rolled matcher: the replaced one backtracked
-/// over every `**` split point — exponential on a pattern with several — and
-/// knew only `*`, `?` and `**`, so a consumer had no character classes, no
-/// braces and no way to say "not this". Adopting the matcher ripgrep already
-/// ships is the wrap-don't-rebuild directive applied to the one thing every rule
-/// runs through.
-///
-/// **Compiled once, matched many.** A pattern is parsed when the rule loads, not
-/// once per candidate path, which is what keeps the selection linear in the size
-/// of the tree rather than in tree × pattern-length.
-///
-/// # Semantics, pinned rather than inherited
-///
-/// `literal_separator(true)` is the one non-default setting and it is
-/// load-bearing: without it `*` crosses `/`, so `*.rs` would select every Rust
-/// file at every depth and a rule scoped to one directory would silently widen.
-/// Widening is the single direction a policy engine may never drift, and
-/// [`tests::glob_semantics_are_pinned_at_the_shipped_patterns`] is what holds it.
-///
-/// **Parsed at load, compiled at first match** (CLOUD-2315). A malformed glob is
-/// still refused when the rule loads, because parsing is what refuses it; the
-/// regex a match runs is built the first time something asks. The hook loads
-/// ~108 selectors per call and matches a handful, and compiling every one was
-/// 14% of the instructions a warm call ran.
-#[derive(Debug, Clone)]
-pub struct Selector {
-    /// Carries the pattern as written too (`Glob::glob`), so there is no
-    /// second copy of it here.
-    glob: globset::Glob,
-    matcher: std::sync::OnceLock<globset::GlobMatcher>,
-}
-
-impl Selector {
-    /// Compile `pattern`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a pattern `globset` cannot
-    /// parse — an unclosed character class, a stray `**` inside a component.
-    /// A malformed glob is bad config, and refusing it at load is what stops it
-    /// reaching a run as a rule that quietly selects nothing.
-    pub fn new(pattern: &str) -> anyhow::Result<Self> {
-        let glob = globset::GlobBuilder::new(pattern)
-            // See the type's doc comment: without this, `*` crosses `/` and
-            // every rule's scope widens.
-            .literal_separator(true)
-            .build()
-            .map_err(|err| UsageError::raise(format!("glob `{pattern}` is not valid: {err}")))?;
-        Ok(Selector {
-            glob,
-            matcher: std::sync::OnceLock::new(),
-        })
-    }
-
-    /// Whether `path` — repo-relative, `/`-separated — is selected.
-    #[must_use]
-    pub fn matches(&self, path: &str) -> bool {
-        self.matcher
-            .get_or_init(|| self.glob.compile_matcher())
-            .is_match(path)
-    }
-
-    /// The pattern this was compiled from, as the consumer wrote it.
-    #[must_use]
-    pub fn pattern(&self) -> &str {
-        self.glob.glob()
     }
 }
 

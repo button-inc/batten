@@ -2252,10 +2252,8 @@ pub struct CaptureConfig {
     pub result_max_tokens: Option<u64>,
 }
 
-/// A result leaf at or under this many bytes is the result's SHAPE (a path, a
-/// count, a mode), never its payload, so it stays in place when a result is
-/// bounded (CLOUD-2223, CLOUD-2224).
-pub const LEAF_KEEP_BYTES: usize = 256;
+// Kept in `stream_input`, which bounds a result by it (CLOUD-2789).
+pub use crate::stream_input::LEAF_KEEP_BYTES;
 
 /// The default bound on a tool result the model reads whole (CLOUD-2223), in
 /// `o200k` tokens. Measured on PR #1132: one task log read whole was 57,764

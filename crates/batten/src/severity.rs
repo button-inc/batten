@@ -205,11 +205,11 @@ impl RuleSeverity {
     /// match that blocks is `deny`, one reported is `warn`, an allowed one a
     /// `note`.
     #[must_use]
-    pub const fn finding_severity(self) -> crate::refusal::Severity {
+    pub const fn finding_severity(self) -> crate::grammar::Severity {
         match self {
-            RuleSeverity::Deny | RuleSeverity::Ask => crate::refusal::Severity::Deny,
-            RuleSeverity::Advise | RuleSeverity::Record => crate::refusal::Severity::Warn,
-            RuleSeverity::Allow => crate::refusal::Severity::Note,
+            RuleSeverity::Deny | RuleSeverity::Ask => crate::grammar::Severity::Deny,
+            RuleSeverity::Advise | RuleSeverity::Record => crate::grammar::Severity::Warn,
+            RuleSeverity::Allow => crate::grammar::Severity::Note,
         }
     }
 
@@ -282,6 +282,19 @@ pub enum AdvisoryTier {
     Caution,
     /// Answer now: the response is due before the work continues.
     Warning,
+}
+
+// Here rather than in `grammar`, which names nothing (CLOUD-2789): the line's
+// severity for a tier is this module's mapping, like `finding_severity`.
+impl crate::grammar::Severity {
+    /// The severity an advisory of `tier` is printed under.
+    #[must_use]
+    pub const fn of_tier(tier: AdvisoryTier) -> Self {
+        match tier {
+            AdvisoryTier::Warning | AdvisoryTier::Caution => Self::Warn,
+            AdvisoryTier::Advisory => Self::Note,
+        }
+    }
 }
 
 impl AdvisoryTier {
