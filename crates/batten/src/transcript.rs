@@ -860,10 +860,18 @@ impl Summary for Tally {
     }
 }
 
-// `Extraction::of` lives here rather than in `crate::facts` (CLOUD-2789): the
-// decision reads this module's `Summary`, and housing it beside `Summary`
-// keeps `facts` from naming `transcript`. The method path is unchanged.
-impl crate::facts::Extraction {
+// `Extraction::of` lives here rather than in `facts` (CLOUD-2789): the
+// decision reads this module's `Summary`, and `Extraction` is `batten-facts`'
+// now, so the method rides an extension trait. A caller names the trait once
+// (`use crate::transcript::ExtractionOf as _`) and the call stays `.of(..)`.
+/// [`crate::facts::Extraction`]'s answer over a parsed stream.
+pub trait ExtractionOf {
+    /// See the implementation on [`crate::facts::Extraction`].
+    #[must_use]
+    fn of(self, stream: &impl Summary) -> Option<usize>;
+}
+
+impl ExtractionOf for crate::facts::Extraction {
     /// This extraction's answer over a parsed stream, or `None` where this host
     /// records none of the events it reduces.
     ///
@@ -886,8 +894,7 @@ impl crate::facts::Extraction {
     ///
     /// Generic over [`Summary`] so the hook's incremental
     /// [`Tally`] is read by this same decision (CLOUD-2315).
-    #[must_use]
-    pub fn of(self, stream: &impl Summary) -> Option<usize> {
+    fn of(self, stream: &impl Summary) -> Option<usize> {
         let records = stream.records();
         let recorded = |kind: Kind| records.contains(&kind);
         match self {

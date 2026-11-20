@@ -3436,7 +3436,7 @@ impl Format {
 /// later cannot leave a refusal naming a stale set — the class of defect the
 /// hardcoded "TOML, YAML, JSON and JSON5" was one instance of.
 #[must_use]
-pub(crate) fn parseable_extensions() -> String {
+pub fn parseable_extensions() -> String {
     let mut names: Vec<&str> = Format::ALL
         .iter()
         .filter(|format| !format.extensions().is_empty())
@@ -3487,7 +3487,7 @@ fn read_yaml(text: &str) -> Look<Node> {
 /// the dialect a setting, widening a configuration surface the house style
 /// keeps narrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Dialect {
+pub enum Dialect {
     Yaml,
     Toml,
     Json,
@@ -3602,7 +3602,8 @@ const FENCES: &[Fence] = &[
 /// of them spell a wildcard element, which
 /// `no_axis_match_carries_a_wildcard_arm` refuses in this file for an unrelated
 /// and better reason.
-pub(crate) fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
+#[must_use]
+pub fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if let Some(found) = split_json_object(text) {
         return Some(found);
@@ -3697,15 +3698,16 @@ fn split_json_object(text: &str) -> Option<Frontmatter<'_>> {
 }
 
 /// A markdown file split at its frontmatter fence, by [`split_frontmatter`].
-pub(crate) struct Frontmatter<'a> {
+#[derive(Debug)]
+pub struct Frontmatter<'a> {
     /// Which syntax [`Self::block`] is written in.
-    pub(crate) dialect: Dialect,
+    pub dialect: Dialect,
     /// What the fence encloses, without either delimiter line. For the unfenced
     /// JSON form there are no delimiter lines to remove, so this is the object
     /// itself, braces included — which is what a JSON reader wants anyway.
-    pub(crate) block: &'a str,
+    pub block: &'a str,
     /// Everything after the closing delimiter.
-    pub(crate) body: &'a str,
+    pub body: &'a str,
 }
 
 /// A parsed document, canonicalised into one shape whatever it was written in.
@@ -5814,10 +5816,8 @@ fn validate_one(fact: &Declared) -> anyhow::Result<()> {
 ///
 /// Housed in `facts` and re-exported from `crate::mint` (CLOUD-2789), so the
 /// module the engine reads facts through names no module above it.
-pub(crate) fn select<'a>(
-    value: &'a serde_json::Value,
-    path: &str,
-) -> Option<Vec<&'a serde_json::Value>> {
+#[must_use]
+pub fn select<'a>(value: &'a serde_json::Value, path: &str) -> Option<Vec<&'a serde_json::Value>> {
     let mut current = vec![value];
     for segment in path.split('.') {
         let (name, iterate) = match segment.strip_suffix("[]") {

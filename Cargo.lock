@@ -155,6 +155,7 @@ name = "batten"
 version = "0.0.222"
 dependencies = [
  "anyhow",
+ "batten-facts",
  "batten-fsio",
  "batten-stream",
  "blake3",
@@ -227,6 +228,28 @@ name = "batten-codemods"
 version = "0.0.220"
 dependencies = [
  "batten",
+]
+
+[[package]]
+name = "batten-facts"
+version = "0.0.220"
+dependencies = [
+ "anyhow",
+ "batten-fsio",
+ "blake3",
+ "hmac",
+ "json5",
+ "proc-macro2",
+ "regex",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 3.0.10",
+ "toml",
+ "unicode-normalization",
+ "yaml-rust2",
 ]
 
 [[package]]
