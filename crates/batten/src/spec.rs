@@ -743,6 +743,14 @@ mod tests {
                 "show agent".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
+                // The step noun's one reading leaf (CLOUD-2788): `cover` reads
+                // the pass record and the step table and writes nothing. The
+                // noun stays off for `capture`'s reason: `run` executes.
+                // `base` (CLOUD-2787) reads object ids and writes nothing.
+                "step base".to_owned(),
+                "step cover".to_owned(),
+                // `env` (CLOUD-2786) reads the environment and writes nothing.
+                "step env".to_owned(),
                 // The verb, never the `worktree` noun: the noun stays
                 // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
                 // The two `task` leaves that read: the registry's report, which
@@ -1384,7 +1392,10 @@ mod tests {
             // The step cache (CLOUD-843, retiring `step-receipt`). All four rows
             // are unclassified: `run` executes the command it is handed.
             "step".to_owned(),
+            "step base".to_owned(),
             "step check".to_owned(),
+            "step cover".to_owned(),
+            "step env".to_owned(),
             "step graph".to_owned(),
             "step graph run".to_owned(),
             "step record".to_owned(),

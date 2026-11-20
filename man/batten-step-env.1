@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-env 1  batten 
+.SH NAME
+batten\-step\-env \- Print the sorted `env` lines a declared environment keys, the step cache\*(Aqs answer to the tool line
+.SH SYNOPSIS
+\fBbatten step env\fR [\fB\-\-exclude\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIpatterns\fR> 
+.SH DESCRIPTION
+Print the sorted `env` lines a declared environment keys, the step cache\*(Aqs answer to the tool line
+.SH OPTIONS
+.TP
+\fB\-\-exclude\fR \fI<exclude>\fR
+A variable a pattern matches that is never keyed, such as a per\-run pid (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpatterns\fR>
+The names or PREFIX* patterns, after `\-\-`: an `env NAME=value` line per keyed variable, `env PATTERN none` where none matches

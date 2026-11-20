@@ -3271,6 +3271,47 @@ const STEP_JOBS: FlagDecl = FlagDecl::valued(
     "Run at most this many of the group's rows at once (a positive integer; default: no bound)",
 );
 
+/// `--ref <ref>` on `step base` (CLOUD-2787): the revision whose merge base
+/// with `HEAD` the base lines are read at.
+const STEP_BASE_REF: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "ref",
+        "ref",
+        "The ref whose merge base with HEAD the lines are read at",
+    )
+};
+
+/// `--ref-env <VAR>` on `step base`: the variable that overrides `--ref`.
+const STEP_BASE_REF_ENV: FlagDecl = FlagDecl::valued(
+    "ref_env",
+    "ref-env",
+    "A variable whose value, when set and non-empty, replaces --ref",
+);
+
+/// The pathspecs `step base` prints a content id for, after the mandatory `--`.
+const STEP_BASE_PATHS: FlagDecl = FlagDecl::trailing(
+    "paths",
+    "The paths, after `--`: one `base <path> <id>` line each, `absent` where missing",
+);
+
+/// `--exclude <NAME>` on `step env` (CLOUD-2786), repeatable: a variable a
+/// pattern matches that is never keyed.
+const STEP_ENV_EXCLUDE: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "exclude",
+        "exclude",
+        "A variable a pattern matches that is never keyed, such as a per-run pid (repeatable)",
+    )
+};
+
+/// The names and `PREFIX*` patterns `step env` keys, after the mandatory `--`.
+const STEP_ENV_PATTERNS: FlagDecl = FlagDecl::trailing(
+    "patterns",
+    "The names or PREFIX* patterns, after `--`: an `env NAME=value` line per keyed variable, `env PATTERN none` where none matches",
+);
+
 /// The step's own command on `step run`, after the mandatory `--`.
 const STEP_COMMAND: FlagDecl = FlagDecl::trailing(
     "command",
@@ -7916,6 +7957,42 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[STEP_GROUP, STEP_JOBS],
+    },
+    // `step cover` (CLOUD-2788): reads the roster from the environment, the
+    // step table and the pass record, and writes nothing: `read`. Its refusal
+    // is a statement about what this head proved, so its exits are a verdict's.
+    CommandDecl {
+        path: "step cover",
+        id: "step.cover",
+        about: "Say whether every required CI check passed at HEAD or is exempt, naming each that did not",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // `step base` (CLOUD-2787): reads object ids at the merge base of HEAD and
+    // a ref, and writes nothing: `read`. A ref that does not resolve is
+    // could-not-look, never a verdict, so its exits are the standard set.
+    CommandDecl {
+        path: "step base",
+        id: "step.base",
+        about: "Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[STEP_BASE_REF, STEP_BASE_REF_ENV, STEP_BASE_PATHS],
+    },
+    // `step env` (CLOUD-2786): reads this process's environment and writes
+    // nothing: `read`. A malformed declaration is usage, never a verdict, so
+    // its exits are the standard set.
+    CommandDecl {
+        path: "step env",
+        id: "step.env",
+        about: "Print the sorted `env` lines a declared environment keys, the step cache's answer to the tool line",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[STEP_ENV_EXCLUDE, STEP_ENV_PATTERNS],
     },
     // The module-graph noun (CLOUD-2789). `cycle` reads the crate's source and
     // writes nothing: `read`. Its refusal over `--max` is a statement about the

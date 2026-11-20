@@ -105,6 +105,16 @@ tools = [["toolv"], ["decl", "bin/taskfile"]]
 id = "traced"
 inputs = ["input.txt"]
 tools = [["toolv"]]
+
+[[step]]
+id = "based"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "base", "--ref", "trunk", "--", "src"]]
+
+[[step]]
+id = "based-by-commit"
+inputs = ["input.txt"]
+tools = [["toolv"], ["git", "merge-base", "HEAD", "trunk"]]
 "#;
 
 /// Where the keyed family keeps its records.
@@ -1063,4 +1073,124 @@ fn a_declared_ignored_or_outside_read_records_under_trace() {
         common::stderr(&out)
     );
     assert_eq!(after, "hit", "traced or not, a declared run records");
+}
+
+/// A TWO-TREE STEP KEYS ITS BASE BY CONTENT (CLOUD-2787): `based` declares its
+/// base half as `step base` over `src`, so a rebase onto a trunk commit that
+/// touched only `docs` hits. `based-by-commit` keys the merge base's commit id,
+/// the shape this replaces, and misses on the same rebase — which is what makes
+/// the first assertion discriminate.
+#[test]
+fn a_rebase_onto_an_unrelated_trunk_commit_hits() {
+    let repo = Repo::new("rebase-unrelated");
+    common::write(&repo.dir, "src/a.rs", "fn a() {}\n");
+    common::write(&repo.dir, "docs/a.md", "one\n");
+    common::git_in(&repo.dir, &["add", "-A"]);
+    common::git_in(&repo.dir, &["commit", "-qm", "trunk"]);
+    let branch = common::git_in(&repo.dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    common::git_in(&repo.dir, &["branch", "trunk"]);
+    common::write(&repo.dir, "feature.txt", "work\n");
+    common::git_in(&repo.dir, &["add", "feature.txt"]);
+    common::git_in(&repo.dir, &["commit", "-qm", "feature"]);
+
+    for step in ["based", "based-by-commit"] {
+        let first = repo.run_step(&[step], &["ok"], &[]);
+        assert_eq!(first_word(&first), "miss", "{}", common::stderr(&first));
+        let again = repo.run_step(&[step], &["ok"], &[]);
+        assert_eq!(
+            first_word(&again),
+            "hit",
+            "the premise: {}",
+            common::stderr(&again)
+        );
+    }
+
+    common::git_in(&repo.dir, &["checkout", "-q", "trunk"]);
+    common::write(&repo.dir, "docs/a.md", "two\n");
+    common::git_in(&repo.dir, &["commit", "-qam", "docs only"]);
+    common::git_in(&repo.dir, &["checkout", "-q", &branch]);
+    common::git_in(&repo.dir, &["rebase", "-q", "trunk"]);
+
+    let based = repo.run_step(&["based"], &["ok"], &[]);
+    assert_eq!(first_word(&based), "hit", "{}", common::stderr(&based));
+    let by_commit = repo.run_step(&["based-by-commit"], &["ok"], &[]);
+    assert_eq!(
+        first_word(&by_commit),
+        "miss",
+        "the control: a commit-id base moves on the same rebase: {}",
+        common::stderr(&by_commit)
+    );
+}
+
+// ---- the write hazard (CLOUD-2786) -----------------------------------------
+//
+// The read half was already there: `record` refuses when the key moved while
+// the step ran. A step that writes a declared input and restores it before it
+// exits leaves the key unmoved, so only the trace can see it.
+
+/// Fails by: a write to a declared input that was put back minting a receipt
+/// (its verdict judged bytes the tree never held), the line not pointing at a
+/// listing naming the input, or an untraced host refusing a run it cannot see.
+#[test]
+fn a_step_that_rewrites_a_declared_input_and_restores_it_takes_no_receipt() {
+    let repo = Repo::new("trace-rewrite");
+    repo.script(
+        "rewrite",
+        "#!/bin/sh\ncp input.txt bin/saved\necho changed >input.txt\ncp bin/saved input.txt\n",
+    );
+    let (out, after) = repo.traced_run("rewrite");
+    assert_eq!(
+        read(&repo.path("input.txt")),
+        "one\n",
+        "the premise: restored"
+    );
+    if batten::mutate::trace::tracer().is_some() {
+        let stderr = common::stderr(&out);
+        assert_eq!(out.status.code(), Some(2), "{stderr}");
+        let listing = stderr
+            .lines()
+            .find_map(|line| line.split_once("step run: traced wrote 1 declared input(s); read "))
+            .map_or_else(
+                || panic!("the line points at the listing: {stderr}"),
+                |(_, at)| at.trim().to_owned(),
+            );
+        assert_eq!(std::fs::read_to_string(&listing).unwrap(), "input.txt\n");
+        assert!(
+            !stderr.contains("outside its inputs"),
+            "the write is reported before any read: {stderr}"
+        );
+        assert_eq!(after, "miss", "a written input records nothing");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit", "untraced, the step records as before");
+    }
+}
+
+/// Fails by: a write under a git-ignored path that a declared pathspec
+/// selects (a build's `target/`) read as a hazard, so no whole-tree step ever
+/// recorded again.
+#[test]
+fn a_write_under_an_ignored_path_is_not_a_hazard() {
+    let repo = Repo::new("trace-ignored-write");
+    repo.script(
+        "build",
+        // A PLAIN `mkdir`, NEVER `-p`: coreutils' `-p` changes directory to
+        // make each component, and a `chdir` leaves every bare relative path
+        // in the trace unresolvable — the reader's stated limit, not this case.
+        "#!/bin/sh\ncat input.txt >/dev/null\nmkdir bin/out\necho artefact >bin/out/a\nrm -r bin/out\n",
+    );
+    let out = repo.run_step(&["whole"], &["build"], &[]);
+    let again = repo.run_step(&["whole"], &["build"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !common::stderr(&out).contains("declared input(s)"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(
+        common::stderr(&again).split_whitespace().next(),
+        Some("hit"),
+        "traced or not, an ignored write records: {}",
+        common::stderr(&out)
+    );
 }
