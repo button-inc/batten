@@ -126,6 +126,7 @@ row here, so a new module lands with its line.
 - `bypass.rs` — guardrail bypass (CLOUD-98): a refused operation retried with enforcement off, the THIRD detector over `transcript.rs`'s stream.
 - `completion.rs` — declared done with work not landed (CLOUD-97), the second detector over `transcript.rs`'s stream and the FIRST occupant of the `FindingKind::Sequence` seam.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): who is reading, and how far have they got.
+- `shell.rs` — the shell parse every hook judges a command by: segments, words with quotes resolved, here-doc stdin, through `rable`; a leaf below `hook` (CLOUD-2789).
 - `init.rs` — `batten init` (CLOUD-206), house style §12's scaffolding half: the starter `batten.toml` embedded as `src/starter.toml` plus the three-valued `apply`.
 - `identity.rs` (crate `batten-facts`) — finding-identity fingerprints (CLOUD-123): SHA-256 over a normalized, kind-discriminated tuple — never raw `file:line` — so line insertion doesn't re-mint a finding.
 - `scratch.rs` (crate `batten-facts`) — out-of-tree TEST scratch, owned in one place and reaped by liveness (CLOUD-1148).
