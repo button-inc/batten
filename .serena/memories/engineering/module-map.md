@@ -15,6 +15,7 @@ row here, so a new module lands with its line.
 - `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
 - `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by CLOUD-1121).
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an exhaustive `match` rather than a lookup on strings.
+- `clock.rs` — the boundary's wall clock in epoch seconds: a leaf, so a module that only needs the time does not reach up into the crate root for it (CLOUD-2789).
 - `output.rs` — house-style §3/§4 (CLOUD-42): the `Verbosity` ladder (`silent…trace`, a derived `Ord`, so `admits` is a comparison), and the §4 attended/unattended resolution.
 - `outputs.rs` — `exec` output predicates (CLOUD-117): declared literals that, found in a wrapped command's captured stream, promote a lying exit `0` to a failure.
 - `admission.rs` — issued admissions (CLOUD-1051): an override stops being knowledge and becomes a record.

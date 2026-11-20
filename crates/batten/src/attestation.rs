@@ -142,7 +142,7 @@ fn produce(root: &Path, tag: Option<&str>, binary: &str, verifier: &str) -> Prod
             "no declared forge credential is set, so a 404 could not be told from a denial",
         );
     }
-    let Some(slug) = crate::repo_slug(root) else {
+    let Some(slug) = crate::race::repo_slug(root) else {
         return could("no forge remote names a repository to ask about");
     };
     let probe = format!("repos/{slug}/attestations/sha256:{ZERO_DIGEST}");

@@ -5146,6 +5146,179 @@ pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
     Ok(Look::Is(Analysis { swept, unswept }))
 }
 
+/// Run each registered module's own `test_` rules (CLOUD-835).
+///
+/// **The gap this closes.** `crates/batten/tests/it/policy_modules.rs` exercises
+/// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
+/// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
+/// cases onto policy rows, and CLOUD-202 measured the trap that makes an
+/// untested port worse than none — the shell tasks spell `1 = violation,
+/// 2 = could not read` and this contract is the exact inverse.
+///
+/// **The fixture is the row's own `documents`.** No new config key: CLOUD-833
+/// already gave a tree-scoped policy row the documents it hands its bundle, and
+/// `crate::rules::tree_document` already parses them and returns the ones the tree does
+/// not carry rather than guessing. Non-negotiable 6 keeps configuration narrow,
+/// and this is the reuse that honours it.
+///
+/// # Exit codes, and the two faults kept apart
+///
+/// `2` when a test failed or a published predicate went unexercised — the row's
+/// §7(b) is explicit that the latter is *"reported, not green"*. `1` when the
+/// suite could not run: a declared fixture the tree does not carry, or a sweep
+/// that did not happen. Separating them is CLOUD-202's whole lesson, and
+/// `tests/policy_test.rs` asserts each independently so the port cannot
+/// reintroduce the inversion it exists to avoid.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
+/// module will not load — both refused by [`load`] with their own
+/// message, at the boundary where a config fault belongs.
+/// The tree input one policy suite runs against.
+///
+/// Split out of `run_policy_test` so that function reads as a loop over rows;
+/// what it holds is the pair of deliberate omissions, which are easier to see
+/// stated together than buried in an argument list.
+///
+/// **A SUITE RUNS AGAINST NO PRODUCED RECORD** (CLOUD-851). A module's tests must
+/// decide the same way on every machine, and the sink store is per-checkout state
+/// that differs between them — so a test that wants a baseline supplies it with
+/// `with input as`, the same way a mediated-call suite supplies its call.
+///
+/// **AND AGAINST NO GIT FACT**, for exactly the same reason (CLOUD-907). HEAD, the
+/// branch, the remotes and whether a ref resolves are all per-checkout state: a
+/// suite that read them would pass on the author's machine and fail in CI's
+/// detached, remote-less clone, which is a test asserting its environment rather
+/// than its module.
+pub(crate) fn suite_input(
+    rule: &crate::rules::Rule,
+    documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
+    tracked: &[String],
+) -> Result<(String, Vec<(String, crate::rules::NotAcquired)>)> {
+    // A mediated-call row declares no documents, so its tests run against `{}`
+    // and supply their own input with `with input as` — OPA and Conftest's own
+    // shape, and the reason neither surface needs a fixture key.
+    Ok(crate::rules::tree_document(
+        documents,
+        &crate::rules::Declared {
+            documents: &crate::rules::declared_documents(rule, tracked)?,
+            lines: &crate::rules::declared_lines(rule, tracked)?,
+            invocations: &crate::rules::declared_invocations(rule, tracked)?,
+            uses: &crate::rules::declared_uses(rule, tracked)?,
+            // EMPTY, unlike its neighbours above, and the asymmetry is the
+            // point (CLOUD-1167). `documents` and the three beside it name paths
+            // INSIDE the repository, so a declared one that is missing is a
+            // fixture the author owes. An `[[rule.external]]` row names a file
+            // outside it — a launcher's settings, a toolchain's data directory —
+            // which is legitimately absent on a CI runner, in a fresh container,
+            // and on any host that does not run that launcher. Resolving the
+            // declared list here would report every such host as a missing
+            // fixture and fail `policy test` for a file the module's own `test_`
+            // rules never read: they supply their input with `with input as`,
+            // which is what this call is building the SHAPE for.
+            //
+            // Whether a declared out-of-root file actually resolves is `check`'s
+            // question, and `check` answers it the way the family requires — the
+            // id goes to `input.tree.missing` with its cause and the row is
+            // skipped, rather than running against a fabricated empty document.
+            // EMPTY for `external`'s reason: a staged read needs an index this
+            // shape-building call has no reason to open.
+            staged: &[],
+            // Nothing to fall back FOR: the list above is empty, so no path ever
+            // reaches the extension test this would answer.
+            staged_format: None,
+            external: &[],
+        },
+        tracked,
+        // A module's own `test_` rules supply their input with `with input as`,
+        // so every member here is empty for one reason: this call builds the
+        // SHAPE, and the case chooses the values.
+        &crate::rules::Resolved {
+            traversals: &serde_json::Value::Null,
+            review: &crate::facts::Look::IsNot,
+            produced: &std::collections::BTreeMap::new(),
+            records: &std::collections::BTreeMap::new(),
+            records_blocked: &std::collections::BTreeMap::new(),
+            git: &crate::git::GitFacts::default(),
+            symbols: &crate::facts::Look::IsNot,
+            external: &std::collections::BTreeMap::new(),
+            state: None,
+            forge: None,
+            tool_verdicts: None,
+            plan: None,
+            minted: None,
+            captured: None,
+        },
+    ))
+}
+
+/// Whether one policy module's own `test_<case>` rule passes under `root`'s
+/// committed config: `Some(true)` passed, `Some(false)` failed, `None` when no
+/// registered rule's module is `module` or the module declares no such test
+/// (CLOUD-2255).
+///
+/// THE MUTATION SWEEP'S REGO SUITE, IN PROCESS. A `#MUTANT` row in a module
+/// that names one of the module's own tests is judged by that test, the way
+/// `opa test --run` selects one: through the same load, input and evaluator
+/// `policy test` uses, over the staged (mutated) tree, so the registry data the
+/// module reads is supplied and nothing is spawned. Conftest, the other `.rego`
+/// suite, supplies none of it.
+///
+/// # Errors
+///
+/// When the config under `root` does not resolve or a bundle does not load:
+/// could-not-look, never a pass.
+pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
+    let config = crate::resolve::resolve(root, &crate::resolve::Overrides::default())?;
+    let Some(rule) = config.rules.iter().find(|rule| {
+        rule.kind == crate::rules::RuleKind::Policy && rule.module.as_deref() == Some(module)
+    }) else {
+        return Ok(None);
+    };
+    // EVERY ROW LOADED, ONE EVALUATED: the registry check holds the declared
+    // verdicts against the raisers among the loaded bundles, so loading the one
+    // row would refuse every class another module raises.
+    let bundles = load(
+        root,
+        &config.rules,
+        Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
+            recorders: &config.recorders,
+            registers: &config.registers,
+            traversals: &config.traversals,
+            records: &config.records,
+        },
+        ModuleChecks::Run,
+        None,
+    )?;
+    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+        return Ok(None);
+    };
+    let tracked = crate::rules::tree_files(root)?;
+    let documents = crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
+    let (input, _) = suite_input(rule, &documents, &tracked)?;
+    let crate::facts::Look::Is(suite) = test(
+        bundle,
+        &input,
+        rule.scope == crate::rules::RuleScope::MediatedCall,
+    )?
+    else {
+        return Ok(None);
+    };
+    let name = format!("test_{case}");
+    let named = |ids: &[TestId]| ids.iter().any(|id| id.name == name);
+    Ok(if named(&suite.passed) {
+        Some(true)
+    } else if named(&suite.failed) {
+        Some(false)
+    } else {
+        None
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

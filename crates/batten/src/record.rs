@@ -560,7 +560,7 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
             "`{reference}` resolves to no commit, so there is no sha to key this verdict to"
         )));
     };
-    let Some(repo) = crate::repo_slug(root) else {
+    let Some(repo) = crate::race::repo_slug(root) else {
         writeln!(
             err,
             "batten: record forge: could not look: no forge remote names the repository"

@@ -3692,7 +3692,7 @@ fn declares_own_case(root: &Path, row: &Row) -> bool {
         })
 }
 
-/// A row judged by its module's own test tier, in process ([`crate::policy_case`]),
+/// A row judged by its module's own test tier, in process ([`crate::policy::case`]),
 /// with the same three-step discipline as a suite: green before the mutation,
 /// a change that touches code, red after it. A fault is could-not-look, never a
 /// catch: a mutation that breaks the module's parse is not one its case caught.
@@ -3702,7 +3702,7 @@ fn declares_own_case(root: &Path, row: &Row) -> bool {
 /// naming no case.
 fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option<Verdict>> {
     let want = row.want.clone();
-    match crate::policy_case(staged.dir(), &row.source, &row.want) {
+    match crate::policy::case(staged.dir(), &row.source, &row.want) {
         Ok(Some(true)) => {}
         Ok(Some(false)) => return Ok(Some(Verdict::CaseAlreadyRed { want })),
         Ok(None) => return Ok(None),
@@ -3720,7 +3720,7 @@ fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option
         return Ok(Some(Verdict::SelfMutatingRow));
     }
     Ok(Some(
-        match crate::policy_case(staged.dir(), &row.source, &row.want) {
+        match crate::policy::case(staged.dir(), &row.source, &row.want) {
             Ok(Some(false)) => Verdict::Caught,
             Ok(Some(true)) => Verdict::Survived { want },
             Ok(None) => Verdict::NamesNoCase { want },

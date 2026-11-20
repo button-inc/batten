@@ -5375,6 +5375,20 @@ pub fn authority_root(start: &Path) -> Result<PathBuf> {
     crate::git::authority_root(start, CONFIG_FILE)
 }
 
+/// The authority as resolved from the directory `here` rather than the working
+/// directory, so an in-process caller resolves what a child spawned in `here`
+/// would: `here` itself when it carries [`CONFIG_FILE`], else
+/// [`authority_root`], else `here`.
+#[must_use]
+pub fn anchor_at(here: &Path) -> PathBuf {
+    if here.join(CONFIG_FILE).is_file() {
+        return here.to_path_buf();
+    }
+    // The worktree's own authority before the repository's (CLOUD-2532): from a
+    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
+    authority_root(here).unwrap_or_else(|_| here.to_path_buf())
+}
+
 /// Locate the one committed authority for a run anchored at `anchor`.
 ///
 /// `config_in` is `--config-in <dir>`, when passed. It names a **directory**,
