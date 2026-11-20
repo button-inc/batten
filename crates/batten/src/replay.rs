@@ -557,7 +557,7 @@ pub fn run(
     let kept = crate::state::repo_state_dir(root)?
         .join("replay")
         .join(BUILD_LOG);
-    if !json && kept.is_file() {
+    if !json && !structural && kept.is_file() {
         writeln!(
             out,
             "test replay: a union build failed; its compiler output is at {}",
