@@ -41,7 +41,46 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::facts::Production;
-use crate::rules::SinkKey;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// What a rule's produced record is filed under (CLOUD-851).
+///
+/// Two, and both are answers the BOUNDARY has: the rule's own id, which is
+/// constant, and the current branch, which is a fact about the checkout. Deliberately
+/// not a free-form string — a key a config could spell arbitrarily is a filename a
+/// config could point anywhere, and the store lives under `$GIT_DIR`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum SinkKey {
+    /// Filed under the rule's own id: one record per rule, whatever the checkout
+    /// is doing. The right key for a journal.
+    #[default]
+    Rule,
+    /// Filed under the current branch, so every commit on it continues to serve
+    /// the same record — `claim.<branch>`'s shape, and the reason
+    /// [`crate::rules::ReceiptKey::Branch`] exists for the reading half.
+    Branch,
+}
+
+/// A rule's declared output (CLOUD-851).
+///
+/// A kind and a key, and nothing else. There is no path column on purpose: a
+/// sink that could name its own destination is a config that can write anywhere,
+/// and the store's layout is the engine's to own.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Sink {
+    /// Which of the three censused kinds this is, deciding whether the record is
+    /// appended, replaced, or merely touched — and whether a later run reads it
+    /// back as a fact.
+    pub kind: crate::facts::Production,
+    /// What the record is filed under.
+    #[serde(default)]
+    pub key: SinkKey,
+}
 
 /// The directory every produced record lives under, relative to the git dir.
 ///
@@ -233,13 +272,15 @@ pub struct Declared {
 /// has to look under the same address the write half filed it under, and the
 /// branch is the caller's answer about the checkout rather than the rule's.
 #[must_use]
-pub fn declared_records(rules: &[crate::rules::Rule], branch: Option<&str>) -> BTreeSet<Declared> {
-    rules
-        .iter()
-        .filter_map(|rule| {
-            let sink = rule.produces.as_ref()?;
+pub fn declared_records<'a>(
+    sinks: impl IntoIterator<Item = (&'a str, &'a Sink)>,
+    branch: Option<&str>,
+) -> BTreeSet<Declared> {
+    sinks
+        .into_iter()
+        .filter_map(|(rule, sink)| {
             Some(Declared {
-                rule: rule.id.clone(),
+                rule: rule.to_owned(),
                 kind: sink.kind,
                 discriminator: discriminator(sink.key, branch)?,
             })
@@ -256,8 +297,8 @@ pub fn declared_records(rules: &[crate::rules::Rule], branch: Option<&str>) -> B
 /// had asked. `receipt::verdicts` states the same rule one channel over: a
 /// caller must not pay a git invocation for a question it never asks.
 #[must_use]
-pub fn any_declared(rules: &[crate::rules::Rule]) -> bool {
-    rules.iter().any(|rule| rule.produces.is_some())
+pub fn any_declared<'a>(mut sinks: impl Iterator<Item = (&'a str, &'a Sink)>) -> bool {
+    sinks.next().is_some()
 }
 
 /// Whether any declared sink is keyed by BRANCH.
@@ -266,11 +307,8 @@ pub fn any_declared(rules: &[crate::rules::Rule]) -> bool {
 /// whose sinks are all rule-keyed needs no branch, and resolving one would be a
 /// second read nobody asked for.
 #[must_use]
-pub fn any_branch_keyed(rules: &[crate::rules::Rule]) -> bool {
-    rules
-        .iter()
-        .filter_map(|rule| rule.produces.as_ref())
-        .any(|sink| sink.key == SinkKey::Branch)
+pub fn any_branch_keyed<'a>(mut sinks: impl Iterator<Item = (&'a str, &'a Sink)>) -> bool {
+    sinks.any(|(_, sink)| sink.key == SinkKey::Branch)
 }
 
 /// Write every requested record, and answer how many reached disk.

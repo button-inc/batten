@@ -1794,7 +1794,7 @@ own text and could carry anything. What to run instead is the row's declared rem
 `batten policy explain` prints; where that remedy cannot perform the change, the class is \
 admissible through a recorded admission bound to the row id at the current commit.",
         routes: &[
-            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),
+            run("rule read first", crate::grammar::RULE_HOP_PLACEHOLDER),
             SHAPE_ADMIT_ROUTE,
         ],
         applicability: Applicability::Advice,

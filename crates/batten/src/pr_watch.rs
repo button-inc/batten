@@ -154,6 +154,11 @@ pub struct Progress {
     pub program: String,
     /// The identity the recorder keys on.
     pub id: String,
+    /// How the recorder is run: the program, then its arguments (CLOUD-2789).
+    /// The caller's, as the program is: resolving a program name is the
+    /// engine's concern, which this module would otherwise reach up into
+    /// `rules` for.
+    pub spawn: fn(&str, &[String]),
 }
 
 /// Project a check-runs document into the rows the decision reads.
@@ -835,23 +840,12 @@ fn recorder_argv(program: &str) -> (&str, Vec<&str>) {
 
 fn record(progress: &Progress, signal: &str, value: &str) {
     let (program, leading) = recorder_argv(&progress.program);
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
-    )]
-    let _ = crate::rules::spawn_resolving(
-        Some(std::path::Path::new(".")),
-        program,
-        |program, extra| {
-            std::process::Command::new(program)
-                .args(extra)
-                .args(&leading)
-                .args([signal, progress.id.as_str(), value])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-        },
-    );
+    let args: Vec<String> = leading
+        .into_iter()
+        .chain([signal, progress.id.as_str(), value])
+        .map(str::to_owned)
+        .collect();
+    (progress.spawn)(program, &args);
 }
 
 /// The wait between requests, with nothing to stop it: [`pause_until`] over a

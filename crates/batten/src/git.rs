@@ -1036,6 +1036,147 @@ fn scope_open() -> bool {
     with_opens(|opens| !opens.1).unwrap_or(false)
 }
 
+/// The entry whose presence makes a directory a repository of its own — git's
+/// own boundary marker, and therefore the one this crate reads.
+///
+/// It is a *directory* in a plain clone and a *file* in a submodule or a linked
+/// worktree, which is why presence is what is tested and never the kind.
+pub const NESTED_REPOSITORY_MARKER: &str = ".git";
+
+/// Render a relative path with `/` separators, so globbing and output are
+/// identical across platforms (§6 byte-stability spans OSes).
+fn rel_to_slash(rel: &Path) -> String {
+    rel.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every file under `root`, as sorted repo-relative `/`-separated paths — the
+/// one tree walk the crate has.
+///
+/// Sorted, so any pass over it is deterministic (§6), and `.git` is skipped:
+/// the object store is never policy input. A second walker would be a second
+/// answer to "what does Batten look at", which is the divergence
+/// [`crate::markers`] reuses this to avoid.
+///
+/// # Ignored files are not policy input (CLOUD-214)
+///
+/// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
+/// repository consider its own" is answered by the `.gitignore` the contributors
+/// already maintain rather than by a second list here. Adopted, not rebuilt:
+/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
+/// it, and none of them is this crate's to re-implement.
+///
+/// The measurement that decided it, on this repository after one `cargo build`:
+/// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
+/// ignored build output under `target/` and only 330 were the repository's own.
+/// A `forbid` rule was one broad glob away from reporting findings against
+/// compiler artifacts, and every rule paid to walk them.
+///
+/// Two settings are load-bearing and pinned by tests rather than left to the
+/// crate's defaults:
+///
+/// * **Hidden entries are walked** (`hidden(false)`). `ignore` skips dotfiles by
+///   default, which would silently drop `.github/`, `.serena/` and `.claude/` —
+///   three directories this repository's committed rules select outright, so the
+///   default would turn live gates into dead ones with no diagnostic.
+/// * **Ignore files are honoured, `require_git` off.** A fixture that is not a
+///   git repository still reads its own `.gitignore`, so the selection does not
+///   change shape depending on whether git happens to be initialised.
+///
+/// # The selection stops at a nested repository (CLOUD-328)
+///
+/// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
+/// own, and this walk does not enter it. **This is the single statement of
+/// which files a glob selects, and the base-rev half of a ratchet
+/// ([`crate::git::count_at_rev`]) reads the same rule** — it skips gitlink
+/// entries — so the two halves select the same set by construction rather than
+/// by a consumer's care with globs.
+///
+/// Without it the two disagree, and the direction is the dangerous one: a
+/// `non_decreasing` row whose glob spans a submodule sits permanently above a
+/// base that counted one gitlink, so no deletion could ever pull it back under
+/// and **the gate cannot fail**. Measured on this repository at the commit that
+/// raised CLOUD-328: base 637 against working 1404, a fixed `+767` in a tree
+/// where nothing had been added.
+///
+/// It is not a ratchet-only property, because this is not a ratchet-only
+/// walker: it is also what stops a `forbid` rule reporting findings against
+/// vendored third-party code, and a `budget` or a marker scan from measuring a
+/// checkout that is not this one. The rule is stated in git's terms rather than
+/// as a submodule list precisely so a linked worktree — `.claude/worktrees/`,
+/// where agents work — is bounded by the same reading.
+///
+/// `root` itself is never a boundary: it carries the marker by definition, and
+/// only *descended* directories are tested.
+///
+/// # Errors
+///
+/// An I/O failure while walking propagates as an internal error (→ exit `3`).
+pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
+    let root = root.to_path_buf();
+    let mut walker = ignore::WalkBuilder::new(&root);
+    walker
+        // Dotfiles are ordinary policy input here; see the doc comment.
+        .hidden(false)
+        // A `.gitignore` means what it says whether or not `git init` has run,
+        // so the selection does not change shape under a fixture.
+        .require_git(false)
+        // The repository's own ignore surface, and only it. A developer's global
+        // excludes are a property of their machine, not of this repository, and
+        // a gate whose file set varies per workstation is not one gate.
+        .git_global(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .parents(false)
+        // One filesystem: a walk that follows a mount out of the repository is
+        // measuring somebody else's disk.
+        .same_file_system(true)
+        .follow_links(false);
+    // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
+    // root's own `.git` but knows nothing about a nested repository, so the rule
+    // this crate states has to be applied here or it would be silently dropped
+    // by the very change that adopts a better walk. `tests/submodule.rs` is what
+    // catches that, and it is why those assertions landed first.
+    let boundary = root.clone();
+    walker.filter_entry(move |entry| {
+        if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
+            return true;
+        }
+        // The object store is never policy input, and this skip cannot be left
+        // to the walker: `ignore` excludes `.git` as a *hidden* entry, and
+        // `hidden(false)` above — which this repository's own rules require, to
+        // reach `.github/` and `.serena/` — switches that off along with it.
+        // Dropping it would put every blob, ref and hook body into the file set.
+        if entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER) {
+            return false;
+        }
+        // `root` carries the marker by definition; testing it would empty every
+        // walk, so only descended directories are judged.
+        if entry.path() == boundary {
+            return true;
+        }
+        !entry.path().join(NESTED_REPOSITORY_MARKER).exists()
+    });
+
+    let mut files = Vec::new();
+    for entry in walker.build() {
+        let entry = entry?;
+        // Directories, and the root itself, are not files; a symlink is not
+        // followed, so it never contributes a path outside the tree.
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(&root) {
+            files.push(rel_to_slash(rel));
+        }
+    }
+    // `ignore` yields in directory order; §6 byte-stability is this sort.
+    files.sort();
+    Ok(files)
+}
+
 /// The gix crates, and their releases, [`read_by_open`]'s list was audited
 /// against (CLOUD-2526). The list is what an isolated open reads, and three
 /// crates decide that — `gix`'s open, `gix-discover`'s walk and `gix-config`'s
@@ -1695,7 +1836,7 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     // Untracked: the crate's one tree walker, so "ignored" means here exactly
     // what it means to every rule that reads the tree.
     if want == Changes::All {
-        for path in crate::rules::tree_files(&root)? {
+        for path in tree_files(&root)? {
             // `.git` IS NOT TREE CONTENT, and in a LINKED WORKTREE it is a
             // regular FILE rather than the directory every walker skips by
             // name. Measured: a `git worktree add` checkout reported exactly one
@@ -3306,7 +3447,7 @@ fn walk_blob_ids(
     // whole listing rather than re-parsed per entry (CLOUD-214). Sharing the
     // type is what keeps the two halves' answer to "does this glob select this
     // path" a single implementation.
-    let selector = crate::rules::Selector::new(glob)?;
+    let selector = crate::selector::Selector::new(glob)?;
 
     // A recorded traversal rather than parsed `ls-tree` output, which is what
     // fixes CLOUD-749: the recorder hands back the path as BYTES, so
@@ -3847,13 +3988,13 @@ pub fn base_delta(
     // declaration for an answer that does not change.
     let selectors = globs
         .iter()
-        .map(|glob| crate::rules::Selector::new(glob))
+        .map(|glob| crate::selector::Selector::new(glob))
         .collect::<Result<Vec<_>>>()?;
     let selects = |path: &str| selectors.iter().any(|selector| selector.matches(path));
 
     let mut delta = BaseDelta::default();
     let mut present: BTreeSet<String> = BTreeSet::new();
-    for path in crate::rules::tree_files(dir)? {
+    for path in tree_files(dir)? {
         if !selects(&path) {
             continue;
         }
@@ -5622,7 +5763,7 @@ fn tags_matching(repo: &gix::Repository, glob: Option<&str>) -> Result<Vec<Histo
     let Some(glob) = glob else {
         return Ok(Vec::new());
     };
-    let selector = crate::rules::Selector::new(glob)
+    let selector = crate::selector::Selector::new(glob)
         .map_err(|_| UsageError::raise("the declared tag glob does not compile".to_owned()))?;
     let platform = repo
         .references()
@@ -6534,7 +6675,7 @@ pub fn index_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, I
             }
         }
     }
-    for path in crate::rules::tree_files(&root)? {
+    for path in tree_files(&root)? {
         // `.git` in a LINKED worktree is a regular file, and it is never tree
         // content — `working_tree_changes` measured the same false entry.
         if path == ".git" || tracked.contains(&path) {

@@ -34,6 +34,11 @@ pub const RESULT_KEYS: [&str; 3] = ["tool_response", "toolResponse", "tool_resul
 /// read granularity rides on it, so no case can tell a product from a sum.
 const CHUNK: usize = 16_384;
 
+/// A result leaf at or under this many bytes is the result's SHAPE (a path, a
+/// count, a mode), never its payload, so it stays in place when a result is
+/// bounded (CLOUD-2223, CLOUD-2224).
+pub const LEAF_KEEP_BYTES: usize = 256;
+
 /// One result leaf too large to keep: where its text went and what stands in
 /// its place in the parsed value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,7 +313,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                 }
             }
             kept.push_str(&piece);
-            if self.over && kept.len() > crate::capture::LEAF_KEEP_BYTES {
+            if self.over && kept.len() > LEAF_KEEP_BYTES {
                 let path = self.spill_dir.join(format!(
                     "leaf-{}-{}.txt",
                     std::process::id(),
@@ -484,10 +489,10 @@ mod tests {
     #[test]
     fn a_leaf_no_longer_than_the_kept_length_is_never_spilled() {
         let dir = scratch("keep");
-        let at = "q".repeat(crate::capture::LEAF_KEEP_BYTES);
+        let at = "q".repeat(LEAF_KEEP_BYTES);
         let kept = super::read(payload(&at).as_bytes(), &dir, 0, q_count).expect("reads");
         assert!(kept.spilled.is_empty(), "{:?}", kept.spilled);
-        let past = "q".repeat(crate::capture::LEAF_KEEP_BYTES + 1);
+        let past = "q".repeat(LEAF_KEEP_BYTES + 1);
         let over = super::read(payload(&past).as_bytes(), &dir, 0, q_count).expect("reads");
         assert_eq!(over.spilled.len(), 1);
     }
