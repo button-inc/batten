@@ -285,6 +285,9 @@ fn material(
     if let Some(command) = command {
         lines.push(format!("command {}", serde_json::to_string(command).ok()?));
     }
+    // THE DECLARED ENVIRONMENT (CLOUD-2786) is a `batten step env` entry of
+    // `tools`, answered in-process by `tool_said`: a row without one keys byte
+    // for byte as before, and one that will not parse is no key.
     for tool in tools {
         let (code, said) = tool_said(root, tool)?;
         let said = said.trim();
@@ -333,17 +336,182 @@ fn material(
 pub const INPUTS_DIGEST: [&str; 5] = ["batten", "enforce", "--half", "tree", "--inputs-digest"];
 
 /// What `tool` says run in `root`, as its exit code and stdout: answered
-/// in-process for [`INPUTS_DIGEST`] (a digest that cannot be taken is a
+/// in-process for [`INPUTS_DIGEST`], a [`BASE`] line and an
+/// [`ENV`](crate::mutate::resume::ENV) line (one that cannot be answered is a
 /// non-zero code, so no key), spawned through the placed boundary for every
 /// other line. `None` where it could not be spawned.
 fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
+    let answered =
+        |said: Option<String>| Some(said.map_or_else(|| (1, String::new()), |said| (0, said)));
     if tool.iter().map(String::as_str).eq(INPUTS_DIGEST) {
-        return Some(
-            crate::tree_inputs_digest_in(root)
-                .map_or_else(|_| (1, String::new()), |said| (0, said)),
+        return answered(crate::tree_inputs_digest_in(root).ok());
+    }
+    if let Some(words) = after(tool, &BASE) {
+        let var = |name: &str| std::env::var(name).ok();
+        return answered(base_ask(words).and_then(|ask| base_said(root, &ask, &var)));
+    }
+    if let Some(words) = after(tool, &crate::mutate::resume::ENV) {
+        return answered(
+            crate::mutate::resume::env_ask(words)
+                .and_then(|declared| env_lines(&declared, std::env::vars_os()))
+                .map(|lines| lines.join("\n")),
         );
     }
     crate::exec::piped_argv(root, tool, "", crate::exec::Diagnostics::Drop, &[])
+}
+
+/// The words of `tool` after `head`, where it begins with `head`.
+fn after<'a>(tool: &'a [String], head: &[&str]) -> Option<&'a [String]> {
+    tool.get(..head.len())
+        .filter(|start| start.iter().map(String::as_str).eq(head.iter().copied()))
+        .and_then(|_| tool.get(head.len()..))
+}
+
+/// `step env` (CLOUD-2786): print the sorted `env "NAME=value"` and
+/// `env "PATTERN" none` lines the declaration keys in this process's
+/// environment, the lines the step cache answers the row's tool line with;
+/// exit 0. 1 for a declaration that names no pattern or a malformed name, 3
+/// for a keyed value that is not Unicode.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_env(
+    exclude: &[String],
+    patterns: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(declared) = crate::mutate::resume::declare(patterns.to_vec(), exclude.to_vec()) else {
+        writeln!(
+            err,
+            "step env: at least one NAME or PREFIX* pattern after `--`, and --exclude takes a NAME"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let Some(lines) = env_lines(&declared, std::env::vars_os()) else {
+        writeln!(err, "step env: a keyed variable's value is not Unicode")?;
+        return Ok(ExitCode::Internal);
+    };
+    for line in lines {
+        writeln!(out, "{line}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// The tool line prefix the cache answers in-process for a two-tree step's
+/// base half (CLOUD-2787): `batten step base --ref <ref> [--ref-env <VAR>] --
+/// <path>...`, by the same function [`run_base`] prints with ([`base_said`]).
+pub const BASE: [&str; 3] = ["batten", "step", "base"];
+
+/// What a `step base` line asks: the ref, the variable that overrides it when
+/// set and non-empty, and the pathspecs whose content ids are its answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BaseAsk {
+    reference: String,
+    ref_env: Option<String>,
+    paths: Vec<String>,
+}
+
+/// The [`BaseAsk`] a tool line's words after [`BASE`] spell, or `None` for any
+/// other shape — which keys nothing, so the step runs. Only the canonical
+/// spelling is read: `--ref` and `--ref-env` as separate tokens, then `--`.
+fn base_ask(words: &[String]) -> Option<BaseAsk> {
+    let (mut reference, mut ref_env) = (None, None);
+    let mut rest = words.iter();
+    loop {
+        match rest.next()?.as_str() {
+            "--ref" => reference = Some(rest.next()?.clone()),
+            "--ref-env" => ref_env = Some(rest.next()?.clone()),
+            "--" => break,
+            _ => return None,
+        }
+    }
+    let paths: Vec<String> = rest.cloned().collect();
+    let reference = reference.filter(|named: &String| !named.is_empty())?;
+    (!paths.is_empty()).then_some(BaseAsk {
+        reference,
+        ref_env,
+        paths,
+    })
+}
+
+/// The ref `ask` compares against: `ref_env`'s value when that variable is set
+/// and non-empty under `var`, else the declared ref.
+fn base_ref(ask: &BaseAsk, var: &dyn Fn(&str) -> Option<String>) -> String {
+    ask.ref_env
+        .as_deref()
+        .and_then(var)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ask.reference.clone())
+}
+
+/// The base lines for `ask`: one `base <path> <id>` per pathspec, read at the
+/// MERGE BASE of `HEAD` and [`base_ref`], never the ref's tip — the revision
+/// `test replay` and `perf-gate` actually compare against. `None` where the
+/// ref or the merge base cannot be resolved: no key, so the step runs.
+///
+/// NO COMMIT ID ENTERS THE ANSWER: a trunk that gains a commit touching none of
+/// the paths moves the merge base after a rebase, never these lines.
+fn base_said(root: &Path, ask: &BaseAsk, var: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let fork = crate::git::merge_base(root, &base_ref(ask, var)).ok()??;
+    base_lines_at(root, &fork, &ask.paths)
+}
+
+/// One `base <path> <id>` line per path, `<id>` the object `commit:<path>`
+/// names (`.` naming the commit's root tree), `absent` where the path is
+/// missing there. `None` only when the repository cannot be read.
+pub(crate) fn base_lines_at(root: &Path, commit: &str, paths: &[String]) -> Option<String> {
+    let mut lines = Vec::with_capacity(paths.len());
+    for path in paths {
+        let trimmed = path.trim_end_matches('/');
+        let rev = if trimmed.is_empty() || trimmed == "." {
+            format!("{commit}^{{tree}}")
+        } else {
+            format!("{commit}:{trimmed}")
+        };
+        let id = crate::git::resolve_ref(root, &rev)
+            .ok()?
+            .unwrap_or_else(|| String::from("absent"));
+        lines.push(format!("base {path} {id}"));
+    }
+    Some(lines.join("\n"))
+}
+
+/// `step base` (CLOUD-2787): print the base lines for `reference` (or
+/// `ref_env`'s value when set and non-empty) over `paths`, exit 0; 3 when the
+/// ref or its merge base with `HEAD` does not resolve, 1 for an empty ref.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_base(
+    reference: &str,
+    ref_env: Option<&str>,
+    paths: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if reference.is_empty() || paths.is_empty() {
+        writeln!(err, "step base: --ref and at least one path are required")?;
+        return Ok(ExitCode::Usage);
+    }
+    let ask = BaseAsk {
+        reference: reference.to_owned(),
+        ref_env: ref_env.map(str::to_owned),
+        paths: paths.to_vec(),
+    };
+    let var = |name: &str| std::env::var(name).ok();
+    let Some(lines) = base_said(Path::new("."), &ask, &var) else {
+        writeln!(
+            err,
+            "step base: {} or its merge base with HEAD does not resolve",
+            base_ref(&ask, &var)
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
 }
 
 /// A free-form value as one JSON string, or the value itself where it cannot be
@@ -567,6 +735,7 @@ pub fn run_step(
             .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
             .and_then(|body| recorded_millis(&body));
         let _ = writeln!(err, "{}", stage_line(step, "hit", recorded));
+        record_pass(step);
         return Ok(ExitCode::Success);
     }
     let started = std::time::Instant::now();
@@ -614,6 +783,27 @@ pub fn run_step(
     }
     let elapsed = started.elapsed();
     let passed = matches!(ran, Ok(ExitCode::Success));
+    // A RED JOURNALED RUN SAYS WHETHER THE CHANGE COULD HAVE CAUSED IT
+    // (CLOUD-2786): a failed case whose sealed reach still holds ran nothing
+    // that moved. A label beside the trace, never a verdict: the exit stands.
+    if let Some((_, root)) = journaled.as_ref().filter(|_| !passed)
+        && let Some((suspects, failed)) = crate::mutate::resume::flaky_suspects(root)
+        && failed > 0
+        && let Some(listing) = trace_file(step).map(|file| file.with_extension("flaky"))
+    {
+        let body: String = suspects
+            .iter()
+            .map(|(name, binary)| format!("{binary} {name}\n"))
+            .collect();
+        if crate::durable::replace(&listing, body).is_ok() {
+            let _ = writeln!(
+                err,
+                "step run: {step} flaky-suspect {} of {failed} failing case(s); read {}",
+                suspects.len(),
+                listing.display()
+            );
+        }
+    }
     let linted = traced
         .as_ref()
         .filter(|_| passed)
@@ -626,6 +816,14 @@ pub fn run_step(
     }
     if let Some(linted) = linted {
         match linted {
+            Linted::Wrote(count, listing) => {
+                let _ = writeln!(
+                    err,
+                    "step run: {step} wrote {count} declared input(s); read {}",
+                    listing.display()
+                );
+                return Ok(ExitCode::Violation);
+            }
             Linted::Undeclared(count, listing) => {
                 let _ = writeln!(
                     err,
@@ -666,9 +864,168 @@ pub fn run_step(
         let _ = err.write_all(&recorded);
         let _ = err.write_all(&refused);
     }
+    if passed {
+        record_pass(step);
+    }
     let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// The keyed family a step's last pass is filed under (CLOUD-2788): per step
+/// id, the tree id of `HEAD` it passed at.
+///
+/// A PASS, NOT A RECEIPT KEY. `step cover` asks whether a row passed at this
+/// tree, and a receipt key cannot answer that: it depends on the `--arg`s the
+/// caller passed, which a later verb does not have, and a schedule-only row
+/// takes no receipt at all.
+pub const PASSES: &str = "step-passes";
+
+/// File that `step` passed at `HEAD`'s tree. Best-effort: a store that will not
+/// take it costs `step cover` a refusal later, never this step its verdict.
+fn record_pass(step: &str) {
+    let root = Path::new(".");
+    let (Ok(git_dir), Ok(Some(tree))) = (
+        crate::git::git_dir(root),
+        crate::git::resolve_ref(root, "HEAD^{tree}"),
+    ) else {
+        return;
+    };
+    let _ = crate::record::keyed_write(&git_dir, PASSES, step, &format!("{tree}\n"));
+}
+
+/// The roster `step cover` covers: the host's required check names.
+pub const ROSTER_VAR: &str = "CI_REQUIRED_CHECKS";
+
+/// Which local step stands for each required check: `check=step` pairs,
+/// comma-separated (CLOUD-2788).
+pub const PROOF_VAR: &str = "CI_LOCAL_PROOF";
+
+/// The required checks no local run stands for: names, or prefixes ending in
+/// `*`, comma-separated (CLOUD-2788).
+pub const EXEMPT_VAR: &str = "CI_EXEMPT_CHECKS";
+
+/// The non-empty, trimmed entries of a comma-separated variable's value.
+fn listed(value: &str) -> Vec<&str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+/// Whether the exemption `entry` covers the required check `check`: equal, or
+/// a prefix when `entry` ends in `*`.
+fn exempts(entry: &str, check: &str) -> bool {
+    entry
+        .strip_suffix('*')
+        .map_or(entry == check, |prefix| check.starts_with(prefix))
+}
+
+/// What `step cover` refuses: the roster entries with neither a pass of their
+/// step at `tree` nor an exemption, and the mapped checks the roster does not
+/// hold. Pure over `passed`, a step id's recorded pass tree.
+fn cover_gaps<'a>(
+    roster: &[&'a str],
+    proof: &[(&'a str, &'a str)],
+    exempt: &[&str],
+    tree: &str,
+    passed: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let uncovered = roster
+        .iter()
+        .copied()
+        .filter(|check| {
+            !exempt.iter().any(|entry| exempts(entry, check))
+                && !proof.iter().any(|(mapped, step)| {
+                    mapped == check && passed(step).is_some_and(|at| at.trim() == tree)
+                })
+        })
+        .collect();
+    let stale = proof
+        .iter()
+        .map(|(mapped, _)| *mapped)
+        .filter(|mapped| !roster.contains(mapped))
+        .collect();
+    (uncovered, stale)
+}
+
+/// `step cover` (CLOUD-2788): exit 0 iff every check [`ROSTER_VAR`] names is
+/// covered by the step [`PROOF_VAR`] maps it to having passed at `HEAD`'s
+/// tree, or by an [`EXEMPT_VAR`] entry; 2 naming each uncovered check and each
+/// mapped check the roster does not hold; 1 for a malformed mapping; 3 when
+/// the roster is unset or `HEAD` names no tree.
+///
+/// ALL THREE FROM THE ENVIRONMENT, never `batten.toml` or an argument: check
+/// names carry spaces (`mutants (0)`), and the roster, which checks have a
+/// local counterpart and which are exempt are the consumer's CI vocabulary
+/// (rule 1), declared where its task runner already declares the roster.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_cover(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let (roster, proof, exempt) = (var(ROSTER_VAR), var(PROOF_VAR), var(EXEMPT_VAR));
+    let roster = listed(&roster);
+    if roster.is_empty() {
+        writeln!(
+            err,
+            "step cover: {ROSTER_VAR} is unset, so there is no roster to cover"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let mut pairs = Vec::new();
+    for entry in listed(&proof) {
+        let Some((check, step)) = entry
+            .split_once('=')
+            .map(|(check, step)| (check.trim(), step.trim()))
+            .filter(|(check, step)| !check.is_empty() && !step.is_empty())
+        else {
+            writeln!(
+                err,
+                "step cover: {PROOF_VAR} entry is not check=step: {entry}"
+            )?;
+            return Ok(ExitCode::Usage);
+        };
+        pairs.push((check, step));
+    }
+    let exempt = listed(&exempt);
+    let root = Path::new(".");
+    let (Ok(git_dir), Ok(Some(tree))) = (
+        crate::git::git_dir(root),
+        crate::git::resolve_ref(root, "HEAD^{tree}"),
+    ) else {
+        writeln!(err, "step cover: HEAD names no tree")?;
+        return Ok(ExitCode::Internal);
+    };
+    let passed = |step: &str| crate::record::keyed_read(&git_dir, PASSES, step);
+    let (uncovered, stale) = cover_gaps(&roster, &pairs, &exempt, &tree, &passed);
+    let stale: Vec<String> = stale
+        .iter()
+        .map(|check| format!("{PROOF_VAR} maps {check}"))
+        .collect();
+    for check in &uncovered {
+        writeln!(out, "uncovered {check}")?;
+    }
+    for line in &stale {
+        writeln!(out, "stale {line}")?;
+    }
+    if uncovered.is_empty() && stale.is_empty() {
+        writeln!(
+            err,
+            "step cover: {} required check(s) covered",
+            roster.len()
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "step cover: {} required check(s) without a pass or exemption, {} stale mapping(s)",
+        uncovered.len(),
+        stale.len()
+    )?;
+    Ok(ExitCode::Violation)
 }
 
 /// Where a step's traced run writes its trace: a file directly under the git
@@ -693,6 +1050,9 @@ enum Linted {
     Declared,
     /// This many worktree paths were read undeclared; the listing names them.
     Undeclared(usize, std::path::PathBuf),
+    /// This many declared inputs were written (CLOUD-2786); the listing names
+    /// them. Checked before [`Linted::Undeclared`].
+    Wrote(usize, std::path::PathBuf),
     /// The trace could not be read whole, so nothing is proven.
     Unread,
     /// The row no longer reads; the record's own recompute decides.
@@ -709,9 +1069,9 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
     let cwd = std::env::current_dir()
         .ok()
         .map(|dir| crate::git::canonical(&dir));
-    let Some(touched) = crate::mutate::trace::await_trace(file)
+    let Some(accessed) = crate::mutate::trace::await_trace(file)
         .as_deref()
-        .and_then(|text| crate::mutate::trace::touched(text, cwd.as_deref()))
+        .and_then(|text| crate::mutate::trace::accesses(text, cwd.as_deref()))
     else {
         return Linted::Unread;
     };
@@ -721,6 +1081,25 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
             .entry(path.to_owned())
             .or_insert_with(|| crate::git::check_ignore(&root, path).unwrap_or(false))
     };
+    // THE WRITE HAZARD FIRST (CLOUD-2786): a run that wrote a declared input
+    // and put it back leaves the key unmoved, though its verdict judged bytes
+    // the tree never held (Rattle, Spall et al. OOPSLA 2020).
+    let written: Vec<std::path::PathBuf> = accessed
+        .iter()
+        .filter(|(_, access)| *access == crate::mutate::trace::Access::Write)
+        .map(|(path, _)| path.clone())
+        .collect();
+    let wrote = written_inputs(&root, row.inputs(), &written, &mut ignored);
+    if !wrote.is_empty() {
+        let listing = file.with_extension("wrote");
+        let mut body = wrote.join("\n");
+        body.push('\n');
+        if crate::durable::replace(&listing, body).is_err() {
+            return Linted::Unread;
+        }
+        return Linted::Wrote(wrote.len(), listing);
+    }
+    let touched: Vec<std::path::PathBuf> = accessed.into_iter().map(|(path, _)| path).collect();
     let found = undeclared(&root, row.inputs(), &touched, &mut ignored);
     if found.is_empty() {
         return Linted::Declared;
@@ -732,6 +1111,79 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
         return Linted::Unread;
     }
     Linted::Undeclared(found.len(), listing)
+}
+
+/// The declared inputs among `written` (CLOUD-2786): a worktree path under
+/// `root`, outside the git dir, that a declared pathspec selects and that
+/// `ignored` does not answer for, an ignored ancestor answering for all
+/// beneath it — so a build's `target/` writes never count. Sorted, each once.
+fn written_inputs(
+    root: &Path,
+    inputs: &[String],
+    written: &[std::path::PathBuf],
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for path in written {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
+            continue;
+        }
+        if inputs
+            .iter()
+            .any(|spec| crate::git::pathspec_matches(spec, &relative))
+        {
+            out.insert(relative);
+        }
+    }
+    out.into_iter()
+        .filter(|relative| {
+            let mut ancestors: Vec<&str> = relative
+                .match_indices('/')
+                .map(|(at, _)| &relative[..at])
+                .collect();
+            ancestors.push(relative);
+            !ancestors.into_iter().any(&mut *ignored)
+        })
+        .collect()
+}
+
+/// The key's `env` lines for `declared` over `vars` (CLOUD-2786), sorted: one
+/// `env "NAME=value"` per variable it keys ([`DeclaredEnv::keys`]), and one
+/// `env "PATTERN" none` per declaration nothing matched. `None` where a keyed
+/// value is not Unicode, which is no key.
+///
+/// [`DeclaredEnv::keys`]: crate::mutate::resume::DeclaredEnv::keys
+fn env_lines(
+    declared: &crate::mutate::resume::DeclaredEnv,
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Option<Vec<String>> {
+    let mut lines = std::collections::BTreeSet::new();
+    let mut matched = std::collections::BTreeSet::new();
+    for (name, value) in vars {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !declared.keys(name) {
+            continue;
+        }
+        let value = value.to_str()?;
+        lines.insert(format!("env {}", quoted(&format!("{name}={value}"))));
+        for pattern in &declared.env {
+            if crate::mutate::resume::env_matches(name, pattern) {
+                matched.insert(pattern.as_str());
+            }
+        }
+    }
+    for pattern in &declared.env {
+        if !matched.contains(pattern.as_str()) {
+            lines.insert(format!("env {} none", quoted(pattern)));
+        }
+    }
+    Some(lines.into_iter().collect())
 }
 
 /// The worktree paths among `touched` that `inputs` does not declare (CLOUD-2784).
@@ -864,12 +1316,18 @@ pub fn run_graph(group: &str, jobs: Option<&str>, err: &mut dyn Write) -> Result
         // A NON-ZERO CHILD ARRIVES AS A `Passthrough` carrying its own code,
         // which may sit outside the §7 table; anything else is a spawn that
         // never decided, which is internal.
-        match crate::exec::run_with(&argv, &[], &settings, &mut std::io::sink()) {
+        let code = match crate::exec::run_with(&argv, &[], &settings, &mut std::io::sink()) {
             Ok(code) => code.code(),
             Err(error) => error
                 .downcast_ref::<crate::error::Passthrough>()
                 .map_or(ExitCode::Internal.code(), |carried| carried.0),
+        };
+        // A NODE THAT EXITS 0 PASSED AT THIS TREE (CLOUD-2788), schedule-only
+        // nodes included: they take no receipt, and `step cover` reads this.
+        if code == 0 {
+            record_pass(&row.id);
         }
+        code
     });
     for line in &outcome.lines {
         writeln!(err, "step graph: {line}")?;
@@ -1006,6 +1464,31 @@ mod tests {
 
     /// Fails by: a receipt's `<n>ms` field misread, a receipt written before it
     /// carried one read as a time, or a stage line's seconds mis-rendered.
+    /// Fails by: a prefix exemption matched only exactly, an exact one as a
+    /// prefix, a pass at another tree or of another step counted, or a mapped
+    /// check outside the roster dropped instead of reported.
+    #[test]
+    fn cover_counts_a_pass_at_this_tree_or_an_exemption() {
+        assert!(super::exempts("windows", "windows"));
+        assert!(!super::exempts("windows", "windows-arm"));
+        assert!(super::exempts("dist (*", "dist (x86_64)"));
+        assert!(!super::exempts("dist (*", "dist"));
+        let roster = ["a", "b", "c", "win"];
+        let proof = [("a", "sa"), ("b", "sb"), ("z", "sz")];
+        let passed = |step: &str| match step {
+            "sa" => Some(String::from("t1\n")),
+            "sb" => Some(String::from("t0\n")),
+            _ => None,
+        };
+        let (uncovered, stale) = super::cover_gaps(&roster, &proof, &["win"], "t1", &passed);
+        assert_eq!(
+            uncovered,
+            ["b", "c"],
+            "b passed at another tree, c is unmapped"
+        );
+        assert_eq!(stale, ["z"]);
+    }
+
     #[test]
     fn a_stage_line_reads_the_recorded_run_and_renders_seconds() {
         assert_eq!(
@@ -1110,6 +1593,7 @@ mod tests {
             depends_on: group.map_or_else(Vec::new, |_| vec![String::from("x")]),
             verdict: group.map(|_| crate::step_table::Verdict::Exit),
             journal: group.map(|_| crate::step_table::Journal::Nextest),
+            ci: Vec::new(),
         };
         let today = r#"row {"id":"s","inputs":["a"],"tools":[["t","--version"]]}"#;
         assert_eq!(super::row_line(&keyed(None, None)).as_deref(), Some(today));
@@ -1162,6 +1646,7 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
+            ci: Vec::new(),
         };
         // The platform's own shell spells each tool: one that answers, one
         // that exits zero saying nothing, and one that answers and fails.
@@ -1180,6 +1665,165 @@ mod tests {
         );
         assert_eq!(material(&root, &row(silent), &[], None), None);
         assert_eq!(material(&root, &row(fails), &[], None), None);
+    }
+
+    /// A row read as the committed table would read it, so a field added to
+    /// [`Step`] cannot break the env cases below.
+    fn env_row(id: &str) -> Step {
+        toml::from_str(&format!(
+            "id = \"{id}\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"]]\n"
+        ))
+        .unwrap()
+    }
+
+    /// `vars` as the process environment iterator [`env_lines`] reads.
+    fn env_vars(
+        pairs: &[(&str, &str)],
+    ) -> impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    // TODAY'S KEY, LITERALLY (CLOUD-2786): captured before the env lines
+    // existed. A row whose `tools` carry no `batten step env` entry keys
+    // exactly as it did, so no receipt is lost to the declaration's arrival.
+    // The literal was captured on unix, where the index mode it hashes is
+    // `100644`; elsewhere the absence of env lines is the whole assertion.
+    #[test]
+    fn a_row_without_env_keys_as_before() {
+        let root = crate::scratch::scratch("step-env-pin");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let row = env_row("cloud-2786-pin");
+        let material = material(&root, &row, &[], None).unwrap();
+        assert!(!material.contains("\nenv "), "{material}");
+        if cfg!(unix) {
+            assert_eq!(
+                key_of(&material),
+                "aedfe39d1eaff13ff2e4b62d52458580c648174bf67fc2b392c9d30f3901c162",
+                "{material}"
+            );
+        }
+    }
+
+    /// Fails by: a declared variable's value, a newly set declared variable,
+    /// or a declaration matching nothing leaving the key unmoved.
+    #[test]
+    fn a_declared_env_value_moves_the_key() {
+        let declared = crate::mutate::resume::declare(
+            vec![
+                String::from("DATABASE_URL"),
+                String::from("APP_*"),
+                String::from("ABSENT"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        let lines = |pairs: &[(&str, &str)]| env_lines(&declared, env_vars(pairs)).unwrap();
+        let base = lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x")]);
+        assert_eq!(
+            base,
+            vec![
+                String::from(r#"env "ABSENT" none"#),
+                String::from(r#"env "APP_MODE=x""#),
+                String::from(r#"env "DATABASE_URL=a""#),
+            ]
+        );
+        assert_ne!(base, lines(&[("DATABASE_URL", "b"), ("APP_MODE", "x")]));
+        assert_ne!(base, lines(&[("DATABASE_URL", "a"), ("APP_MODE", "y")]));
+        assert_ne!(
+            base,
+            lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x"), ("APP_NEW", "1")])
+        );
+        assert_ne!(
+            base,
+            lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x"), ("ABSENT", "")]),
+            "a declaration that starts matching moves the key"
+        );
+    }
+
+    /// Fails by: an excluded per-run variable, or an undeclared one, moving
+    /// the key (every run a miss), or an exclusion read as a prefix.
+    #[test]
+    fn an_excluded_variable_does_not_move_the_key() {
+        let declared = crate::mutate::resume::declare(
+            vec![String::from("APP_*")],
+            vec![String::from("APP_PID")],
+        )
+        .unwrap();
+        let lines = |pairs: &[(&str, &str)]| env_lines(&declared, env_vars(pairs)).unwrap();
+        let base = lines(&[("APP_MODE", "x"), ("APP_PID", "1"), ("TERM", "a")]);
+        assert_eq!(
+            base,
+            lines(&[("APP_MODE", "x"), ("APP_PID", "2"), ("TERM", "b")])
+        );
+        assert_eq!(base, lines(&[("APP_MODE", "x")]));
+        assert_ne!(
+            base,
+            lines(&[("APP_MODE", "x"), ("APP_PID2", "1")]),
+            "an exclusion names one variable, never a prefix"
+        );
+    }
+
+    /// Fails by: a `batten step env` tool line spawned (a process per lap, and
+    /// the released engine answering a verb it lacks with no key), answered
+    /// with anything but [`env_lines`]' own lines, or a malformed line keyed
+    /// rather than refused. `step env` and the cache share the lines, so the
+    /// verb prints exactly what the key hashes.
+    #[test]
+    fn the_env_line_is_answered_in_process() {
+        let root = crate::scratch::scratch("step-env-in-process");
+        let line = |words: &[&str]| -> Vec<String> {
+            crate::mutate::resume::ENV
+                .iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        // A name no environment sets: its line is `none`, whatever runs this.
+        let absent = "BATTEN_CLOUD_2786_NEVER_SET";
+        assert_eq!(
+            tool_said(&root, &line(&["--", absent])),
+            Some((0, format!(r#"env "{absent}" none"#)))
+        );
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_env(&[], &[absent.to_owned()], &mut out, &mut err).unwrap();
+        assert_eq!(code, ExitCode::Success);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!("env \"{absent}\" none\n")
+        );
+        for malformed in [
+            &["--", "lower"][..],
+            &[absent][..],
+            &["--"][..],
+            &["--bogus", "--", absent][..],
+        ] {
+            assert_eq!(
+                tool_said(&root, &line(malformed)),
+                Some((1, String::new())),
+                "{malformed:?}"
+            );
+        }
+        let mut out = Vec::new();
+        let code = run_env(
+            &[String::from("A*")],
+            &[absent.to_owned()],
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(
+            code,
+            ExitCode::Usage,
+            "an exclusion is a name, never a pattern"
+        );
+        assert!(out.is_empty());
     }
 
     /// Fails by: the engine's own digest line spawned rather than answered
@@ -1207,6 +1851,7 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
+            ci: Vec::new(),
         };
         let held = material(&root, &row, &[], None).expect("the line keys the step");
         assert!(held.contains(&digest), "keyed on the in-process digest");
@@ -1219,6 +1864,130 @@ mod tests {
             material(&root, &row, &[], None),
             Some(held),
             "a moved local config moves the key"
+        );
+    }
+
+    /// A linear history and the ids of its first three commits: `r[0]` (src
+    /// x, docs 1), `r[1]` (docs 2 only), `r[2]` (src y), then a HEAD commit on
+    /// top, so each one's merge base with HEAD is that commit itself.
+    fn based(name: &str) -> (std::path::PathBuf, Vec<String>) {
+        let root = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let paths = [String::from("src/lib.rs"), String::from("docs/a.md")];
+        let mark = |file: &str, text: &str| {
+            std::fs::write(root.join(file), text).unwrap();
+            crate::gitwrite::commit_paths(&root, &paths, file).unwrap();
+            crate::git::head_commit(&root).unwrap()
+        };
+        std::fs::write(root.join("docs/a.md"), "1\n").unwrap();
+        let marked = vec![
+            mark("src/lib.rs", "x\n"),
+            mark("docs/a.md", "2\n"),
+            mark("src/lib.rs", "y\n"),
+        ];
+        mark("docs/a.md", "3\n");
+        (root, marked)
+    }
+
+    fn ask(reference: &str, ref_env: Option<&str>, paths: &[&str]) -> BaseAsk {
+        BaseAsk {
+            reference: reference.to_owned(),
+            ref_env: ref_env.map(str::to_owned),
+            paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+        }
+    }
+
+    const NO_VAR: &dyn Fn(&str) -> Option<String> = &|_| None;
+
+    /// Fails by: a base half keyed on the merge base's COMMIT id, which moves
+    /// with a trunk commit touching none of the declared paths (CLOUD-2787).
+    #[test]
+    fn a_base_commit_moving_with_the_same_trees_keeps_the_key() {
+        let (root, r) = based("step-base-same-trees");
+        let one = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR).unwrap();
+        assert_eq!(
+            base_said(&root, &ask(r[1].as_str(), None, &["src"]), NO_VAR),
+            Some(one.clone()),
+            "r2 moved only docs"
+        );
+        assert!(one.starts_with("base src "), "{one}");
+        assert!(!one.contains(r[0].as_str()), "no commit id in the lines");
+    }
+
+    /// Fails by: a base half blind to a declared path's content, or one that
+    /// drops a missing path rather than keying it `absent`.
+    #[test]
+    fn a_base_path_changing_moves_the_key() {
+        let (root, r) = based("step-base-path-moves");
+        let one = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR).unwrap();
+        assert_ne!(
+            base_said(&root, &ask(r[2].as_str(), None, &["src"]), NO_VAR),
+            Some(one)
+        );
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), None, &["nowhere"]), NO_VAR).as_deref(),
+            Some("base nowhere absent")
+        );
+        assert_eq!(
+            base_said(&root, &ask("no-such-ref", None, &["src"]), NO_VAR),
+            None,
+            "an unresolvable ref is no key"
+        );
+    }
+
+    /// Fails by: `ref_env` ignored, read when set but empty, or read when the
+    /// row names no variable.
+    #[test]
+    fn a_set_ref_env_replaces_the_ref() {
+        let (root, r) = based("step-base-ref-env");
+        let set = |name: &str| (name == "BASE_VAR").then(|| r[2].clone());
+        let empty = |_: &str| Some(String::new());
+        let at_r3 = base_said(&root, &ask(r[2].as_str(), None, &["src"]), NO_VAR);
+        let at_r1 = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR);
+        assert_ne!(at_r1, at_r3, "the premise");
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), Some("BASE_VAR"), &["src"]), &set),
+            at_r3
+        );
+        assert_eq!(
+            base_said(
+                &root,
+                &ask(r[0].as_str(), Some("BASE_VAR"), &["src"]),
+                &empty
+            ),
+            at_r1
+        );
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), None, &["src"]), &set),
+            at_r1
+        );
+    }
+
+    /// Fails by: the tool line spawned (a process per lap) or answered by a
+    /// parse other than the canonical spelling.
+    #[test]
+    fn the_base_line_is_answered_in_process() {
+        let (root, r) = based("step-base-in-process");
+        let line = |words: &[&str]| -> Vec<String> {
+            BASE.iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        let said = base_said(&root, &ask(r[0].as_str(), None, &["src", "docs"]), NO_VAR).unwrap();
+        assert_eq!(
+            tool_said(&root, &line(&["--ref", r[0].as_str(), "--", "src", "docs"])),
+            Some((0, said))
+        );
+        assert_eq!(
+            tool_said(&root, &line(&["--ref", r[0].as_str()])),
+            Some((1, String::new()))
+        );
+        assert_eq!(
+            tool_said(&root, &line(&["--bogus", "--", "src"])),
+            Some((1, String::new()))
         );
     }
 }

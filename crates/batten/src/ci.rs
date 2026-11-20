@@ -122,6 +122,34 @@ pub struct Ci {
     /// compared against the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_linear_history: Option<bool>,
+    /// Required CI checks with no local counterpart, each with its reason
+    /// (CLOUD-2788). `step cover` counts a check matched here as covered.
+    ///
+    /// CONSUMER DATA for `slow_inert`'s reason: which checks a repository can
+    /// only run on another OS or a release runner is that repository's. An entry
+    /// whose `check` ends in `*` matches every check it prefixes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exempt: Vec<Exempt>,
+}
+
+/// One required check `step cover` accepts without a local pass (CLOUD-2788).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Exempt {
+    /// The check's name, or a prefix ending in `*`.
+    pub check: String,
+    /// Why no local run stands for it, for the reader of the table.
+    pub reason: String,
+}
+
+impl Exempt {
+    /// Whether this entry covers the required check `name`.
+    #[must_use]
+    pub fn covers(&self, name: &str) -> bool {
+        self.check
+            .strip_suffix('*')
+            .map_or(self.check == name, |prefix| name.starts_with(prefix))
+    }
 }
 
 /// The merge methods the host vocabulary admits.
@@ -775,7 +803,26 @@ mod tests {
             allowed_merge_methods: methods
                 .map(|methods| methods.iter().map(|m| (*m).to_owned()).collect()),
             required_linear_history: None,
+            exempt: Vec::new(),
         }
+    }
+
+    /// Fails by: a prefix entry matching only exactly, or an exact entry
+    /// matching as a prefix.
+    #[test]
+    fn an_exemption_covers_its_name_or_its_prefix() {
+        let exact = Exempt {
+            check: String::from("windows"),
+            reason: String::from("another OS"),
+        };
+        assert!(exact.covers("windows"));
+        assert!(!exact.covers("windows-arm"));
+        let prefix = Exempt {
+            check: String::from("dist / dist (*"),
+            reason: String::from("release targets"),
+        };
+        assert!(prefix.covers("dist / dist (x86_64-unknown-linux-gnu)"));
+        assert!(!prefix.covers("dist"));
     }
 
     #[test]
