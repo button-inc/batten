@@ -30,7 +30,7 @@
 //!
 //! The bound, so nothing is read as stronger than it is: this proves the body
 //! propagates rather than replaces. It does not prove the engine returns `2` for a
-//! denial — `crates/batten/src/exit.rs`'s own table test owns that — and it cannot
+//! denial — `crates/batten-base/src/exit.rs`'s own table test owns that — and it cannot
 //! prove the two compose without a denying ruleset to run.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.

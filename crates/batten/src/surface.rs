@@ -2580,6 +2580,21 @@ const SLOW_BASE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `test replay --structural` (CLOUD-2789): judge only what needs no build.
+const REPLAY_STRUCTURAL: FlagDecl = FlagDecl {
+    id: "structural",
+    long: Some("structural"),
+    short: None,
+    help: "Judge only removed tests, without building: the seconds half the lap runs first",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--head <rev>` on `ci slow-needed` (CLOUD-1991).
 ///
 /// The diff is always taken against the CHECKOUT, which in a `pull_request` job
@@ -8391,7 +8406,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[JSON, SLOW_BASE],
+        flags: &[JSON, SLOW_BASE, REPLAY_STRUCTURAL],
     },
     // CLOUD-2690. THE FORGE'S DOOR: one event payload on stdin, normalized by
     // `forge_event`, deduplicated by its seen ring, and dispatched through the

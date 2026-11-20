@@ -3336,7 +3336,8 @@ fn verified_by(config: &Config) -> Vec<String> {
 /// Absent and empty reach the same value on purpose: both are could-not-look to
 /// [`crate::lease::decide`], so a comparison that told them apart would report a
 /// weakening where the reader sees no change in posture.
-fn landing_paths(config: &Config) -> Vec<String> {
+#[must_use]
+pub fn landing_paths(config: &Config) -> Vec<String> {
     config
         .lease
         .as_ref()

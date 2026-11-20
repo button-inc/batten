@@ -1989,43 +1989,7 @@ fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
     }
 }
 
-/// The conflict-marker width, as the merge driver takes it.
-const MARKER_SIZE: std::num::NonZeroU8 = match std::num::NonZeroU8::new(crate::propose::MARKER) {
-    Some(size) => size,
-    None => unreachable!(),
-};
-
-/// The three-way text merge with every conflict kept as diff3 markers, or
-/// `None` for a merge with no conflict or bytes that are not UTF-8 (CLOUD-1956).
-///
-/// Here rather than in `propose` because the git backend is confined to the git
-/// modules; `propose` reads the markers as plain text.
-#[must_use]
-pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
-    use gix::merge::blob::builtin_driver::text;
-    let mut out = Vec::new();
-    let mut input = gix_diff::blob::InternedInput::default();
-    let options = text::Options {
-        conflict: text::Conflict::Keep {
-            style: text::ConflictStyle::Diff3,
-            marker_size: MARKER_SIZE,
-        },
-        ..Default::default()
-    };
-    let resolution = gix::merge::blob::builtin_driver::text(
-        &mut out,
-        &mut input,
-        text::Labels::default(),
-        ours,
-        ancestor,
-        theirs,
-        options,
-    );
-    if resolution != gix::merge::blob::Resolution::Conflict {
-        return None;
-    }
-    String::from_utf8(out).ok()
-}
+pub use crate::propose::diff3;
 
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out

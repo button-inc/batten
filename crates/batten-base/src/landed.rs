@@ -449,7 +449,8 @@ impl Claim {
 /// the host literal it replaces and is recorded rather than silently widened —
 /// matching every `/<word>/<digits>` would admit `/issues/12` and turn an issue
 /// link into a claim.
-pub(crate) fn is_pull_request_url(url: &str) -> bool {
+#[must_use]
+pub fn is_pull_request_url(url: &str) -> bool {
     url.match_indices("/pull/").any(|(at, marker)| {
         url.get(at + marker.len()..)
             .and_then(|rest| rest.chars().next())
@@ -1365,13 +1366,13 @@ mod tests {
 
     /// `second_of` pinned against KNOWN epoch values, not merely non-None — the
     /// same standard the case above holds `day_of` to. `1_788_000_000` is
-    /// 2026-08-29T10:40:00Z, which `receipt::rfc3339_utc` independently renders.
+    /// 2026-08-29T10:40:00Z, which `clock::rfc3339_utc` independently renders.
     #[test]
     fn an_instant_reads_to_the_second_and_its_offset_is_applied() {
         assert_eq!(second_of("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(second_of("2026-08-29T10:40:00Z"), Some(1_788_000_000));
         assert_eq!(
-            crate::receipt::rfc3339_utc(1_788_000_000),
+            crate::clock::rfc3339_utc(1_788_000_000),
             "2026-08-29T10:40:00Z",
             "the formatter and the parser agree about one instant"
         );

@@ -786,13 +786,15 @@ mod tests {
 
     /// The shape this repository's own host returns: one required check, and no
     /// `pull_request` rule at all.
-    const RULES: &str = include_str!("../tests/fixtures/ci/rules-required-checks.json");
+    const RULES: &str = include_str!("../../batten/tests/fixtures/ci/rules-required-checks.json");
     /// A ruleset that also constrains merge methods.
-    const RULES_WITH_METHODS: &str = include_str!("../tests/fixtures/ci/rules-merge-methods.json");
+    const RULES_WITH_METHODS: &str =
+        include_str!("../../batten/tests/fixtures/ci/rules-merge-methods.json");
     /// Two `pull_request` rules whose method sets overlap.
-    const RULES_TWO_PR_RULES: &str = include_str!("../tests/fixtures/ci/rules-two-pr-rules.json");
+    const RULES_TWO_PR_RULES: &str =
+        include_str!("../../batten/tests/fixtures/ci/rules-two-pr-rules.json");
     /// A legacy branch-protection-shaped payload: no `pull_request` rule.
-    const RULES_LEGACY: &str = include_str!("../tests/fixtures/ci/rules-legacy.json");
+    const RULES_LEGACY: &str = include_str!("../../batten/tests/fixtures/ci/rules-legacy.json");
 
     fn ci(checks: &[&str], methods: Option<&[&str]>) -> Ci {
         Ci {

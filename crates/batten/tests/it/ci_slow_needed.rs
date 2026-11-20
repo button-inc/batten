@@ -18,16 +18,16 @@
 //! the deciding path rather than counting. Those are properties of the compiled
 //! binary.
 //
-// carried: mise-tasks/ci-slow-needed.sh crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: tests/ci-slow-needed.bats crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs
+// carried: mise-tasks/ci-slow-needed.sh crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: tests/ci-slow-needed.bats crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs
 //
-// carried: "a crates change still needs the slow tier" crates/batten/src/ci.rs
-// carried: "a memories-only diff does not need the slow tier" crates/batten/src/ci.rs
-// carried: "the bot config is inert too — the diff that bought an 18-minute run" crates/batten/src/ci.rs
-// carried: "ONE non-inert path in a mostly-inert diff still needs the tier" crates/batten/src/ci.rs
-// carried: "an empty diff is could-not-look, not a clean skip" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: "no base revision refuses rather than guessing" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: "output is a pointer — no file contents echoed" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "a crates change still needs the slow tier" crates/batten-base/src/ci.rs
+// carried: "a memories-only diff does not need the slow tier" crates/batten-base/src/ci.rs
+// carried: "the bot config is inert too — the diff that bought an 18-minute run" crates/batten-base/src/ci.rs
+// carried: "ONE non-inert path in a mostly-inert diff still needs the tier" crates/batten-base/src/ci.rs
+// carried: "an empty diff is could-not-look, not a clean skip" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "no base revision refuses rather than guessing" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "output is a pointer — no file contents echoed" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
 // changed: "the probe mode holds the inert list to both directions" policy/ci-slow-inert.rego the probes are unchanged and both directions survive — a live path declared inert, and an inert path no longer covered — but they are a rule over declared config rather than a flag on the program that owns the list, which is what the move from program to `[ci] slow_inert` makes possible
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.

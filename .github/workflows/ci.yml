@@ -854,7 +854,7 @@ jobs:
       - name: Check out the trunk's predicate beside the head
         run: git worktree add trunk-predicate origin/main
       - name: Grade the head with the trunk's predicate, post release-path, and seal final
-        if: hashFiles('trunk-predicate/crates/batten/src/release_path.rs') != ''
+        if: hashFiles('trunk-predicate/crates/batten-base/src/release_path.rs') != ''
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

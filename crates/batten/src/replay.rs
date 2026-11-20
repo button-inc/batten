@@ -185,6 +185,35 @@ fn differs(base: &str, head: &str) -> bool {
 /// What changed between a file's base and head text.
 #[must_use]
 pub fn compare(base: &str, head: &str) -> Changed {
+    compare_moved(base, head, &|body| body.to_owned(), &|_| false)
+}
+
+/// [`compare`], with the branch's file moves taken out of the question
+/// (CLOUD-2789).
+///
+/// THE GATE ASKS WHETHER A BASE ASSERTION STILL HOLDS AT HEAD (#1056), and a
+/// move changes no assertion. Two things a move did change are taken back out
+/// here, and nothing else is:
+///
+/// - `translate` rewrites each moved file's path inside a base body to where
+///   it lives now. A base body that differs from its head body only by such a
+///   path is UNCHANGED, and a modified one is spliced in translated, so its
+///   own assertions run against HEAD's files rather than failing on a path
+///   that no longer exists.
+/// - `elsewhere` answers whether a body (translated, whitespace aside) is a
+///   test at HEAD in some other file. A base test gone from its file but
+///   present there MOVED; it is not removed.
+///
+/// Every other difference is judged exactly as before: an assertion whose text
+/// changed is still modified and replayed, and a body found nowhere is still
+/// `test-removed`.
+#[must_use]
+pub fn compare_moved(
+    base: &str,
+    head: &str,
+    translate: &dyn Fn(&str) -> String,
+    elsewhere: &dyn Fn(&str) -> bool,
+) -> Changed {
     let index = |source: &str| -> BTreeMap<String, TestFn> {
         tests_in(source)
             .unwrap_or_default()
@@ -195,21 +224,67 @@ pub fn compare(base: &str, head: &str) -> Changed {
     let (before, after) = (index(base), index(head));
     let mut changed = Changed::default();
     for (inner, old) in &before {
-        let base_body = &base[old.body.0..old.body.1];
+        let base_body = translate(&base[old.body.0..old.body.1]);
         match after.get(inner) {
-            Some(new) if differs(base_body, &head[new.body.0..new.body.1]) => {
+            Some(new) if differs(&base_body, &head[new.body.0..new.body.1]) => {
                 changed.modified.push(Modified {
                     inner: inner.clone(),
-                    base_body: base_body.to_owned(),
+                    base_body,
                     head_body: new.body,
                     line: new.line,
                 });
             }
             Some(_) => {}
+            None if elsewhere(&shape(&base_body)) => {}
             None => changed.removed.push((inner.clone(), old.line)),
         }
     }
     changed
+}
+
+/// Each moved file's path rewritten to where it lives now, in every spelling a
+/// test in `test_path` can use for it: repository-relative, and relative to the
+/// test's own crate (`../batten-base/src/x.rs` from `crates/batten`), which is
+/// how `CARGO_MANIFEST_DIR`-based reads spell a sibling crate.
+///
+/// One left-to-right pass, longest spelling first at each position, so a
+/// rewritten path is never rewritten again (`src/x.rs` sits inside
+/// `crates/a/src/x.rs`).
+#[must_use]
+pub fn translate(body: &str, test_path: &str, moves: &BTreeMap<String, String>) -> String {
+    let crate_dir = test_path
+        .strip_prefix("crates/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(name, _)| format!("crates/{name}/"));
+    let relative = |path: &str| -> Option<String> {
+        let dir = crate_dir.as_deref()?;
+        Some(match path.strip_prefix(dir) {
+            Some(inside) => inside.to_owned(),
+            None => format!("../{}", path.strip_prefix("crates/")?),
+        })
+    };
+    let mut spellings: Vec<(String, String)> = Vec::new();
+    for (old, new) in moves {
+        spellings.push((old.clone(), new.clone()));
+        if let (Some(old), Some(new)) = (relative(old), relative(new)) {
+            spellings.push((old, new));
+        }
+    }
+    spellings.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    'scan: while let Some(next) = rest.chars().next() {
+        for (old, new) in &spellings {
+            if let Some(after) = rest.strip_prefix(old.as_str()) {
+                out.push_str(new);
+                rest = after;
+                continue 'scan;
+            }
+        }
+        out.push(next);
+        rest = &rest[next.len_utf8()..];
+    }
+    out
 }
 
 /// `head` with each modified test's base body spliced in, applied from the last
@@ -288,28 +363,17 @@ pub fn successors(
     before: &BTreeMap<String, String>,
     after: &BTreeMap<String, String>,
 ) -> BTreeMap<String, Option<String>> {
-    let below_src = |path: &str| -> Option<String> {
-        path.rfind("src/")
-            .map(|at| path[at + "src/".len()..].to_owned())
-    };
-    let mut fresh: BTreeMap<String, Vec<&String>> = BTreeMap::new();
-    for path in after.keys().filter(|path| !before.contains_key(*path)) {
-        if let Some(tail) = below_src(path) {
-            fresh.entry(tail).or_default().push(path);
-        }
-    }
+    let moves = crate::git::pair_moves(
+        before.keys().filter(|path| !after.contains_key(*path)),
+        after.keys().filter(|path| !before.contains_key(*path)),
+    );
     before
         .keys()
         .map(|path| {
             let at_head = if after.contains_key(path) {
                 Some(path.clone())
             } else {
-                below_src(path)
-                    .and_then(|tail| fresh.get(&tail))
-                    .and_then(|paths| match paths.as_slice() {
-                        [only] => Some((*only).clone()),
-                        _ => None,
-                    })
+                moves.get(path).cloned()
             };
             (path.clone(), at_head)
         })
@@ -401,7 +465,13 @@ fn write_rows(
 ///
 /// A base that does not resolve, a tree that cannot be materialised, or a
 /// ledger that cannot be read — each could-not-look rather than a pass.
-pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+pub fn run(
+    root: &Path,
+    base: &str,
+    json: bool,
+    structural: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let fork = crate::git::merge_base(root, base)?.unwrap_or_else(|| base.to_owned());
     let before = rust_files(root, &fork)?;
     let after = rust_files(root, "HEAD")?;
@@ -410,6 +480,29 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     // The head text each modified file is spliced from, by path.
     let mut splices: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
     let moved = successors(&before, &after);
+    // Every file the branch moved, old path to new (CLOUD-2789): what a base
+    // body is translated through before it is judged.
+    let moves: BTreeMap<String, String> = moved
+        .iter()
+        .filter_map(|(old, new)| Some((old.clone(), new.clone()?)))
+        .filter(|(old, new)| old != new)
+        .collect();
+    // Every test body at HEAD, by shape, read only if some base test left its
+    // file: what tells a test that moved from one that is gone.
+    let head_shapes: std::cell::OnceCell<BTreeSet<String>> = std::cell::OnceCell::new();
+    let shapes_at_head = || {
+        head_shapes.get_or_init(|| {
+            after
+                .values()
+                .flat_map(|text| {
+                    tests_in(text)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|test| shape(&text[test.body.0..test.body.1]))
+                })
+                .collect()
+        })
+    };
     for (path, base_text) in &before {
         // A file gone at HEAD is compared against nothing, so each of its base
         // tests is removed; a moved one is compared at the path it moved to.
@@ -421,7 +514,13 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
         if head_text == base_text {
             continue;
         }
-        let changed = compare(base_text, head_text);
+        let test_path = head_path.as_deref().unwrap_or(path);
+        let changed = compare_moved(
+            base_text,
+            head_text,
+            &|body| translate(body, test_path, &moves),
+            &|body| shapes_at_head().contains(body),
+        );
         for (inner, line) in changed.removed {
             findings.push(Finding {
                 key: format!("{path}::{inner}"),
@@ -437,7 +536,10 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
         }
     }
 
-    if !splices.is_empty() {
+    // `--structural` STOPS HERE (CLOUD-2789): a removed test is decided by the
+    // two trees alone, so the lap judges it in its first, seconds-long tier, and
+    // only a modified test's run waits for the build.
+    if !structural && !splices.is_empty() {
         findings.extend(replay(root, &base_lines(&before), &after, &splices)?);
     }
 
@@ -1455,6 +1557,51 @@ mod tests {
             compare(BASE, BASE).removed.len() + tests_in(BASE).unwrap().len(),
             "a file with no successor is compared against nothing: every test removed"
         );
+    }
+
+    /// Fails by: a moved file's path left untranslated in either spelling, or a
+    /// rewritten path rewritten again by the shorter spelling inside it.
+    #[test]
+    fn a_moved_path_is_translated_in_both_spellings_once() {
+        let moves = BTreeMap::from([(
+            "crates/batten/src/facts.rs".to_owned(),
+            "crates/batten-facts/src/facts.rs".to_owned(),
+        )]);
+        let body = r#"{ read("crates/batten/src/facts.rs"); read(dir.join("src/facts.rs")); }"#;
+        assert_eq!(
+            translate(body, "crates/batten/tests/it/x.rs", &moves),
+            r#"{ read("crates/batten-facts/src/facts.rs"); read(dir.join("../batten-facts/src/facts.rs")); }"#
+        );
+        assert_eq!(translate(body, "README.md", &BTreeMap::new()), body);
+    }
+
+    /// Fails by: a body that differs only by a moved path judged modified, a
+    /// test that moved to another file judged removed, or a REAL change to an
+    /// assertion hidden by either.
+    #[test]
+    fn a_move_is_not_a_change_and_a_changed_assertion_still_is() {
+        let base = "#[test]\nfn a() { read(\"old/x.rs\"); assert_eq!(n, 1); }\n\
+                    #[test]\nfn b() { assert!(gone); }\n";
+        let moved = |body: &str| body.replace("old/x.rs", "new/x.rs");
+        let elsewhere = |body: &str| body == shape("{ assert!(gone); }");
+        let head = "#[test]\nfn a() { read(\"new/x.rs\"); assert_eq!(n, 1); }\n";
+        assert_eq!(
+            compare_moved(base, head, &moved, &elsewhere),
+            Changed::default()
+        );
+        let weakened = "#[test]\nfn a() { read(\"new/x.rs\"); assert_eq!(n, 2); }\n";
+        let changed = compare_moved(base, weakened, &moved, &elsewhere);
+        assert_eq!(
+            changed.modified.len(),
+            1,
+            "a changed assertion is still replayed"
+        );
+        assert!(
+            changed.modified[0].base_body.contains("new/x.rs"),
+            "and spliced translated, so it fails on its assertion, not its path"
+        );
+        let removed = compare_moved(base, head, &moved, &|_| false);
+        assert_eq!(removed.removed, vec![(String::from("b"), 4)]);
     }
 
     #[test]
