@@ -116,6 +116,7 @@ pub mod landed;
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
 pub mod lease;
 pub mod lint;
+pub mod low_water;
 pub mod main_watch;
 pub mod markers;
 pub mod mcp;
