@@ -423,7 +423,7 @@ span of session text, no score, no vector reaches `input.*`.
 
 It is not a rule that the engine never reads text. `record decide turn-writes`
 already applies `[[pattern]] finding-citation` to assistant prose in
-`crates/batten/src/turn.rs` and keeps only a boolean. That shape — the engine
+`crates/batten-base/src/turn.rs` and keeps only a boolean. That shape — the engine
 reads, reduces to a typed fact, the module decides over the fact — is the
 admissible one, and a Batten-managed classifier is the same shape with a better
 reducer: pinned by digest, deterministic, its text kept in the engine, only a

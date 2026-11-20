@@ -978,12 +978,14 @@ description = "Clippy with warnings denied"
 # line), so the variable rides the step's own argv rather than the task's `env`,
 # where it would also send the engine's `cargo run` into `target/clippy` and pay
 # a second full debug build of it there.
-# ONE ROW PER PACKAGE CUT OUT OF `batten` (CLOUD-2789): `batten-facts` is keyed
-# on its own sources, so an edit confined to `batten` hits its receipt, and the
-# workspace row excludes it, so every package is still linted exactly once.
+# ONE ROW PER PACKAGE CUT OUT OF `batten` (CLOUD-2789): `batten-facts` and
+# `batten-base` are each keyed
+# on its own sources, so an edit confined to `batten` hits their receipts, and
+# the workspace row excludes them, so every package is still linted once.
 run = [
   "{{vars.batten}} step run lint:clippy:facts -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-facts --all-targets --all-features -- -D warnings",
-  "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --exclude batten-facts --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy:base -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-base --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --exclude batten-facts --exclude batten-base --all-targets --all-features -- -D warnings",
 ]
 # ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
@@ -1560,7 +1562,7 @@ description = "Gate: the committed [ci] table still matches the host ruleset (CL
 # CLOUD-54's gate, ported off `mise-tasks/ci-drift.sh` under CLOUD-843.
 #
 # THE ADJUDICATION WAS ALREADY THE VERB'S. The program's last line was
-# `config lint --host-rules -`, so the comparison has lived in `crates/batten/src/ci.rs`
+# `config lint --host-rules -`, so the comparison has lived in `crates/batten-base/src/ci.rs`
 # all along. What the shell still owned was a credentialed FETCH, which the engine
 # may not do — house-style §5, and `evaluator-io-check` is the standing gate on it.
 #
@@ -2129,7 +2131,7 @@ run = "{{vars.batten}} check --rule 'bound grade other' --fail-on-warning"
 # dependency, the same one activated, a dev-dependency, and a crate the
 # workspace reaches but the evaluator does not — and they are the
 # security-critical half. Inlined here they would be assertable by nothing;
-# in `crates/batten/src/cargo_graph.rs` they are
+# in `crates/batten-base/src/cargo_graph.rs` they are
 # `crates/batten/tests/it/evaluator_closure.rs`'s to drive.
 #
 # IT WAS A `.py` SIBLING FOR PART OF THIS BRANCH, and that detour is recorded
@@ -2506,7 +2508,7 @@ run = "{{vars.batten}} release backfill --workflow linear-release-backfill.yml -
 # under CLOUD-843, and reached as the `finding-sink` `[[hook.handler]] on = "stop"`
 # row, the engine's end-of-turn ladder's second rung.
 #
-# THE READING IS THE ENGINE'S (`crates/batten/src/turn.rs`): the LAST turn, main
+# THE READING IS THE ENGINE'S (`crates/batten-base/src/turn.rs`): the LAST turn, main
 # thread only; whether its prose matches `[[pattern]] finding-citation`; and its
 # tool calls, each with the row it names (a direct call's `id`/`issueId`, or the
 # `finding-mediated-key` group of a mediated `batten mcp call`) and the column
@@ -4247,7 +4249,8 @@ run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",
   "{{vars.batten}} step run cross-check:facts -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-facts --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
-  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --exclude batten-facts --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check:base -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-base --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --exclude batten-facts --exclude batten-base --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
 ]
 
 [tasks."test:musl"]
@@ -4707,6 +4710,16 @@ description = "The hk gate minus the slow tier — what a diff that cannot move 
 # the binary too. On a cold runner this pays a `batten` debug build first.
 run = "hk check --all --profile '!slow'"
 
+# EVERY hk STEP BUT THE SUITE AND THE MUTANTS (CLOUD-2789), so `verify`'s second
+# tier reports `schema-check`, `reference-check`, `skill-check` and the rest in
+# minutes, beside clippy, rather than after `test:cargo` and `mutant:changed`
+# end an hour in. Each is keyed by its own `step run` receipt, so `ci` in the
+# third tier reads them back as hits and is left with the suite alone.
+[tasks."ci:checks"]
+description = "Every hk step except the test suite and the mutation sweep — `verify`'s second tier"
+depends = ["pkl-package"]
+run = "hk check --all --skip-step test --skip-step mutant:changed"
+
 [tasks.ci]
 description = "Everything CI runs"
 # fmt-check + lint + test come from the SAME hk.pkl the pre-commit hook runs
@@ -4944,8 +4957,12 @@ depends = ["tree-clean"]
 #      #1276 a held filed row, a seconds read, refused only after hours of mutants.
 #      The two records it reads (`signing-posture-record`, `record validate`, hk's
 #      edges for it) are written in sequence just above, so it never judges a stale one.
-#   2. minutes: semver, the test replay, the two cross builds, clippy.
-#   3. the suite: `ci` (hk's whole suite, mutants included).
+#      Since CLOUD-2789 also every hk step not tagged `slow` (`ci:quick`) and
+#      the test replay's removed-test half, which needs no build.
+#   2. minutes: semver, the test replay, the two cross builds, clippy, and every
+#      hk step but the suite and the mutants (`ci:checks`).
+#   3. the suite: `ci`, whose other steps the first two tiers already receipted,
+#      so what runs is the suite and the mutants.
 #
 # TIERS 1 AND 2 ARE STEP GRAPHS (CLOUD-2785): their order and fan width were
 # positions in this array, which the engine could not bound, time or report.
@@ -4994,6 +5011,15 @@ run = "mise run config-lint"
 # THE BASE-TEST REPLAY (CLOUD-2090), over the same trusted base as the two above:
 # each `#[test]` this lap modified runs in its BASE form against HEAD, and a base
 # expectation HEAD no longer meets is admitted only by a recorded answer.
+[tasks."verify:test-replay-structural"]
+description = "Gate: no test this lap removed is gone without a recorded answer, judged without a build — invoked through `verify`'s first tier"
+# THE SECONDS HALF, FIRST (CLOUD-2789). A removed test is decided by the two
+# trees alone, so it is judged in tier 1 beside `config-lint`, rather than an
+# hour into the lap behind the replay's build; `verify:test-replay` still runs
+# the modified tests' base bodies in tier 2.
+env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
+run = "{{vars.batten}} test replay --structural --base {{env.TEST_REPLAY_BASE}}"
+
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
 env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }

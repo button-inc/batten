@@ -151,7 +151,8 @@ impl Run {
     }
 
     /// Whether it has concluded.
-    pub(crate) fn completed(&self) -> bool {
+    #[must_use]
+    pub fn completed(&self) -> bool {
         self.state().conclusion().is_some()
     }
 
@@ -380,7 +381,8 @@ fn key(run: &Run) -> (bool, String, String, u64) {
 /// `pub(crate)` because `record forge --fetch` records one conclusion per name
 /// and must choose the SAME run this does (CLOUD-843): two orderings over one
 /// reading are two authorities, and on an overlapping re-run they disagree.
-pub(crate) fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
+#[must_use]
+pub fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
     const UNANSWERED: u8 = 3;
     // `max_by_key` over `(key, rank)` is the whole ordering, and it is a
     // FUNCTION OF THE SET rather than of the arrival order — which is the defect
@@ -441,7 +443,8 @@ pub(crate) fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Ru
 /// contradict each other. The predecessor's summary had that property by
 /// construction, emitted from inside the same pass; two passes would only have
 /// it by inspection.
-pub(crate) fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
+#[must_use]
+pub fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
     let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
     for run in runs {
         if !roster.required.iter().any(|name| name == &run.name) {

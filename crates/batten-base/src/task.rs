@@ -320,7 +320,7 @@ fn is_record(path: &Path) -> bool {
 ///
 /// Off unix there is no process group to read, so the pid is the whole truth;
 /// only the read is under `cfg` (CLOUD-2509).
-pub(crate) fn process_group(pid: &str) -> String {
+pub fn process_group(pid: &str) -> String {
     #[cfg(unix)]
     let group = pid
         .parse::<i32>()
@@ -580,7 +580,8 @@ pub fn normalized_root(program_root: &str) -> Option<String> {
 /// reader useless on Windows rather than wrong there, which is the side to be on.
 /// The parse decides on every platform; only the probe is under `cfg`
 /// (CLOUD-2509).
-pub(crate) fn pid_exists(pid: &str) -> bool {
+#[must_use]
+pub fn pid_exists(pid: &str) -> bool {
     let Ok(raw) = pid.parse::<i32>() else {
         return false;
     };
@@ -872,7 +873,7 @@ pub fn report(
 // immediately and holds nothing, exactly as the shell did.
 
 /// Where one clone's singleton locks live.
-pub(crate) const SINGLETON_DIR: &str = "batten-singleton";
+pub const SINGLETON_DIR: &str = "batten-singleton";
 
 /// What an acquire attempt found.
 #[derive(Clone, Debug, PartialEq, Eq)]

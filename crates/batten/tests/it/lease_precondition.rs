@@ -44,7 +44,7 @@
 // changed: "FAIL OPEN: no run id means there is nothing to cancel" crates/batten/src/lib.rs kind:mechanism
 // changed: "FAIL OPEN: no repository and no head ref each run" crates/batten/src/lib.rs kind:mechanism
 // carried: "the branch under judgement is the one passed to land-lock" crates/batten/src/lease.rs kind:mechanism
-// carried: "the token never reaches the log, on any path" crates/batten/src/rest.rs kind:mechanism
+// carried: "the token never reaches the log, on any path" crates/batten-base/src/rest.rs kind:mechanism
 // carried: "a branch that lands through /fast-forward is not judged, in either row" crates/batten/src/lease.rs kind:mechanism
 // carried: "the retired bot's prefix is judged like any other branch (CLOUD-660)" crates/batten/src/lease.rs kind:mechanism
 // carried: "the exemption is a prefix on the landing path, not a substring anywhere in the ref" crates/batten/src/lease.rs kind:mechanism

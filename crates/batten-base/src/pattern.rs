@@ -97,7 +97,7 @@ pub struct NamedPattern {
 /// load, so reaching this with one is impossible for a config that loaded, and
 /// a panic here would make a boundary the reason work stops.
 #[must_use]
-pub(crate) fn compiled(patterns: &[NamedPattern]) -> BTreeMap<String, regex::Regex> {
+pub fn compiled(patterns: &[NamedPattern]) -> BTreeMap<String, regex::Regex> {
     patterns
         .iter()
         .filter_map(|pattern| {

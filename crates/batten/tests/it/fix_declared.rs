@@ -1,7 +1,7 @@
 //! Every rule declares its remedy: `fix` or `no_fix_reason`, exactly one, and a
 //! reason names its class and the missing substrate (CLOUD-1576).
 //!
-//! It reddens a mutant of `crates/batten/src/remedy.rs` that admits both a fix
+//! It reddens a mutant of `crates/batten-base/src/remedy.rs` that admits both a fix
 //! and a reason, or an empty reason.
 
 use batten::waiver::Date;

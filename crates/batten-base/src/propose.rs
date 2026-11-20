@@ -259,12 +259,51 @@ fn union(ours: &[String], base: &[String], theirs: &[String]) -> Vec<String> {
     merged
 }
 
+/// The conflict-marker width, as the merge driver takes it.
+const MARKER_SIZE: std::num::NonZeroU8 = match std::num::NonZeroU8::new(MARKER) {
+    Some(size) => size,
+    None => unreachable!(),
+};
+
+/// The three-way text merge with every conflict kept as diff3 markers, or
+/// `None` for a merge with no conflict or bytes that are not UTF-8 (CLOUD-1956).
+///
+/// Here, beside the shapes that read its markers, since CLOUD-2789: it is a
+/// pure text merge over gix's driver, not a read or write of a repository, and
+/// `gitwrite` re-exports it for the replay that runs it.
+#[must_use]
+pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
+    use gix::merge::blob::builtin_driver::text;
+    let mut out = Vec::new();
+    let mut input = gix_diff::blob::InternedInput::default();
+    let options = text::Options {
+        conflict: text::Conflict::Keep {
+            style: text::ConflictStyle::Diff3,
+            marker_size: MARKER_SIZE,
+        },
+        ..Default::default()
+    };
+    let resolution = gix::merge::blob::builtin_driver::text(
+        &mut out,
+        &mut input,
+        text::Labels::default(),
+        ours,
+        ancestor,
+        theirs,
+        options,
+    );
+    if resolution != gix::merge::blob::Resolution::Conflict {
+        return None;
+    }
+    String::from_utf8(out).ok()
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    /// The replay's own path: `gitwrite`'s diff3, then the shapes.
+    /// The replay's own path: `diff3`, then the shapes.
     fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<super::Proposal> {
-        super::propose(&crate::gitwrite::diff3(ancestor, ours, theirs)?)
+        super::propose(&super::diff3(ancestor, ours, theirs)?)
     }
 
     use super::*;

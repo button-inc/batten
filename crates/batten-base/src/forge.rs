@@ -133,7 +133,8 @@ pub fn verdicts(git_dir: &Path, declared: &[String]) -> BTreeMap<String, BTreeMa
 /// A line with no conclusion is skipped — a name with no verdict is not a
 /// verdict, and recording it as an empty string would let a predicate comparing
 /// against `""` succeed.
-pub(crate) fn parse(text: &str) -> BTreeMap<String, String> {
+#[must_use]
+pub fn parse(text: &str) -> BTreeMap<String, String> {
     let mut checks = BTreeMap::new();
     for line in text.lines() {
         let mut parts = line.split_whitespace();
