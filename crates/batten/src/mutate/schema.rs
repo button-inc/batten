@@ -3262,6 +3262,9 @@ pub fn case_digests<'c>(
             hasher.update(b"\x19");
             hasher.update(depends.untraced.as_bytes());
         }
+        // The test's own text and its module's helpers, from the first source
+        // that holds it: what a shared module is reached FROM.
+        let mut own: Option<Vec<String>> = None;
         for file in case_sources(package_dirs, name, binary) {
             let held = parsed.entry(file.clone()).or_insert_with(|| {
                 let bytes = crate::fsio::read(root.join(&file)).ok()?;
@@ -3272,12 +3275,32 @@ pub fn case_digests<'c>(
             let Some((bytes, tests)) = held else {
                 continue;
             };
-            match tests.get(test).filter(|_| !file.ends_with("common/mod.rs")) {
+            if file.ends_with("common/mod.rs") {
+                // THE SHARED HELPERS A CASE REACHES, NEVER THE WHOLE FILE: keyed
+                // on its bytes, one edit to `common/mod.rs` moved the key of
+                // every integration case and re-judged every mutant one
+                // reaches (#1276, lap 24's TLS port retry). Without a text to
+                // reach from, the whole file stands, as before.
+                match own.as_deref() {
+                    Some(texts) => {
+                        hasher.update(
+                            common_reached(&String::from_utf8_lossy(bytes), texts).as_bytes(),
+                        );
+                    }
+                    None => {
+                        hasher.update(bytes);
+                    }
+                }
+                continue;
+            }
+            match tests.get(test) {
                 Some(bodies) => {
                     for text in bodies {
                         hasher.update(text.as_bytes());
                         hasher.update(b"\x1e");
                     }
+                    own.get_or_insert_with(Vec::new)
+                        .extend(bodies.iter().cloned());
                 }
                 None => {
                     hasher.update(bytes);
@@ -3287,6 +3310,66 @@ pub fn case_digests<'c>(
         digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
     }
     digests
+}
+
+/// The digest of the items of a shared test module (`common`) that `texts`
+/// reach by name, transitively: an item is reached when a reached text names
+/// it, and then everything it names is reached too. An item with no name of
+/// its own (a `use`) is always taken; an `impl` answers to its self type's
+/// name, so a reached type brings its methods.
+///
+/// BY NAME, NOT BY CALL: a name mentioned is taken whether or not it runs, so
+/// the set errs toward more, which costs a re-judge and never a stale verdict.
+/// A source that will not parse keys on its whole text.
+fn common_reached(common: &str, texts: &[String]) -> String {
+    use ra_ap_syntax::ast::HasModuleItem as _;
+    let parse = SourceFile::parse(common, ra_ap_syntax::Edition::Edition2024);
+    if !parse.errors().is_empty() {
+        return blake3::hash(common.as_bytes()).to_hex().to_string();
+    }
+    let items: Vec<(Option<String>, String, BTreeSet<String>)> = parse
+        .tree()
+        .items()
+        .map(|item| {
+            let name = match &item {
+                ast::Item::Impl(it) => it
+                    .self_ty()
+                    .and_then(|ty| names_in(ty.syntax()).into_iter().next_back()),
+                ast::Item::Use(_) | ast::Item::MacroCall(_) => None,
+                other => ast::AnyHasName::cast(other.syntax().clone())
+                    .and_then(|named| ast::HasName::name(&named))
+                    .map(|name| name.text().to_string()),
+            };
+            (name, item.syntax().to_string(), names_in(item.syntax()))
+        })
+        .collect();
+    let mut wanted: BTreeSet<String> = texts
+        .iter()
+        .flat_map(|text| {
+            names_in(&SourceFile::parse(text, ra_ap_syntax::Edition::Edition2024).syntax_node())
+        })
+        .collect();
+    let mut taken = vec![false; items.len()];
+    loop {
+        let mut grew = false;
+        for (at, (name, _, names)) in items.iter().enumerate() {
+            if taken[at] || name.as_ref().is_some_and(|name| !wanted.contains(name)) {
+                continue;
+            }
+            taken[at] = true;
+            wanted.extend(names.iter().cloned());
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut hasher = blake3::Hasher::new();
+    for ((_, text, _), _) in items.iter().zip(&taken).filter(|(_, taken)| **taken) {
+        hasher.update(text.as_bytes());
+        hasher.update(b"\x1e");
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Every `#[test]` function in `source` by name: its own text, then the
@@ -7232,6 +7315,41 @@ mod tests {
             handback_cases(1, &named(None), &schema, &reach),
             None,
             "nothing to go on"
+        );
+    }
+
+    /// A shared test module keys a case on what the case reaches by name, and
+    /// on nothing else of the file.
+    ///
+    /// Fails by: the whole file keyed (an unreached helper's edit moves the
+    /// digest), a reached helper dropped, a helper reached only through
+    /// another missed, or a reached type's `impl` left out.
+    #[test]
+    fn a_case_is_keyed_on_the_shared_helpers_it_reaches() {
+        let test = [String::from("fn t() { let r = repo(); r.run(); }")];
+        let common = |helper: &str, other: &str, method: &str| {
+            format!(
+                "use std::path::Path;\npub fn repo() -> Repo {{ Repo(scratch()) }}\n\
+                 fn scratch() -> u8 {{ {helper} }}\npub struct Repo(u8);\n\
+                 impl Repo {{ pub fn run(&self) {{ {method} }} }}\n\
+                 pub fn other() -> u8 {{ {other} }}\n"
+            )
+        };
+        let base = common_reached(&common("1", "1", "()"), &test);
+        assert_eq!(
+            base,
+            common_reached(&common("1", "2", "()"), &test),
+            "an unreached helper does not move the key"
+        );
+        assert_ne!(
+            base,
+            common_reached(&common("2", "1", "()"), &test),
+            "a helper reached through another moves it"
+        );
+        assert_ne!(
+            base,
+            common_reached(&common("1", "1", "let _ = 0;"), &test),
+            "a reached type's method moves it"
         );
     }
 
