@@ -3252,11 +3252,14 @@ const STEP_GROUP: FlagDecl = FlagDecl::positional(
 
 /// `--jobs <n>` on `step graph run`: how many rows run at once.
 /// `--root <dir>` on `modules cycle` (CLOUD-2789).
-const MODULES_ROOT: FlagDecl = FlagDecl::valued(
-    "root",
-    "root",
-    "The crate's source root, the directory holding lib.rs",
-);
+const MODULES_ROOT: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "root",
+        "root",
+        "The crate's source root, the directory holding lib.rs",
+    )
+};
 
 /// `--max <n>` on `modules cycle` (CLOUD-2789).
 const MODULES_MAX: FlagDecl = FlagDecl::valued(

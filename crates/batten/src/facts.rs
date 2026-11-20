@@ -4855,7 +4855,7 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
         // restating it.
         serde_json::Value::Object(map) => match shell_streams(map) {
             // A shell envelope: count what the tool actually printed.
-            (bytes, blocks) if blocks > 0 => match std::str::from_utf8(&bytes) {
+            (bytes, 1..) => match std::str::from_utf8(&bytes) {
                 Ok(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
                 // Bytes that are not text are a shape this build did not read,
                 // never a buffer that carried nothing.
@@ -4863,7 +4863,7 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
             },
             // An object carrying no readable stream member is not an envelope at
             // all — it is a single JSON row, which is one element wrapped.
-            _ => Look::Is(1),
+            (_, 0) => Look::Is(1),
         },
         // A single number or boolean is one element. Wrapping it is what makes
         // the count obvious rather than making the caller project.
