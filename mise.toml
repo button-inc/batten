@@ -3766,7 +3766,7 @@ description = "Gate: the crate's largest module cycle holds no more modules than
 # this gate landed (148), lowered to 128 when `error` and `facts` stopped
 # reaching up (CLOUD-2789 phase 2); a commit that breaks a cycle lowers it in the
 # same change, and a commit that grows one is refused here.
-run = "{{vars.batten}} modules cycle --root crates/batten/src --max 128"
+run = "{{vars.batten}} modules cycle --root crates/batten/src --max 104"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"

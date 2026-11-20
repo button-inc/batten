@@ -2317,7 +2317,7 @@ pub enum Beat {
 
 #[must_use]
 pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> Beat {
-    let Ok((_, holder)) = crate::lease_identity(root) else {
+    let Ok((_, holder)) = identity(root) else {
         return Beat::Quiet;
     };
     let Ok(observed) = observe(terms) else {
@@ -3861,6 +3861,17 @@ pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries
         .as_deref()
         .and_then(|wanted| head_carries(repo, wanted, head));
     decide(paths, head, wanted.as_deref(), ancestral)
+}
+
+/// This clone's bookkeeping directory and its holder id.
+pub fn identity(root: &Path) -> std::result::Result<(Local, String), String> {
+    let git_dir =
+        crate::git::git_dir(root).map_err(|err| format!("cannot read this repository: {err}"))?;
+    let local = Local::under(&git_dir);
+    let holder = local
+        .holder()
+        .map_err(|err| format!("cannot mint a holder id: {err}"))?;
+    Ok((local, holder))
 }
 
 #[cfg(test)]

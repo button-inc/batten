@@ -163,7 +163,7 @@ pub fn run_settings(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = crate::repo_slug(std::path::Path::new(".")) else {
+    let Some(slug) = crate::race::repo_slug(std::path::Path::new(".")) else {
         writeln!(
             err,
             "batten: release settings: could not look: no forge remote names the repository"

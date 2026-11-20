@@ -30,7 +30,7 @@
 //!
 //! Every consumer fact is an argument: the manifest's name, the workflow to
 //! dispatch, the branch it runs on and the tag glob. The repository comes from
-//! [`crate::repo_slug`], the credential from `[forge] credential_names`
+//! [`crate::race::repo_slug`], the credential from `[forge] credential_names`
 //! (non-negotiable rule 1).
 //!
 //! # Three answers, kept apart
@@ -472,7 +472,7 @@ fn manifest_name(verb: &str, name: &str) -> Result<()> {
 /// what could not be asked on `err`, and answers [`ExitCode::Internal`].
 pub fn run_record(tag: Option<&str>, manifest: &str, err: &mut dyn Write) -> Result<ExitCode> {
     manifest_name(RECORD_VERB, manifest)?;
-    let slug = crate::repo_slug(Path::new("."));
+    let slug = crate::race::repo_slug(Path::new("."));
     let produced = produce_record(
         slug.as_deref(),
         tag,
@@ -578,7 +578,7 @@ pub fn run_sums(
         writeln!(out, "sums={}", path.display())?;
         return Ok(ExitCode::Success);
     }
-    let slug = crate::repo_slug(Path::new("."));
+    let slug = crate::race::repo_slug(Path::new("."));
     let produced = produce_sums(
         slug.as_deref(),
         tag,
@@ -918,7 +918,7 @@ pub fn run_backfill(
         }
         return Ok(ExitCode::Success);
     }
-    let Some(slug) = crate::repo_slug(root) else {
+    let Some(slug) = crate::race::repo_slug(root) else {
         writeln!(
             err,
             "batten: {BACKFILL_VERB}: could not look: no forge remote names the repository to \
