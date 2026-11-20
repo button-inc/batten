@@ -18524,6 +18524,22 @@ tools = [
   ["mise", "tasks", "info", "hk-drift", "--json"],
 ]
 
+# THE SUITE TIER (CLOUD-2788): `verify:gated` runs `mise run ci` through this
+# row, so a tree the suite already passed is not run again, and its pass is the
+# local proof `step cover` reads for `ci` and the `mutants (*)` shards. Keyed on
+# the whole tree because the suite reads the whole tree, and on the merge base,
+# because `mutant:changed` judges the diff from it.
+[[step]]
+id = "ci-suite"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["hk", "--version"],
+  ["mise", "tasks", "info", "ci", "--json"],
+  ["batten", "step", "base", "--ref", "origin/main", "--ref-env", "BATTEN_SPEC_BASE", "--", "."],
+]
+
 # THE LAP'S FIRST TWO TIERS, AS A GRAPH (CLOUD-2785). `verify:gated` runs
 # `step graph run verify-1`, then `step graph run verify-2 --jobs 2`; these rows
 # are their nodes. Each is SCHEDULE-ONLY (no `inputs`, no `tools`): it always
