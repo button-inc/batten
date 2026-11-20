@@ -1240,10 +1240,11 @@ fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
     // the same defect one target further on — it never ran on Windows, because
     // cargo stopped at the `--lib` failure before reaching the integration
     // tests.
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/identity.rs"))
-            .expect("read identity.rs")
-            .replace("\r\n", "\n");
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../batten-facts/src/identity.rs"),
+    )
+    .expect("read identity.rs")
+    .replace("\r\n", "\n");
     for name in [
         "pub fn code_fingerprint",
         "pub fn log_fingerprint",

@@ -6104,7 +6104,10 @@ mod tests {
         // exempts — and the failure direction is worse here: an exemption that
         // names nothing merely never fires, while a NARROWING key that names
         // nothing is a name a later column could accidentally acquire.
-        let source = concat!(include_str!("rules.rs"), include_str!("facts.rs"));
+        let source = concat!(
+            include_str!("rules.rs"),
+            include_str!("../../batten-facts/src/facts.rs")
+        );
         for (key, reason) in RULE_NARROWING_ON_ARRIVAL {
             assert!(
                 source.contains(&format!("pub {key}:")),
