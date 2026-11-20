@@ -176,6 +176,13 @@ const CONTENT: &[Canary] = &[
         source: "a shell line inside a manifest body or a workflow step the census counts",
         columns: &[],
     },
+    Canary {
+        tag: "modsource",
+        // CLOUD-2789. `modules cycle` reads every source file under its root to
+        // draw the graph; it may print one count, and this is the byte it read.
+        source: "a comment inside a Rust module the module graph reads",
+        columns: &[],
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -571,6 +578,15 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // A two-module crate `modules cycle` reads (CLOUD-2789): `a` and `b`
+            // reach each other, so the answer is a live count of 2, and the
+            // comment it read past is a content canary it must never print.
+            .file("crate/src/lib.rs", "mod a;\nmod b;\n")
+            .file(
+                "crate/src/a.rs",
+                &format!("// {}\nuse crate::b::B;\npub struct A;\n", canary("modsource")),
+            )
+            .file("crate/src/b.rs", "use crate::a::A;\npub struct B;\n")
             // `doctor toolchain`'s manifest (CLOUD-1683). The declared key is a
             // PLAIN name, deliberately: the verdict names a missing declared key
             // as its subject, which `Check::subjects` licenses — an identifier
@@ -949,6 +965,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // either the trunk commit or the comparison — which is the could-not-look
     // this gate is built to fail open on.
     "lease carries",
+    // `step cover` (CLOUD-2788) reads the CI roster from the task runner's
+    // environment, where the consumer declares it (rule 1), and this corpus is
+    // run with no roster: could-not-look, exit 3, is its honest answer. What it
+    // emits then is the variable's name, held to the pointer-only law below.
+    "step cover",
     // `claim merged` joins it for `lease carries`' reason exactly: it reaches
     // the FORGE to read merged pull request bodies, and a corpus with no
     // credential can read none of them. It is also the one verb here whose
@@ -2099,6 +2120,33 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `step base` (CLOUD-2787) answers object ids at the merge base, one per
+    // path it was handed: a pointer to the bytes, never the bytes.
+    Verb {
+        path: "step base",
+        args: &["--ref", "main", "--", "."],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step cover` (CLOUD-2788) names roster checks and the variable that maps
+    // them; it reads no file a canary is seeded in, only the pass records.
+    Verb {
+        path: "step cover",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step env` (CLOUD-2786) prints the declared variables' values, which ARE
+    // the key the step cache compares: a relay of the caller's own environment.
+    Verb {
+        path: "step env",
+        args: &["--", "HOME"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "it prints the values of the variables the caller declared, which are the step \
+             key's own input — the other way to see them is the caller's environment itself",
+        ),
+    },
     Verb {
         path: "step record",
         args: &["a-step"],
@@ -2108,6 +2156,14 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "step run",
         args: &["a-step", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules cycle` (CLOUD-2789) prints one count of modules; it reads source
+    // files only to draw their edges, and never prints a byte of one.
+    Verb {
+        path: "modules cycle",
+        args: &["--root", "crate/src"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

@@ -23,8 +23,15 @@ use std::fmt;
 /// TESTS ONLY, so a base test the replay splices in (`crate::error::Denial`)
 /// still builds, while the library never reaches back up to `refusal`: that
 /// edge alone put 20 modules back into the crate's largest cycle (128 → 148).
+///
+/// AN ALIAS, NOT A `use`: `module_closure` draws the crate's graph from `use`
+/// items, test modules included, and a test-only re-export there put `refusal`
+/// and `verdict` into the closure of every module reaching `error` (exec, land
+/// and four more left the plumbing). A test-only path is no crate boundary —
+/// cargo allows a dev-dependency to point back — and once the replay's base is
+/// a trunk carrying the new path, nothing spells the old one.
 #[cfg(test)]
-pub use crate::refusal::Denial;
+pub type Denial = crate::refusal::Denial;
 
 /// A wrapped command's own exit code, travelling to the boundary that reports it.
 ///

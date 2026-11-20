@@ -198,9 +198,22 @@ same_stage(program, step) if {
 # word comes first (`-p batten`'s value, `-D warnings`), never a verb.
 same_stage(program, step) if {
 	program.name != "batten"
+	program.name != "mise"
 	program.name == step.name
 	program.subcommand == step.subcommand
 	selected(program) == selected(step)
+}
+
+# A MISE RUN IS THE TASKS IT RUNS (CLOUD-2788). Its verb is always `run`, so the
+# clause above would make every `mise run <task>` the stage a receipted
+# `step run ci-suite -- mise run ci` names; the task list is the identity, the
+# same answer `task-programs` reads, and a different task is development.
+same_stage(program, step) if {
+	program.name == "mise"
+	step.name == "mise"
+	program.subcommand == step.subcommand
+	is_array(program.tasks)
+	program.tasks == step.tasks
 }
 
 # The `--target` and `--profile` values a program names, each with its option.
@@ -450,6 +463,26 @@ test_the_steps_targets_are_the_step if {
 		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["check", "--target=x86_64-pc-windows-gnu", "--target", "x86_64-unknown-linux-musl"], "subcommand": "check", "nested": null, "global-options": [], "via": null, "mediated": false}],
 		"task-programs": [],
 		"step-programs": [{"program": "cargo", "name": "cargo", "arguments": ["check", "--target", "x86_64-pc-windows-gnu", "--target=x86_64-unknown-linux-musl"], "subcommand": "check", "nested": null, "global-options": [], "via": "step run", "receipted": true, "task": "cross-check", "mediated": true}],
+	}}
+}
+
+test_another_mise_task_is_not_the_suite_step if {
+	count(violation) == 0 with input as {"call": {
+		"command": "mise run lint:clippy",
+		"segments": [],
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "lint:clippy"], "subcommand": "run", "tasks": ["lint:clippy"], "nested": "lint:clippy", "global-options": [], "via": null, "mediated": false}],
+		"task-programs": [],
+		"step-programs": [{"program": "mise", "name": "mise", "arguments": ["run", "ci"], "subcommand": "run", "tasks": ["ci"], "nested": "ci", "global-options": [], "via": "step run", "receipted": true, "task": "verify:gated", "mediated": true}],
+	}}
+}
+
+test_the_suite_steps_task_outside_it_is_refused if {
+	some _ in violation with input as {"call": {
+		"command": "mise run ci",
+		"segments": [],
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "ci"], "subcommand": "run", "tasks": ["ci"], "nested": "ci", "global-options": [], "via": null, "mediated": false}],
+		"task-programs": [],
+		"step-programs": [{"program": "mise", "name": "mise", "arguments": ["run", "ci"], "subcommand": "run", "tasks": ["ci"], "nested": "ci", "global-options": [], "via": "step run", "receipted": true, "task": "verify:gated", "mediated": true}],
 	}}
 }
 
