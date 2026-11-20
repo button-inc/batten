@@ -333,6 +333,19 @@ pub fn root_names(source: &str, module: &[String]) -> Result<BTreeSet<String>, C
             if let Some(name) = from_root(&segments(&path), module) {
                 names.insert(name);
             }
+        } else if node.kind() == SyntaxKind::TOKEN_TREE {
+            // A MACRO'S ARGUMENTS ARE TOKENS, NOT PATHS (CLOUD-2789): the
+            // `crate::review::for_body` inside `matches!(…)` was no edge, so a
+            // module reached its caller unseen and read as below the cycle.
+            // Read once, at the outermost tree: an inner one is a descendant.
+            if node
+                .parent()
+                .is_some_and(|p| p.kind() == SyntaxKind::TOKEN_TREE)
+                || cfg_test(&node)
+            {
+                continue;
+            }
+            names.extend(token_paths(&node, module));
         } else if let Some(tree) = ast::UseTree::cast(node) {
             // `use crate::{a, b}`: the group's members name the root.
             let (Some(path), Some(list)) = (tree.path(), tree.use_tree_list()) else {
@@ -383,6 +396,52 @@ fn segments(path: &ast::Path) -> Vec<String> {
     }
     out.reverse();
     out
+}
+
+/// Every root name a macro token tree spells as a path: `crate::a…` or a
+/// `super::…` chain, assembled from its identifier and `::` tokens.
+fn token_paths(tree: &SyntaxNode, module: &[String]) -> Vec<String> {
+    let tokens: Vec<(SyntaxKind, String)> = tree
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| !token.kind().is_trivia())
+        .map(|token| (token.kind(), token.text().to_owned()))
+        .collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < tokens.len() {
+        let (kind, text) = &tokens[at];
+        if !matches!(kind, SyntaxKind::CRATE_KW | SyntaxKind::SUPER_KW) {
+            at += 1;
+            continue;
+        }
+        let mut segments = vec![text.clone()];
+        let mut next = at + 1;
+        loop {
+            // `::` is one token or, inside a token tree, two `:`.
+            let step = match tokens.get(next).map(|t| t.0) {
+                Some(SyntaxKind::COLON2) => 1,
+                Some(SyntaxKind::COLON)
+                    if tokens.get(next + 1).map(|t| t.0) == Some(SyntaxKind::COLON) =>
+                {
+                    2
+                }
+                _ => break,
+            };
+            match tokens.get(next + step) {
+                Some((SyntaxKind::IDENT | SyntaxKind::SUPER_KW, word)) => {
+                    segments.push(word.clone());
+                    next += step + 1;
+                }
+                _ => break,
+            }
+        }
+        if let Some(name) = from_root(&segments, module) {
+            found.push(name);
+        }
+        at = next.max(at + 1);
+    }
+    found
 }
 
 /// How many leading segments of `segments` climb to the root: `crate` is one;
@@ -520,6 +579,17 @@ mod tests {
     }
 
     /// Fails by: test code or a doc comment read as an edge.
+    /// Fails by: a path inside a macro's arguments read as no edge, the hole
+    /// that put `ready` below the cycle while `matches!` hid its call into
+    /// `review`; or a test-only macro read as one.
+    #[test]
+    fn a_path_inside_a_macro_is_an_edge() {
+        let source = "fn f() { if matches!(crate::review::for_body(x), Some(_)) {} \
+                      assert!(super::git::y()); }\n\
+                      #[cfg(test)]\nmod tests { fn t() { assert!(crate::fixture::y()); } }\n";
+        assert_eq!(names(source, &["ready"]), ["git", "review"]);
+    }
+
     #[test]
     fn a_cfg_test_path_is_not_an_edge() {
         let source = "/// See [`crate::doc_only`].\nfn f() { crate::git::x(); }\n\
