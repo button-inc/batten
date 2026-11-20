@@ -780,85 +780,10 @@ pub enum Arm {
     Pointer,
 }
 
-/// The word every finding line opens with, naming the binary that raised it and
-/// that `policy explain` is run through (CLOUD-2145). No harness writes a line
-/// opening `batten <severity> `, so it is also what tells a finding apart from
-/// a host's own messages.
-pub const PROVENANCE: &str = "batten";
-
-/// What a line is, as its second word (CLOUD-2145): for a finding, how it
-/// bears on the call — `deny` refused it, `warn` must be answered soon, `note`
-/// eventually — and `remedy` for a line that is no finding at all but how a
-/// rule's findings are fixed. One ASCII token each, the shape of a compiler's
-/// `error`/`warning`/`help`.
-///
-/// THE WORD, NOT THE SHAPE, SAYS IT IS A REMEDY: a finding may name no subject
-/// (`batten deny plan write refused; run ExitPlanMode…`), so a missing ` at `
-/// cannot mark a remedy line, and a reader merging stdout and stderr would read
-/// `batten deny <rule> — …` as a second finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Severity {
-    /// The call was refused.
-    #[default]
-    Deny,
-    /// An advisory to answer before the work goes much further.
-    Warn,
-    /// An advisory with no deadline.
-    Note,
-    /// Not a finding: how a rule's findings, each on its own line, are fixed.
-    Remedy,
-}
-
-impl Severity {
-    /// Every head word.
-    pub const ALL: [Severity; 4] = [
-        Severity::Deny,
-        Severity::Warn,
-        Severity::Note,
-        Severity::Remedy,
-    ];
-
-    /// The word the line carries.
-    #[must_use]
-    pub const fn word(self) -> &'static str {
-        match self {
-            Severity::Deny => "deny",
-            Severity::Warn => "warn",
-            Severity::Note => "note",
-            Severity::Remedy => "remedy",
-        }
-    }
-
-    /// The severity an advisory of `tier` is printed under.
-    #[must_use]
-    pub const fn of_tier(tier: crate::severity::AdvisoryTier) -> Severity {
-        match tier {
-            crate::severity::AdvisoryTier::Warning | crate::severity::AdvisoryTier::Caution => {
-                Severity::Warn
-            }
-            crate::severity::AdvisoryTier::Advisory => Severity::Note,
-        }
-    }
-}
-
-/// Whether `text` opens with a finding's head, `batten <severity> `.
-#[must_use]
-pub fn is_headed(text: &str) -> bool {
-    Severity::ALL.iter().any(|severity| {
-        text.strip_prefix(PROVENANCE)
-            .and_then(|rest| rest.strip_prefix(' '))
-            .and_then(|rest| rest.strip_prefix(severity.word()))
-            .is_some_and(|rest| rest.starts_with(' '))
-    })
-}
-
-/// The ONE spelling of a finding's head, `batten <severity> <name>`. Every line
-/// that reports a finding opens with this; `emission_census` refuses a
-/// hand-spelled one.
-#[must_use]
-pub fn head(severity: Severity, name: &str) -> String {
-    format!("{PROVENANCE} {} {}", severity.word(), plain(name))
-}
+// The line's grammar lives in the `grammar` leaf (CLOUD-2789), so the modules
+// below this one can spell a finding's head without reaching up here.
+pub use crate::grammar::{PROVENANCE, Severity, head, is_headed};
+use crate::grammar::{RULE_HOP_PLACEHOLDER, plain};
 
 /// The two names a finding line labels, so a reader can always tell a rule
 /// from a verdict (CLOUD-2075).
@@ -894,20 +819,9 @@ fn quoted(name: &str) -> String {
     format!("'{}'", name.replace('\'', "\\'"))
 }
 
-/// Pointer text made safe for the grammar: it can never contain the tail
-/// opener or the clause separator.
-fn plain(text: &str) -> String {
-    text.replace(" — ", " - ").replace("; ", ", ")
-}
-
 /// How every rendered override route opens; [`parse_finding`] drops these
 /// segments from an item's definition because their subject varies per firing.
 const OVERRIDE_OPENER: &str = "admit with batten override request ";
-
-/// CLOUD-1806's class route. The hop [`finding_line`] appends names the same
-/// verb with the real id, so a route whose target is this placeholder is
-/// dropped at render rather than printed twice.
-pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'";
 
 /// The one projection every channel carries (CLOUD-2075, CLOUD-2142):
 /// `<label> '<name>'[ at <S>](; <route>)*[ — ['<T>' ]<definition>]`,
