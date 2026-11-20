@@ -210,28 +210,12 @@ impl Date {
 
     /// The date of an instant given as seconds since the Unix epoch, UTC.
     ///
-    /// The standard era-based civil-from-days algorithm, hand-written so a date
-    /// costs no dependency — the same reason [`crate::receipt`] gives for its
-    /// timestamp formatter, which now reads its date half from here rather than
-    /// carrying a second copy of this arithmetic.
+    /// [`crate::clock::civil`]'s reading as a `Date`: the one civil-from-days
+    /// conversion in the tree, which the receipt timestamp formatter reads too.
     #[must_use]
     pub fn from_unix_seconds(seconds: u64) -> Date {
-        // Shift to the era starting 0000-03-01; every quantity below is
-        // non-negative, so the arithmetic stays in u64.
-        let z = seconds / 86_400 + 719_468;
-        let era = z / 146_097;
-        let day_of_era = z % 146_097;
-        let year_of_era =
-            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-        let mp = (5 * day_of_year + 2) / 153;
-        let day = day_of_year - (153 * mp + 2) / 5 + 1;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 };
-        Date {
-            year: year_of_era + era * 400 + u64::from(month <= 2),
-            month,
-            day,
-        }
+        let (year, month, day) = crate::clock::civil(seconds);
+        Date { year, month, day }
     }
 
     /// The canonical `YYYY-MM-DD` spelling — the one [`Date::parse`] accepts.
