@@ -677,6 +677,27 @@ pub enum StepCommand {
         /// The command, verbatim. Never empty — the surface requires it.
         command: Vec<String>,
     },
+    /// Say whether every required CI check passed locally at `HEAD` or is
+    /// exempt (CLOUD-2788).
+    Cover,
+    /// Print one `base <path> <id>` line per pathspec, read at the merge base
+    /// of `HEAD` and the ref (CLOUD-2787): a two-tree step's base half.
+    Base {
+        /// The ref compared against, unless `ref_env` overrides it.
+        reference: String,
+        /// The variable whose value, when set and non-empty, replaces the ref.
+        ref_env: Option<String>,
+        /// The pathspecs whose content ids at the merge base are printed.
+        paths: Vec<String>,
+    },
+    /// Print the sorted `env` lines a declared environment keys (CLOUD-2786):
+    /// a step's environment half, declared as a `tools` entry.
+    Env {
+        /// Names the patterns match that are never keyed, in the order written.
+        exclude: Vec<String>,
+        /// The names, or `PREFIX*` patterns, whose variables are keyed.
+        patterns: Vec<String>,
+    },
     /// Run a group's rows as a graph (CLOUD-2785).
     Graph {
         /// The group, as the step table names it.
@@ -3674,6 +3695,25 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
             args: step_args(matches),
             command: matches
                 .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        ("cover", _) => Some(StepCommand::Cover),
+        ("env", matches) => Some(StepCommand::Env {
+            exclude: matches
+                .get_many::<String>("exclude")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            patterns: matches
+                .get_many::<String>("patterns")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        ("base", matches) => Some(StepCommand::Base {
+            reference: matches.get_one::<String>("ref").cloned()?,
+            ref_env: matches.get_one::<String>("ref_env").cloned(),
+            paths: matches
+                .get_many::<String>("paths")?
                 .cloned()
                 .collect::<Vec<_>>(),
         }),

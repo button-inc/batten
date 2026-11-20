@@ -437,7 +437,23 @@ RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ 
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
+#
+# WHICH LOCAL STEP STANDS FOR EACH CHECK HERE is `CI_LOCAL_PROOF`, and which have
+# none is `CI_EXEMPT_CHECKS`, both just below (CLOUD-2788).
 CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
+# Read by `batten step cover`, the last line of `verify` (CLOUD-2788): a check is
+# covered when the step it maps to passed at the lap's tree (`step run` and
+# `step graph run` record each pass). Beside the roster rather than in
+# `batten.toml`: it is the same CI vocabulary, and the released engine drops
+# `batten.toml` keys it does not know. `ci-suite` is hk's suite, whose
+# `mutant:changed` stands for `mutants (n)`.
+CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,batten-check=gate:batten-check,commit-lint=gate:commit-lint,zizmor=gate:zizmor,semver=gate:semver,cross=gate:cross-check,darwin-link (aarch64-apple-darwin)=gate:darwin-link,darwin-link (x86_64-apple-darwin)=gate:darwin-link,perf=perf-gate"
+# Each exemption's reason; a `*` entry covers every check it prefixes. `musl`:
+# a link target CI builds, with no local toolchain declared. `windows`, `macos`:
+# the suite on another OS's runtime. `final`: the fan-in of the others, covered
+# through them. `action*`: the composite action, exercised on hosted runners.
+# `dist / dist (*`: release artifact builds per target.
+CI_EXEMPT_CHECKS = "musl,windows,macos,final,action*,dist / dist (*"
 
 # JOBS LEAVING THE ROSTER, and only while they still run (CLOUD-2301). The
 # fast-forward bot judges a head against TRUNK's roster, so a job is retired in
@@ -3741,9 +3757,10 @@ run = "{{vars.batten}} policy budget"
 description = "Gate: the crate's largest module cycle holds no more modules than the committed bound (CLOUD-2789)"
 # A workspace crate must be dependency-closed, so while one cycle spans most of
 # `crates/batten/src` no package cut exists. The bound is the count measured when
-# this gate landed (148); a commit that breaks a cycle lowers it in the same
-# change, and a commit that grows one is refused here.
-run = "{{vars.batten}} modules cycle --root crates/batten/src --max 148"
+# this gate landed (148), lowered to 128 when `error` and `facts` stopped
+# reaching up (CLOUD-2789 phase 2); a commit that breaks a cycle lowers it in the
+# same change, and a commit that grows one is refused here.
+run = "{{vars.batten}} modules cycle --root crates/batten/src --max 128"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
@@ -4935,9 +4952,10 @@ depends = ["tree-clean"]
 run = [
   "{{vars.batten}} step graph run verify-1",
   "{{vars.batten}} step graph run verify-2 --jobs 2",
-  "mise run ci",
+  "{{vars.batten}} step run ci-suite -- mise run ci",
   "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
   "mise run perf-gate",
+  "{{vars.batten}} step cover",
   "{{vars.batten}} receipt record verify",
 ]
 
@@ -4971,7 +4989,7 @@ run = "mise run config-lint"
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
 env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
-run = "{{vars.batten}} step run test-replay --arg {{env.TEST_REPLAY_BASE}} -- {{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
+run = "{{vars.batten}} step run test-replay -- {{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"

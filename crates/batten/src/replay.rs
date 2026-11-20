@@ -37,13 +37,13 @@
 //! `replay/journal/` the moment it is read, keyed on what decides it: the spliced
 //! base body, the test's dependency key at HEAD (the one `test:cargo` selects by,
 //! [`crate::mutate::resume::held_cases`]; HEAD's tree id where that is unknown),
-//! the build's inputs and the base commit. A rerun reads the journal first and
+//! the build's inputs and the base content. A rerun reads the journal first and
 //! runs the union only over what it does not hold, and `replay/tree` is kept
 //! while HEAD's tree id is the one it was materialised from.
 //!
 //! Inside the union run, each case is kept too: the run goes under the same
 //! nextest run-wrapper `test:cargo` uses ([`crate::mutate::resume::wrap`]),
-//! journaled under a key over the base commit, HEAD's tree, every spliced
+//! journaled under a key over the base content, HEAD's tree, every spliced
 //! body and the build ([`union_key`]), so a lap stopped mid-run keeps every
 //! case it passed and the next one reads those back as passes.
 
@@ -273,6 +273,18 @@ fn rust_files(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
     Ok(files)
 }
 
+/// The base half of the journal key (CLOUD-2787): one `base <path> <id>` line
+/// per Rust file read at the merge base, `<id>` its content's digest — `step
+/// base`'s line shape over exactly what the replay reads there. NO COMMIT ID:
+/// a trunk commit touching no Rust file moves the merge base, never this.
+fn base_lines(before: &BTreeMap<String, String>) -> String {
+    before
+        .iter()
+        .map(|(path, text)| format!("base {path} {}", blake3::hash(text.as_bytes()).to_hex()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One finding: the test's `<path>::<inner>` key, its line, and the token.
 #[derive(serde::Serialize)]
 struct Finding {
@@ -376,7 +388,7 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     }
 
     if !splices.is_empty() {
-        findings.extend(replay(root, &fork, &after, &splices)?);
+        findings.extend(replay(root, &base_lines(&before), &after, &splices)?);
     }
 
     let smells: Vec<crate::lint::Smell> = findings
@@ -421,10 +433,11 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
 ///
 /// **Journaled first** ([`Journal`]): a test whose verdict the journal holds is
 /// read back, never rerun, and when it holds every one no tree is placed and
-/// nothing is built. `fork` is the base commit and `after` HEAD's Rust by path.
+/// nothing is built. `base` is the merge base's content ([`base_lines`]) and
+/// `after` HEAD's Rust by path.
 fn replay(
     root: &Path,
-    fork: &str,
+    base: &str,
     after: &BTreeMap<String, String>,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
 ) -> Result<Vec<Finding>> {
@@ -432,9 +445,9 @@ fn replay(
     let tree = state.join("tree");
     let head =
         crate::git::resolve_ref(root, "HEAD^{tree}")?.context("test replay: HEAD names no tree")?;
-    // THE BASE BY COMMIT, never by a name that can move under the journal.
-    let base = crate::git::resolve_ref(root, fork)?.unwrap_or_else(|| fork.to_owned());
-    let journal = Journal::open(root, &state, &base, &head, splices);
+    // THE BASE BY CONTENT (CLOUD-2787), never by a name that can move under the
+    // journal nor by a commit id that moves with an unrelated trunk commit.
+    let journal = Journal::open(root, &state, base, &head, splices);
     if !journal.lacks_any(splices) {
         return resume(&tree, splices, &journal, &|_| None, &|_| None);
     }
@@ -622,7 +635,7 @@ impl Verdict {
 struct Journal {
     /// `replay/journal` under the repository's state directory.
     dir: PathBuf,
-    /// The base commit the bodies were read at.
+    /// The merge base's content the bodies were read at ([`base_lines`]).
     base: String,
     /// The build's inputs ([`crate::mutate::resume::build_digest`]), `None`
     /// where they cannot be read.
@@ -635,7 +648,7 @@ struct Journal {
 }
 
 impl Journal {
-    /// The journal under `state` for the base commit `base` and HEAD's tree id
+    /// The journal under `state` for the base content `base` and HEAD's tree id
     /// `tree`, with each test of `splices` whose dependency key is known.
     fn open(
         root: &Path,
@@ -719,8 +732,8 @@ impl Journal {
     }
 }
 
-/// The key of the union run's per-case journal: the base commit `base`,
-/// HEAD's tree id `tree`, the build's inputs `build`
+/// The key of the union run's per-case journal: the base content `base`
+/// ([`base_lines`]), HEAD's tree id `tree`, the build's inputs `build`
 /// ([`crate::mutate::resume::build_digest`]), the code-generation variables
 /// `flags`, and every spliced body of `splices` by path and test.
 ///
@@ -777,7 +790,10 @@ fn dependency_keys(
     if !crate::git::changed_paths(root).is_ok_and(|changed| changed.is_empty()) {
         return deps;
     }
-    let env = crate::mutate::resume::env_digest(std::env::vars_os());
+    let env = crate::mutate::resume::env_digest(
+        std::env::vars_os(),
+        &crate::mutate::resume::journal_env(root),
+    );
     let Ok(held) = crate::mutate::resume::held_cases(root, resources, &env) else {
         return deps;
     };
@@ -1271,6 +1287,29 @@ mod tests {
         assert_eq!(rows[0]["cause"], "not-asked");
         assert_eq!(rows[1]["admission"], "asked");
         assert!(rows[1]["cause"].is_null());
+    }
+
+    /// Fails by: the journal's base half keyed on anything but the Rust read
+    /// at the merge base (CLOUD-2787) — a commit id would move with a trunk
+    /// commit touching none of it, and a key blind to a body would hold
+    /// across a changed one.
+    #[test]
+    fn the_journal_base_is_the_content_read_at_the_merge_base() {
+        let at = |text: &str| {
+            BTreeMap::from([
+                (String::from("src/a.rs"), String::from("fn a() {}\n")),
+                (String::from("src/b.rs"), text.to_owned()),
+            ])
+        };
+        let one = base_lines(&at("fn b() {}\n"));
+        assert_eq!(
+            one,
+            base_lines(&at("fn b() {}\n")),
+            "same content, same base"
+        );
+        assert_ne!(one, base_lines(&at("fn b() { 1; }\n")), "a moved body");
+        assert_eq!(one.lines().count(), 2);
+        assert!(one.starts_with("base src/a.rs "), "{one}");
     }
 
     const BASE: &str = "\

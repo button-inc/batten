@@ -64,6 +64,12 @@ pub struct Step {
     /// sniffing the command's argv.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<Journal>,
+    /// The required CI checks a pass of this row stands for (CLOUD-2788):
+    /// `step cover` counts a check covered when the row passed at `HEAD`'s
+    /// tree. Never key material: it names what the pass is evidence of, not
+    /// what the verdict depends on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ci: Vec<String>,
 }
 
 /// How a step's verdict is read.
@@ -269,6 +275,7 @@ mod tests {
             depends_on: Vec::new(),
             verdict: None,
             journal: None,
+            ci: Vec::new(),
         }
     }
 
@@ -283,6 +290,7 @@ mod tests {
             depends_on: after.iter().map(|id| (*id).to_owned()).collect(),
             verdict: None,
             journal: None,
+            ci: Vec::new(),
         }
     }
 
