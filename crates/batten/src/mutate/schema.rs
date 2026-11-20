@@ -3282,9 +3282,10 @@ pub fn case_digests<'c>(
                 // reaches (#1276, lap 24's TLS port retry). Without a text to
                 // reach from, the whole file stands, as before.
                 match own.as_deref() {
-                    Some(texts) => {
+                    Some(reached_from) => {
                         hasher.update(
-                            common_reached(&String::from_utf8_lossy(bytes), texts).as_bytes(),
+                            common_reached(&String::from_utf8_lossy(bytes), reached_from)
+                                .as_bytes(),
                         );
                     }
                     None => {
