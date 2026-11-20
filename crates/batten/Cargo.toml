@@ -111,6 +111,7 @@ rustls-graviola.workspace = true
 rustls-pki-types.workspace = true
 tokio.workspace = true
 compio.workspace = true
+batten-base = { path = "../batten-base", version = "=0.0.220" }
 batten-facts = { path = "../batten-facts", version = "=0.0.220" }
 batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
 batten-stream = { path = "../batten-stream", version = "=0.0.220" }
@@ -222,6 +223,8 @@ regex-automata = { version = "0.4", default-features = false, features = [
 batten-stream = { path = "../batten-stream", version = "=0.0.220", features = ["seam"] }
 # `cache::clock`, the pinned wall clock a case reads its stamps through.
 batten-facts = { path = "../batten-facts", version = "=0.0.220", features = ["seam"] }
+# The forge fixtures `rest` and `fetch` stand up for a case (CLOUD-2789).
+batten-base = { path = "../batten-base", version = "=0.0.220", features = ["seam"] }
 # CLOUD-2224: the bench times the regex the DFA replaced, and the two runtime
 # vocabularies the compile-time table replaced; `o200k`'s anti-drift case and
 # the vocabulary check (CLOUD-1284 arm 4) count against tiktoken-rs.

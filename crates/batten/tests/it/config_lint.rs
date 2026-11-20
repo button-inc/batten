@@ -97,8 +97,8 @@
 //! no command surface — `config lint --host-rules` already shipped — so both are
 //! `kind:mechanism`.
 //!
-// carried: mise-tasks/ci-drift.sh crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
-// carried: tests/ci-drift.bats crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: mise-tasks/ci-drift.sh crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/ci-drift.bats crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
 //!
 //! ## CARRIED — the decision half, which this file already covered
 //!

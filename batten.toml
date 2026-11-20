@@ -1838,7 +1838,7 @@ regex = 'mise exec -- [a-z][a-z0-9._-]*'
 # CLOUD-1717's four consumer facts, moved out of two `.py` siblings and NOT into
 # `crates/batten/src`. Non-negotiable rule 1: the core stays repo-agnostic, and a
 # `const IO_CRATES` in the engine would be a consumer identifier in it. The walk
-# that reads them is `crates/batten/src/cargo_graph.rs` and names no crate at all.
+# that reads them is `crates/batten-base/src/cargo_graph.rs` and names no crate at all.
 #
 # They are also better here than they were in a script: a list in a `[[pattern]]`
 # row is reviewable data a gate reads, which is rule 3 as well as rule 1.
@@ -4382,7 +4382,11 @@ id = "path write unsafe"
 no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
-line_sources = ["crates/batten/src/**/*.rs", "crates/batten-facts/src/**/*.rs"]
+line_sources = [
+  "crates/batten/src/**/*.rs",
+  "crates/batten-facts/src/**/*.rs",
+  "crates/batten-base/src/**/*.rs",
+]
 module = "policy/durable-write.rego"
 severity = "deny"
 
@@ -6127,7 +6131,7 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
 pattern = "clippy::disallowed_methods"
 direction = "non_increasing"
 base = "origin/main"
@@ -7586,6 +7590,7 @@ line_sources = [
   "mise.toml",
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
+  "crates/batten-base/src/**/*.rs",
 ]
 module = "policy/obligations-bound.rego"
 severity = "deny"
@@ -7984,6 +7989,7 @@ line_sources = [
   "rules/*.md",
   "crates/batten/src/*.rs",
   "crates/batten-facts/src/*.rs",
+  "crates/batten-base/src/*.rs",
   "mise-tasks/*.sh",
   "batten.toml",
 ]
@@ -7995,7 +8001,11 @@ id = "patch judge wrong"
 no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
-invocation_sources = ["crates/batten/src/*.rs", "crates/batten-facts/src/*.rs"]
+invocation_sources = [
+  "crates/batten/src/*.rs",
+  "crates/batten-facts/src/*.rs",
+  "crates/batten-base/src/*.rs",
+]
 module = "policy/ancestry-decides-nothing.rego"
 severity = "deny"
 
@@ -9842,7 +9852,7 @@ severity = "deny"
 # RETIRING SHELL added five `#[expect(clippy::disallowed_types)]` spawns and
 # widened the placement table twice, with every sensor green and every reason
 # repeating a claim — *"this crate carries no HTTP client that resolves a forge
-# credential"* — that `crates/batten/src/fetch.rs` had already falsified.
+# credential"* — that `crates/batten-base/src/fetch.rs` had already falsified.
 #
 # `base = "origin/main"` because the subject is a CHANGE rather than a state
 # (CLOUD-1059): a tree holding N escapes is the inventory, and this decides
@@ -9879,6 +9889,7 @@ severity = "deny"
 delta_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
+  "crates/batten-base/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 # AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
@@ -9896,6 +9907,7 @@ delta_sources = [
 line_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
+  "crates/batten-base/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 
@@ -11686,7 +11698,7 @@ landing_paths = [
   # row it read as current. `pipeline.rs` is deliberately NOT here: it decides
   # whether a composition is walkable and performs nothing, so a head can differ
   # on it without differing on what a lap DOES.
-  "crates/batten/src/fast_forward.rs",
+  "crates/batten-base/src/fast_forward.rs",
 ]
 
 # THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
@@ -11735,7 +11747,7 @@ verified_by = ["verify", "linear-check"]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 
 # THIS BOARD'S COLUMN VOCABULARY (CLOUD-1623). These four words were `const`s in
-# `crates/batten/src/landed.rs` and `claim.rs` — non-negotiable rule 1's worst
+# `crates/batten-base/src/landed.rs` and `claim.rs` — non-negotiable rule 1's worst
 # violation in the tree, because the failure is silent in the direction that
 # matters. Off a board spelling its columns this way every comparison is false:
 # `is_started` never fires, so the landed-honesty sweep reports ZERO FINDINGS
@@ -11746,7 +11758,7 @@ prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
 # could-not-look named by key, never a fallback to these values — a fallback
 # would put this repository's vocabulary back in the engine with one more step in
 # front of it, and restore exactly the property that made the original defect
-# unobservable. `crates/batten/src/board.rs` carries that reasoning.
+# unobservable. `crates/batten-base/src/board.rs` carries that reasoning.
 #
 # VALUES RATHER THAN `[[pattern]]` ROWS, per CLOUD-472's precedent one table up: a
 # column is matched by EQUALITY against the string the tracker echoes back, not by
@@ -11777,7 +11789,7 @@ review = "In Review"
 started = ["In Progress", "In Review", "Done"]
 
 # THE BOARD CHECK'S VOCABULARY (CLOUD-1221), read by `batten board check` and
-# declared by `crates/batten/src/board.rs`. Each is this consumer's word for a
+# declared by `crates/batten-base/src/board.rs`. Each is this consumer's word for a
 # fact the `tracker-hygiene` preset decides with; the preset itself names none.
 #
 # The status TYPES that settle a blocker, so its dependent may reach the ready
@@ -17105,7 +17117,7 @@ string the author writes about their own change.
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "crates/batten/src/rest.rs"
+target = "crates/batten-base/src/rest.rs"
 
 [[verdict.route]]
 id = "prose read first"
@@ -17246,7 +17258,7 @@ it never opened. This names the file instead.
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "crates/batten/src/rest.rs"
+target = "crates/batten-base/src/rest.rs"
 
 [[verdict]]
 id = "plan read missing"
@@ -18220,6 +18232,28 @@ inputs = [
   "crates/batten-facts",
   "crates/batten-fsio",
   "crates/batten/Cargo.toml",
+  "crates/batten-base/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "crates/batten-stream/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "clippy.toml",
+  ".clippy.toml",
+  ".cargo",
+]
+tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
+
+# The second per-package row (CLOUD-2789): `batten-base` reaches `batten-facts`
+# and `batten-fsio` and nothing in `batten`. `ci`'s cases `include_str!` the
+# rules fixtures under `batten`'s tests, which `--all-targets` compiles.
+[[step]]
+id = "lint:clippy:base"
+inputs = [
+  "crates/batten-base",
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten/tests/fixtures/ci",
+  "crates/batten/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
   "Cargo.toml",
@@ -18387,6 +18421,29 @@ id = "cross-check:facts"
 inputs = [
   "crates/batten-facts",
   "crates/batten-fsio",
+  "crates/batten/Cargo.toml",
+  "crates/batten-base/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "crates/batten-stream/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo",
+]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "cross-check", "--json"],
+]
+
+# `cross-check`'s half for `batten-base` (CLOUD-2789), keyed as
+# `lint:clippy:base` is.
+[[step]]
+id = "cross-check:base"
+inputs = [
+  "crates/batten-base",
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten/tests/fixtures/ci",
   "crates/batten/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
@@ -18609,6 +18666,21 @@ group = "verify-1"
 run = ["mise", "run", "verify:config-lint"]
 depends_on = ["gate:config-validator"]
 
+# EVERY hk STEP NOT TAGGED `slow`, in seconds, at the front of the lap
+# (CLOUD-2789): they ran only inside `ci` in the third tier, so a formatter or a
+# drift check that fails in seconds was reported an hour in.
+[[step]]
+id = "gate:hk-quick"
+group = "verify-1"
+run = ["mise", "run", "ci:quick"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:test-replay-structural"
+group = "verify-1"
+run = ["mise", "run", "verify:test-replay-structural"]
+depends_on = ["gate:config-validator"]
+
 [[step]]
 id = "gate:prose-only-check"
 group = "verify-1"
@@ -18669,6 +18741,13 @@ id = "gate:test-replay"
 group = "verify-2"
 run = ["mise", "run", "verify:test-replay"]
 
+# hk's minutes-long checks before the third tier's suite (CLOUD-2789); see
+# `[tasks."ci:checks"]`.
+[[step]]
+id = "gate:hk-checks"
+group = "verify-2"
+run = ["mise", "run", "ci:checks"]
+
 [[step]]
 id = "gate:cross-check"
 group = "verify-2"
@@ -18699,7 +18778,7 @@ run = ["mise", "run", "lint:clippy"]
 [[rule]]
 id = "path read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
 pattern = 'fs::read('
 direction = "non_increasing"
 base = "origin/main"
@@ -18710,7 +18789,7 @@ no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio
 [[rule]]
 id = "source read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
 pattern = 'fs::read_to_string('
 direction = "non_increasing"
 base = "origin/main"

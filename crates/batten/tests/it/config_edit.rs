@@ -20,7 +20,7 @@
 //! nothing.
 //
 // The obligation CLOUD-1575's Ready block binds. The row itself is swept from
-// `crates/batten/src/config_edit.rs`, the file it mutates:
+// `crates/batten-base/src/config_edit.rs`, the file it mutates:
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

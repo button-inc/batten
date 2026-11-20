@@ -900,13 +900,101 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
         })
         .and_then(std::result::Result::ok)
         .unwrap_or_default();
-    smells(
+    let found = smells(
         &text,
         &path.display().to_string(),
         base.as_ref(),
         today,
         &bundles,
-    )
+    )?;
+    // A MOVE IS NOT A WEAKENING (CLOUD-2789). The kinds below compare paths by
+    // their spelling, so a file moved between crates reads as a path removed or
+    // a glob changed although the gate covers exactly the same files. Only a
+    // finding a move fully explains is dropped; one that changes what is
+    // covered still reaches the owner.
+    let (Some(base), Some(reference)) = (base.as_ref(), base_ref) else {
+        return Ok(found);
+    };
+    let Ok(working) = config::parse(&text, &path.display().to_string()) else {
+        return Ok(found);
+    };
+    let Ok(moves) = crate::git::moves_since(dir, reference) else {
+        return Ok(found);
+    };
+    if moves.is_empty() {
+        return Ok(found);
+    }
+    let tracked = crate::git::tracked_paths(dir).unwrap_or_default();
+    Ok(found
+        .into_iter()
+        .filter(|smell| !explained_by_moves(smell, base, &working, &moves, &tracked))
+        .collect())
+}
+
+/// Whether `smell` is a path comparison that the branch's file moves fully
+/// explain (CLOUD-2789).
+///
+/// - `landing-path-removed` for a path that moved, whose new path the working
+///   list declares: the lease reads the same file.
+/// - `rule-predicate-changed` on a path-selecting column (`glob`, `sources`,
+///   `*_sources`) whose old and new selectors pick EXACTLY the same tracked
+///   files, each file judged by the old selector at the path it had before the
+///   move ([`crate::git::unmoved`]). A widening that also covers a file the old
+///   one did not is still reported: this equates, it never ranks.
+fn explained_by_moves(
+    smell: &Smell,
+    base: &config::Config,
+    working: &config::Config,
+    moves: &std::collections::BTreeMap<String, String>,
+    tracked: &std::collections::BTreeSet<String>,
+) -> bool {
+    let (Where::Key(key), SmellId::Weakening(kind)) = (&smell.at, &smell.id) else {
+        return false;
+    };
+    match kind {
+        trust::WeakeningKind::LandingPathRemoved => key
+            .strip_prefix("lease.landing_paths[")
+            .and_then(|rest| rest.strip_suffix(']'))
+            .and_then(|old| moves.get(old))
+            .is_some_and(|new| trust::landing_paths(working).contains(new)),
+        trust::WeakeningKind::RulePredicateChanged => {
+            let Some((id, column)) = key
+                .strip_prefix("rule[")
+                .and_then(|rest| rest.split_once("]."))
+            else {
+                return false;
+            };
+            if !(column == "glob" || column == "sources" || column.ends_with("_sources")) {
+                return false;
+            }
+            let selectors = |config: &config::Config| -> Option<Vec<crate::rules::Selector>> {
+                let rule = config.rules.iter().find(|rule| rule.id == id)?;
+                let value = serde_json::to_value(rule).ok()?.get(column)?.clone();
+                let globs: Vec<String> = match value {
+                    serde_json::Value::String(glob) => vec![glob],
+                    serde_json::Value::Array(items) => items
+                        .into_iter()
+                        .map(|item| item.as_str().map(str::to_owned))
+                        .collect::<Option<_>>()?,
+                    _ => return None,
+                };
+                globs
+                    .iter()
+                    .map(|glob| crate::rules::Selector::new(glob).ok())
+                    .collect()
+            };
+            let (Some(was), Some(now)) = (selectors(base), selectors(working)) else {
+                return false;
+            };
+            let any = |selectors: &[crate::rules::Selector], path: &str| {
+                selectors.iter().any(|selector| selector.matches(path))
+            };
+            tracked
+                .iter()
+                .all(|path| any(&was, &crate::git::unmoved(path, moves)) == any(&now, path))
+        }
+        _ => false,
+    }
 }
 
 /// Compare the committed `[ci]` against a host ruleset payload (CLOUD-54).
@@ -1727,6 +1815,57 @@ mod tests {
         assert_eq!(
             found[0].line_text(),
             "batten.toml:protected[a] protected-removed"
+        );
+    }
+
+    /// Fails by: a glob widened only to follow a moved file still charged as a
+    /// weakening, or a glob that ALSO covers a file the old one did not, or
+    /// stops covering one, dropped as a move.
+    #[test]
+    fn a_glob_that_only_follows_a_move_is_not_a_weakening() {
+        let rule = |glob: &str| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+            )
+        };
+        let base = config::parse(&rule("crates/a/src/**/*.rs"), "base").unwrap();
+        let moves = std::collections::BTreeMap::from([(
+            "crates/a/src/x.rs".to_owned(),
+            "crates/b/src/x.rs".to_owned(),
+        )]);
+        let tracked: std::collections::BTreeSet<String> = [
+            "crates/a/src/kept.rs",
+            "crates/b/src/x.rs",
+            "crates/b/src/new.rs",
+            "crates/c/src/other.rs",
+            "docs.md",
+        ]
+        .map(str::to_owned)
+        .into();
+        let judged = |glob: &str| {
+            let working = config::parse(&rule(glob), "test").unwrap();
+            let found = smells(&rule(glob), "test", Some(&base), today(), &[]).unwrap();
+            let changed = found
+                .iter()
+                .find(|smell| smell.id.as_str() == "rule-predicate-changed")
+                .unwrap_or_else(|| panic!("{glob}: the spelling did change"));
+            explained_by_moves(changed, &base, &working, &moves, &tracked)
+        };
+        assert!(
+            judged("crates/{a,b}/src/**/*.rs"),
+            "follows the move exactly"
+        );
+        assert!(
+            !judged("crates/**/*.rs"),
+            "also covers crates/c/src/other.rs"
+        );
+        assert!(
+            !judged("crates/b/src/**/*.rs"),
+            "drops crates/a/src/kept.rs"
+        );
+        assert!(
+            !judged("{crates/{a,b}/src/**/*.rs,*.md}"),
+            "also covers docs.md"
         );
     }
 

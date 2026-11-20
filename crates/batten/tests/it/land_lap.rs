@@ -58,20 +58,20 @@
 //
 // The 146 titles, one row each.
 //
-// carried: "a refusal starts the next lap instead of ending the run" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a cancelled run is the bot failing to DECIDE, not a refusal" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a SIBLING PR's refusal is not this lap's verdict (CLOUD-409)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a keyed refusal IS still read — the filter did not stop reading" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "this lap's own run is read even when it fell off the first page (CLOUD-456)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "paging stops at the short page instead of walking history (CLOUD-456)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a /fast-forward the API refused is never reported as posted (CLOUD-408)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: a refused comment waits the retry-after the response STATES" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: with no retry-after it waits until x-ratelimit-reset" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: a response stating no limit headers still waits a floor" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: exhausting the budget names the LIMIT, not a moving main" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a 403 from the runs query is not an answer (CLOUD-414)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "an unreadable answer re-asks without buying a CI run" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the fast-forward verdict is KEYED, not merely windowed" crates/batten/src/fast_forward.rs kind:mechanism
+// carried: "a refusal starts the next lap instead of ending the run" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a cancelled run is the bot failing to DECIDE, not a refusal" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a SIBLING PR's refusal is not this lap's verdict (CLOUD-409)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a keyed refusal IS still read — the filter did not stop reading" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "this lap's own run is read even when it fell off the first page (CLOUD-456)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "paging stops at the short page instead of walking history (CLOUD-456)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a /fast-forward the API refused is never reported as posted (CLOUD-408)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: a refused comment waits the retry-after the response STATES" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: with no retry-after it waits until x-ratelimit-reset" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: a response stating no limit headers still waits a floor" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: exhausting the budget names the LIMIT, not a moving main" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a 403 from the runs query is not an answer (CLOUD-414)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "an unreadable answer re-asks without buying a CI run" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the fast-forward verdict is KEYED, not merely windowed" crates/batten-base/src/fast_forward.rs kind:mechanism
 // carried: "a lap rebases onto the main that moved, then re-verifies the new SHA" crates/batten/src/land.rs kind:mechanism
 // carried: "a conflicting rebase is the one stop, and it aborts what it started" crates/batten/src/land.rs kind:mechanism
 // carried: "a failing verify stops before CI is ever asked" crates/batten/src/lib.rs kind:mechanism
@@ -93,9 +93,9 @@
 // carried: "red CI stops the lap without asking for the merge" crates/batten/src/land.rs kind:mechanism
 // carried: "a run CI DECLINED is a stop, not a red — the agent is told to rebase" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-470: the declination is asked of land-lock, not re-derived" crates/batten/src/land.rs kind:mechanism
-// carried: "a verdict that could not be READ is not a red one" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "an unset required roster stops rather than readying (CLOUD-467)" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "CLOUD-376: an unset ANSWERED set stops rather than readying, for the same reason" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "a verdict that could not be READ is not a red one" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "an unset required roster stops rather than readying (CLOUD-467)" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "CLOUD-376: an unset ANSWERED set stops rather than readying, for the same reason" crates/batten-base/src/checks_green.rs kind:mechanism
 // withdrawn: "CLOUD-376: no conclusion name is written in mise-tasks outside the manifest" both declared subjects are retired — `mise-tasks/land.sh` dies in this change and `mise-tasks/checks-green.sh` is already gone — so the case has no source to read. The property is structural in the engine: a conclusion literal inside `crates/batten` is non-negotiable rule 1's own violation, which `document_facts.rs` refuses
 // carried: "a rejected push stops rather than clobbering someone else's branch" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-345: a branch ABSENT from the remote is a stale ref, not a rival" crates/batten/src/land.rs kind:mechanism
@@ -104,13 +104,13 @@
 // carried: "endless refusals hit the lap cap rather than lapping forever" crates/batten/src/lib.rs kind:mechanism
 // carried: "land refuses to run from main" crates/batten/src/lib.rs kind:mechanism
 // carried: "a merged PR exits 0" crates/batten/src/lib.rs kind:mechanism
-// carried: "a PR that closed without merging exits non-zero" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a run still in progress concludes neither way, and the poll continues" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a run that predates this lap is not read as a verdict on it" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the merge is what it waits for, not the comment" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the poll carries no wall-clock timeout" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a branch with no OPEN PR has nothing to land" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "THE MERGED-NAME CASE: a branch whose old PR merged binds the OPEN one (CLOUD-465)" crates/batten/src/fast_forward.rs kind:mechanism
+// carried: "a PR that closed without merging exits non-zero" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a run still in progress concludes neither way, and the poll continues" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a run that predates this lap is not read as a verdict on it" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the merge is what it waits for, not the comment" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the poll carries no wall-clock timeout" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a branch with no OPEN PR has nothing to land" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "THE MERGED-NAME CASE: a branch whose old PR merged binds the OPEN one (CLOUD-465)" crates/batten-base/src/fast_forward.rs kind:mechanism
 // carried: "an already-proven HEAD is not proven again" crates/batten/src/lib.rs kind:mechanism
 // carried: "main moving mid-wait starts the next lap instead of paying out the run" crates/batten/src/land.rs kind:mechanism
 // carried: "a red CI re-drafts the PR before stopping" crates/batten/src/land.rs kind:mechanism
@@ -151,8 +151,8 @@
 // withdrawn: "a watcher that shrugs off the TERM is escalated, never left to outlive the lap" a TERM-then-KILL escalation over a subshell that ignored the first signal. The engine spawns no watcher, and `exec`'s own process-group handling is `policy/spawn-adapters.rego`'s subject rather than the lander's
 // withdrawn: "a detached descendant cannot hold bats' output stream — fd 3 is closed beneath the program under test" a bats harness property — fd 3 is the runner's output stream, and the case asserted a detached descendant could not hold it open. There is no descendant and no bats
 // withdrawn: "a land killed mid-race takes its watchers with it — the trap reaps the races too" the predecessor's EXIT trap reaped its race subshells so a killed lander took them with it. Nothing is backgrounded, so the trap has no subject
-// carried: "a head whose LATEST required run is a skip has no answer, so the ready is fired" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "a skip its own re-run superseded is an answer, so nothing buys a second run" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "a head whose LATEST required run is a skip has no answer, so the ready is fired" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "a skip its own re-run superseded is an answer, so nothing buys a second run" crates/batten-base/src/checks_green.rs kind:mechanism
 // carried: "a run main moved under is CANCELLED, not left to bill for an answer nobody reads" crates/batten/src/land.rs kind:mechanism
 // carried: "a lap that CI answered cancels nothing — only a voided run is void" crates/batten/src/land.rs kind:mechanism
 // carried: "a waiter linearizes onto the HOLDER's head, not onto the main it is replacing" crates/batten/src/lib.rs kind:mechanism
@@ -180,7 +180,7 @@
 // carried: "CLOUD-900: a run CI DECLINED abandons nothing — it is not a verdict" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-900: a provisioning transient abandons nothing — the jobs get re-run" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-900: a lap CI answered green abandons nothing" crates/batten/src/land.rs kind:mechanism
-// carried: "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" crates/batten-base/src/checks_green.rs kind:mechanism
 // carried: "CLOUD-483: the retry budget is a COUNT, and exhausting it stops" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-483: a re-run the API refuses stops, naming the command" crates/batten/src/land.rs kind:mechanism
 // withdrawn: "CLOUD-383: a rendezvous that cannot be created stops, rather than guessing" a bash rendezvous — a FIFO the racing subshells synchronised on. The engine's race is two polls in one process and needs no rendezvous to create or fail to create
