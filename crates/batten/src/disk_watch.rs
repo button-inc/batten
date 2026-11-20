@@ -48,32 +48,8 @@ use std::sync::{Arc, Mutex};
 /// bound. Checked at unit boundaries; the next pressed call resumes.
 pub const HOOK_COLLECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The lowest free space, in MiB, any watcher in this process has read since the
-/// last [`reset_low_water`]; `u64::MAX` while none has.
-///
-/// MEASURED, NEVER INFERRED FROM TEXT (#1276). A gate's failure was classified
-/// disk-full by matching `No space left on device` in its log, and on #1276 that
-/// phrase sat inside a mutant's diff while this watcher had read gigabytes free.
-/// Whether the volume filled is what this reading answers; the log is not asked.
-static LOW_WATER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
-
-/// Start a new measurement window: the gate about to run is judged by what is
-/// read from here on.
-pub fn reset_low_water() {
-    LOW_WATER.store(u64::MAX, Ordering::Release);
-}
-
-/// The lowest free space read since [`reset_low_water`], or `None` where no
-/// watcher read the volume in the window, which decides nothing about it.
-#[must_use]
-pub fn low_water() -> Option<u64> {
-    Some(LOW_WATER.load(Ordering::Acquire)).filter(|low| *low != u64::MAX)
-}
-
-/// Record one reading against the window.
-fn observe(free_mb: u64) {
-    LOW_WATER.fetch_min(free_mb, Ordering::AcqRel);
-}
+use crate::low_water::observe;
+pub use crate::low_water::{read as low_water, reset as reset_low_water};
 
 /// Where a watcher hands each collection's lines as it ends (CLOUD-2782).
 pub type RecordSink<'a> = Box<dyn Fn(&[String]) + Send + Sync + 'a>;

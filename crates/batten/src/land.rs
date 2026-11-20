@@ -2117,7 +2117,7 @@ pub fn verify(
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
     // THE GATE'S OWN WINDOW: the low-water mark it is judged by is read from here.
-    crate::disk_watch::reset_low_water();
+    crate::low_water::reset();
     let classified =
         crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
             .map(|(code, found, handles)| {
@@ -2127,7 +2127,7 @@ pub fn verify(
     let start = head.clone();
     let start_dirty = crate::git::uncommitted(&started).ok();
     let verified = match classified {
-        Ok(ran) => gate_said(head, ran, environment, crate::disk_watch::low_water()),
+        Ok(ran) => gate_said(head, ran, environment, crate::low_water::read()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
     };
     // THE TREE THE GATE JUDGED MUST BE THE TREE IT STARTED ON (CLOUD-2781).
