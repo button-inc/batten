@@ -18,6 +18,13 @@
 # * `git pull --rebase` (`-r`, `--rebase=<mode>`) replays the local commits onto
 #   what it fetched, and `git pull --ff-only` refuses rather than merging.
 #
+# THE MERGE IS USUALLY A REFUSED PUSH'S REMEDY, not a base update (CLOUD-2813):
+# the branch's own remote moved, the push was refused, and "fetch and merge" is
+# the advice a harness gives. Measured: three such merges on one branch, one
+# carrying conflict markers into a pushed file. The route names the linear
+# answer for that case too: rebase onto what was fetched, and push with a lease
+# on the head it was rebased onto, so an unseen head fails the push.
+#
 # `pull.rebase = true` in git's own config makes a bare `git pull` rebase too,
 # and the call cannot see it: `input.call` is the argv, not the clone's config.
 # So a bare pull is refused whatever the config says, and the route names the
@@ -54,6 +61,27 @@ weaves(program) if {
 weaves(program) if {
 	program.subcommand == "pull"
 	not linear_pull(program.arguments)
+}
+
+# `git rebase --rebase-merges` (`-r`) REPLAYS THE BRANCH'S MERGE COMMITS AS
+# MERGE COMMITS, so a branch that already wove keeps its weave through the very
+# command that is supposed to straighten it. A plain rebase drops them and
+# replays their changes as a line, which is the linear answer. `--no-rebase-merges`
+# turns a configured default back off.
+weaves(program) if {
+	program.subcommand == "rebase"
+	keeps_merges(program.arguments)
+	not "--no-rebase-merges" in program.arguments
+}
+
+keeps_merges(arguments) if {
+	some word in arguments
+	word in {"-r", "--rebase-merges"}
+}
+
+keeps_merges(arguments) if {
+	some word in arguments
+	startswith(word, "--rebase-merges=")
 }
 
 linear_merge(arguments) if {
@@ -154,6 +182,35 @@ test_the_word_elsewhere_is_not_a_merge if {
 		"command": "git merge-base HEAD origin/main",
 		"programs": [{"program": "git", "name": "git", "arguments": ["merge-base", "HEAD", "origin/main"], "subcommand": "merge-base", "global-options": [], "mediated": false}],
 	}}
+}
+
+test_a_rebase_keeping_merges_is_caught if {
+	every argv in [["rebase", "-r", "origin/main"], ["rebase", "--rebase-merges"], ["rebase", "--rebase-merges=rebase-cousins", "x"]] {
+		some v in violation with input as {"call": {
+			"command": concat(" ", array.concat(["git"], argv)),
+			"programs": [{"program": "git", "name": "git", "arguments": argv, "subcommand": "rebase", "global-options": [], "mediated": false}],
+		}}
+		v.rule == "commit write loose"
+	}
+}
+
+test_a_plain_rebase_is_left_alone if {
+	every argv in [["rebase", "FETCH_HEAD"], ["rebase", "--onto", "a", "b"], ["rebase", "-r", "--no-rebase-merges", "x"], ["rebase", "--continue"]] {
+		count(violation) == 0 with input as {"call": {
+			"command": concat(" ", array.concat(["git"], argv)),
+			"programs": [{"program": "git", "name": "git", "arguments": argv, "subcommand": "rebase", "global-options": [], "mediated": false}],
+		}}
+	}
+}
+
+# `--continue` concludes a merge by WRITING the merge commit, so unlike
+# `--abort` and `--quit` it weaves: refused.
+test_concluding_a_merge_is_caught if {
+	some v in violation with input as {"call": {
+		"command": "git merge --continue",
+		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "--continue"], "subcommand": "merge", "global-options": [], "mediated": false}],
+	}}
+	v.rule == "commit write loose"
 }
 
 test_another_tools_merge_is_not_judged if {
