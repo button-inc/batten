@@ -434,6 +434,31 @@ fn sync_directory(directory: &Path) {
     let _ = directory;
 }
 
+/// Mark the file at `path` executable (`0o755`); a no-op off unix, where the
+/// extension carries it (CLOUD-2789).
+///
+/// The one copy: `engine` and `provision` each carried their own, and a test in
+/// `git` reached up into `engine` for its.
+///
+/// # Errors
+///
+/// The permissions cannot be set.
+#[cfg(unix)]
+pub fn make_executable(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+
+/// Mark the file at `path` executable; off unix the extension carries it.
+///
+/// # Errors
+///
+/// None off unix.
+#[cfg(not(unix))]
+pub fn make_executable(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// What this thread asked the disk to sync, for a case to read (CLOUD-2509): a
 /// skipped sync leaves the same bytes in the page cache as one that ran, so the
 /// call, counted, is the only observable before a power loss.

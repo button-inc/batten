@@ -7705,7 +7705,7 @@ mod tests {
         // Off unix this is git's `core.symlinks=false` file, the same bytes.
         crate::gitwrite::link("clean.txt", &dir.join("link.txt")).unwrap();
         // `run.sh` was committed plain; its bit flips on where there is one.
-        crate::engine::make_executable(&dir.join("run.sh")).unwrap();
+        crate::durable::make_executable(&dir.join("run.sh")).unwrap();
         let diverged = |dir: &Path| {
             index_facts(dir, &["*".to_owned()]).unwrap()["*"]
                 .diverged
