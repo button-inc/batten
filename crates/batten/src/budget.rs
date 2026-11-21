@@ -75,15 +75,22 @@ use crate::severity::RuleSeverity;
 /// right shape here.
 const BYTES_PER_TOKEN: usize = 4;
 
-impl Budget {
+/// `Budget` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait BudgetExt: Sized {
     /// The declared sets, in name order — the fixed evaluation and report order.
-    pub fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
-        self.0.iter()
-    }
+    fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)>;
 
     /// Whether the table declares nothing.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool;
+}
+
+impl BudgetExt for Budget {
+    fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
+        self.0.iter()
+    }
+
+    fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
@@ -641,6 +648,9 @@ pub fn measure_all(root: &Path, budget: Option<&Budget>) -> Result<Vec<Report>> 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use std::fs;
 
     #[test]

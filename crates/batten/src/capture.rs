@@ -2386,6 +2386,7 @@ impl StreamedChild for std::process::Child {
 
 #[cfg(test)]
 mod exceeds_tests {
+    #[cfg(test)]
     #[test]
     fn counting_stops_once_the_bound_is_passed() {
         // 64 chunks of text, each counted as 100: the bound is passed on the
@@ -3194,6 +3195,9 @@ pub fn prune(repo_root: &Path) -> Result<usize> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// Fails by: a leaf per array element named, a third key kept, or a range,
     /// byte or token count taken from one leaf instead of summed.

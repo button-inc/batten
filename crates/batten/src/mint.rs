@@ -62,11 +62,16 @@ use crate::config_model::MintKey;
 #[cfg(test)]
 use crate::config_model::MintMode;
 
-impl Authority {
+/// `Authority` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait AuthorityExt: Sized {
     /// The authority this name selects, or `None` for a name no authority
     /// answers to — which every caller turns into a load error rather than into
     /// a value that renders as itself.
-    pub(crate) fn named(name: &str) -> Option<Self> {
+    fn named(name: &str) -> Option<Self>;
+}
+
+impl AuthorityExt for Authority {
+    fn named(name: &str) -> Option<Self> {
         match name {
             "ready" => Some(Self::Ready),
             _ => None,
@@ -85,13 +90,18 @@ impl Authority {
 /// has to point.
 const ABSENT: &str = "-";
 
-impl Piece {
+/// `Piece` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait PieceExt: Sized {
     /// Whether rendering this piece consults the tool RESULT.
     ///
     /// Exhaustive with no wildcard arm, which is `facts.rs`' rule and for its
     /// reason: a variant added later must fail to compile rather than classify
     /// itself as reading nothing, because that is the direction that silently
     /// re-opens the record this predicate exists to withhold.
+    fn reads_the_result(&self) -> bool;
+}
+
+impl PieceExt for Piece {
     fn reads_the_result(&self) -> bool {
         match self {
             // `{authority:…}` is grouped with the path forms rather than given its
@@ -342,12 +352,13 @@ pub fn render(
     Some(out)
 }
 
-impl Declared {}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::mint::PieceExt as _;
 
     /// A row declaring a selector mints only for the value it names.
     ///

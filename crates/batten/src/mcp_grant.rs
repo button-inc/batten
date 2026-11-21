@@ -364,6 +364,9 @@ fn guard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::verdict::RouteKindExt as _;
 
     #[test]
     fn a_tool_name_splits_at_the_first_separator_after_the_server() {

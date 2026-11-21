@@ -5148,7 +5148,7 @@ pub fn seal_tested(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn the_indexed_walk_reaches_what_the_closure_reaches_in_name_order() {
         let set = |names: &[&str]| -> BTreeSet<String> {

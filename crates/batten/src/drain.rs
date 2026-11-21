@@ -1131,6 +1131,9 @@ pub fn render(drained: &Drained) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::findings::{Check, FINDINGS_SCHEMA, Instance, Remediation};
     use crate::identity::{SpanNormalization, StoredIdentity, code_fingerprint};
     use crate::severity::{AdvisoryTier, RuleSeverity};

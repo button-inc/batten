@@ -1571,6 +1571,9 @@ pub fn run_pin(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     fn answer(status: u16, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {

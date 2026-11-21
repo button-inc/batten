@@ -412,6 +412,328 @@ fn impl_sites(parsed: &[(String, Vec<String>, SourceFile)]) -> Sites {
     Sites { sites, declared }
 }
 
+/// The files of `files` under `src` that parse, as their keys and their
+/// `(node, module, tree)`, index for index.
+fn parse_src(
+    src: &str,
+    files: &BTreeMap<String, String>,
+) -> (Vec<String>, Vec<(String, Vec<String>, SourceFile)>) {
+    let prefix = format!("{}/", src.trim_end_matches('/'));
+    let mut keys = Vec::new();
+    let mut parsed = Vec::new();
+    for (key, text) in files {
+        let Some(below) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        let (Some((node, module)), Ok(tree)) = (locate(below), parse(text)) else {
+            continue;
+        };
+        keys.push(key.clone());
+        parsed.push((node, module, tree));
+    }
+    (keys, parsed)
+}
+
+/// Every file of `files` that changes when each type's inherent impls that
+/// sit outside its type's top-level module, in one file, become that file's
+/// extension trait (CLOUD-2793's `impl-to-extension-trait`). `src` is a
+/// crate's source directory and `krate` its name, used to import the trait
+/// from outside `src`.
+///
+/// BEHAVIOUR STAYS IN ITS LAYER. These impls are a higher layer's logic over
+/// a lower layer's type: moving them home inverts the layering (measured: 155
+/// errors). `impl T { … }` becomes `trait TExt { signatures }` plus
+/// `impl TExt for T { … }`, legal under the orphan rule because the trait is
+/// local, so every call keeps its method syntax and gains one import.
+///
+/// Per item: a method's signature, doc comments and `#[must_use]` go to the
+/// trait, its other attributes and body stay in the impl, and visibility is
+/// dropped (a trait item has its trait's). An associated const splits the
+/// same way. The trait is `pub` when any item was `pub`, else `pub(crate)`.
+/// An empty impl is deleted. A group holding anything else (a macro call) is
+/// left as written, so the gate still counts it.
+///
+/// Every other file that calls one of the trait's items by name gets
+/// `use …::TExt as _;`, gated `#[cfg(test)]` where only test code calls it;
+/// `cargo fix` drops the ones a same-named method elsewhere made spurious.
+#[must_use]
+pub fn impls_to_extension_traits(
+    src: &str,
+    krate: &str,
+    files: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let (keys, parsed) = parse_src(src, files);
+    let sites = impl_sites(&parsed).sites;
+    let mut groups: BTreeMap<(usize, String), Vec<ast::Impl>> = BTreeMap::new();
+    for site in sites {
+        // An impl inside an inline module (`config_check.rs`'s seven) is left:
+        // its trait would need that module's path, and the file's inline
+        // modules are their own smell to split into files first.
+        let inline = site
+            .found
+            .syntax()
+            .ancestors()
+            .any(|node| ast::Module::can_cast(node.kind()));
+        if !inline
+            && site
+                .home
+                .as_ref()
+                .is_some_and(|home| *home != parsed[site.file].0)
+        {
+            groups
+                .entry((site.file, site.name))
+                .or_default()
+                .push(site.found);
+        }
+    }
+    let mut edits: BTreeMap<String, Vec<(std::ops::Range<usize>, String)>> = BTreeMap::new();
+    let mut imports: BTreeMap<(String, Option<usize>), BTreeSet<(String, bool)>> = BTreeMap::new();
+    for ((file, name), blocks) in groups {
+        let Some(trait_) = extension_trait(&name, &blocks) else {
+            continue;
+        };
+        let key = &keys[file];
+        for (at, block) in blocks.iter().enumerate() {
+            let range = block.syntax().text_range();
+            let replacement = if at == 0 {
+                trait_.text.clone()
+            } else {
+                String::new()
+            };
+            edits.entry(key.clone()).or_default().push((
+                usize::from(range.start())..usize::from(range.end()),
+                replacement,
+            ));
+        }
+        if trait_.items.is_empty() {
+            continue;
+        }
+        let module = &parsed[file].1;
+        // Only this package's own targets can name it: another package may
+        // not depend on this crate, and a build script cannot depend on the
+        // crate it builds (measured: `build.rs` given the import, and the
+        // tree stopped compiling).
+        let package = src.trim_end_matches('/').trim_end_matches("src");
+        let targets =
+            ["src/", "tests/", "examples/", "benches/"].map(|dir| format!("{package}{dir}"));
+        for (other, text) in files {
+            if !other.ends_with(".rs") || !targets.iter().any(|dir| other.starts_with(dir.as_str()))
+            {
+                continue;
+            }
+            // A binary target (`main.rs`, `src/bin/`) is its own crate root,
+            // where `crate::` is the binary: it names the library by name.
+            let src_dir = format!("{}/", src.trim_end_matches('/'));
+            let binary = other == &format!("{src_dir}main.rs")
+                || other.starts_with(&format!("{src_dir}bin/"));
+            let inside = other.starts_with(&src_dir) && !binary;
+            // Outside the library only a `pub` trait can be imported, and a
+            // test could never have called a `pub(crate)` method there: a
+            // name match there is another method of that name (measured: 50
+            // spurious test imports).
+            if !inside && !trait_.public {
+                continue;
+            }
+            let head = if inside { "crate" } else { krate };
+            let path: Vec<&str> = std::iter::once(head)
+                .chain(module.iter().map(String::as_str))
+                .collect();
+            let line = format!("use {}::{}Ext as _;", path.join("::"), name);
+            for (scope, test_only) in calls(text, &trait_.items) {
+                // The trait's own scope needs no import.
+                if other == key && scope.is_none() {
+                    continue;
+                }
+                imports
+                    .entry((other.clone(), scope))
+                    .or_default()
+                    .insert((line.clone(), test_only));
+            }
+        }
+    }
+    for ((file, scope), lines) in imports {
+        let Ok(tree) = parse(&files[&file]) else {
+            continue;
+        };
+        let at = match scope {
+            Some(at) => at,
+            None => match tree.items().next() {
+                Some(first) => usize::from(first.syntax().text_range().start()),
+                None => continue,
+            },
+        };
+        let block: String = lines
+            .into_iter()
+            .map(|(line, test_only)| {
+                if test_only {
+                    format!("#[cfg(test)]\n{line}\n")
+                } else {
+                    format!("{line}\n")
+                }
+            })
+            .collect();
+        edits.entry(file).or_default().push((at..at, block));
+    }
+    edits
+        .into_iter()
+        .filter_map(|(file, mut list)| {
+            let original = &files[&file];
+            let mut text = original.clone();
+            list.sort_by_key(|(range, _)| (range.start, range.end));
+            for (range, replacement) in list.into_iter().rev() {
+                text.replace_range(range, &replacement);
+            }
+            (text != *original).then_some((file, text))
+        })
+        .collect()
+}
+
+/// A type's extension trait: its text (trait and impl, or empty for impls
+/// with no items) and the names of its items.
+struct ExtensionTrait {
+    text: String,
+    items: BTreeSet<String>,
+    /// Whether the trait is `pub`: only then can another crate (a test, a
+    /// binary) import it.
+    public: bool,
+}
+
+/// The extension trait `blocks` (one type's impls in one file) become, or
+/// `None` when an item is neither a method nor a const.
+fn extension_trait(name: &str, blocks: &[ast::Impl]) -> Option<ExtensionTrait> {
+    let self_ty = blocks.first()?.self_ty()?.syntax().text().to_string();
+    let (mut signatures, mut bodies) = (Vec::new(), Vec::new());
+    let mut items = BTreeSet::new();
+    let mut public = false;
+    for block in blocks {
+        for item in block.assoc_item_list()?.assoc_items() {
+            let syntax = item.syntax();
+            let visibility = syntax.children().find_map(ast::Visibility::cast);
+            public |= visibility
+                .as_ref()
+                .is_some_and(|v| v.syntax().text().to_string() == "pub");
+            // Doc comments and `#[must_use]` describe the declaration; every
+            // other attribute is about the body.
+            let (mut declared, mut kept) = (String::new(), String::new());
+            for child in syntax.children_with_tokens() {
+                match child.kind() {
+                    // The parser wraps a doc comment in its own node.
+                    SyntaxKind::DOC_COMMENT => declared.push_str(&format!("    {child}\n")),
+                    SyntaxKind::ATTR if child.to_string().contains("must_use") => {
+                        declared.push_str(&format!("    {child}\n"));
+                    }
+                    SyntaxKind::ATTR => kept.push_str(&format!("    {child}\n")),
+                    _ => {}
+                }
+            }
+            let start = item_start(syntax)?;
+            let past_visibility =
+                visibility.map_or(start, |v| usize::from(v.syntax().text_range().end()));
+            let whole = syntax.text_range();
+            let base = usize::from(whole.start());
+            let text = syntax.text().to_string();
+            let body_text = text[past_visibility - base..].trim_start().to_owned();
+            let (signature, item_name) = match &item {
+                // A trait cannot declare a `const fn`, and dropping `const`
+                // breaks its callers in const contexts: the block stays.
+                ast::AssocItem::Fn(function) if function.const_token().is_some() => return None,
+                ast::AssocItem::Fn(function) => {
+                    let body = function.body()?.syntax().text_range();
+                    let head = &text[past_visibility - base..usize::from(body.start()) - base];
+                    (
+                        format!("{};", head.trim()),
+                        function.name()?.text().to_string(),
+                    )
+                }
+                ast::AssocItem::Const(constant) => {
+                    let ty = constant.ty()?.syntax().text().to_string();
+                    let const_name = constant.name()?.text().to_string();
+                    (format!("const {const_name}: {ty};"), const_name)
+                }
+                _ => return None,
+            };
+            items.insert(item_name);
+            signatures.push(format!("{declared}    {signature}"));
+            bodies.push(format!("{kept}    {body_text}"));
+        }
+    }
+    if items.is_empty() {
+        return Some(ExtensionTrait {
+            text: String::new(),
+            items,
+            public,
+        });
+    }
+    let visibility = if public { "pub" } else { "pub(crate)" };
+    Some(ExtensionTrait {
+        text: format!(
+            "/// `{name}` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).\n{visibility} trait {name}Ext: Sized {{\n{}\n}}\n\nimpl {name}Ext for {self_ty} {{\n{}\n}}",
+            signatures.join("\n\n"),
+            bodies.join("\n\n")
+        ),
+        items,
+        public,
+    })
+}
+
+/// Each scope of `text` that calls any of `items` by name (a method call or
+/// a path segment), as where its import goes, with whether every call there
+/// is under test code. The scope is the nearest enclosing inline module,
+/// whose body does not see its file's imports (its first item, as `Some`), or
+/// the file's top level (`None`): measured, a file-level import left the
+/// calls inside `config_check.rs`'s inline modules unresolved.
+fn calls(text: &str, items: &BTreeSet<String>) -> BTreeMap<Option<usize>, bool> {
+    let tree = SourceFile::parse(text, ra_ap_syntax::Edition::Edition2024).tree();
+    let mut found: BTreeMap<Option<usize>, bool> = BTreeMap::new();
+    for token in tree
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| token.kind() == SyntaxKind::IDENT && items.contains(token.text()))
+    {
+        // Inside a macro's arguments there is no call node, only a token tree
+        // (measured: `row.severity()` in a `vec![…]`): there a call is the
+        // name between `.`/`::` and `(`.
+        let in_macro = || {
+            let next = std::iter::successors(token.next_token(), |at| at.next_token())
+                .find(|at| at.kind() != SyntaxKind::WHITESPACE);
+            let previous = std::iter::successors(token.prev_token(), |at| at.prev_token())
+                .find(|at| at.kind() != SyntaxKind::WHITESPACE);
+            next.is_some_and(|at| at.kind() == SyntaxKind::L_PAREN)
+                && previous
+                    .is_some_and(|at| matches!(at.kind(), SyntaxKind::DOT | SyntaxKind::COLON2))
+        };
+        let called = token.parent_ancestors().take(3).any(|node| {
+            matches!(
+                node.kind(),
+                SyntaxKind::METHOD_CALL_EXPR | SyntaxKind::PATH_SEGMENT
+            )
+        }) || (token
+            .parent()
+            .is_some_and(|parent| parent.kind() == SyntaxKind::TOKEN_TREE)
+            && in_macro());
+        if !called {
+            continue;
+        }
+        let in_test = token.parent_ancestors().any(|node| cfg_test(&node));
+        let scope = token
+            .parent_ancestors()
+            .find_map(ast::ItemList::cast)
+            .map(|list| {
+                list.items().next().map_or_else(
+                    || {
+                        list.l_curly_token()
+                            .map_or(0, |open| usize::from(open.text_range().end()))
+                    },
+                    |first| usize::from(first.syntax().text_range().start()),
+                )
+            });
+        let all_test = found.entry(scope).or_insert(true);
+        *all_test = *all_test && in_test;
+    }
+    found
+}
+
 /// The node and module path of a file at `below` (relative to a crate's
 /// `src/`), or `None` for a binary's `main.rs`: the same rule [`sources`]
 /// walks by.
@@ -453,19 +775,7 @@ fn locate(below: &str) -> Option<(String, Vec<String>)> {
 /// cannot see is a compile error naming the site, never a silent change.
 #[must_use]
 pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let prefix = format!("{}/", src.trim_end_matches('/'));
-    let mut keys = Vec::new();
-    let mut parsed = Vec::new();
-    for (key, text) in files {
-        let Some(below) = key.strip_prefix(&prefix) else {
-            continue;
-        };
-        let (Some((node, module)), Ok(tree)) = (locate(below), parse(text)) else {
-            continue;
-        };
-        keys.push(key.clone());
-        parsed.push((node, module, tree));
-    }
+    let (keys, parsed) = parse_src(src, files);
     let Sites { sites, declared } = impl_sites(&parsed);
     let nodes: BTreeSet<String> = parsed
         .iter()
@@ -618,19 +928,7 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
 /// between moving it home and keeping its behaviour in the layer above.
 #[must_use]
 pub fn impl_plan(src: &str, files: &BTreeMap<String, String>) -> Vec<String> {
-    let prefix = format!("{}/", src.trim_end_matches('/'));
-    let mut keys = Vec::new();
-    let mut parsed = Vec::new();
-    for (key, text) in files {
-        let Some(below) = key.strip_prefix(&prefix) else {
-            continue;
-        };
-        let (Some((node, module)), Ok(tree)) = (locate(below), parse(text)) else {
-            continue;
-        };
-        keys.push(key.clone());
-        parsed.push((node, module, tree));
-    }
+    let (keys, parsed) = parse_src(src, files);
     impl_sites(&parsed)
         .sites
         .into_iter()
@@ -721,14 +1019,19 @@ fn item_visibility(item: &ast::Item) -> Option<ast::Visibility> {
 }
 
 /// Where an item's own tokens start, past its attributes and doc comments:
-/// where a visibility goes.
+/// where a visibility goes. The parser wraps a doc comment in a
+/// `DOC_COMMENT` node; not skipping it put `pub(crate) ` ahead of the doc
+/// comment instead of the item (15 errors in the first `move-impl-home` run).
 fn item_start(syntax: &SyntaxNode) -> Option<usize> {
     syntax
         .children_with_tokens()
         .find(|child| {
             !matches!(
                 child.kind(),
-                SyntaxKind::ATTR | SyntaxKind::COMMENT | SyntaxKind::WHITESPACE
+                SyntaxKind::ATTR
+                    | SyntaxKind::COMMENT
+                    | SyntaxKind::DOC_COMMENT
+                    | SyntaxKind::WHITESPACE
             )
         })
         .map(|child| usize::from(child.text_range().start()))
@@ -1733,5 +2036,52 @@ mod tests {
             moved["src/b.rs"],
             "use crate::a::T;\nuse std::fmt::Write as _;\npub(crate) fn helper() -> u8 { 1 }\n\nfn caller(t: &T) -> u8 { t.get() }\n"
         );
+    }
+
+    /// Fails by: a signature, doc comment or `#[must_use]` left off the
+    /// trait; a body attribute moved onto it; a visibility kept on a trait
+    /// item; the trait narrower than a `pub` method it now carries; an
+    /// associated const not split; or a caller, in the crate or its tests,
+    /// left without the import its method call now needs.
+    #[test]
+    fn an_impl_over_a_lower_layers_type_becomes_an_extension_trait() {
+        let files: BTreeMap<String, String> = [
+            ("src/lib.rs", "mod model;\nmod rules;\nmod user;\n"),
+            ("src/model.rs", "pub struct Rule { pub x: u8 }\n"),
+            (
+                "src/rules.rs",
+                "use crate::model::Rule;\nimpl Rule {\n    /// Doubles.\n    #[must_use]\n    #[allow(dead_code)]\n    pub fn twice(&self) -> u8 { self.x * 2 }\n    const ONE: u8 = 1;\n}\n",
+            ),
+            ("src/user.rs", "use crate::model::Rule;\nfn f(r: &Rule) -> u8 { r.twice() }\n"),
+            ("tests/it.rs", "fn t(r: &app::model::Rule) -> u8 { r.twice() }\n"),
+        ]
+        .into_iter()
+        .map(|(path, text)| (path.to_owned(), text.to_owned()))
+        .collect();
+        let changed = impls_to_extension_traits("src", "app", &files);
+        assert_eq!(
+            changed["src/rules.rs"],
+            "use crate::model::Rule;\n/// `Rule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).\npub trait RuleExt: Sized {\n    /// Doubles.\n    #[must_use]\n    fn twice(&self) -> u8;\n\n    const ONE: u8;\n}\n\nimpl RuleExt for Rule {\n    #[allow(dead_code)]\n    fn twice(&self) -> u8 { self.x * 2 }\n\n    const ONE: u8 = 1;\n}\n"
+        );
+        assert_eq!(
+            changed["src/user.rs"],
+            "use crate::rules::RuleExt as _;\nuse crate::model::Rule;\nfn f(r: &Rule) -> u8 { r.twice() }\n"
+        );
+        assert_eq!(
+            changed["tests/it.rs"],
+            "use app::rules::RuleExt as _;\nfn t(r: &app::model::Rule) -> u8 { r.twice() }\n"
+        );
+    }
+
+    /// The measured `preset.rs` miss: `row.severity()` inside `vec![…]`.
+    /// Fails by: a call inside a macro's arguments, a token tree with no
+    /// call node, not counted, so its file is left without the import; or
+    /// a bare mention counted as a call.
+    #[test]
+    fn a_call_inside_a_macros_arguments_is_a_call() {
+        let items: BTreeSet<String> = [String::from("twice")].into();
+        let found = calls("fn f(r: &R) { let _ = vec![r.twice()]; }\n", &items);
+        assert_eq!(found, BTreeMap::from([(None, false)]));
+        assert!(calls("fn f() { let _ = vec![twice]; }\n", &items).is_empty());
     }
 }

@@ -163,6 +163,7 @@ pub fn reasons(patterns: &[OutputPattern], found: &[Hit]) -> Vec<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::error::UsageError;
 
     fn pattern(id: &str, literal: &str, stream: Watched) -> OutputPattern {

@@ -632,6 +632,9 @@ pub fn shard_path(repo_root: &Path, worktree: &Path) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::identity::{FindingKind, SpanNormalization, code_fingerprint};
 
     fn record() -> DecisionRecord {

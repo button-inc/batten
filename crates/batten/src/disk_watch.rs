@@ -554,6 +554,7 @@ impl Drop for Stop<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     /// THE WATCHER'S READING IS THE MEASUREMENT A GATE IS JUDGED BY (CLOUD-2781):
     /// a 0 the loop reads is the window's low-water mark, and a reset opens a new

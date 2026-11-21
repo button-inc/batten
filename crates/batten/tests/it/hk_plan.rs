@@ -24,6 +24,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::hk::PlanQueryExt as _;
 
 use std::fs;
 

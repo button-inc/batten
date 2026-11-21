@@ -732,6 +732,9 @@ fn executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// CLOUD-2315: an absent member and a present member holding the absence
     /// token's bytes are two different keys. Unframed, both concatenated to the
