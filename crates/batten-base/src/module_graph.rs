@@ -313,8 +313,43 @@ pub struct ImplCensus {
 ///
 /// The root cannot be read, or a file does not parse.
 pub fn impl_census(root: &Path) -> anyhow::Result<ImplCensus> {
-    let (modules, _) = sources(root)?;
     let parsed = parsed_sources(root)?;
+    let mut census = ImplCensus::default();
+    for site in impl_sites(&parsed).sites {
+        match site.home {
+            Some(home) if home == parsed[site.file].0 => {}
+            Some(_) => census.outside += 1,
+            None => census.ambiguous += 1,
+        }
+    }
+    Ok(census)
+}
+
+/// One inherent impl outside test code, of a type this tree declares.
+struct ImplSite {
+    /// Index of its file in the parsed sources.
+    file: usize,
+    found: ast::Impl,
+    /// Its self type's name.
+    name: String,
+    /// The top-level module declaring that type, or `None` unresolved.
+    home: Option<String>,
+}
+
+/// Every [`ImplSite`], and each file's declared type names.
+struct Sites {
+    sites: Vec<ImplSite>,
+    declared: Vec<BTreeSet<String>>,
+}
+
+/// THE ONE WALK the census and the move recipe share, so the gate and the
+/// rewrite cannot disagree about which impl is outside.
+fn impl_sites(parsed: &[(String, Vec<String>, SourceFile)]) -> Sites {
+    let modules: BTreeSet<String> = parsed
+        .iter()
+        .map(|(node, _, _)| node.clone())
+        .filter(|node| node != LIB)
+        .collect();
     let mut homes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let declared: Vec<BTreeSet<String>> = parsed
         .iter()
@@ -341,8 +376,8 @@ pub fn impl_census(root: &Path) -> anyhow::Result<ImplCensus> {
         homes: &homes,
         lib_aliases: &lib_aliases,
     };
-    let mut census = ImplCensus::default();
-    for ((node, module, tree), names) in parsed.iter().zip(&declared) {
+    let mut sites = Vec::new();
+    for (file, ((node, module, tree), names)) in parsed.iter().zip(&declared).enumerate() {
         let aliases = top_level_aliases(tree);
         for found in tree.syntax().descendants().filter_map(ast::Impl::cast) {
             if found.trait_().is_some() || cfg_test(found.syntax()) {
@@ -363,14 +398,337 @@ pub fn impl_census(root: &Path) -> anyhow::Result<ImplCensus> {
             } else {
                 resolver.node_of(&path, module, 2)
             };
-            match home {
-                Some(home) if home == *node => {}
-                Some(_) => census.outside += 1,
-                None => census.ambiguous += 1,
+            sites.push(ImplSite {
+                file,
+                found,
+                name: name.clone(),
+                home,
+            });
+        }
+    }
+    Sites { sites, declared }
+}
+
+/// The node and module path of a file at `below` (relative to a crate's
+/// `src/`), or `None` for a binary's `main.rs`: the same rule [`sources`]
+/// walks by.
+fn locate(below: &str) -> Option<(String, Vec<String>)> {
+    let path = Path::new(below);
+    let mut parts = path.components();
+    let first = parts.next()?.as_os_str().to_string_lossy().into_owned();
+    if parts.next().is_none() {
+        let stem = Path::new(&first)
+            .file_stem()?
+            .to_string_lossy()
+            .into_owned();
+        return match stem.as_str() {
+            "lib" => Some((LIB.to_owned(), Vec::new())),
+            "main" => None,
+            _ => Some((stem.clone(), vec![stem])),
+        };
+    }
+    let below_dir = path.strip_prefix(&first).ok()?;
+    let mut module = vec![first.clone()];
+    module.extend(module_path(below_dir));
+    Some((first, module))
+}
+
+/// Every file of `files` (path to text) that changes when each inherent impl
+/// under `src` (a crate's source directory, relative like the keys) that
+/// sits outside its type's top-level module moves into the one file of that
+/// module declaring the type (CLOUD-2793's `move-impl-home`).
+///
+/// The move carries what the impl needs: each `use` leaf of its old file it
+/// names (an `as _` trait import always), rebased to a crate-absolute path,
+/// and a `use` of each item of the old module it names, raised to
+/// `pub(crate)` there when private. A method of the moved impl that its old
+/// module still calls is raised to `pub(crate)` too. The impl lands before
+/// the new file's `#[cfg(test)]` module, or at its end.
+///
+/// An impl whose home has no single declaring file, or that the census left
+/// unresolved, is left where it is, so the gate still counts it. What this
+/// cannot see is a compile error naming the site, never a silent change.
+#[must_use]
+pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let prefix = format!("{}/", src.trim_end_matches('/'));
+    let mut keys = Vec::new();
+    let mut parsed = Vec::new();
+    for (key, text) in files {
+        let Some(below) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        let (Some((node, module)), Ok(tree)) = (locate(below), parse(text)) else {
+            continue;
+        };
+        keys.push(key.clone());
+        parsed.push((node, module, tree));
+    }
+    let Sites { sites, declared } = impl_sites(&parsed);
+    let nodes: BTreeSet<String> = parsed
+        .iter()
+        .map(|(node, _, _)| node.clone())
+        .filter(|node| node != LIB)
+        .collect();
+    // An item two moving impls both name is raised once.
+    let mut raised: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut edits: BTreeMap<usize, Vec<(std::ops::Range<usize>, String)>> = BTreeMap::new();
+    let mut uses: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+    let mut landed: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for site in &sites {
+        let (node, module, tree) = &parsed[site.file];
+        let Some(home) = site.home.as_ref().filter(|home| *home != node) else {
+            continue;
+        };
+        let targets: Vec<usize> = (0..parsed.len())
+            .filter(|&at| parsed[at].0 == *home && declared[at].contains(&site.name))
+            .collect();
+        let [target] = targets[..] else {
+            continue;
+        };
+        let source = &files[&keys[site.file]];
+        let range = site.found.syntax().text_range();
+        let (start, end) = (usize::from(range.start()), usize::from(range.end()));
+        let named: BTreeSet<String> = site
+            .found
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+            .filter(|token| token.kind() == SyntaxKind::IDENT)
+            .map(|token| token.text().to_owned())
+            .collect();
+        let used_outside = |name: &str| {
+            tree.syntax()
+                .descendants_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .any(|token| {
+                    let at = usize::from(token.text_range().start());
+                    token.kind() == SyntaxKind::IDENT
+                        && token.text() == name
+                        && !(start..end).contains(&at)
+                })
+        };
+        // The moved impl's private methods its old module still calls.
+        let mut text = source[start..end].to_owned();
+        let mut raises: Vec<usize> = site
+            .found
+            .assoc_item_list()
+            .into_iter()
+            .flat_map(|list| list.assoc_items())
+            .filter_map(|item| match item {
+                ast::AssocItem::Fn(function) => Some(function),
+                _ => None,
+            })
+            .filter(|function| function.visibility().is_none())
+            .filter(|function| {
+                function
+                    .name()
+                    .is_some_and(|name| used_outside(&name.text()))
+            })
+            .filter_map(|function| item_start(function.syntax()))
+            .map(|at| at - start)
+            .collect();
+        raises.sort_unstable();
+        for at in raises.into_iter().rev() {
+            text.insert_str(at, "pub(crate) ");
+        }
+        landed.entry(target).or_default().push(text);
+        edits
+            .entry(site.file)
+            .or_default()
+            .push((start..end, String::new()));
+        // What the impl names from its old file.
+        let wanted = uses.entry(target).or_default();
+        for (name, path) in top_level_aliases(tree) {
+            if name == "_" || named.contains(&name) {
+                wanted.insert(use_line(&rebase(&path, module, &nodes), &name));
+            }
+        }
+        for item in tree.items() {
+            let Some(name) = item_name(&item) else {
+                continue;
+            };
+            if name == site.name || !named.contains(&name) {
+                continue;
+            }
+            let path: Vec<String> = std::iter::once(String::from("crate"))
+                .chain(module.iter().cloned())
+                .chain(std::iter::once(name.clone()))
+                .collect();
+            wanted.insert(use_line(&path, &name));
+            if item_visibility(&item).is_none()
+                && let Some(at) = item_start(item.syntax())
+                && raised.insert((site.file, at))
+            {
+                edits
+                    .entry(site.file)
+                    .or_default()
+                    .push((at..at, String::from("pub(crate) ")));
             }
         }
     }
-    Ok(census)
+    for (target, texts) in landed {
+        let tree = &parsed[target].2;
+        let text = &files[&keys[target]];
+        let local: BTreeSet<String> = top_level_aliases(tree)
+            .into_keys()
+            .chain(tree.items().filter_map(|item| item_name(&item)))
+            .collect();
+        let at = tree
+            .items()
+            .find(|item| matches!(item, ast::Item::Module(_)) && cfg_test(item.syntax()))
+            .map_or(text.len(), |item| {
+                usize::from(item.syntax().text_range().start())
+            });
+        let body: String = texts.iter().map(|moved| format!("\n{moved}\n\n")).collect();
+        let list = edits.entry(target).or_default();
+        list.push((at..at, body));
+        let lines: Vec<String> = uses
+            .remove(&target)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|line| use_name(line).is_none_or(|name| name == "_" || !local.contains(name)))
+            .collect();
+        if !lines.is_empty()
+            && let Some(first) = tree.items().next()
+        {
+            let at = usize::from(first.syntax().text_range().start());
+            list.push((at..at, format!("{}\n", lines.join("\n"))));
+        }
+    }
+    edits
+        .into_iter()
+        .filter_map(|(file, mut list)| {
+            let mut text = files[&keys[file]].clone();
+            list.sort_by_key(|(range, _)| (range.start, range.end));
+            for (range, replacement) in list.into_iter().rev() {
+                text.replace_range(range, &replacement);
+            }
+            (text != files[&keys[file]]).then(|| (keys[file].clone(), text))
+        })
+        .collect()
+}
+
+/// Each inherent impl under `src` the census counts outside its type's
+/// module, as a pointer: its file, its first line, its type, the module
+/// declaring that type, and how many lines it spans. Unresolved impls are
+/// listed with the home `?`. This is the evidence for choosing, per impl,
+/// between moving it home and keeping its behaviour in the layer above.
+#[must_use]
+pub fn impl_plan(src: &str, files: &BTreeMap<String, String>) -> Vec<String> {
+    let prefix = format!("{}/", src.trim_end_matches('/'));
+    let mut keys = Vec::new();
+    let mut parsed = Vec::new();
+    for (key, text) in files {
+        let Some(below) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        let (Some((node, module)), Ok(tree)) = (locate(below), parse(text)) else {
+            continue;
+        };
+        keys.push(key.clone());
+        parsed.push((node, module, tree));
+    }
+    impl_sites(&parsed)
+        .sites
+        .into_iter()
+        .filter(|site| site.home.as_ref() != Some(&parsed[site.file].0))
+        .map(|site| {
+            let text = &files[&keys[site.file]];
+            let range = site.found.syntax().text_range();
+            let line = text[..usize::from(range.start())].lines().count() + 1;
+            let span = text[usize::from(range.start())..usize::from(range.end())]
+                .lines()
+                .count();
+            format!(
+                "{}:{line} {} -> {} ({span} lines)",
+                keys[site.file],
+                site.name,
+                site.home.as_deref().unwrap_or("?")
+            )
+        })
+        .collect()
+}
+
+/// A `use` leaf's path rebased to `crate::…` from a file at `module`;
+/// `nodes` are the crate's top-level modules, the only heads a crate root
+/// reads root-relative (`serde::…` there is still the crate `serde`).
+fn rebase(path: &[String], module: &[String], nodes: &BTreeSet<String>) -> Vec<String> {
+    match path.first().map(String::as_str) {
+        Some("self") => std::iter::once(String::from("crate"))
+            .chain(module.iter().cloned())
+            .chain(path[1..].iter().cloned())
+            .collect(),
+        Some("super") => {
+            let supers = path
+                .iter()
+                .take_while(|segment| *segment == "super")
+                .count();
+            let kept = module.len().saturating_sub(supers);
+            std::iter::once(String::from("crate"))
+                .chain(module[..kept].iter().cloned())
+                .chain(path[supers..].iter().cloned())
+                .collect()
+        }
+        Some(head) if module.is_empty() && nodes.contains(head) => {
+            // A crate root's own child module, read root-relative.
+            std::iter::once(String::from("crate"))
+                .chain(path.iter().cloned())
+                .collect()
+        }
+        _ => path.to_vec(),
+    }
+}
+
+fn use_line(path: &[String], name: &str) -> String {
+    let joined = path.join("::");
+    if path.last().is_some_and(|last| last == name) {
+        format!("use {joined};")
+    } else {
+        format!("use {joined} as {name};")
+    }
+}
+
+/// The name a `use` line binds.
+fn use_name(line: &str) -> Option<&str> {
+    let body = line.strip_prefix("use ")?.strip_suffix(';')?;
+    Some(body.rsplit_once(" as ").map_or_else(
+        || body.rsplit("::").next().unwrap_or(body),
+        |(_, name)| name,
+    ))
+}
+
+/// The name an item declares, when a path can name it.
+fn item_name(item: &ast::Item) -> Option<String> {
+    let name = match item {
+        ast::Item::Fn(item) => item.name(),
+        ast::Item::Struct(item) => item.name(),
+        ast::Item::Enum(item) => item.name(),
+        ast::Item::Const(item) => item.name(),
+        ast::Item::Static(item) => item.name(),
+        ast::Item::TypeAlias(item) => item.name(),
+        ast::Item::Trait(item) => item.name(),
+        ast::Item::Union(item) => item.name(),
+        _ => None,
+    }?;
+    Some(name.text().to_string())
+}
+
+fn item_visibility(item: &ast::Item) -> Option<ast::Visibility> {
+    item.syntax().children().find_map(ast::Visibility::cast)
+}
+
+/// Where an item's own tokens start, past its attributes and doc comments:
+/// where a visibility goes.
+fn item_start(syntax: &SyntaxNode) -> Option<usize> {
+    syntax
+        .children_with_tokens()
+        .find(|child| {
+            !matches!(
+                child.kind(),
+                SyntaxKind::ATTR | SyntaxKind::COMMENT | SyntaxKind::WHITESPACE
+            )
+        })
+        .map(|child| usize::from(child.text_range().start()))
 }
 
 /// A file's top-level `use` leaves: the name each makes visible, to its path.
@@ -1283,5 +1641,33 @@ mod tests {
             "shims-scope",
         );
         assert_eq!(census, ShimCensus::default());
+    }
+
+    /// Fails by: the impl left in place or landing after its new file's test
+    /// module; a `use` of its old file it names (or an `as _` trait import)
+    /// not carried; the old module's private helper it calls not raised; or
+    /// its private method the old module still calls left private.
+    #[test]
+    fn an_impl_moves_home_with_what_it_names() {
+        let files: BTreeMap<String, String> = [
+            ("src/lib.rs", "mod a;\nmod b;\n"),
+            ("src/a.rs", "pub struct T { x: u8 }\n#[cfg(test)]\nmod tests {}\n"),
+            (
+                "src/b.rs",
+                "use crate::a::T;\nuse std::fmt::Write as _;\nfn helper() -> u8 { 1 }\nimpl T {\n    fn get(&self) -> u8 { helper() + self.x }\n}\nfn caller(t: &T) -> u8 { t.get() }\n",
+            ),
+        ]
+        .into_iter()
+        .map(|(path, text)| (path.to_owned(), text.to_owned()))
+        .collect();
+        let moved = move_impls_home("src", &files);
+        assert_eq!(
+            moved["src/a.rs"],
+            "use crate::b::helper;\nuse std::fmt::Write as _;\npub struct T { x: u8 }\n\nimpl T {\n    pub(crate) fn get(&self) -> u8 { helper() + self.x }\n}\n\n#[cfg(test)]\nmod tests {}\n"
+        );
+        assert_eq!(
+            moved["src/b.rs"],
+            "use crate::a::T;\nuse std::fmt::Write as _;\npub(crate) fn helper() -> u8 { 1 }\n\nfn caller(t: &T) -> u8 { t.get() }\n"
+        );
     }
 }
