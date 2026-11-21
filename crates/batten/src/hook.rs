@@ -56,11 +56,10 @@ use crate::rules::{
     RuleScope,
 };
 use crate::severity::{self, ReportLevel, RuleSeverity};
-#[allow(
-    clippy::wildcard_imports,
-    reason = "the shell parse moved out of this module whole (CLOUD-2789); its items are still this module's vocabulary"
-)]
-use crate::shell::*;
+use crate::shell::{
+    Segment, SegmentLine, Separator, covered, flatten, flatten_command, flatten_in, opens_heredoc,
+    segments, shell_commands, stdin_text,
+};
 use crate::verbs::{MutatingVerb, OperandScope};
 
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
