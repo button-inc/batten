@@ -55,7 +55,6 @@ use crate::rules::RuleExt as _;
 #[cfg(test)]
 use crate::rules::RuleKindExt as _;
 use crate::sbom::DeclaredExt as _;
-use crate::verdict::VocabularyExt as _;
 use crate::wiring::WiringExt as _;
 use std::collections::BTreeMap;
 use std::io;
@@ -5218,12 +5217,15 @@ mod tests {
         // this check exists to refuse. It opens no hole either: a real table
         // marked `skip` cannot be written in a `batten.toml` at all, so its row
         // would already be dead by a route with its own gates.
+        // `Config` moved to `config_model` (CLOUD-2789 phase 2); the loader's
+        // validators stayed here, so each half reads its own file.
         let source = include_str!("config.rs");
+        let model = include_str!("config_model.rs");
         let struct_body = {
-            let start = source
+            let start = model
                 .find("pub struct Config {")
                 .expect("Config is declared here");
-            let rest = &source[start..];
+            let rest = &model[start..];
             &rest[..rest.find("\n}").expect("the struct closes")]
         };
         // BOTH bodies, because the loader is two functions and the predicate is
