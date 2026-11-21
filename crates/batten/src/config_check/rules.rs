@@ -320,8 +320,506 @@ pub(crate) struct Declared<'a> {
     pub staged_format: Option<crate::facts::Format>,
 }
 
-impl Rule {
-    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+/// `Rule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait RuleExt: Sized {
+    fn validate(&self) -> anyhow::Result<()>;
+
+    /// The obligation [`RuleKind::permits`] cannot express (CLOUD-758).
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
+    /// both, or a `content` expression the matcher cannot compile.
+    ///
+    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
+    ///
+    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
+    /// reason: a row with NEITHER loads, matches every mediated call, and turns
+    /// a ban into a universal gate; a row with BOTH is two predicates where the
+    /// reader can see one, and a precedence rule nobody can read is worse than a
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    fn validate_shape_columns(&self) -> anyhow::Result<()>;
+
+    /// The three ceiling columns travel together, or none of them does
+    /// (CLOUD-925).
+    ///
+    /// A value inside the row decides the obligation, so the per-kind census
+    /// structurally cannot state it — the same reason `receipt`'s
+    /// trigger-dependent columns and `policy`'s one-of-three source live here.
+    ///
+    /// Each partial row is a distinct silent failure and that is why all three
+    /// are refused rather than defaulted: a `max` with no `measures` caps
+    /// something unnamed, a `measures` with no `max` measures and decides
+    /// nothing, and a pair with no `counts` cannot say whether 6000 means tokens
+    /// or artifacts — which is a cap off by three orders of magnitude, in the
+    /// permissive direction.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the columns a partial row is missing.
+    /// The two polarity modifiers may not name the same projection (CLOUD-987).
+    ///
+    /// A row asking for one key to be both absent and present can never fire, so
+    /// it loads, matches nothing, and reads from the file as a narrowing — the
+    /// inert-coverage failure this whole validation surface refuses. Naming
+    /// *different* projections is legitimate and is what row 3 wants.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the projection asked for twice.
+    fn validate_polarity(&self) -> anyhow::Result<()>;
+
+    /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
+    /// that names no command line.
+    ///
+    /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
+    /// because the argument is identical one column over, and stating it twice is
+    /// how the two would drift when an eighth modifier lands. Each of the seven
+    /// names a COMMAND: `contains` and `unless_contains` are substring tests over
+    /// an argv in the two polarities, `word` and `unless_word` the same over its
+    /// whole words, `require_via` is a via-shape test over the
+    /// same argv, `requires_key` asks whether the work is keyed before a
+    /// command may run, and `base` exists only to tell `requires_key` which
+    /// commits to read. A write and a structured call carry no argv for any of
+    /// them to read, so left to load they are accepted, ignored on every call,
+    /// and the row narrows nothing the configuration appears to narrow.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
+    fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()>;
+
+    /// Refuse a `pattern` the command matcher cannot honour (CLOUD-401).
+    ///
+    /// The empty-operand fix closed one row that loaded into silence; this
+    /// closes the **class**. `hook::matching_shape_rows` and
+    /// `hook::matching_receipt_rows` compare a pattern against a command that
+    /// has already been normalised two ways — `effective_program` has stepped
+    /// past env assignments and look-through wrappers, and the operand words
+    /// have had every flag dropped — so a pattern naming what that
+    /// normalisation removes is a row that can never fire. It loads clean,
+    /// gates nothing, and reads as coverage, which is the exact defect
+    /// [`validate`]'s doc comment is written against.
+    ///
+    /// Refused here rather than in the per-kind column census because the
+    /// census is a const list of column NAMES: this depends on the value inside
+    /// the column. Both surfaces that key on a command line are covered — a
+    /// `shape` row's ban and a `receipt` row's trigger read the same pattern
+    /// through the same matcher (`Rule::trigger`), so a rule inert on one is
+    /// inert on the other.
+    ///
+    /// A program-only pattern is **valid**, and that is the point: it is the
+    /// reading `Rule::pattern`'s doc comment already invites, and the one this
+    /// validator must not take back.
+    fn validate_command_pattern(&self) -> anyhow::Result<()>;
+
+    /// The value-dependent obligations on the two ratchet admission columns,
+    /// [`Rule::retires_with`] and [`Rule::admits_with`].
+    ///
+    /// Extracted from [`Rule::validate`] for `validate_conserves`'s reason — the
+    /// per-kind census sees a present column and nothing about what is inside it
+    /// — and the two are here together because they are the same three refusals
+    /// mirrored, so a reader comparing them should not have to hold two screens.
+    ///
+    /// Each column admits ONE direction of change, and all three refusals close
+    /// the same failure: a column that reads as a configured permission and
+    /// decides nothing.
+    ///
+    /// * **`base` must be there.** Each column asks a question about another
+    ///   tree — was this subject alive, was this file absent — and there is no
+    ///   such tree without it. The ratchet kind already requires `base`, but the
+    ///   obligation is on the VALUE, so a future kind taking either column
+    ///   inherits the refusal rather than the omission.
+    /// * **The token must not be blank.** An empty prefix matches at the start of
+    ///   every line, so every file would "declare" whatever its first line
+    ///   happens to say. That is `requires_key`'s compile-at-load failure in the
+    ///   one form these columns can take it.
+    /// * **The direction must be the one the column governs.** This is the blank
+    ///   token's failure reached by the other axis, and it is the sharper of the
+    ///   two because the column is not merely inert on the wrong row — it
+    ///   switches the row OFF. `retires_with`'s block inspects only the files
+    ///   whose count FELL, so on a `non_increasing` row it collects no subject,
+    ///   leaves the blocker set empty, and the evaluator returns clean over every
+    ///   increase. `undeclared_growth` is the mirror: it inspects only the files
+    ///   that ROSE, so on a `non_decreasing` row every decrease is admitted in
+    ///   silence. Found by review of #694 on `admits_with`; the sibling had
+    ///   carried it latent since CLOUD-807.
+    fn validate_admission_columns(&self) -> anyhow::Result<()>;
+
+    /// Every token in a [`Conserves`] decides something, so a blank one is a
+    /// configured admission (CLOUD-908).
+    ///
+    /// The obligations, and each closes a way the mapping could read as present
+    /// and decide nothing:
+    ///
+    /// * **`retires_with` must be there.** This column refines that admission. A
+    ///   ratchet that never permits a decrease has no deletion to map, so the
+    ///   mapping would be inert — and inert coverage is what the whole row is
+    ///   about.
+    /// * **No token may be blank.** An empty prefix matches at the start of every
+    ///   line, so every line would "declare" a case or claim one. The same
+    ///   reading `retires_with` takes over its own token.
+    /// * **The three arms must be distinct.** Two arms spelled alike make "exactly
+    ///   one arm" undecidable: one line would claim a case twice, and the refusal
+    ///   for a double claim would fire on every correct mapping instead.
+    /// * **`declared_in` must compile.** A glob `globset` cannot parse selects
+    ///   nothing, and a mapping read over nothing admits every deletion.
+    fn validate_conserves(&self) -> anyhow::Result<()>;
+
+    fn validate_remediation(&self) -> anyhow::Result<()>;
+
+    fn validate_ceiling(&self) -> anyhow::Result<()>;
+
+    /// The modifiers that read the command's ARGV (CLOUD-2662): refused on a
+    /// row keyed by anything that names none, which an `on` row does not either,
+    /// since its routes include structured calls.
+    fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()>;
+
+    fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error;
+
+    /// The columns an `on` row may not carry (CLOUD-2662): the argv modifiers,
+    /// and the per-call projections, which differ per route (`input-draft` is
+    /// absent on every shell call) and so would silently drop whole routes.
+    /// `requires_key`, `base` and the branch modifiers read the branch, which
+    /// every route has, and stay.
+    fn validate_on_columns(&self) -> anyhow::Result<()>;
+
+    /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
+    /// express (CLOUD-444).
+    ///
+    /// Which columns a receipt row owes depends on its `trigger`, a value inside
+    /// the row — so the per-kind census cannot state it, exactly as it cannot
+    /// state a policy row's one-of-three source. Both refusals have the same
+    /// reasoning: a column that reads as configured and decides nothing is the
+    /// defect this kind was added to close.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
+    /// `pattern`, for a write-triggered row carrying either command column, and
+    /// for an empty `checks` list.
+    /// The `delta` key and its base travel together (CLOUD-1547).
+    ///
+    /// Refused in BOTH directions, for the reason `key_from`'s pair is and with
+    /// the same pair of silent failures one keying over.
+    ///
+    /// A `delta` key with no base has no second side to diff against, so it has
+    /// no identity at all and would read no file for any call — which reads as
+    /// *never reviewed* and denies everything. That is the direction that gets a
+    /// guard switched off rather than satisfied, and it is worse than the
+    /// permissive one here precisely because it looks like the gate working. A
+    /// base on any other key is the mirror: a column that reads as configured and
+    /// is never consulted.
+    ///
+    /// **Its own function rather than a fourth arm inside
+    /// [`Rule::validate_receipt_columns`]**, which clippy's line ceiling forced
+    /// and which is the right shape anyway: that one decides what a `trigger`
+    /// owes, and this decides what a `key` owes.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for `key = "delta"` with no `key_base`, and
+    /// for a `key_base` on any other keying.
+    fn validate_delta_base(&self) -> anyhow::Result<()>;
+
+    /// A receipt row's selectors (CLOUD-2662): exactly one of `pattern`, `tool`
+    /// and `on` on a command-triggered row, and no command selector on a
+    /// write-triggered one. Split from [`Rule::validate_receipt_columns`], whose
+    /// line budget the third selector spent.
+    fn validate_receipt_selectors(&self) -> anyhow::Result<()>;
+
+    fn validate_receipt_columns(&self) -> anyhow::Result<()>;
+
+    /// A `while_marker` must name a family that landing sweeps (CLOUD-1390).
+    ///
+    /// **A REFUSAL NEEDS A SPEND, and this is the only thing that supplies one.**
+    /// The column's whole contract is *fires while the marker exists*; what makes
+    /// that finite is [`crate::land::retire_branch`] deleting the file. Name a
+    /// family outside [`crate::config_model::BRANCH_KEYED_RECEIPTS`] and the row is a
+    /// deny nothing clears — the work lands, the marker survives the retirement,
+    /// and the next piece of work to reuse the branch name is refused for a punt
+    /// somebody else took. That is CLOUD-774's inherited-suppression defect in the
+    /// refusing direction, which is strictly worse than the advisory one.
+    ///
+    /// Asserted at load rather than documented, because the doc on
+    /// [`Rule::while_marker`] said exactly this and a sentence in a doc comment
+    /// stops nobody (non-negotiable rule 2). The pair can now only drift by
+    /// failing.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the row and the marker. Pointer-only:
+    /// the two ids and the permitted list, never a path from the receipt store.
+    fn validate_marker(&self) -> anyhow::Result<()>;
+
+    /// The three refusals over a receipt row's two name columns (CLOUD-1297).
+    ///
+    /// Split out of [`Rule::validate_receipt_columns`] because that function
+    /// crossed the 100-line bound when the alternation arrived, and this is the
+    /// half that comes out whole: every arm here is about WHICH RECEIPTS the row
+    /// names, where everything left behind is about the trigger and the columns
+    /// it implies.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for an empty `checks` list, an empty
+    /// `checks_any` list, or a row naming neither column.
+    fn validate_receipt_names(&self) -> anyhow::Result<()>;
+
+    /// `ask` is a MEDIATED-CALL disposition, and both refusals below are config
+    /// faults rather than silent downgrades (CLOUD-340).
+    ///
+    /// Extracted for the reason its neighbours are: `validate` is at its line
+    /// ceiling, and this is a question about a value INSIDE the row — a
+    /// severity, not a kind — which the per-kind census structurally cannot ask.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) when a non-`mediated_call` row declares
+    /// `ask`, or when an `ask` row carries no `reason`.
+    fn validate_ask_disposition(&self) -> anyhow::Result<()>;
+
+    /// The load-time refusals the three repository-state columns owe
+    /// (CLOUD-843).
+    ///
+    /// Each refuses a declaration the acquisition could only answer wrongly: an
+    /// empty tag glob lists nothing, a config key git cannot address resolves to
+    /// a permanent `unset`, and a `:`-magic pathspec read as a literal selects
+    /// nothing. Every one would load, acquire, and hand its module an answer to a
+    /// question nobody asked — CLOUD-845's dead gate by way of a typo — so each is
+    /// named here with the column and the entry.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the first offending entry.
+    fn validate_repository_state(&self) -> anyhow::Result<()>;
+
+    /// The three obligations a policy row carries that [`RuleKind::permits`]
+    /// cannot express (CLOUD-833, CLOUD-836).
+    ///
+    /// All three depend on a value INSIDE the row rather than on its kind, which
+    /// is what a flat per-kind column list structurally cannot say — the same
+    /// reason `forbid`'s `pattern`/`regex` pair and `receipt`'s trigger-dependent
+    /// columns live in `validate` rather than in the census.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) when the row names no source or more than
+    /// one, when a mediated-call row declares `documents`, or when a tree-scoped
+    /// row declares none.
+    fn validate_policy_source(&self) -> anyhow::Result<()>;
+
+    /// Refuse a `document` row whose declared `format` contradicts the extension
+    /// its glob names (CLOUD-1787).
+    ///
+    /// # The trap this closes
+    ///
+    /// `format` is declared and never inferred, which is right — a `.json` file
+    /// that is really JSON5 must be declarable as JSON5. But nothing checked the
+    /// declaration against the paths it would meet, and one pairing is actively
+    /// dangerous rather than merely wrong: `format = "yaml"` over `*.md`
+    /// **appears to work**, because `---` is YAML's document-start marker, so a
+    /// markdown file's frontmatter is document 1 of the stream and gets read.
+    /// Document 2 is the body, which is only accidentally valid YAML. Measured
+    /// in CLOUD-1787: with identical correct frontmatter, prose and `**bold**`
+    /// passed while a table, a task list and a block quote failed — the verdict
+    /// decided by the prose, not the data.
+    ///
+    /// A row whose correctness depends on whether prose happens to lex is not a
+    /// gate, and it fails silently in both directions, so it is refused at load
+    /// where a config error costs a config error.
+    ///
+    /// # Why the literal suffix and not the glob
+    ///
+    /// Deciding what an arbitrary glob *can* match needs a glob engine and
+    /// answers "possibly" for most inputs. The extension a glob ENDS in is a
+    /// string, it is what every real row writes (`*.md`, `**/*.md`,
+    /// `notes/*.md`), and it is exactly the case above. A computed or
+    /// extensionless glob is not caught here and the message says so rather than
+    /// implying a totality this does not have.
+    fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()>;
+
+    /// Validate that the per-kind fields present match the declared `kind`.
+    ///
+    /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
+    /// `deny_unknown_fields`), so the kind/field agreement that a tagged enum
+    /// would give for free is asserted here instead — and a field belonging to
+    /// another kind is an *error*, never ignored, so a rule can never half-apply.
+    /// Every optional column, paired with whether this rule carries it.
+    ///
+    /// The census is what keeps [`Rule::validate`] total. The previous version
+    /// hand-wrote one match arm per kind naming one required and one forbidden
+    /// field, which was correct for two kinds and two columns and goes stale
+    /// silently the moment either grows: a new column simply appears in no arm,
+    /// so every kind accepts it. Listing the columns once and asking each kind
+    /// about all of them makes that failure impossible, and
+    /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
+    /// a column is added here without being placed.
+    fn columns(&self) -> [(&'static str, bool); 63];
+
+    /// What makes this row fire, with the pinned default applied — the one place
+    /// absence is resolved, so no call site reads it a second way.
+    #[must_use]
+    fn receipt_trigger(&self) -> ReceiptTrigger;
+
+    /// Which git fact this row's receipts are keyed to, default applied.
+    #[must_use]
+    fn receipt_key(&self) -> ReceiptKey;
+
+    /// The pipeline row's own tables (CLOUD-443).
+    ///
+    /// Refused for the reason everything in [`Rule::validate`] is refused: a
+    /// list that narrows nothing, or a row whose conditions contradict, loads
+    /// clean and decides nothing. Extracted rather than inlined so `validate`
+    /// stays under the line limit as columns accumulate — the census below it
+    /// is the part that must stay whole.
+    fn validate_pipeline_tables(&self) -> anyhow::Result<()>;
+
+    /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
+    ///
+    /// Not expressible in [`RuleKind::requires`] for the same reason
+    /// `pattern`-xor-`regex` is not: that list is columns that must *all* be
+    /// present. [`RuleKind::permits`] carries the other half — a `shape` row is
+    /// refused both columns there, because it is adjudicated per mediated call
+    /// and never reaches the store, the same reasoning that already denies it
+    /// `identity_key`.
+    ///
+    /// **Carrying neither is refused at ingest, not here** (§5). A rule with no
+    /// remediation still loads and still gates: `check` and `enforce` render its
+    /// findings and exit on them exactly as before. What it cannot do is put one
+    /// in the store, because a *stored* finding is one something later has to
+    /// close. Refusing at load would instead make an un-actionable rule
+    /// un-runnable, which turns a store-shaped requirement into a gate outage
+    /// for every consumer whose config predates this field.
+    /// The out-of-root bound's own obligations, refused at LOAD (CLOUD-1167).
+    ///
+    /// Its own function rather than a block inside `validate` for
+    /// [`Rule::validate_tool_rows`]' reason: that function is at its 100-line
+    /// ceiling, and every declared-read family adds a paragraph to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row missing an `id` or a
+    /// `root`, one whose `path` can leave the root it named, or one id declared
+    /// twice over different files.
+    fn validate_external_rows(&self) -> anyhow::Result<()>;
+
+    /// The tool-verdict key's own obligations, refused at LOAD (CLOUD-1171).
+    ///
+    /// Its own function rather than another block inside `validate` for the
+    /// reason `validate_sink` is one: that function is at its line ceiling and
+    /// every declared-read family adds a paragraph to it.
+    ///
+    /// Every refusal here is a CONFIG FAULT rather than a verdict, which is the
+    /// choice `NotAcquired::UnknownFormat` already makes: no state of the
+    /// filesystem makes an empty tool name or a separator inside a version
+    /// admissible, so reporting either as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row whose key cannot be
+    /// composed unambiguously, or for one id declared twice over different keys.
+    fn validate_tool_rows(&self) -> anyhow::Result<()>;
+
+    /// Refuse a `[[rule.minted]]` row that cannot address a receipt, or an id
+    /// declared twice over different questions (CLOUD-1310).
+    ///
+    /// **The mint NAME is not resolved against the mint table, and that is
+    /// deliberate.** A mint that has never fired leaves no receipts, which is
+    /// could-not-look and is the ordinary state on any fresh clone — so refusing
+    /// the row at load would refuse the common case rather than an authoring
+    /// error. What is refused here is only what no state of the filesystem could
+    /// make admissible.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row naming an unusable mint or
+    /// id, for a row whose two column indices are the same, and for one id
+    /// declared twice over different questions.
+    fn validate_minted_rows(&self) -> anyhow::Result<()>;
+
+    /// A declared sink must be on a kind that can actually request one
+    /// (CLOUD-851).
+    ///
+    /// The request set is built from a [`Scan`], which only the TREE surface
+    /// produces: `adjudicate` returns a decision about one call and has no
+    /// findings vector to digest. So a `produces` on a `mediated_call`-only kind
+    /// would parse, read as configured, and write nothing on every call — the
+    /// inert-coverage failure `validate_shape_columns` and
+    /// `validate_receipt_columns` each close one column over, and the same one
+    /// `Rule::fix`'s refusal states rather than pretends about.
+    ///
+    /// Refused at LOAD rather than skipped at run time, because a skip is
+    /// invisible: the run reports its findings and the record simply is not
+    /// there, which looks exactly like a run that had nothing to produce.
+    fn validate_sink(&self) -> anyhow::Result<()>;
+
+    /// `exclude_paths` has to be honoured by everything that reads the rule's
+    /// selection, and two shapes cannot honour it (CLOUD-883).
+    ///
+    /// **No `glob`.** The column subtracts from an include set, so with nothing to
+    /// subtract from it narrows nothing while reading as a narrowing — the
+    /// inert-coverage failure `validate_sink` and `validate_shape_columns` each
+    /// close one column over.
+    ///
+    /// **A ratchet.** Its verdict compares the working tree against a count taken
+    /// at the base rev by `git::count_at_rev`, which globs on its own and knows
+    /// nothing of this column. The two sides would select different sets, and the
+    /// direction is the dangerous one CLOUD-328 measured: a working side narrowed
+    /// below a base that counted everything sits permanently under its baseline,
+    /// so no addition could ever push it over and **the gate cannot fail**.
+    /// Refused rather than half-implemented, because a ratchet that cannot fail
+    /// reads exactly like one that is passing.
+    fn validate_exclude_paths(&self) -> anyhow::Result<()>;
+
+    /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
+    ///
+    /// Not expressible in [`RuleKind::requires`], which is a flat list of
+    /// columns that must all be present — "exactly one of these two" needs a
+    /// check of its own (CLOUD-283). Refusing a row that carries both is what
+    /// keeps this a *choice* rather than a precedence rule a reader has to know.
+    ///
+    /// Each expression is compiled here, at load, so a bad one is a config error
+    /// naming the row rather than a failure part-way through a scan.
+    /// A document row's predicate: exactly one of `pattern` or `reads`.
+    ///
+    /// The same "one of" the forbid predicate carries and for the same reason —
+    /// a flat column list cannot express it, so it lives here where the pair is
+    /// in scope. A row with neither loads, matches a document, and asks nothing
+    /// of it; a row with both declares two answers to one comparison.
+    fn validate_document_predicate(&self) -> anyhow::Result<()>;
+
+    /// A ratchet's `counts` and `per_file` columns (CLOUD-2663).
+    fn validate_ratchet_measure(&self) -> anyhow::Result<()>;
+
+    fn validate_forbid_predicate(&self) -> anyhow::Result<()>;
+
+    /// The first column this row declares whose fact the mediated call cannot
+    /// resolve (CLOUD-1282).
+    ///
+    /// Derived rather than listed: [`COLUMN_CENSUS`] says which fact each column
+    /// declares and [`crate::facts::Fact::class`] says where that fact resolves,
+    /// so a column added to this struct is covered the day it lands — and a fact
+    /// RECLASSIFIED onto the hook surface stops being refused here without an
+    /// edit, which a list could not manage in either direction.
+    ///
+    /// `Surface::Hook` is the NARROWEST surface a fact may be resolved on, so it
+    /// is the one value that reaches the mediated call; every other means the
+    /// column would parse, load and never be acquired.
+    ///
+    /// Census order decides which column a multi-column row is refused for,
+    /// which is declaration order in the struct — the same tie-break every other
+    /// table here uses, and the one a reviewer reading top to bottom expects.
+    #[must_use]
+    fn tree_only_column(&self) -> Option<TreeOnlyColumn>;
+}
+
+impl RuleExt for Rule {
+    fn validate(&self) -> anyhow::Result<()> {
         let kind = self.kind.as_str();
         // Ahead of every per-kind question, so the rename is what the author
         // reads. Left to the census, a `run` on a command rule would report
@@ -426,45 +924,8 @@ impl Rule {
         self.validate_document_predicate()?;
         self.validate_remediation()
     }
-}
 
-impl Located<'_> {
-    /// `<source>:<line>` for the row declaring `id`, or `<source>` where the
-    /// declaration cannot be located.
-    ///
-    /// A literal search for the `id` key rather than a second TOML parse: the
-    /// pointer is a courtesy on an error path, and a parser here would be a
-    /// second reader of the file the loader already read.
-    pub(crate) fn pointer(self, id: &str) -> String {
-        let needle = format!("id = \"{id}\"");
-        for (index, line) in self.text.lines().enumerate() {
-            if line.trim_start().starts_with(&needle) {
-                return format!("{}:{}", self.source, index + 1);
-            }
-        }
-        self.source.to_owned()
-    }
-}
-
-impl Rule {
-    /// The obligation [`RuleKind::permits`] cannot express (CLOUD-758).
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
-    /// both, or a `content` expression the matcher cannot compile.
-    ///
-    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
-    ///
-    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
-    /// reason: a row with NEITHER loads, matches every mediated call, and turns
-    /// a ban into a universal gate; a row with BOTH is two predicates where the
-    /// reader can see one, and a precedence rule nobody can read is worse than a
-    /// refusal.
-    ///
-    /// # Errors
-    ///
-    pub(crate) fn validate_shape_columns(&self) -> anyhow::Result<()> {
+    fn validate_shape_columns(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Shape {
             return Ok(());
         }
@@ -564,34 +1025,7 @@ impl Rule {
         }
     }
 
-    /// The three ceiling columns travel together, or none of them does
-    /// (CLOUD-925).
-    ///
-    /// A value inside the row decides the obligation, so the per-kind census
-    /// structurally cannot state it — the same reason `receipt`'s
-    /// trigger-dependent columns and `policy`'s one-of-three source live here.
-    ///
-    /// Each partial row is a distinct silent failure and that is why all three
-    /// are refused rather than defaulted: a `max` with no `measures` caps
-    /// something unnamed, a `measures` with no `max` measures and decides
-    /// nothing, and a pair with no `counts` cannot say whether 6000 means tokens
-    /// or artifacts — which is a cap off by three orders of magnitude, in the
-    /// permissive direction.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the columns a partial row is missing.
-    /// The two polarity modifiers may not name the same projection (CLOUD-987).
-    ///
-    /// A row asking for one key to be both absent and present can never fire, so
-    /// it loads, matches nothing, and reads from the file as a narrowing — the
-    /// inert-coverage failure this whole validation surface refuses. Naming
-    /// *different* projections is legitimate and is what row 3 wants.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the projection asked for twice.
-    pub(crate) fn validate_polarity(&self) -> anyhow::Result<()> {
+    fn validate_polarity(&self) -> anyhow::Result<()> {
         if let (Some(absent), Some(present)) = (self.when_absent, self.when_present)
             && absent == present
         {
@@ -641,25 +1075,7 @@ impl Rule {
         Ok(())
     }
 
-    /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
-    /// that names no command line.
-    ///
-    /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
-    /// because the argument is identical one column over, and stating it twice is
-    /// how the two would drift when an eighth modifier lands. Each of the seven
-    /// names a COMMAND: `contains` and `unless_contains` are substring tests over
-    /// an argv in the two polarities, `word` and `unless_word` the same over its
-    /// whole words, `require_via` is a via-shape test over the
-    /// same argv, `requires_key` asks whether the work is keyed before a
-    /// command may run, and `base` exists only to tell `requires_key` which
-    /// commits to read. A write and a structured call carry no argv for any of
-    /// them to read, so left to load they are accepted, ignored on every call,
-    /// and the row narrows nothing the configuration appears to narrow.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
-    pub(crate) fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+    fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
         self.refuse_argv_modifiers(keyed_on)?;
         for (field, present) in [
             ("requires_key", self.requires_key.is_some()),
@@ -672,29 +1088,7 @@ impl Rule {
         Ok(())
     }
 
-    /// Refuse a `pattern` the command matcher cannot honour (CLOUD-401).
-    ///
-    /// The empty-operand fix closed one row that loaded into silence; this
-    /// closes the **class**. `hook::matching_shape_rows` and
-    /// `hook::matching_receipt_rows` compare a pattern against a command that
-    /// has already been normalised two ways — `effective_program` has stepped
-    /// past env assignments and look-through wrappers, and the operand words
-    /// have had every flag dropped — so a pattern naming what that
-    /// normalisation removes is a row that can never fire. It loads clean,
-    /// gates nothing, and reads as coverage, which is the exact defect
-    /// [`validate`]'s doc comment is written against.
-    ///
-    /// Refused here rather than in the per-kind column census because the
-    /// census is a const list of column NAMES: this depends on the value inside
-    /// the column. Both surfaces that key on a command line are covered — a
-    /// `shape` row's ban and a `receipt` row's trigger read the same pattern
-    /// through the same matcher (`Rule::trigger`), so a rule inert on one is
-    /// inert on the other.
-    ///
-    /// A program-only pattern is **valid**, and that is the point: it is the
-    /// reading `Rule::pattern`'s doc comment already invites, and the one this
-    /// validator must not take back.
-    pub(crate) fn validate_command_pattern(&self) -> anyhow::Result<()> {
+    fn validate_command_pattern(&self) -> anyhow::Result<()> {
         // The kinds that key on a command line. A `write`-triggered receipt row
         // is refused a `pattern` outright above, so it never reaches here.
         let keys_on_a_command = self.kind == RuleKind::Shape
@@ -735,38 +1129,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The value-dependent obligations on the two ratchet admission columns,
-    /// [`Rule::retires_with`] and [`Rule::admits_with`].
-    ///
-    /// Extracted from [`Rule::validate`] for `validate_conserves`'s reason — the
-    /// per-kind census sees a present column and nothing about what is inside it
-    /// — and the two are here together because they are the same three refusals
-    /// mirrored, so a reader comparing them should not have to hold two screens.
-    ///
-    /// Each column admits ONE direction of change, and all three refusals close
-    /// the same failure: a column that reads as a configured permission and
-    /// decides nothing.
-    ///
-    /// * **`base` must be there.** Each column asks a question about another
-    ///   tree — was this subject alive, was this file absent — and there is no
-    ///   such tree without it. The ratchet kind already requires `base`, but the
-    ///   obligation is on the VALUE, so a future kind taking either column
-    ///   inherits the refusal rather than the omission.
-    /// * **The token must not be blank.** An empty prefix matches at the start of
-    ///   every line, so every file would "declare" whatever its first line
-    ///   happens to say. That is `requires_key`'s compile-at-load failure in the
-    ///   one form these columns can take it.
-    /// * **The direction must be the one the column governs.** This is the blank
-    ///   token's failure reached by the other axis, and it is the sharper of the
-    ///   two because the column is not merely inert on the wrong row — it
-    ///   switches the row OFF. `retires_with`'s block inspects only the files
-    ///   whose count FELL, so on a `non_increasing` row it collects no subject,
-    ///   leaves the blocker set empty, and the evaluator returns clean over every
-    ///   increase. `undeclared_growth` is the mirror: it inspects only the files
-    ///   that ROSE, so on a `non_decreasing` row every decrease is admitted in
-    ///   silence. Found by review of #694 on `admits_with`; the sibling had
-    ///   carried it latent since CLOUD-807.
-    pub(crate) fn validate_admission_columns(&self) -> anyhow::Result<()> {
+    fn validate_admission_columns(&self) -> anyhow::Result<()> {
         for (name, token, wanted, wanted_name, base_reason) in [
             (
                 "retires_with",
@@ -809,25 +1172,7 @@ impl Rule {
         Ok(())
     }
 
-    /// Every token in a [`Conserves`] decides something, so a blank one is a
-    /// configured admission (CLOUD-908).
-    ///
-    /// The obligations, and each closes a way the mapping could read as present
-    /// and decide nothing:
-    ///
-    /// * **`retires_with` must be there.** This column refines that admission. A
-    ///   ratchet that never permits a decrease has no deletion to map, so the
-    ///   mapping would be inert — and inert coverage is what the whole row is
-    ///   about.
-    /// * **No token may be blank.** An empty prefix matches at the start of every
-    ///   line, so every line would "declare" a case or claim one. The same
-    ///   reading `retires_with` takes over its own token.
-    /// * **The three arms must be distinct.** Two arms spelled alike make "exactly
-    ///   one arm" undecidable: one line would claim a case twice, and the refusal
-    ///   for a double claim would fire on every correct mapping instead.
-    /// * **`declared_in` must compile.** A glob `globset` cannot parse selects
-    ///   nothing, and a mapping read over nothing admits every deletion.
-    pub(crate) fn validate_conserves(&self) -> anyhow::Result<()> {
+    fn validate_conserves(&self) -> anyhow::Result<()> {
         let Some(conserves) = self.conserves.as_ref() else {
             return Ok(());
         };
@@ -891,7 +1236,7 @@ impl Rule {
         Ok(())
     }
 
-    pub(crate) fn validate_remediation(&self) -> anyhow::Result<()> {
+    fn validate_remediation(&self) -> anyhow::Result<()> {
         if let Some(why) =
             crate::remedy::malformed(self.fix.as_deref(), self.no_fix_reason.as_deref())
         {
@@ -912,10 +1257,8 @@ impl Rule {
         }
         Ok(())
     }
-}
 
-impl Rule {
-    pub(crate) fn validate_ceiling(&self) -> anyhow::Result<()> {
+    fn validate_ceiling(&self) -> anyhow::Result<()> {
         let declared: Vec<&str> = [
             ("measures", self.measures.is_some()),
             ("counts", self.counts.is_some()),
@@ -995,10 +1338,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The modifiers that read the command's ARGV (CLOUD-2662): refused on a
-    /// row keyed by anything that names none, which an `on` row does not either,
-    /// since its routes include structured calls.
-    pub(crate) fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+    fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
         for (field, present) in [
             ("contains", self.contains.is_some()),
             ("unless_contains", self.unless_contains.is_some()),
@@ -1013,7 +1353,7 @@ impl Rule {
         Ok(())
     }
 
-    pub(crate) fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error {
+    fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error {
         UsageError::raise(format!(
             "rule {}: kind \"{}\" keyed on `{keyed_on}` cannot carry `{field}`; \
              that column narrows a command line, and this row names none",
@@ -1022,12 +1362,7 @@ impl Rule {
         ))
     }
 
-    /// The columns an `on` row may not carry (CLOUD-2662): the argv modifiers,
-    /// and the per-call projections, which differ per route (`input-draft` is
-    /// absent on every shell call) and so would silently drop whole routes.
-    /// `requires_key`, `base` and the branch modifiers read the branch, which
-    /// every route has, and stay.
-    pub(crate) fn validate_on_columns(&self) -> anyhow::Result<()> {
+    fn validate_on_columns(&self) -> anyhow::Result<()> {
         self.refuse_argv_modifiers("on")?;
         for (field, present) in [
             ("when_absent", self.when_absent.is_some()),
@@ -1041,43 +1376,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
-    /// express (CLOUD-444).
-    ///
-    /// Which columns a receipt row owes depends on its `trigger`, a value inside
-    /// the row — so the per-kind census cannot state it, exactly as it cannot
-    /// state a policy row's one-of-three source. Both refusals have the same
-    /// reasoning: a column that reads as configured and decides nothing is the
-    /// defect this kind was added to close.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
-    /// `pattern`, for a write-triggered row carrying either command column, and
-    /// for an empty `checks` list.
-    /// The `delta` key and its base travel together (CLOUD-1547).
-    ///
-    /// Refused in BOTH directions, for the reason `key_from`'s pair is and with
-    /// the same pair of silent failures one keying over.
-    ///
-    /// A `delta` key with no base has no second side to diff against, so it has
-    /// no identity at all and would read no file for any call — which reads as
-    /// *never reviewed* and denies everything. That is the direction that gets a
-    /// guard switched off rather than satisfied, and it is worse than the
-    /// permissive one here precisely because it looks like the gate working. A
-    /// base on any other key is the mirror: a column that reads as configured and
-    /// is never consulted.
-    ///
-    /// **Its own function rather than a fourth arm inside
-    /// [`Rule::validate_receipt_columns`]**, which clippy's line ceiling forced
-    /// and which is the right shape anyway: that one decides what a `trigger`
-    /// owes, and this decides what a `key` owes.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for `key = "delta"` with no `key_base`, and
-    /// for a `key_base` on any other keying.
-    pub(crate) fn validate_delta_base(&self) -> anyhow::Result<()> {
+    fn validate_delta_base(&self) -> anyhow::Result<()> {
         match (self.receipt_key(), self.key_base.as_deref()) {
             (ReceiptKey::Delta, None) => Err(UsageError::raise(format!(
                 "rule {}: `key = \"delta\"` requires `key_base` — the ref the identity is taken \
@@ -1100,11 +1399,7 @@ impl Rule {
         }
     }
 
-    /// A receipt row's selectors (CLOUD-2662): exactly one of `pattern`, `tool`
-    /// and `on` on a command-triggered row, and no command selector on a
-    /// write-triggered one. Split from [`Rule::validate_receipt_columns`], whose
-    /// line budget the third selector spent.
-    pub(crate) fn validate_receipt_selectors(&self) -> anyhow::Result<()> {
+    fn validate_receipt_selectors(&self) -> anyhow::Result<()> {
         match self.receipt_trigger() {
             // A command-triggered row selecting on NOTHING matches every
             // mediated call, turning a precondition into a universal gate.
@@ -1164,7 +1459,7 @@ impl Rule {
         Ok(())
     }
 
-    pub(crate) fn validate_receipt_columns(&self) -> anyhow::Result<()> {
+    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Receipt {
             return Ok(());
         }
@@ -1272,27 +1567,7 @@ impl Rule {
         self.validate_marker()
     }
 
-    /// A `while_marker` must name a family that landing sweeps (CLOUD-1390).
-    ///
-    /// **A REFUSAL NEEDS A SPEND, and this is the only thing that supplies one.**
-    /// The column's whole contract is *fires while the marker exists*; what makes
-    /// that finite is [`crate::land::retire_branch`] deleting the file. Name a
-    /// family outside [`crate::config_model::BRANCH_KEYED_RECEIPTS`] and the row is a
-    /// deny nothing clears — the work lands, the marker survives the retirement,
-    /// and the next piece of work to reuse the branch name is refused for a punt
-    /// somebody else took. That is CLOUD-774's inherited-suppression defect in the
-    /// refusing direction, which is strictly worse than the advisory one.
-    ///
-    /// Asserted at load rather than documented, because the doc on
-    /// [`Rule::while_marker`] said exactly this and a sentence in a doc comment
-    /// stops nobody (non-negotiable rule 2). The pair can now only drift by
-    /// failing.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the row and the marker. Pointer-only:
-    /// the two ids and the permitted list, never a path from the receipt store.
-    pub(crate) fn validate_marker(&self) -> anyhow::Result<()> {
+    fn validate_marker(&self) -> anyhow::Result<()> {
         let Some(marker) = self.while_marker.as_deref() else {
             return Ok(());
         };
@@ -1308,19 +1583,7 @@ impl Rule {
         )))
     }
 
-    /// The three refusals over a receipt row's two name columns (CLOUD-1297).
-    ///
-    /// Split out of [`Rule::validate_receipt_columns`] because that function
-    /// crossed the 100-line bound when the alternation arrived, and this is the
-    /// half that comes out whole: every arm here is about WHICH RECEIPTS the row
-    /// names, where everything left behind is about the trigger and the columns
-    /// it implies.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for an empty `checks` list, an empty
-    /// `checks_any` list, or a row naming neither column.
-    pub(crate) fn validate_receipt_names(&self) -> anyhow::Result<()> {
+    fn validate_receipt_names(&self) -> anyhow::Result<()> {
         // A row naming an empty `checks` list gates its trigger on nothing and
         // allows every call, which reads as coverage from the file.
         if self.checks.as_ref().is_some_and(Vec::is_empty) {
@@ -1356,18 +1619,7 @@ impl Rule {
         Ok(())
     }
 
-    /// `ask` is a MEDIATED-CALL disposition, and both refusals below are config
-    /// faults rather than silent downgrades (CLOUD-340).
-    ///
-    /// Extracted for the reason its neighbours are: `validate` is at its line
-    /// ceiling, and this is a question about a value INSIDE the row — a
-    /// severity, not a kind — which the per-kind census structurally cannot ask.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) when a non-`mediated_call` row declares
-    /// `ask`, or when an `ask` row carries no `reason`.
-    pub(crate) fn validate_ask_disposition(&self) -> anyhow::Result<()> {
+    fn validate_ask_disposition(&self) -> anyhow::Result<()> {
         // A tree-scoped rule has no caller to ask: `batten check` walks a
         // repository and answers to whoever ran it, so there is no in-band
         // decision channel and no call to hold open. Accepting `ask` there and
@@ -1402,20 +1654,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The load-time refusals the three repository-state columns owe
-    /// (CLOUD-843).
-    ///
-    /// Each refuses a declaration the acquisition could only answer wrongly: an
-    /// empty tag glob lists nothing, a config key git cannot address resolves to
-    /// a permanent `unset`, and a `:`-magic pathspec read as a literal selects
-    /// nothing. Every one would load, acquire, and hand its module an answer to a
-    /// question nobody asked — CLOUD-845's dead gate by way of a typo — so each is
-    /// named here with the column and the entry.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the first offending entry.
-    pub(crate) fn validate_repository_state(&self) -> anyhow::Result<()> {
+    fn validate_repository_state(&self) -> anyhow::Result<()> {
         if self.tags.iter().any(String::is_empty) {
             return Err(UsageError::raise(format!(
                 "rule {}: `tags` carries an empty glob, which lists no tag and would read as \
@@ -1449,20 +1688,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The three obligations a policy row carries that [`RuleKind::permits`]
-    /// cannot express (CLOUD-833, CLOUD-836).
-    ///
-    /// All three depend on a value INSIDE the row rather than on its kind, which
-    /// is what a flat per-kind column list structurally cannot say — the same
-    /// reason `forbid`'s `pattern`/`regex` pair and `receipt`'s trigger-dependent
-    /// columns live in `validate` rather than in the census.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) when the row names no source or more than
-    /// one, when a mediated-call row declares `documents`, or when a tree-scoped
-    /// row declares none.
-    pub(crate) fn validate_policy_source(&self) -> anyhow::Result<()> {
+    fn validate_policy_source(&self) -> anyhow::Result<()> {
         // A QUALIFIER WITH NOTHING TO QUALIFY IS THE DEAD COLUMN THIS ROW EXISTS
         // TO END (CLOUD-1625). `provider` selects among a preset's modules and is
         // read nowhere else, so a row declaring it without `preset` — on this kind
@@ -1619,35 +1845,7 @@ impl Rule {
         Ok(())
     }
 
-    /// Refuse a `document` row whose declared `format` contradicts the extension
-    /// its glob names (CLOUD-1787).
-    ///
-    /// # The trap this closes
-    ///
-    /// `format` is declared and never inferred, which is right — a `.json` file
-    /// that is really JSON5 must be declarable as JSON5. But nothing checked the
-    /// declaration against the paths it would meet, and one pairing is actively
-    /// dangerous rather than merely wrong: `format = "yaml"` over `*.md`
-    /// **appears to work**, because `---` is YAML's document-start marker, so a
-    /// markdown file's frontmatter is document 1 of the stream and gets read.
-    /// Document 2 is the body, which is only accidentally valid YAML. Measured
-    /// in CLOUD-1787: with identical correct frontmatter, prose and `**bold**`
-    /// passed while a table, a task list and a block quote failed — the verdict
-    /// decided by the prose, not the data.
-    ///
-    /// A row whose correctness depends on whether prose happens to lex is not a
-    /// gate, and it fails silently in both directions, so it is refused at load
-    /// where a config error costs a config error.
-    ///
-    /// # Why the literal suffix and not the glob
-    ///
-    /// Deciding what an arbitrary glob *can* match needs a glob engine and
-    /// answers "possibly" for most inputs. The extension a glob ENDS in is a
-    /// string, it is what every real row writes (`*.md`, `**/*.md`,
-    /// `notes/*.md`), and it is exactly the case above. A computed or
-    /// extensionless glob is not caught here and the message says so rather than
-    /// implying a totality this does not have.
-    pub(crate) fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()> {
+    fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()> {
         let (Some(declared), Some(glob)) = (self.format, self.glob.as_deref()) else {
             return Ok(());
         };
@@ -1669,23 +1867,7 @@ impl Rule {
         )))
     }
 
-    /// Validate that the per-kind fields present match the declared `kind`.
-    ///
-    /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
-    /// `deny_unknown_fields`), so the kind/field agreement that a tagged enum
-    /// would give for free is asserted here instead — and a field belonging to
-    /// another kind is an *error*, never ignored, so a rule can never half-apply.
-    /// Every optional column, paired with whether this rule carries it.
-    ///
-    /// The census is what keeps [`Rule::validate`] total. The previous version
-    /// hand-wrote one match arm per kind naming one required and one forbidden
-    /// field, which was correct for two kinds and two columns and goes stale
-    /// silently the moment either grows: a new column simply appears in no arm,
-    /// so every kind accepts it. Listing the columns once and asking each kind
-    /// about all of them makes that failure impossible, and
-    /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
-    /// a column is added here without being placed.
-    pub(crate) fn columns(&self) -> [(&'static str, bool); 63] {
+    fn columns(&self) -> [(&'static str, bool); 63] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1765,27 +1947,15 @@ impl Rule {
         ]
     }
 
-    /// What makes this row fire, with the pinned default applied — the one place
-    /// absence is resolved, so no call site reads it a second way.
-    #[must_use]
-    pub fn receipt_trigger(&self) -> ReceiptTrigger {
+    fn receipt_trigger(&self) -> ReceiptTrigger {
         self.trigger.unwrap_or_default()
     }
 
-    /// Which git fact this row's receipts are keyed to, default applied.
-    #[must_use]
-    pub fn receipt_key(&self) -> ReceiptKey {
+    fn receipt_key(&self) -> ReceiptKey {
         self.key.unwrap_or_default()
     }
 
-    /// The pipeline row's own tables (CLOUD-443).
-    ///
-    /// Refused for the reason everything in [`Rule::validate`] is refused: a
-    /// list that narrows nothing, or a row whose conditions contradict, loads
-    /// clean and decides nothing. Extracted rather than inlined so `validate`
-    /// stays under the line limit as columns accumulate — the census below it
-    /// is the part that must stay whole.
-    pub(crate) fn validate_pipeline_tables(&self) -> anyhow::Result<()> {
+    fn validate_pipeline_tables(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Pipeline {
             return Ok(());
         }
@@ -1837,34 +2007,7 @@ impl Rule {
         Ok(())
     }
 
-    /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
-    ///
-    /// Not expressible in [`RuleKind::requires`] for the same reason
-    /// `pattern`-xor-`regex` is not: that list is columns that must *all* be
-    /// present. [`RuleKind::permits`] carries the other half — a `shape` row is
-    /// refused both columns there, because it is adjudicated per mediated call
-    /// and never reaches the store, the same reasoning that already denies it
-    /// `identity_key`.
-    ///
-    /// **Carrying neither is refused at ingest, not here** (§5). A rule with no
-    /// remediation still loads and still gates: `check` and `enforce` render its
-    /// findings and exit on them exactly as before. What it cannot do is put one
-    /// in the store, because a *stored* finding is one something later has to
-    /// close. Refusing at load would instead make an un-actionable rule
-    /// un-runnable, which turns a store-shaped requirement into a gate outage
-    /// for every consumer whose config predates this field.
-    /// The out-of-root bound's own obligations, refused at LOAD (CLOUD-1167).
-    ///
-    /// Its own function rather than a block inside `validate` for
-    /// [`Rule::validate_tool_rows`]' reason: that function is at its 100-line
-    /// ceiling, and every declared-read family adds a paragraph to it.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row missing an `id` or a
-    /// `root`, one whose `path` can leave the root it named, or one id declared
-    /// twice over different files.
-    pub(crate) fn validate_external_rows(&self) -> anyhow::Result<()> {
+    fn validate_external_rows(&self) -> anyhow::Result<()> {
         // THE OUT-OF-ROOT BOUND, REFUSED AT LOAD (CLOUD-1167). Both halves are
         // config faults rather than verdicts: no state of the filesystem makes
         // either admissible, so reporting them as could-not-look would present a
@@ -1916,23 +2059,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The tool-verdict key's own obligations, refused at LOAD (CLOUD-1171).
-    ///
-    /// Its own function rather than another block inside `validate` for the
-    /// reason `validate_sink` is one: that function is at its line ceiling and
-    /// every declared-read family adds a paragraph to it.
-    ///
-    /// Every refusal here is a CONFIG FAULT rather than a verdict, which is the
-    /// choice `NotAcquired::UnknownFormat` already makes: no state of the
-    /// filesystem makes an empty tool name or a separator inside a version
-    /// admissible, so reporting either as could-not-look would present a
-    /// permanent authoring error as a transient one.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row whose key cannot be
-    /// composed unambiguously, or for one id declared twice over different keys.
-    pub(crate) fn validate_tool_rows(&self) -> anyhow::Result<()> {
+    fn validate_tool_rows(&self) -> anyhow::Result<()> {
         let mut seen: BTreeMap<&str, &crate::facts::ToolQuery> = BTreeMap::new();
         for row in &self.tools {
             if row.id.trim().is_empty() || row.input.trim().is_empty() {
@@ -1972,22 +2099,7 @@ impl Rule {
         Ok(())
     }
 
-    /// Refuse a `[[rule.minted]]` row that cannot address a receipt, or an id
-    /// declared twice over different questions (CLOUD-1310).
-    ///
-    /// **The mint NAME is not resolved against the mint table, and that is
-    /// deliberate.** A mint that has never fired leaves no receipts, which is
-    /// could-not-look and is the ordinary state on any fresh clone — so refusing
-    /// the row at load would refuse the common case rather than an authoring
-    /// error. What is refused here is only what no state of the filesystem could
-    /// make admissible.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row naming an unusable mint or
-    /// id, for a row whose two column indices are the same, and for one id
-    /// declared twice over different questions.
-    pub(crate) fn validate_minted_rows(&self) -> anyhow::Result<()> {
+    fn validate_minted_rows(&self) -> anyhow::Result<()> {
         let mut seen: BTreeMap<&str, &crate::facts::MintedQuery> = BTreeMap::new();
         for row in &self.minted {
             if row.malformed() {
@@ -2025,21 +2137,7 @@ impl Rule {
         Ok(())
     }
 
-    /// A declared sink must be on a kind that can actually request one
-    /// (CLOUD-851).
-    ///
-    /// The request set is built from a [`Scan`], which only the TREE surface
-    /// produces: `adjudicate` returns a decision about one call and has no
-    /// findings vector to digest. So a `produces` on a `mediated_call`-only kind
-    /// would parse, read as configured, and write nothing on every call — the
-    /// inert-coverage failure `validate_shape_columns` and
-    /// `validate_receipt_columns` each close one column over, and the same one
-    /// `Rule::fix`'s refusal states rather than pretends about.
-    ///
-    /// Refused at LOAD rather than skipped at run time, because a skip is
-    /// invisible: the run reports its findings and the record simply is not
-    /// there, which looks exactly like a run that had nothing to produce.
-    pub(crate) fn validate_sink(&self) -> anyhow::Result<()> {
+    fn validate_sink(&self) -> anyhow::Result<()> {
         if self.produces.is_none() {
             return Ok(());
         }
@@ -2063,23 +2161,7 @@ impl Rule {
         Ok(())
     }
 
-    /// `exclude_paths` has to be honoured by everything that reads the rule's
-    /// selection, and two shapes cannot honour it (CLOUD-883).
-    ///
-    /// **No `glob`.** The column subtracts from an include set, so with nothing to
-    /// subtract from it narrows nothing while reading as a narrowing — the
-    /// inert-coverage failure `validate_sink` and `validate_shape_columns` each
-    /// close one column over.
-    ///
-    /// **A ratchet.** Its verdict compares the working tree against a count taken
-    /// at the base rev by `git::count_at_rev`, which globs on its own and knows
-    /// nothing of this column. The two sides would select different sets, and the
-    /// direction is the dangerous one CLOUD-328 measured: a working side narrowed
-    /// below a base that counted everything sits permanently under its baseline,
-    /// so no addition could ever push it over and **the gate cannot fail**.
-    /// Refused rather than half-implemented, because a ratchet that cannot fail
-    /// reads exactly like one that is passing.
-    pub(crate) fn validate_exclude_paths(&self) -> anyhow::Result<()> {
+    fn validate_exclude_paths(&self) -> anyhow::Result<()> {
         if self.exclude_paths.is_empty() {
             return Ok(());
         }
@@ -2101,22 +2183,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
-    ///
-    /// Not expressible in [`RuleKind::requires`], which is a flat list of
-    /// columns that must all be present — "exactly one of these two" needs a
-    /// check of its own (CLOUD-283). Refusing a row that carries both is what
-    /// keeps this a *choice* rather than a precedence rule a reader has to know.
-    ///
-    /// Each expression is compiled here, at load, so a bad one is a config error
-    /// naming the row rather than a failure part-way through a scan.
-    /// A document row's predicate: exactly one of `pattern` or `reads`.
-    ///
-    /// The same "one of" the forbid predicate carries and for the same reason —
-    /// a flat column list cannot express it, so it lives here where the pair is
-    /// in scope. A row with neither loads, matches a document, and asks nothing
-    /// of it; a row with both declares two answers to one comparison.
-    pub(crate) fn validate_document_predicate(&self) -> anyhow::Result<()> {
+    fn validate_document_predicate(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Document {
             return Ok(());
         }
@@ -2135,8 +2202,7 @@ impl Rule {
         }
     }
 
-    /// A ratchet's `counts` and `per_file` columns (CLOUD-2663).
-    pub(crate) fn validate_ratchet_measure(&self) -> anyhow::Result<()> {
+    fn validate_ratchet_measure(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Ratchet {
             return Ok(());
         }
@@ -2178,7 +2244,7 @@ impl Rule {
         Ok(())
     }
 
-    pub(crate) fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
+    fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
         if !matches!(self.kind, RuleKind::Forbid | RuleKind::Ratchet) {
             return Ok(());
         }
@@ -2215,24 +2281,7 @@ impl Rule {
         Ok(())
     }
 
-    /// The first column this row declares whose fact the mediated call cannot
-    /// resolve (CLOUD-1282).
-    ///
-    /// Derived rather than listed: [`COLUMN_CENSUS`] says which fact each column
-    /// declares and [`crate::facts::Fact::class`] says where that fact resolves,
-    /// so a column added to this struct is covered the day it lands — and a fact
-    /// RECLASSIFIED onto the hook surface stops being refused here without an
-    /// edit, which a list could not manage in either direction.
-    ///
-    /// `Surface::Hook` is the NARROWEST surface a fact may be resolved on, so it
-    /// is the one value that reaches the mediated call; every other means the
-    /// column would parse, load and never be acquired.
-    ///
-    /// Census order decides which column a multi-column row is refused for,
-    /// which is declaration order in the struct — the same tie-break every other
-    /// table here uses, and the one a reviewer reading top to bottom expects.
-    #[must_use]
-    pub fn tree_only_column(&self) -> Option<TreeOnlyColumn> {
+    fn tree_only_column(&self) -> Option<TreeOnlyColumn> {
         COLUMN_CENSUS
             .iter()
             .find_map(|column| match column.declares {
@@ -2249,7 +2298,26 @@ impl Rule {
     }
 }
 
-impl VerdictProgram {
+impl Located<'_> {
+    /// `<source>:<line>` for the row declaring `id`, or `<source>` where the
+    /// declaration cannot be located.
+    ///
+    /// A literal search for the `id` key rather than a second TOML parse: the
+    /// pointer is a courtesy on an error path, and a parser here would be a
+    /// second reader of the file the loader already read.
+    pub(crate) fn pointer(self, id: &str) -> String {
+        let needle = format!("id = \"{id}\"");
+        for (index, line) in self.text.lines().enumerate() {
+            if line.trim_start().starts_with(&needle) {
+                return format!("{}:{}", self.source, index + 1);
+            }
+        }
+        self.source.to_owned()
+    }
+}
+
+/// `VerdictProgram` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait VerdictProgramExt: Sized {
     /// Reject a row that cannot mean anything.
     ///
     /// # Errors
@@ -2259,7 +2327,11 @@ impl VerdictProgram {
     /// `subcommands` and `except`, an `any_argument` beside either of them, and a
     /// row declaring no column at all. Every one of those either matches nothing
     /// or contradicts itself, and both read as coverage from the file.
-    pub(crate) fn validate(&self, rule: &str) -> anyhow::Result<()> {
+    fn validate(&self, rule: &str) -> anyhow::Result<()>;
+}
+
+impl VerdictProgramExt for VerdictProgram {
+    fn validate(&self, rule: &str) -> anyhow::Result<()> {
         let refuse = |detail: &str| {
             Err(UsageError::raise(format!(
                 "rule {rule}: verdict {}: {detail}",

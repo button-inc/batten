@@ -27,7 +27,8 @@ pub fn validate(actions: &[Action]) -> anyhow::Result<()> {
     Ok(())
 }
 
-impl Action {
+/// `Action` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait ActionExt: Sized {
     /// Reject an action that cannot honestly fire.
     ///
     /// # Errors
@@ -35,7 +36,11 @@ impl Action {
     /// Returns a [`UsageError`] (→ exit `1`) for an empty `id`, an `on` naming
     /// no known event or naming `pre-tool` (see the module docs), an empty
     /// `run`, or a `run` whose program is empty.
-    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+    fn validate(&self) -> anyhow::Result<()>;
+}
+
+impl ActionExt for Action {
+    fn validate(&self) -> anyhow::Result<()> {
         if self.id.is_empty() {
             return Err(UsageError::raise("hook.action: `id` must not be empty"));
         }

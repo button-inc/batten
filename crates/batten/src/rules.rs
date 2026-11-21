@@ -39,6 +39,9 @@
 //! unlanded sets is a separate concern (CLOUD-36, CLOUD-37) that layers on top of
 //! this walk without changing the rule model.
 
+use crate::config_check::rules::RuleExt as _;
+#[cfg(test)]
+use crate::config_check::rules::VerdictProgramExt as _;
 use crate::verdict::RouteKindExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17784,6 +17787,8 @@ violation contains {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod half_tests {
     use super::null_live_keys;
+    #[cfg(test)]
+    use crate::config_check::rules::RuleExt as _;
     use crate::config_model::{Rule, RuleKind};
     #[cfg(test)]
     use crate::facts::{Fact, Subject};
