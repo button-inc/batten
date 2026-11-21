@@ -7412,7 +7412,7 @@ fn run(
     };
 
     let mut scan = Scan::default();
-    evaluate_rules(rules, root, &inputs, &mut scan)?;
+    evaluate_rules(rules, root, &inputs, &mut scan, workers_for(inputs.surface))?;
     // BEFORE the sort, deliberately (CLOUD-396): the sort is what makes the
     // output byte-stable, so a dedup running after it would be reading an order
     // it also has to preserve, and "which duplicate survived" would become a
@@ -7478,131 +7478,315 @@ fn unresolved_declared_fact(
 /// Split out of [`run`] because that function is at clippy's line ceiling and
 /// this is the half with its own reason to be read: `run` resolves the facts a
 /// run shares, and this decides what each rule then did with them.
+///
+/// **POOLED ON THE TREE VERBS, AND EQUAL TO A SERIAL RUN** (CLOUD-2329). Up to
+/// `workers` rules evaluate at once, each into its own [`RuleRecord`], and the
+/// records are folded in declaration order — so for any `workers` the scan, the
+/// [`rule_costs`] census and a returned error are what `workers = 1` gives. A
+/// rule that answers [`Isolated::Propagate`] stops any rule after it from
+/// STARTING, and the fold returns the lowest-index one, which every index below
+/// it was taken before. What differs is only the effect: a later rule already in
+/// flight may have spawned its `command` before the stop, and its record is
+/// discarded.
 fn evaluate_rules(
     rules: &[Rule],
     root: &Path,
     inputs: &RunInputs<'_>,
     scan: &mut Scan,
+    workers: std::num::NonZeroUsize,
 ) -> anyhow::Result<()> {
-    for rule in rules {
-        // A COPY BEHIND ITS PRESET (CLOUD-2290), on the tree verbs only and for
-        // every scope: an ejected module usually decides the mediated call, which
-        // `check` never evaluates, so this cannot wait for the row to run.
-        if rule.kind == RuleKind::Policy && inputs.surface != crate::facts::Surface::Hook {
-            ejected_behind(rule, root, inputs.verdicts, &mut scan.findings);
-        }
-        // THE DECLARED INPUT-PRECONDITION, BEFORE THE BODY (CLOUD-125). Here
-        // rather than inside `run_rule` for the reason the row's acceptance
-        // states as a clause: "the precondition never invokes the check body".
-        // Deciding it at the call site makes that structural — the body is not
-        // entered because the call is not made — where a guard on the first line
-        // of `run_rule` would make it a property of that function's ordering,
-        // which the next kind added below it could quietly break.
-        //
-        // `validate` is NOT re-run before this. Every path into `run` comes from
-        // a loaded config, and `config::parse_ungated` already put the whole
-        // table through `rules::validate`, so a malformed row cannot reach here
-        // to be skipped instead of refused. `run_rule`'s own `validate` call
-        // stays where it is; re-running it here would recompile every row's
-        // regexes a second time per run to re-refuse what cannot arrive.
-        if let Some(missing) = rule.unmet_requirement(root) {
-            scan.not_evaluated
-                .insert(rule.id.clone(), NotObserved::RuleSkipped);
-            scan.unmet.insert(rule.id.clone(), missing.to_owned());
-            continue;
-        }
-        // THE DECLARED FACT-PRECONDITION, beside the input one above and for its
-        // reason (CLOUD-1480). A rule that DECLARED a fact the run could not
-        // resolve has not been given what it asked for, and evaluating it anyway
-        // hands the module a `null` it cannot tell from a measured answer.
-        //
-        // WHY THIS IS NOT OPTIONAL, measured on this branch. Barring the two
-        // `Cost::Effect` facts from the mediated surface left
-        // `input.tree.symbols` null while `spawn-adapters.rego` — a `policy` row,
-        // so still evaluable on the recorder's partition — refuses on exactly
-        // that shape (`no_census if not input.tree.symbols.sites`). Every end of
-        // turn therefore wrote a spurious `symbol count absent` deny into the
-        // state store: a gate reporting on a census nobody took. Trading a slow
-        // hook for a hook that records false findings is the worse half of the
-        // trade, and it was caught by review rather than by me.
-        //
-        // WITHHELD RATHER THAN PASSED, which is the whole point and the direction
-        // `Scan::not_evaluated` exists to keep honest. A withheld rule's silence
-        // is not evidence of a clean tree, so its findings HOLD; passing it would
-        // be CLOUD-251's vacuous pass in the one place a reader would never look.
-        // `.claude/rules/policy-modules.md` already states the engine half of
-        // this for a module that cannot look: "the engine reports `RuleSkipped`
-        // for it rather than a clean tree".
-        //
-        // It also repairs a case that predates this branch: `symbols_fact`
-        // answers could-not-look wherever the analyser is absent, so every
-        // checkout without the delegated toolchain was taking that same spurious
-        // deny — a verdict about the OPERATOR wearing a verdict about the tree.
-        if let Some(fact) = unresolved_declared_fact(rule, inputs, inputs.surface) {
-            scan.not_evaluated
-                .insert(rule.id.clone(), NotObserved::RuleSkipped);
-            scan.unmet.insert(rule.id.clone(), fact.to_owned());
-            continue;
-        }
-        // FAIL-CLOSED ISOLATION (CLOUD-126). This loop used to carry a `?`, so
-        // one rule's I/O error propagated out of the whole scan: no findings at
-        // all were emitted and no later rule ran, over a failure in one row.
-        // Containing it here means the other gates still evaluate and still
-        // report, and the failure becomes a value in the fold rather than an
-        // unwind — which is what lets `Violation` outrank `Internal` at all,
-        // since an unwound run has no violation left to outrank with.
-        //
-        // The scan's three mutable maps are destructured inside the block so
-        // their borrows end before `not_evaluated` is written below.
-        // THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind
-        // (CLOUD-1217). One site sees every rule, so a kind added later is
-        // measured without anyone remembering to instrument it — the inverse of
-        // the state this row found, where nothing reported and the largest item
-        // in CI was a silent span.
-        //
-        // Deltas over the process-global counters rather than an accumulator
-        // threaded through nine read sites. Sound because this loop is serial,
-        // which `rules/rust.md` records as a measured verdict rather
-        // than an accident.
-        //
-        // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
-        // precondition skip above puts it: a rule held back by an unmet
-        // requirement never enters the body, so it has no cost to report and a
-        // zero row for it would read as "evaluated, and free".
-        let started = std::time::Instant::now();
-        let (files_before, bytes_before) = (files_read(), bytes_read());
-        let outcome = {
-            let Scan {
-                findings, classes, ..
-            } = &mut *scan;
-            isolate(|| run_rule(rule, root, inputs, findings, classes))
-        };
-        costs_lock().push(RuleCost {
-            rule: rule.id.clone(),
-            elapsed: started.elapsed(),
-            files_read: files_read().saturating_sub(files_before),
-            bytes_read: bytes_read().saturating_sub(bytes_before),
-        });
-        match outcome {
-            Isolated::Evaluated => {}
-            Isolated::NotEvaluated(why) => {
-                scan.not_evaluated.insert(rule.id.clone(), why);
+    let records = if workers.get() == 1 || rules.len() < 2 {
+        let mut records = Vec::with_capacity(rules.len());
+        for rule in rules {
+            let record = evaluate_one(rule, root, inputs);
+            let stops = record.propagates();
+            records.push(Some(record));
+            if stops {
+                break;
             }
-            // A typed answer the boundary owns — see `isolate` for why these two
-            // are not a gate's to contain.
-            Isolated::Propagate(failure) => return Err(failure),
-            Isolated::Errored(failure) => {
-                // Both maps, and both are load-bearing: `not_evaluated` is what
-                // keeps the store fail-closed, so an errored rule HOLDS its
-                // findings exactly as a skipped one does — its silence is not
-                // evidence either. `errored` is what a reader is told.
-                scan.not_evaluated
-                    .insert(rule.id.clone(), NotObserved::RuleErrored);
-                scan.errored.insert(rule.id.clone(), failure);
-            }
+        }
+        records
+    } else {
+        pooled(rules, root, inputs, workers)
+    };
+    for record in records.into_iter().map_while(|record| record) {
+        if let Some(failure) = fold(record, scan) {
+            return Err(failure);
         }
     }
     Ok(())
+}
+
+/// How many rules a run on `surface` evaluates at once (CLOUD-2329).
+///
+/// POOLED ON THE TREE VERBS ONLY: the mediated surfaces keep a per-call budget a
+/// pool's spawn would spend, so they stay serial.
+fn workers_for(surface: crate::facts::Surface) -> std::num::NonZeroUsize {
+    if surface == crate::facts::Surface::Check {
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN)
+    } else {
+        std::num::NonZeroUsize::MIN
+    }
+}
+
+/// [`evaluate_rules`]' pool: `workers` scoped threads taking rules by an
+/// increasing index, each record kept at its rule's position.
+///
+/// An index is never taken after a rule answered [`Isolated::Propagate`], so the
+/// positions before the first such record are all filled; the fold stops there.
+fn pooled(
+    rules: &[Rule],
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    workers: std::num::NonZeroUsize,
+) -> Vec<Option<RuleRecord>> {
+    let next = AtomicUsize::new(0);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let slots: Vec<Mutex<Option<RuleRecord>>> = rules.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers.get().min(rules.len()) {
+            scope.spawn(|| {
+                while !stop.load(Ordering::Acquire) {
+                    let index = next.fetch_add(1, Ordering::AcqRel);
+                    let Some(rule) = rules.get(index) else {
+                        break;
+                    };
+                    let record = evaluate_one(rule, root, inputs);
+                    if record.propagates() {
+                        stop.store(true, Ordering::Release);
+                    }
+                    *slots[index]
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record);
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+        .collect()
+}
+
+/// What one rule did, as a value rather than a write into the shared [`Scan`]
+/// (CLOUD-2329): [`evaluate_rules`] folds these in declaration order.
+struct RuleRecord {
+    /// The rule's id, which every map the fold writes is keyed by.
+    id: String,
+    /// [`ejected_behind`]'s findings, which a serial run pushed before the
+    /// rule's own.
+    ejected: Vec<Finding>,
+    outcome: RuleOutcome,
+}
+
+enum RuleOutcome {
+    /// A declared precondition was unmet: the requirement, and no body ran.
+    Unmet(String),
+    /// The body ran, contained.
+    Ran {
+        findings: Vec<Finding>,
+        classes: BTreeMap<String, String>,
+        cost: RuleCost,
+        outcome: Isolated,
+    },
+}
+
+impl RuleRecord {
+    /// Whether this record ends the run, as a serial loop's `return` did.
+    fn propagates(&self) -> bool {
+        matches!(
+            self.outcome,
+            RuleOutcome::Ran {
+                outcome: Isolated::Propagate(_),
+                ..
+            }
+        )
+    }
+}
+
+/// Fold one record into `scan` exactly as the serial loop wrote it, answering
+/// the failure that ends the run.
+fn fold(record: RuleRecord, scan: &mut Scan) -> Option<anyhow::Error> {
+    let RuleRecord {
+        id,
+        ejected,
+        outcome,
+    } = record;
+    scan.findings.extend(ejected);
+    let (findings, classes, cost, outcome) = match outcome {
+        RuleOutcome::Unmet(missing) => {
+            scan.not_evaluated
+                .insert(id.clone(), NotObserved::RuleSkipped);
+            scan.unmet.insert(id, missing);
+            return None;
+        }
+        RuleOutcome::Ran {
+            findings,
+            classes,
+            cost,
+            outcome,
+        } => (findings, classes, cost, outcome),
+    };
+    scan.findings.extend(findings);
+    scan.classes.extend(classes);
+    costs_lock().push(cost);
+    match outcome {
+        Isolated::Evaluated => {}
+        Isolated::NotEvaluated(why) => {
+            scan.not_evaluated.insert(id, why);
+        }
+        // A typed answer the boundary owns — see `isolate` for why these two
+        // are not a gate's to contain.
+        Isolated::Propagate(failure) => return Some(failure),
+        Isolated::Errored(failure) => {
+            // Both maps, and both are load-bearing: `not_evaluated` is what
+            // keeps the store fail-closed, so an errored rule HOLDS its
+            // findings exactly as a skipped one does — its silence is not
+            // evidence either. `errored` is what a reader is told.
+            scan.not_evaluated
+                .insert(id.clone(), NotObserved::RuleErrored);
+            scan.errored.insert(id, failure);
+        }
+    }
+    None
+}
+
+/// One rule's whole evaluation, touching no shared state (CLOUD-2329).
+fn evaluate_one(rule: &Rule, root: &Path, inputs: &RunInputs<'_>) -> RuleRecord {
+    let mut ejected = Vec::new();
+    // A COPY BEHIND ITS PRESET (CLOUD-2290), on the tree verbs only and for
+    // every scope: an ejected module usually decides the mediated call, which
+    // `check` never evaluates, so this cannot wait for the row to run.
+    if rule.kind == RuleKind::Policy && inputs.surface != crate::facts::Surface::Hook {
+        ejected_behind(rule, root, inputs.verdicts, &mut ejected);
+    }
+    // THE DECLARED INPUT-PRECONDITION, BEFORE THE BODY (CLOUD-125). Here
+    // rather than inside `run_rule` for the reason the row's acceptance
+    // states as a clause: "the precondition never invokes the check body".
+    // Deciding it at the call site makes that structural — the body is not
+    // entered because the call is not made — where a guard on the first line
+    // of `run_rule` would make it a property of that function's ordering,
+    // which the next kind added below it could quietly break.
+    //
+    // `validate` is NOT re-run before this. Every path into `run` comes from
+    // a loaded config, and `config::parse_ungated` already put the whole
+    // table through `rules::validate`, so a malformed row cannot reach here
+    // to be skipped instead of refused. `run_rule`'s own `validate` call
+    // stays where it is; re-running it here would recompile every row's
+    // regexes a second time per run to re-refuse what cannot arrive.
+    if let Some(missing) = rule.unmet_requirement(root) {
+        return RuleRecord {
+            id: rule.id.clone(),
+            ejected,
+            outcome: RuleOutcome::Unmet(missing.to_owned()),
+        };
+    }
+    // THE DECLARED FACT-PRECONDITION, beside the input one above and for its
+    // reason (CLOUD-1480). A rule that DECLARED a fact the run could not
+    // resolve has not been given what it asked for, and evaluating it anyway
+    // hands the module a `null` it cannot tell from a measured answer.
+    //
+    // WHY THIS IS NOT OPTIONAL, measured on this branch. Barring the two
+    // `Cost::Effect` facts from the mediated surface left
+    // `input.tree.symbols` null while `spawn-adapters.rego` — a `policy` row,
+    // so still evaluable on the recorder's partition — refuses on exactly
+    // that shape (`no_census if not input.tree.symbols.sites`). Every end of
+    // turn therefore wrote a spurious `symbol count absent` deny into the
+    // state store: a gate reporting on a census nobody took. Trading a slow
+    // hook for a hook that records false findings is the worse half of the
+    // trade, and it was caught by review rather than by me.
+    //
+    // WITHHELD RATHER THAN PASSED, which is the whole point and the direction
+    // `Scan::not_evaluated` exists to keep honest. A withheld rule's silence
+    // is not evidence of a clean tree, so its findings HOLD; passing it would
+    // be CLOUD-251's vacuous pass in the one place a reader would never look.
+    // `.claude/rules/policy-modules.md` already states the engine half of
+    // this for a module that cannot look: "the engine reports `RuleSkipped`
+    // for it rather than a clean tree".
+    //
+    // It also repairs a case that predates this branch: `symbols_fact`
+    // answers could-not-look wherever the analyser is absent, so every
+    // checkout without the delegated toolchain was taking that same spurious
+    // deny — a verdict about the OPERATOR wearing a verdict about the tree.
+    if let Some(fact) = unresolved_declared_fact(rule, inputs, inputs.surface) {
+        return RuleRecord {
+            id: rule.id.clone(),
+            ejected,
+            outcome: RuleOutcome::Unmet(fact.to_owned()),
+        };
+    }
+    // FAIL-CLOSED ISOLATION (CLOUD-126). This loop used to carry a `?`, so
+    // one rule's I/O error propagated out of the whole scan: no findings at
+    // all were emitted and no later rule ran, over a failure in one row.
+    // Containing it here means the other gates still evaluate and still
+    // report, and the failure becomes a value in the fold rather than an
+    // unwind — which is what lets `Violation` outrank `Internal` at all,
+    // since an unwound run has no violation left to outrank with.
+    //
+    // The scan's three mutable maps are destructured inside the block so
+    // their borrows end before `not_evaluated` is written below.
+    // THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind
+    // (CLOUD-1217). One site sees every rule, so a kind added later is
+    // measured without anyone remembering to instrument it — the inverse of
+    // the state this row found, where nothing reported and the largest item
+    // in CI was a silent span.
+    //
+    // Deltas over the process-global counters rather than an accumulator
+    // threaded through nine read sites. Sound because this loop is serial,
+    // which `rules/rust.md` records as a measured verdict rather
+    // than an accident.
+    //
+    // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
+    // precondition skip above puts it: a rule held back by an unmet
+    // requirement never enters the body, so it has no cost to report and a
+    // zero row for it would read as "evaluated, and free".
+    // FAIL-CLOSED ISOLATION (CLOUD-126). This loop used to carry a `?`, so
+    // one rule's I/O error propagated out of the whole scan: no findings at
+    // all were emitted and no later rule ran, over a failure in one row.
+    // Containing it here means the other gates still evaluate and still
+    // report, and the failure becomes a value in the fold rather than an
+    // unwind — which is what lets `Violation` outrank `Internal` at all,
+    // since an unwound run has no violation left to outrank with.
+    //
+    // THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind
+    // (CLOUD-1217). One site sees every rule, so a kind added later is
+    // measured without anyone remembering to instrument it — the inverse of
+    // the state this row found, where nothing reported and the largest item
+    // in CI was a silent span.
+    //
+    // Counted on this rule's own thread (CLOUD-2329), never as a delta over
+    // the process-global counters: a pooled run interleaves rules, so a
+    // global delta would credit one rule with another's reads. A rule body
+    // spawns no threads, so every read it makes lands on this one.
+    //
+    // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
+    // precondition skip above puts it: a rule held back by an unmet
+    // requirement never enters the body, so it has no cost to report and a
+    // zero row for it would read as "evaluated, and free".
+    let started = std::time::Instant::now();
+    task_census_reset();
+    let mut findings = Vec::new();
+    let mut classes = BTreeMap::new();
+    let outcome = isolate(|| run_rule(rule, root, inputs, &mut findings, &mut classes));
+    let (files_read, bytes_read) = task_census();
+    RuleRecord {
+        id: rule.id.clone(),
+        ejected,
+        outcome: RuleOutcome::Ran {
+            findings,
+            classes,
+            cost: RuleCost {
+                rule: rule.id.clone(),
+                elapsed: started.elapsed(),
+                files_read,
+                bytes_read,
+            },
+            outcome,
+        },
+    }
 }
 
 /// What the run asks the boundary to write (CLOUD-851).
@@ -8292,9 +8476,9 @@ pub fn documents_acquired() -> usize {
 ///
 /// **Monotonic and process-global, read as a DELTA around one rule**, which is
 /// what makes the per-rule attribution possible without threading an accumulator
-/// through nine call sites. Sound only because [`run`]'s loop is serial; a
-/// concurrent second run in the same process would interleave, which is why the
-/// test that reads them lives in its own binary, exactly as
+/// through nine call sites. A POOLED run attributes per rule through the
+/// per-thread census beside them instead (CLOUD-2329); these stay the process
+/// total, and the test that reads them lives in its own binary, exactly as
 /// `document_read_count.rs` does and for the same reason.
 static FILES_READ: AtomicUsize = AtomicUsize::new(0);
 static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
@@ -8307,6 +8491,28 @@ static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
 fn count_read(bytes: usize) {
     FILES_READ.fetch_add(1, Ordering::Relaxed);
     BYTES_READ.fetch_add(bytes, Ordering::Relaxed);
+    TASK_READS.with(|reads| {
+        let (files, total) = reads.get();
+        reads.set((files + 1, total + bytes));
+    });
+}
+
+thread_local! {
+    /// The reads made on this thread since [`task_census_reset`] (CLOUD-2329):
+    /// what one rule read, whatever other rules read beside it on other
+    /// threads. [`count_read`] adds to it beside the globals, so no read site
+    /// changes and the public monotonic counters keep their meaning.
+    static TASK_READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Zero this thread's census before one rule's body.
+fn task_census_reset() {
+    TASK_READS.with(|reads| reads.set((0, 0)));
+}
+
+/// The files and bytes read on this thread since [`task_census_reset`].
+fn task_census() -> (usize, usize) {
+    TASK_READS.with(std::cell::Cell::get)
 }
 
 /// How many files this process has read on a rule's behalf.
@@ -16322,7 +16528,14 @@ mod tests {
         let facts = BareFacts::new();
         let inputs = facts.inputs(&files);
         let mut scan = Scan::default();
-        evaluate_rules(&[errs, ok], &root, &inputs, &mut scan).expect("the loop does not unwind");
+        evaluate_rules(
+            &[errs, ok],
+            &root,
+            &inputs,
+            &mut scan,
+            std::num::NonZeroUsize::MIN,
+        )
+        .expect("the loop does not unwind");
 
         assert_eq!(
             scan.not_evaluated.get("reads-a-directory"),
@@ -16364,7 +16577,14 @@ mod tests {
         let facts = BareFacts::new();
         let inputs = facts.inputs(&files);
         let mut scan = Scan::default();
-        evaluate_rules(std::slice::from_ref(&rule), &root, &inputs, &mut scan).expect("no unwind");
+        evaluate_rules(
+            std::slice::from_ref(&rule),
+            &root,
+            &inputs,
+            &mut scan,
+            std::num::NonZeroUsize::MIN,
+        )
+        .expect("no unwind");
 
         assert_eq!(
             scan.not_evaluated.get("needs-an-input"),
@@ -16387,10 +16607,112 @@ mod tests {
         fs::create_dir_all(root.join("absent")).expect("create the declared dir");
         fs::write(root.join("absent/input.json"), "{}\n").expect("write the declared input");
         let mut met = Scan::default();
-        evaluate_rules(std::slice::from_ref(&rule), &root, &inputs, &mut met).expect("no unwind");
+        evaluate_rules(
+            std::slice::from_ref(&rule),
+            &root,
+            &inputs,
+            &mut met,
+            std::num::NonZeroUsize::MIN,
+        )
+        .expect("no unwind");
         assert_eq!(met.findings.len(), 1, "a met precondition is not a filter");
         assert!(met.unmet.is_empty());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **A POOLED RUN IS THE SERIAL RUN, IN DECLARATION ORDER** (CLOUD-2329).
+    ///
+    /// Fails by: a fold in completion order. The first rule sleeps, so under four
+    /// workers it finishes last, and a merge that took records as they finished
+    /// would list its cost last and its findings out of place. Nothing here reads
+    /// the clock: only the order and the counts are compared.
+    #[cfg(unix)]
+    #[test]
+    fn a_pooled_run_merges_in_declaration_order() {
+        let root = crate::scratch::scratch("pooled-declaration-order");
+        fs::write(root.join("f.rs"), "TODO one\nTODO two\n").expect("write the scanned file");
+        let mut rules = vec![Rule {
+            glob: Some("f.rs".into()),
+            check: Some("sleep 0.3".into()),
+            ..blank("sleeps-first", RuleKind::Command)
+        }];
+        for index in 0..7 {
+            let mut forbid = blank(&format!("forbids-{index}"), RuleKind::Forbid);
+            forbid.glob = Some("f.rs".to_owned());
+            forbid.pattern = Some("TODO".to_owned());
+            rules.push(forbid);
+        }
+        let files = vec!["f.rs".to_owned()];
+        let facts = BareFacts::new();
+        let inputs = facts.inputs(&files);
+        let run = |workers: usize| {
+            let mut scan = Scan::default();
+            let workers = std::num::NonZeroUsize::new(workers).expect("non-zero");
+            evaluate_rules(&rules, &root, &inputs, &mut scan, workers).expect("no unwind");
+            let costs: Vec<(String, usize, usize)> = rule_costs()
+                .into_iter()
+                .map(|cost| (cost.rule, cost.files_read, cost.bytes_read))
+                .collect();
+            costs_lock().clear();
+            (scan, costs)
+        };
+        let (serial, serial_costs) = run(1);
+        let (pooled, pooled_costs) = run(4);
+        assert!(!serial.findings.is_empty(), "the fixture must fire");
+        assert_eq!(pooled, serial, "a pooled scan is the serial scan");
+        assert_eq!(
+            pooled_costs, serial_costs,
+            "the census lists the same rules, in declaration order, with the same counts"
+        );
+    }
+
+    /// Fails by: the mediated surfaces pooling, which spends a spawn per worker
+    /// out of the hook's per-call budget, or the tree verbs staying serial.
+    #[test]
+    fn only_the_tree_verbs_evaluate_rules_in_a_pool() {
+        let parallel = std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN);
+        assert_eq!(workers_for(crate::facts::Surface::Check), parallel);
+        assert_eq!(
+            workers_for(crate::facts::Surface::Hook),
+            std::num::NonZeroUsize::MIN
+        );
+        assert_eq!(
+            workers_for(crate::facts::Surface::VerifyOnly),
+            std::num::NonZeroUsize::MIN
+        );
+    }
+
+    /// **A RULE'S CENSUS COUNTS ONLY ITS OWN THREAD'S READS** (CLOUD-2329).
+    ///
+    /// Fails by: a census read as a delta over the process-global counters. The
+    /// barrier puts every one of B's reads inside A's window, so a global delta
+    /// would credit A with `(8, 65)`.
+    #[test]
+    fn a_task_census_counts_only_reads_on_its_own_thread() {
+        let barrier = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                task_census_reset();
+                for _ in 0..3 {
+                    count_read(10);
+                }
+                barrier.wait();
+                barrier.wait();
+                task_census()
+            });
+            let b = scope.spawn(|| {
+                task_census_reset();
+                barrier.wait();
+                for _ in 0..5 {
+                    count_read(7);
+                }
+                barrier.wait();
+                task_census()
+            });
+            (a.join().expect("a"), b.join().expect("b"))
+        });
+        assert_eq!(a, (3, 30));
+        assert_eq!(b, (5, 35));
     }
 
     #[test]
@@ -20133,7 +20455,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 ..facts.inputs(&files)
             };
             let mut scan = Scan::default();
-            evaluate_rules(&rows, &dir, &inputs, &mut scan).expect("evaluates");
+            evaluate_rules(&rows, &dir, &inputs, &mut scan, std::num::NonZeroUsize::MIN)
+                .expect("evaluates");
             scan.findings
                 .into_iter()
                 .map(|finding| finding.owner)
