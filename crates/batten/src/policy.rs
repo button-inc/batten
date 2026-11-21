@@ -98,7 +98,6 @@ use crate::preset::PresetModuleExt as _;
 use crate::rules::RuleExt as _;
 use crate::rules::RuleScopeExt as _;
 use crate::verdict::DeclaredVerdictExt as _;
-use crate::verdict::VocabularyExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
