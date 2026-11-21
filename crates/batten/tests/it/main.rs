@@ -323,6 +323,7 @@ mod ratchet_at_call;
 // and the shape `ntia` above already uses.
 #[cfg(unix)]
 mod modules_cycle;
+mod modules_ratchet;
 #[cfg(unix)]
 mod own_image_spawn;
 mod perf_assert;
