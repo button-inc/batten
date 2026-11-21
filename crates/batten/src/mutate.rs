@@ -1348,7 +1348,7 @@ impl Registry {
         let owners: std::collections::BTreeSet<RunnerKind> = self
             .owns
             .iter()
-            .filter(|(_, glob)| crate::rules::glob_match(glob, path))
+            .filter(|(_, glob)| crate::selector::glob_match(glob, path))
             .map(|(kind, _)| *kind)
             .collect();
         let mut owners = owners.into_iter();
@@ -3785,7 +3785,7 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
         let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         material.extend(crate::git::without_comments(path, &text).into_bytes());
     }
-    crate::provision::digest(&material)
+    crate::digest::sha256_hex(&material)
 }
 
 /// The keys recorded caught; an unreadable record is an empty one. A line is a
@@ -4041,7 +4041,7 @@ impl ChangeInputs {
                 }
             } else {
                 put(path.as_bytes());
-                put(crate::provision::digest(&bytes).as_bytes());
+                put(crate::digest::sha256_hex(&bytes).as_bytes());
             }
         }
         for name in names {
@@ -4052,7 +4052,7 @@ impl ChangeInputs {
                 }
             }
         }
-        Some(crate::provision::digest(&material))
+        Some(crate::digest::sha256_hex(&material))
     }
 }
 

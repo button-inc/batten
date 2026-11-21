@@ -390,7 +390,7 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     // One file per key, CREATED EXCLUSIVELY (CLOUD-2145): the existence test and
     // the mark are one operation, so of a parallel batch of identical firings
     // exactly one reads "first". A check-then-write let every one of them.
-    let path = dir.join(crate::provision::digest(key.as_bytes()));
+    let path = dir.join(crate::digest::sha256_hex(key.as_bytes()));
     let _ = std::fs::create_dir_all(&dir);
     // An error other than "already there" answers TRUE: an unwritable store
     // means the next firing explains itself again, which is the safe direction.
@@ -430,7 +430,7 @@ pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
 /// The directory one context's sightings live in.
 fn context_dir(root: &Path, context: &str) -> Option<std::path::PathBuf> {
     let store = crate::git::git_dir(root).ok()?.join(STORE);
-    Some(store.join(crate::provision::digest(context.as_bytes())))
+    Some(store.join(crate::digest::sha256_hex(context.as_bytes())))
 }
 
 /// Which arm this firing of `refusal` gets in `context`, marking it seen.
@@ -455,7 +455,7 @@ pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
         return Arm::Full;
     };
     let key = refusal.sighting_key();
-    if dir.join(crate::provision::digest(key.as_bytes())).exists() {
+    if dir.join(crate::digest::sha256_hex(key.as_bytes())).exists() {
         Arm::Pointer
     } else {
         Arm::Full
@@ -474,7 +474,7 @@ pub fn forget_sightings(root: &Path, context: &str) {
 /// an edit to a gloss, route, precondition or reason mid-cycle is a new item
 /// that renders in full again (CLOUD-1582, absorbed).
 fn key_of(rule: &str, class: Option<&str>, definition: &str) -> String {
-    let digest = crate::provision::digest(definition.as_bytes());
+    let digest = crate::digest::sha256_hex(definition.as_bytes());
     format!("{rule}\u{1f}{}\u{1f}{digest}", class.unwrap_or_default())
 }
 

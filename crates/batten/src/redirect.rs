@@ -44,7 +44,7 @@
 //! The glob matcher is [`crate::rules::glob_match`] — one glob semantics for the
 //! whole engine, never a second implementation.
 
-use crate::rules::glob_match;
+use crate::selector::glob_match;
 // The section's declaration lives with the model (CLOUD-2789).
 #[allow(unused_imports)]
 pub(crate) use crate::config_check::redirect::{invocation, is_flag, is_placeholder};

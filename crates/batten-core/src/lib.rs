@@ -13,7 +13,7 @@
 //! What each module states; this root adds none.
 
 pub use batten_base::{checks_green, exit, fetch, forge, patch, propose, rest};
-pub use batten_facts::{cache, durable, error, facts, identity, scratch};
+pub use batten_facts::{cache, digest, durable, error, facts, identity, scratch};
 pub use batten_fsio as fsio;
 pub use batten_stream as stream;
 
