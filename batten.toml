@@ -636,6 +636,18 @@ scope = "mediated_call"
 module = "policy/hook-skip-local.rego"
 severity = "deny"
 
+# CLOUD-2803. An in-place `sed` aimed by line number at a repository file: a
+# line number names where text was, so every earlier edit makes it a guess.
+# Measured on #1276: 93 files corrupted by one script, and a wrong import
+# overwritten after two edits shifted its line.
+[[rule]]
+id = "path edit unsafe"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/sed-line-address.rego"
+severity = "deny"
+
 # One container is one checkout on one branch, so it has one implementer: the
 # session. CLOUD-1717 measured the alternative (worktree implementers, disk full
 # twice, zero integrable commits); `mem:workflow/agent-fanout` carries it.
@@ -1729,6 +1741,19 @@ regex = '^[[:space:]]*set[[:space:]]+-[a-z]*o?[a-z]*[[:space:]]*.*pipefail'
 [[pattern]]
 id = "pipe-into-grep"
 regex = '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)'
+
+# CLOUD-2803, `path edit unsafe`. A sed short-flag cluster carrying `i` (`-i`,
+# `-i.bak`, `-ni`); `--in-place` is matched by prefix in the module.
+[[pattern]]
+id = "sed-in-place-cluster"
+regex = '^-[A-Za-z]*i'
+
+# A sed script whose first address is a line number or numeric range followed
+# by a command or brace (`52s/a/b/`, `3,5d`, `1{`, `7!d`), never a file name
+# such as `1.txt`.
+[[pattern]]
+id = "sed-line-address"
+regex = '^[0-9]+(,([0-9]+|\$))?\s*!?\s*[A-Za-z{]'
 
 # CLOUD-843's port of `awk-regex-check`. The NAME is a capture rather than the
 # whole match: the module compares full identifiers so that a name which merely
@@ -14472,6 +14497,28 @@ target = "policy/hook-skip-local.rego"
 # `wip` in the wrong unit. A reporting surface with nothing downstream of it.
 # CLOUD-472's core. The Ready block is the only artifact that still remembers
 # what was promised, and until now nothing read it at implementation time.
+[[verdict]]
+id = "path edit unsafe"
+gloss = "an in-place sed aims at a repository file by line number, which names where text was"
+class = """
+A line number is a guess about a file's current shape: every earlier edit \
+moves it, and a wrong guess edits the wrong line in silence. Measured on #1276: \
+one `sed i\\` script corrupted 93 files, and `51s/…/…/` on `verdict.rs` \
+overwrote the import above the one it meant after two edits shifted it. A \
+text-matched edit fails loudly when its text is absent, so the remedy is to \
+address by text, never by line.
+"""
+
+[[verdict.route]]
+id = "path edit first"
+kind = "command"
+target = "make the change with the Edit tool, or a sed regex address (`/^exact line$/s/…/…/`), which matches text and fails when it is not there"
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sed-line-address.rego"
+
 [[verdict]]
 id = "test name undefined"
 gloss = "an obligation this row declared names no case, or a case with no mutation that could kill it"
