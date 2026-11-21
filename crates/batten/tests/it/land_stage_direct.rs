@@ -301,7 +301,7 @@ fn a_spelling_another_row_owns_is_still_refused() {
 fn a_receipted_steps_program_run_outside_it_is_refused() {
     all_refused(&[
         (
-            "mise exec -- cargo clippy -q -p batten --all-targets -- -D warnings",
+            "mise exec -- cargo clippy -q --all-targets -- -D warnings",
             true,
         ),
         ("mise exec -- cargo clippy --workspace", true),
@@ -322,6 +322,25 @@ fn a_receipted_steps_program_run_outside_it_is_refused() {
         ("batten semver check", true),
         ("batten hk drift", false),
         ("mise exec -- cargo run -q -p batten -- perf gate", true),
+    ]);
+}
+
+/// Fails by: a one-package clippy read as the workspace `lint:clippy` stage,
+/// which left an 881 s lap as the only route to a lint verdict (CLOUD-2806).
+/// The package is part of what cargo builds, so a different selection is
+/// development and keeps nothing the lap would reuse.
+#[test]
+fn a_single_package_clippy_is_not_a_stage() {
+    none_refused(&[
+        (
+            "mise exec -- cargo clippy -q -p batten --all-targets -- -D warnings",
+            true,
+        ),
+        (
+            "mise exec -- cargo clippy -p batten-codemods --all-targets",
+            true,
+        ),
+        ("cargo clippy --package=batten-base", true),
     ]);
 }
 
