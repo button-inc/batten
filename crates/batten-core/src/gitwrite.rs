@@ -1592,7 +1592,11 @@ fn materialise(
 /// content. Not `std::os::windows::fs::symlink_file`, which needs a privilege an
 /// ordinary account does not hold, so it would fail rather than degrade. Only
 /// each platform's call is under `cfg` (CLOUD-2509).
-pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
+///
+/// # Errors
+///
+/// The link, or off unix the file that stands in for it, cannot be written.
+pub fn link(destination: &str, target: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(destination, target)
