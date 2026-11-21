@@ -214,12 +214,29 @@ fn check_stream(verb: &[&str], units: &[&str], scope: &[String]) -> std::io::Res
         .args(units)
         .args(scope)
         .streamed_output()?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let stream = String::from_utf8_lossy(&output.stdout).into_owned();
+    // Could-not-look, never "nothing to fix" (`recipe::fix::read_nothing`).
+    if recipe::fix::read_nothing(output.status.success(), &stream) {
+        return Err(std::io::Error::other(format!(
+            "cargo {} exited {} with no compiler message; nothing was read, nothing applied",
+            verb.join(" "),
+            output.status
+        )));
+    }
+    Ok(stream)
 }
 
 /// Plan and apply passes until one changes nothing; one count line per pass.
 fn run_fix(out: &mut impl std::io::Write, scope: &[String]) -> std::io::Result<()> {
     let read = |path: &str| batten::fsio::read_to_string(path).ok();
+    // No package named means no stream is read, which printed "applied 0" as if
+    // the workspace had been judged clean.
+    if scope.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fix needs at least one package: `fix <package>…`",
+        ));
+    }
     for pass in 1..=FIX_PASSES {
         // PER PACKAGE, EACH STREAM FILTERED TO THAT PACKAGE'S OWN MESSAGES.
         // `check --profile test` does not set `cfg(test)`; `test --no-run
@@ -263,6 +280,18 @@ fn run_fix(out: &mut impl std::io::Write, scope: &[String]) -> std::io::Result<(
             unused(&other)
         )?;
         let plan = recipe::fix::plan(streams, &read);
+        // A build that does not compile is not one to edit (`recipe::fix::may_apply`).
+        if !recipe::fix::may_apply(&plan) {
+            writeln!(
+                out,
+                "fix pass {pass}: applied 0, refused all, errors {}",
+                plan.errors
+            )?;
+            return Err(std::io::Error::other(format!(
+                "the build carries {} compile error(s); fix them first, nothing was applied",
+                plan.errors
+            )));
+        }
         let (mut applied, mut refused) = (0_usize, 0_usize);
         for (path, suggestions) in &plan.edits {
             let written = read(path)
