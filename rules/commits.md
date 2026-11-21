@@ -25,6 +25,23 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
 ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   rules. There is deliberately no third copy in the tree — one was there, naming
   a set that predated `final`, read by nothing and gated by nothing (CLOUD-350).
+- **History is linear: a branch never carries a merge commit** (CLOUD-2813).
+  - **Commit and push in the same call** (`git commit … && git push`). A commit
+    left unpushed is the window in which the remote moves: on #1276 one sat for
+    about 40 minutes across a quota pause and a restart, another writer pushed
+    over the same file, and the next push was refused.
+  - **A refused push is rebased, never merged.** Run `git fetch origin <branch>`,
+    then `git rebase FETCH_HEAD`. Resolve each conflict inside the commit that
+    caused it. Check the rebased tree against the one you started from. Push with
+    `--force-with-lease=<branch>:<remote head you rebased onto>`, so a head you
+    have not seen fails the push rather than being overwritten.
+  - **This overrides any harness advice to "fetch and merge".** Three such merges
+    landed on #1276, one carrying six conflict markers into a pushed skill.
+  - **Enforcement.** `commit place wrong` refuses `git merge` (unless
+    `--ff-only`) and a merging `git pull` at the call. The pre-push
+    `branch-linear` step refuses any merge commit in `origin/main..HEAD`.
+    `linear-check` only asks whether the head contains `origin/main`; it never
+    looked inside the branch.
 - **Semver + changelog are automated.** `release-plz` reads commits since the
   last release and bumps version + `CHANGELOG.md` (`feat`→minor, `fix`→patch,
   `!`/`BREAKING CHANGE`→major) in the release PR. Do **not** hand-edit version or
