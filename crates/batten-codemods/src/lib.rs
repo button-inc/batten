@@ -11,6 +11,8 @@
 //!
 //! `cargo run -p batten-codemods --example codemod -- <recipe>` runs one by name.
 
+pub mod fix;
+
 use std::collections::BTreeMap;
 
 use batten::codemod::{self, CouldNotLook, Edition};
