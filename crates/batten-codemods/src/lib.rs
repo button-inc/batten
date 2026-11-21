@@ -67,7 +67,7 @@ pub const RECIPES: &[Recipe] = &[
     },
     Recipe {
         name: "stream-adapter-exec",
-        summary: "`Streamed`, `StreamedChild` and `Keep` move from `stream` to `exec`, the placed spawn boundary (#1276)",
+        summary: "`Streamed`, `StreamedChild` and `Keep` move from `stream` to `capture`, beside the placed spawn in `exec` (#1276; CLOUD-2793 retired the `exec` re-export)",
         edition: Edition::E2024,
         skip: &["mutation_markers.rs"],
         apply: stream_adapter_exec,
@@ -145,7 +145,7 @@ fn stream_capture(source: &str, base: &str) -> Result<String, CouldNotLook> {
         codemod::import_for_calls(
             &renamed,
             edition,
-            &format!("use {base}::exec::{trait_name} as _;"),
+            &format!("use {base}::capture::{trait_name} as _;"),
             to,
         )
     };
@@ -163,7 +163,7 @@ fn stream_keep_set(source: &str, base: &str) -> Result<String, CouldNotLook> {
         let (stdin, stdout, stderr) = (set("stdin"), set("stdout"), set("stderr"));
         (stdin || stdout || stderr).then(|| {
             format!(
-                "streamed_output_keeping({base}::exec::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
+                "streamed_output_keeping({base}::capture::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
             )
         })
     };
@@ -171,8 +171,9 @@ fn stream_keep_set(source: &str, base: &str) -> Result<String, CouldNotLook> {
 }
 
 /// `batten-stream` carried the process adapter, a spawn in a module the
-/// spawn-placement table does not place. It moved to `exec`, the placed
-/// child-process boundary, and every path to it moves with it. Its blind spot:
+/// spawn-placement table does not place. It moved beside `exec`, the placed
+/// child-process boundary, into `capture`, and every path to it moves with it
+/// (it named `exec` until CLOUD-2793 retired that re-export). Its blind spot:
 /// a path inside a macro's arguments, which the compiler names.
 fn stream_adapter_exec(source: &str, base: &str) -> Result<String, CouldNotLook> {
     let mut text = source.to_owned();
@@ -181,7 +182,7 @@ fn stream_adapter_exec(source: &str, base: &str) -> Result<String, CouldNotLook>
             &text,
             Edition::E2024,
             &format!("{base}::stream::{item}"),
-            &format!("{base}::exec::{item}"),
+            &format!("{base}::capture::{item}"),
         )?;
     }
     Ok(text)

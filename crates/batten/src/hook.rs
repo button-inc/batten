@@ -13540,7 +13540,7 @@ mod tests {
     #[test]
     fn a_trailing_separator_ends_no_segment() {
         for command in ["mise run verify;", "a ;", "a; b;", "a || b;"] {
-            let crate::facts::Look::Is(parsed) = super::segments(command) else {
+            let crate::facts::Look::Is(parsed) = crate::shell::segments(command) else {
                 panic!("{command:?} reads");
             };
             assert_eq!(
@@ -13600,7 +13600,7 @@ mod tests {
             "a && cat <<'EOF'\nsaid \"q\"\nEOF",
         ] {
             assert!(
-                matches!(super::segments(command), crate::facts::Look::Is(_)),
+                matches!(crate::shell::segments(command), crate::facts::Look::Is(_)),
                 "{command:?}"
             );
         }

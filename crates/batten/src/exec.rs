@@ -2905,8 +2905,9 @@ fn report_bundle(
 
 // THE PROCESS ADAPTER moved to `crate::capture::child_io` (#1276): `secrets`
 // captured through it, and reaching `exec` pulled `task` along, past the
-// recorded worst closure. Re-exported so `exec::Streamed` keeps resolving.
-pub use crate::capture::{Keep, Streamed, StreamedChild};
+// recorded worst closure. Callers name it at `capture`; the `exec` re-export
+// was retired with every other shim (CLOUD-2793).
+use crate::capture::{Keep, Streamed, StreamedChild};
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_model::{ExecConfig, ExecProgress as Progress, OutputFormat, OutputStyle};
 
