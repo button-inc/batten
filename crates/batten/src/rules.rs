@@ -2986,7 +2986,7 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
-    recorders: &[crate::recorder::Declared],
+    recorders: &[crate::config_model::RecorderDeclared],
     // The verb-written families this repository declares (CLOUD-1810). A THIRD
     // source beside the two below rather than an extension of either, because the
     // three differ in who writes them: a `[[recorder]]` row is filled from a
@@ -2996,7 +2996,7 @@ fn recorder_records(
     // Without it a `record named` family was in no source at all, so its key never
     // reached `input.tree.records`, every rule beneath it was undefined, and the
     // row reading it reported clean over a record that said otherwise.
-    families: &[crate::record::Declared],
+    families: &[crate::config_model::RecordDeclared],
     verb_written: &[&str],
 ) -> BTreeMap<String, Vec<String>> {
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -3072,7 +3072,7 @@ fn recorder_records(
 /// key covers.
 fn recorded_stores(
     root: &Path,
-    recorders: &[crate::recorder::Declared],
+    recorders: &[crate::config_model::RecorderDeclared],
     vocabulary: crate::policy::Vocabulary<'_>,
     tree_half: bool,
 ) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
@@ -3083,7 +3083,7 @@ fn recorded_stores(
                 &branch,
                 recorders,
                 vocabulary.records,
-                crate::record::VERB_WRITTEN,
+                crate::config_check::record::VERB_WRITTEN,
             ),
             recorder_blocked(&git_dir, &branch),
         ),
@@ -5442,7 +5442,8 @@ fn ejected_behind(
         let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
             continue;
         };
-        let Some(shipped) = crate::preset::find(&preset).map(|manifest| manifest.version) else {
+        let Some(shipped) = crate::preset_catalog::find(&preset).map(|manifest| manifest.version)
+        else {
             continue;
         };
         if recorded >= shipped {

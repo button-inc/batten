@@ -19,7 +19,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::hook::{Envelope, Event, Operation};
+use crate::config_model::Event;
+use crate::hook::{Envelope, Operation};
 
 /// One webhook event GitHub documents, with where its subject lives.
 ///

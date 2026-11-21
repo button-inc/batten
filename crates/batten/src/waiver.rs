@@ -129,9 +129,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 
 pub use crate::config_check::waiver::validate;
+use crate::config_model::RuleKind;
 pub use crate::config_model::Waiver;
 use crate::error::UsageError;
-use crate::rules::{self, Finding, RuleKind};
+use crate::findings::Finding;
+use crate::rules::{self};
 
 /// A calendar date, to the day.
 ///

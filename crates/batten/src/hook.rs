@@ -3857,7 +3857,7 @@ pub struct Policy {
     /// contractually pure, so the table travels as a value rather than being
     /// re-read at the point of use.
     mints: Vec<crate::mint::Declared>,
-    recorders: Vec<crate::recorder::Declared>,
+    recorders: Vec<crate::config_model::RecorderDeclared>,
     patterns: Vec<crate::pattern::NamedPattern>,
     programs: std::collections::BTreeMap<String, crate::recorder::Program>,
     /// The enabled policy bundles, compiled at the boundary (CLOUD-647,
@@ -4197,7 +4197,7 @@ impl Policy {
     /// payload, a recorder may additionally run a declared program and record
     /// what it decided.
     #[must_use]
-    pub fn declared_recorders(&self) -> &[crate::recorder::Declared] {
+    pub fn declared_recorders(&self) -> &[crate::config_model::RecorderDeclared] {
         &self.recorders
     }
 
@@ -4346,8 +4346,8 @@ impl Policy {
     pub fn field_bound_for(
         &self,
         envelope: &Envelope,
-    ) -> std::collections::BTreeMap<String, crate::rules::FieldBound> {
-        let mut bounds: std::collections::BTreeMap<String, crate::rules::FieldBound> =
+    ) -> std::collections::BTreeMap<String, crate::config_model::FieldBound> {
+        let mut bounds: std::collections::BTreeMap<String, crate::config_model::FieldBound> =
             std::collections::BTreeMap::new();
         for rule in matching_receipt_rows(self, envelope) {
             let Some(bound) = rule.requires_field.as_ref() else {

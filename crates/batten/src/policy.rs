@@ -99,9 +99,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
 pub use crate::config_model::preset_names;
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
 use crate::facts::Look;
-use crate::rules::{Rule, RuleKind};
 
 /// The unattributed deny set: a set of bare strings, and the shape CLOUD-689
 /// shipped.
@@ -613,7 +613,7 @@ impl Bundle {
     /// pure "N sources, one engine" function CLOUD-837 made it and its callers
     /// keep their signature.
     #[must_use]
-    pub fn with_severity(mut self, rule: &crate::rules::Rule) -> Self {
+    pub fn with_severity(mut self, rule: &crate::config_model::Rule) -> Self {
         self.severity = rule.severity();
         self.predicate_severity = rule.predicate_severity.clone().unwrap_or_default();
         self
@@ -793,7 +793,7 @@ pub struct Vocabulary<'a> {
     /// module reads is projected from it, so a caller with the patterns always
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
-    pub recorders: &'a [crate::recorder::Declared],
+    pub recorders: &'a [crate::config_model::RecorderDeclared],
     /// The `[[register]]` table (CLOUD-2005), read by a `reference` rule.
     ///
     /// Here for `recorders`' reason: config the consumer declares, fixed for the
@@ -809,7 +809,7 @@ pub struct Vocabulary<'a> {
     /// the recorders needs the verb-written families too or half the store is
     /// invisible to it. Carrying it on this struct is what keeps the arity of the
     /// four public entry points from growing again.
-    pub records: &'a [crate::record::Declared],
+    pub records: &'a [crate::config_model::RecordDeclared],
 }
 
 impl Vocabulary<'_> {
@@ -1039,7 +1039,7 @@ pub fn load(
         // consumer who enabled `trunk-basd` should be told, not quietly gated by
         // nothing.
         if let Some(name) = rule.preset.as_deref() {
-            let manifest = crate::preset::find(name).ok_or_else(|| {
+            let manifest = crate::preset_catalog::find(name).ok_or_else(|| {
                 UsageError::raise(format!(
                     "rule `{}` enables the preset `{name}`, which this binary does not ship; \
                      the ones it does are {}",
@@ -1177,14 +1177,18 @@ fn check_tables(
 /// Refuse a preset enabled at a scope none of its modules decide (CLOUD-1181,
 /// CLOUD-1672) — see the call site in [`load`] for why this precedes
 /// compilation. Lifted out whole for `clippy::too_many_lines`.
-fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &str) -> Result<()> {
+fn check_preset_scope(
+    rule: &Rule,
+    manifest: &crate::preset_catalog::Manifest,
+    name: &str,
+) -> Result<()> {
     if manifest.decides(rule.scope) {
         return Ok(());
     }
     let decided: Vec<&str> = manifest
         .scopes()
         .into_iter()
-        .map(crate::rules::RuleScope::as_str)
+        .map(crate::config_model::RuleScope::as_str)
         .collect();
     Err(UsageError::raise(format!(
         "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
@@ -1268,7 +1272,7 @@ fn compile_for(
 /// crate already takes for that lint instead of raising a cap.
 fn preset_sources(
     rule: &Rule,
-    manifest: &crate::preset::Manifest,
+    manifest: &crate::preset_catalog::Manifest,
     name: &str,
 ) -> Result<Vec<(String, String)>> {
     // THE PROVIDER COMPARISON, AND UNLIKE THE SCOPE ONE ITS CALLER RUNS FIRST,
@@ -1301,7 +1305,7 @@ fn preset_sources(
             .modules
             .iter()
             .filter(|module| module.scope == rule.scope)
-            .map(crate::preset::PresetModule::name)
+            .map(crate::preset_catalog::PresetModule::name)
             .collect();
         return Err(UsageError::raise(format!(
             "rule `{}` excepts `{unknown}`, which the preset `{name}` does not ship at scope \
@@ -1371,7 +1375,9 @@ fn ejected_originals(sources: &[(String, String)]) -> BTreeMap<String, &'static 
         .iter()
         .filter_map(|(path, text)| {
             let (preset, module, _) = crate::preset::ejected_from(text)?;
-            let original = crate::preset::find(&preset)?.module(&module)?.source;
+            let original = crate::preset_catalog::find(&preset)?
+                .module(&module)?
+                .source;
             Some((path.clone(), original))
         })
         .collect()
@@ -3043,7 +3049,7 @@ fn bundle_members(
 /// A [`UsageError`] (exit `1`) naming the offending key and the module path.
 /// Pointer-only: never a line of the module body.
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
-    let tree_scoped = rule.scope == crate::rules::RuleScope::Tree;
+    let tree_scoped = rule.scope == crate::config_model::RuleScope::Tree;
     let emittable = tree_keys();
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal: `load` has already
@@ -3175,7 +3181,7 @@ fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<S
     // the VENDORED PRESETS — the third is the one that bites: `trunk push
     // forced` is a preset's class, and a set built from the first two refuses
     // a name the collapse arm requires.
-    let vendored = crate::preset::verdict_rows();
+    let vendored = crate::config_check::preset::verdict_rows();
     verdicts
         .iter()
         .filter(|entry| !entry.retired())
@@ -5181,7 +5187,7 @@ pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
 /// detached, remote-less clone, which is a test asserting its environment rather
 /// than its module.
 pub(crate) fn suite_input(
-    rule: &crate::rules::Rule,
+    rule: &crate::config_model::Rule,
     documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
     tracked: &[String],
 ) -> Result<(String, Vec<(String, crate::rules::NotAcquired)>)> {
@@ -5261,7 +5267,7 @@ pub(crate) fn suite_input(
 pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
     let config = crate::resolve::resolve(root, &crate::resolve::Overrides::default())?;
     let Some(rule) = config.rules.iter().find(|rule| {
-        rule.kind == crate::rules::RuleKind::Policy && rule.module.as_deref() == Some(module)
+        rule.kind == crate::config_model::RuleKind::Policy && rule.module.as_deref() == Some(module)
     }) else {
         return Ok(None);
     };
@@ -5286,13 +5292,13 @@ pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
     let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
         return Ok(None);
     };
-    let tracked = crate::rules::tree_files(root)?;
+    let tracked = crate::git::tree_files(root)?;
     let documents = crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
     let (input, _) = suite_input(rule, &documents, &tracked)?;
     let crate::facts::Look::Is(suite) = test(
         bundle,
         &input,
-        rule.scope == crate::rules::RuleScope::MediatedCall,
+        rule.scope == crate::config_model::RuleScope::MediatedCall,
     )?
     else {
         return Ok(None);
