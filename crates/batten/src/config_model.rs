@@ -6793,11 +6793,14 @@ impl Decided {
     /// BESIDE ITS TYPE because serde's `skip_serializing_if` names it by path
     /// from this module's own attributes, where no extension trait's import
     /// reaches (CLOUD-2793).
+    ///
+    /// `&self` on a `Copy` type is the derive's signature, not a choice: serde's
+    /// `skip_serializing_if` passes a reference. NO `trivially_copy_pass_by_ref`
+    /// EXPECTATION: that lint honours `avoid-breaking-exported-api` and never
+    /// fires on a `pub` fn, so an `#[expect]` here is unfulfilled, which is a
+    /// hard error that failed every clippy run over this crate, the spawn census
+    /// (`adapter place missing`, CLOUD-2816) among them.
     #[must_use]
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde's `skip_serializing_if` calls this with a reference to the field, so the signature is the derive's rather than this author's; taking `self` by value does not compile"
-    )]
     pub const fn is_default(&self) -> bool {
         matches!(self, Self::ExitStatus)
     }
