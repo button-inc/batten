@@ -2167,6 +2167,20 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `modules impls` and `modules shims` (CLOUD-2792) print one count line
+    // each over the same crate, and never a byte of a source they read.
+    Verb {
+        path: "modules impls",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "modules shims",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "sbom",
         args: &["--names"],

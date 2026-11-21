@@ -89,46 +89,6 @@ fn module_of(roots: &[(String, String)], path: &str) -> Option<(String, Vec<Stri
     Some((krate.clone(), segments))
 }
 
-/// The `::`-separated segments of a path's text, whitespace removed.
-fn segments_of(path: &ast::Path) -> Vec<String> {
-    let text: String = path
-        .syntax()
-        .text()
-        .to_string()
-        .split_whitespace()
-        .collect();
-    text.split("::").map(str::to_owned).collect()
-}
-
-/// Flatten one `use` tree into `(visible name, path)` pairs, with `prefix` the
-/// path so far. A glob names nothing and is skipped.
-fn flatten(tree: &ast::UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
-    let mut full = prefix.to_vec();
-    if let Some(path) = tree.path() {
-        full.extend(segments_of(&path));
-    }
-    if tree.star_token().is_some() {
-        return;
-    }
-    if let Some(list) = tree.use_tree_list() {
-        for nested in list.use_trees() {
-            flatten(&nested, &full, out);
-        }
-        return;
-    }
-    // `self` in a group names the group's prefix itself.
-    if full.last().is_some_and(|last| last == "self") {
-        full.pop();
-    }
-    let renamed = tree
-        .rename()
-        .and_then(|rename| rename.name())
-        .map(|name| name.text().to_string());
-    if let Some(visible) = renamed.or_else(|| full.last().cloned()) {
-        out.push((visible, full));
-    }
-}
-
 /// The name an item declares, when it declares one a path can name.
 fn declared_name(item: &ast::Item) -> Option<String> {
     let name = match item {
@@ -198,9 +158,11 @@ impl Index {
                 match item {
                     ast::Item::Use(declaration) => {
                         if let Some(tree) = declaration.use_tree() {
-                            let mut pairs = Vec::new();
-                            flatten(&tree, &[], &mut pairs);
-                            entry.aliases.extend(pairs);
+                            entry.aliases.extend(
+                                crate::module_graph::use_leaves(&tree)
+                                    .into_iter()
+                                    .map(|leaf| (leaf.name, leaf.path)),
+                            );
                         }
                     }
                     ast::Item::Module(nested) => {
