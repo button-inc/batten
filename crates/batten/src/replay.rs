@@ -364,6 +364,16 @@ fn compile_errors(output: &str) -> Vec<(String, usize)> {
         .collect()
 }
 
+/// Every `Cargo.toml` blob at `rev`, by path: where the item index finds the
+/// tree's crates, so it reads any layout rather than this repository's.
+fn manifests(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
+    let mut files = BTreeMap::new();
+    crate::git::for_each_blob_at_rev(root, rev, "**/Cargo.toml", |path, text| {
+        files.insert(path.to_owned(), text.to_owned());
+    })?;
+    Ok(files)
+}
+
 /// Every `.rs` blob at `rev`, by path.
 fn rust_files(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
@@ -515,20 +525,15 @@ pub fn run(
     // Which item each path names, at base and at HEAD, and the items the
     // branch moved between files (CLOUD-2789): a body is judged by what it
     // names, so a path respelled at an item's new home is no change.
-    let base_index = crate::item_index::Index::new(&before);
-    let head_index = crate::item_index::Index::new(&after);
+    let base_index = crate::item_index::Index::new(&before, &manifests(root, &fork)?);
+    let head_index = crate::item_index::Index::new(&after, &manifests(root, "HEAD")?);
     let item_moves = crate::item_index::moved_items(&base_index, &head_index);
     let no_moves = BTreeMap::new();
-    // `crate::` names the file's own crate only for a file under a crate's
-    // `src/`; in an integration test it is the test crate, which is not
-    // indexed, so only its `batten::` paths resolve.
-    let krate_of = |path: &str| -> String {
-        if path.contains("/src/") {
-            crate::item_index::crate_of(path).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    };
+    // `crate::` names a file's own crate only for a library source the index
+    // read; in an integration test it is the test crate, which is not indexed,
+    // so only paths through the tree's crates by name resolve there.
+    let base_krate = |path: &str| base_index.crate_of(path).unwrap_or_default();
+    let head_krate = |path: &str| head_index.crate_of(path).unwrap_or_default();
     // Every test body at HEAD, by canonical shape, read only if some base test
     // left its file: what tells a test that moved from one that is gone.
     let head_shapes: std::cell::OnceCell<BTreeSet<String>> = std::cell::OnceCell::new();
@@ -537,7 +542,7 @@ pub fn run(
             after
                 .iter()
                 .flat_map(|(path, text)| {
-                    let krate = krate_of(path);
+                    let krate = head_krate(path);
                     tests_in(text)
                         .unwrap_or_default()
                         .into_iter()
@@ -566,14 +571,14 @@ pub fn run(
             continue;
         }
         let test_path = head_path.as_deref().unwrap_or(path);
-        let (base_krate, head_krate) = (krate_of(path), krate_of(test_path));
+        let (base_crate, head_crate) = (base_krate(path), head_krate(test_path));
         let changed = compare_canonical(
             base_text,
             head_text,
             &|body| translate(body, test_path, &moves),
             &|body| shapes_at_head().contains(body),
-            &|body| crate::item_index::canonical(body, &base_krate, &base_index, &item_moves),
-            &|body| crate::item_index::canonical(body, &head_krate, &head_index, &no_moves),
+            &|body| crate::item_index::canonical(body, &base_crate, &base_index, &item_moves),
+            &|body| crate::item_index::canonical(body, &head_crate, &head_index, &no_moves),
         );
         for (inner, line) in changed.removed {
             findings.push(Finding {
