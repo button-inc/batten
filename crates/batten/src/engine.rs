@@ -35,23 +35,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 
-/// The engine a config needs: exactly one of a release tag or a source digest.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Pin {
-    /// A published release, spelled as its tag (`v0.0.198`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release: Option<String>,
-    /// The digest `batten engine digest` prints for the source tree the engine
-    /// must be built from (64 hex).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Pin;
 
 /// What a [`Pin`] names, decided once (CLOUD-2418): a verb that matches this
 /// rather than the two fields reads a malformed pin as every other such verb

@@ -48,34 +48,15 @@
 
 use std::collections::BTreeMap;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::identity::{FindingKind, StoredIdentity};
 use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 use crate::transcript::{Event, Stream};
 
-/// The `[hook_output]` table: what this repository's hooks may cost one session.
-///
-/// **Absent means unenforced**, on `[budget]`'s reading — a threshold nobody
-/// declared is not a threshold of zero — so a consumer that has not adopted the
-/// table measures exactly as it did before and refuses nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Ceiling {
-    /// The ceiling on estimated tokens of hook output across the whole session.
-    /// The boundary is `<=`, matching `[budget]`, `[refusal]` and `[advisory]`
-    /// so the four thresholds in this tree do not disagree about their own edge.
-    pub max_tokens: usize,
-    /// How many times one hook may emit byte-identical text in one session.
-    ///
-    /// **The floor is 1, not 0.** Saying a thing once is the report; saying it
-    /// again is the copy. A ceiling of 0 would refuse the first emission, which
-    /// is a hook switched off rather than a hook made quiet — and this row puts
-    /// "removing any hook, or weakening what it detects" explicitly out of scope.
-    pub max_repeats: usize,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::HookCeiling as Ceiling;
 
 /// Refuse a ceiling nothing could satisfy.
 ///
