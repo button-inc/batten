@@ -1752,6 +1752,8 @@ fn bench(
         args.push(input.to_string_lossy().into_owned());
     }
 
+    let single = arms.len() == 1;
+    let mut arm_env: Vec<(String, String)> = Vec::new();
     let arms: Vec<(&'static str, Vec<String>)> = if id.starts_with("posttool") {
         // ONE STATE ROOT PER ARM, AND EMPTY BEFORE EVERY RUN. This is the only
         // arm whose binaries WRITE, and both would otherwise share the store: the
@@ -1779,19 +1781,37 @@ fn bench(
             .collect::<Result<Vec<String>>>()?;
         args.push(String::from("--prepare"));
         args.push(format!("rm -rf {}", stores.join(" ")));
-        arms.iter()
-            .zip(&roots)
-            .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
-            .collect()
+        if single {
+            // ONE ARM, ITS ROOT IN THE MEASURING PROCESS'S ENVIRONMENT rather
+            // than an `env` exec the hook call never pays: see [`unprefixed`].
+            arm_env.extend(roots.first().map_or_else(Vec::new, |root| state_env(root)));
+            arms.to_vec()
+        } else {
+            arms.iter()
+                .zip(&roots)
+                .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
+                .collect()
+        }
     } else {
         arms.to_vec()
+    };
+    let arms: Vec<(&'static str, Vec<String>)> = if single {
+        arms.into_iter()
+            .map(|(label, cmd)| {
+                let (env, cmd) = unprefixed(dir, cmd);
+                arm_env.extend(env);
+                (label, cmd)
+            })
+            .collect()
+    } else {
+        arms
     };
 
     for (_, cmd) in &arms {
         args.push(cmd.join(" "));
     }
 
-    let env = vec![
+    let mut env = vec![
         (String::from("XDG_DATA_HOME"), state.to_owned()),
         (String::from("APPDATA"), state.to_owned()),
         (String::from("LOCALAPPDATA"), state.to_owned()),
@@ -1807,6 +1827,8 @@ fn bench(
             }),
         ),
     ];
+    // After the defaults, so a single arm's own root wins over them.
+    env.extend(arm_env);
     if !run(dir, Tool::Hyperfine, &args, &env)? {
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
@@ -1882,24 +1904,72 @@ fn stand_in_daemon(state_root: &str, dir: &Path) -> Result<std::fs::File> {
 /// `--shell=none` runs argv directly, so it can only come from a prefix. The
 /// extra exec is identical on both arms and divides out of the ratio.
 fn state_prefixed(state: &str, argv: &[String]) -> Vec<String> {
+    let mut out = vec![String::from("env")];
+    out.extend(
+        state_env(state)
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    out.extend(argv.iter().cloned());
+    out
+}
+
+/// The environment that points an arm's state at `state`.
+fn state_env(state: &str) -> Vec<(String, String)> {
     // THE ISOLATION IS `arm::Isolation`'s, and stating it there is what makes it
     // behaviour rather than setup (CLOUD-1714): every state-writing name is set
     // together, so a caller cannot point one at a scratch root and leave the
-    // rest ambient. This wrapper is the `env`-prefix spelling the benchmarking
-    // tool needs, over that one declaration.
-    let mut out = vec![String::from("env")];
-    for (name, value) in crate::arm::Isolation::at(state).env() {
-        if name == "HOME" {
-            // The benchmarking arms deliberately keep the ambient home: they
-            // measure a repository checkout, and relocating `HOME` would move
-            // the toolchain out from under the binary being measured. The other
-            // three are what carry per-arm state.
-            continue;
-        }
-        out.push(format!("{name}={value}"));
+    // rest ambient. This is the benchmarking tool's view of that one
+    // declaration, as a prefix or as its own process environment.
+    crate::arm::Isolation::at(state)
+        .env()
+        .into_iter()
+        // The benchmarking arms deliberately keep the ambient home: they
+        // measure a repository checkout, and relocating `HOME` would move the
+        // toolchain out from under the binary being measured. The other three
+        // are what carry per-arm state.
+        .filter(|(name, _)| name != "HOME")
+        .collect()
+}
+
+/// A single arm's `env` prefix as the measuring process's own environment, and
+/// the argv after it (2026-11-16, the owner's answer in `.batten/asked.jsonl`).
+///
+/// AN ABSOLUTE ARM MEASURES WHAT A HOOK CALL COSTS, and no hook call pays an
+/// `env` exec: the settings file invokes the binary itself. Measured on the
+/// runner, the prefix added ~2.5 ms to `posttool` and `wired` over the arms that
+/// run the binary directly, ~0.3 ms locally. A pair keeps the prefix, where it is
+/// paid by both arms and divides out of the ratio.
+///
+/// `-C<dir>` is dropped only where it names the directory the arm already runs
+/// in; any other prefix is left as it is, measured as before.
+fn unprefixed(dir: &Path, argv: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
+    if argv.first().map(String::as_str) != Some("env") {
+        return (Vec::new(), argv);
     }
-    out.extend(argv.iter().cloned());
-    out
+    let here = dir.to_string_lossy();
+    let mut env = Vec::new();
+    let mut rest = argv.iter().skip(1).peekable();
+    while let Some(word) = rest.peek() {
+        if let Some(cwd) = word.strip_prefix("-C") {
+            if cwd != here {
+                return (Vec::new(), argv);
+            }
+        } else if let Some((name, value)) = word.split_once('=')
+            && !name.is_empty()
+            && !name.starts_with('-')
+        {
+            env.push((name.to_owned(), value.to_owned()));
+        } else {
+            break;
+        }
+        rest.next();
+    }
+    let rest: Vec<String> = rest.cloned().collect();
+    if rest.is_empty() {
+        return (Vec::new(), argv);
+    }
+    (env, rest)
 }
 
 /// One arm's record, with `perf`'s own percentile convention.
@@ -4415,6 +4485,35 @@ mod tests {
                 "x"
             ]
         );
+    }
+
+    fn words(text: &str) -> Vec<String> {
+        text.split(' ').map(String::from).collect()
+    }
+
+    /// Fails by: the prefix kept on a single arm, a `-C` naming another
+    /// directory dropped, or the argv after the prefix truncated.
+    #[test]
+    fn a_single_arms_env_prefix_becomes_its_environment() {
+        let here = Path::new("/t");
+        let (env, argv) = unprefixed(here, words("env -C/t A=/t B=/b /bin/x adjudicate --h"));
+        assert_eq!(
+            env,
+            [
+                (String::from("A"), String::from("/t")),
+                (String::from("B"), String::from("/b"))
+            ]
+        );
+        assert_eq!(argv, words("/bin/x adjudicate --h"));
+
+        let elsewhere = words("env -C/u A=1 /bin/x");
+        assert_eq!(unprefixed(here, elsewhere.clone()), (Vec::new(), elsewhere));
+
+        let plain = words("/bin/x hook");
+        assert_eq!(unprefixed(here, plain.clone()), (Vec::new(), plain));
+
+        let bare = words("env A=1");
+        assert_eq!(unprefixed(here, bare.clone()), (Vec::new(), bare));
     }
 
     /// Fails by: the seconds-to-milliseconds factor or the fallback mean's
