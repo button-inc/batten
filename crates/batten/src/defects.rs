@@ -491,10 +491,6 @@ pub fn plan(existing: &[Record], incoming: &[Record]) -> Result<(Added, Vec<Reco
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
-    #[cfg(test)]
-    use crate::defects::DefectsExt as _;
 
     fn record(id: &str, class: &str) -> Record {
         Record {

@@ -5156,8 +5156,6 @@ pub fn job_count(machine: Machine, cost: JobCost) -> usize {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     /// A kept run's stderr is shown nowhere; a captured or streamed one's is.
     ///

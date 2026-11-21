@@ -47,6 +47,7 @@
 //! leaving it true by accident.
 
 use crate::rules::RuleExt as _;
+use crate::rules::RuleScopeExt as _;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -577,8 +578,6 @@ pub fn mode_sources() -> Vec<(String, String)> {
 mod tests {
     use super::{eject, ejected_from, ejected_source, helpers_defined, mode_sources, uses};
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::config_check::preset::verdict_rows;
     use crate::config_model::Rule;
     #[cfg(test)]

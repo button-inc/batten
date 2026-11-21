@@ -11,6 +11,7 @@
 
 use crate::common;
 use batten::preset::ManifestExt as _;
+use batten::rules::RuleScopeExt as _;
 
 use common::Fixture;
 

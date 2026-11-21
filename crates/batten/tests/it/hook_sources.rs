@@ -5,6 +5,8 @@
 //! survive a mutation of the `vocabulary()` arm, which is the accessor every
 //! consumer reaches.
 
+use batten::hook::EventExt as _;
+use batten::hook::HarnessExt as _;
 use std::collections::BTreeSet;
 
 use batten::config_model::{Event, Harness, HookDisposition};

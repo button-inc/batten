@@ -307,9 +307,6 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn a_runner_file_takes_the_text_only_where_one_is_named() {
         let dir = crate::scratch::scratch("ci-step-append");

@@ -1005,8 +1005,6 @@ pub fn disposition_lines(records: &[FindingRecord]) -> Vec<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::findings::{Context, FINDINGS_SCHEMA, Instance, NotShown, Observation};
     use crate::identity::{FindingKind, SpanNormalization, StoredIdentity, code_fingerprint};
     use crate::severity::{AdvisoryTier, RuleSeverity};

@@ -32,6 +32,8 @@
 //! repo tooling; this is the product verb.
 
 use crate::handler::HandlerExt as _;
+use crate::hook::HarnessExt as _;
+use crate::hook::HarnessWiringExt as _;
 use crate::rules::RuleExt as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -3287,8 +3289,6 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
 mod tests {
 
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::action::ActionExt as _;
     /// A rustlib directory with the residue the case names present.
     fn rustlib(name: &str, traces: &[&str]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-rustup-{name}"));
@@ -4635,8 +4635,6 @@ mod tests {
 mod probe_tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::preset::PresetModuleExt as _;
     use std::time::{Duration, SystemTime};
 
     /// A git repository holding `config` as its committed authority.

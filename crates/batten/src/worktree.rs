@@ -502,8 +502,6 @@ fn pointer_if_outstanding(landing: &git::Landing, branch: &str) -> Option<Pointe
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     fn pointer(truncated: bool) -> Pointer {
         Pointer {

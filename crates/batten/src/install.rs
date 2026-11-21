@@ -680,8 +680,6 @@ pub fn programs_in(script: &str) -> BTreeSet<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     /// A `SHA256SUMS` body naming `digest` for every bootstrap target at v1.2.3.
     fn sums_of(digest: &str) -> String {

@@ -78,6 +78,7 @@
 //! The three precedents above are about a gate that *skipped and reported success*;
 //! this reports, every time, and hands the rules keyed on the transcript nothing.
 
+use crate::hook::HarnessExt as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -2200,9 +2201,6 @@ pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     // --- the independent-session census (CLOUD-1717) -----------------------
 
     /// One authored user turn, in the host's real shape.

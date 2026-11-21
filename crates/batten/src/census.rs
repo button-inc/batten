@@ -639,10 +639,6 @@ pub fn run_shell(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
-    #[cfg(test)]
-    use crate::census::ShellCensusExt as _;
 
     fn keys(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()

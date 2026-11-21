@@ -45,6 +45,7 @@
 //! most important property in this file. Only a zero exit reaches the postures,
 //! and which posture is the CLASS's declaration rather than this module's guess.
 
+use crate::verdict::ApplicabilityExt as _;
 use std::path::Path;
 
 use crate::preset_catalog::Applicability;
@@ -189,9 +190,6 @@ pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicabili
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn a_fix_naming_no_key_is_returned_unchanged() {
         assert_eq!(

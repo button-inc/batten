@@ -429,8 +429,6 @@ pub fn no_fix_reason(target: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::engine::PinExt as _;
 
     /// A push nobody could compute refuses like an unpushed one (CLOUD-2656).
     #[test]

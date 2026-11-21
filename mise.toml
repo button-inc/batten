@@ -3780,8 +3780,10 @@ description = "Gate: no more inherent impls sit away from their type's module th
 # Resolved the way each file reads the name, inline modules' own imports
 # included (CLOUD-2793): 57 outside + 0 ambiguous. `impl-to-extension-trait`
 # turned behaviour over lower-layer types into its layer's extension traits:
-# 24. CLOUD-2793 lowers it to 0.
-run = "{{vars.batten}} modules impls --root crates/batten/src --max 24"
+# 24, then 7 once `const fn` blocks joined (a `const fn` a lower layer needs
+# moved home). The 7 are `config_check.rs`'s impls inside inline modules.
+# CLOUD-2793 lowers it to 0.
+run = "{{vars.batten}} modules impls --root crates/batten/src --max 7"
 
 [tasks.modules-shims]
 description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"

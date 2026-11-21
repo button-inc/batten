@@ -649,8 +649,6 @@ pub fn measure_all(root: &Path, budget: Option<&Budget>) -> Result<Vec<Report>> 
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use std::fs;
 
     #[test]
