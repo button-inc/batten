@@ -50,6 +50,9 @@ pub struct Index {
     /// Each crate root directory (`""` for the tree's root, else ending `/`)
     /// to its identifier, longest first so a nested crate wins.
     roots: Vec<(String, String)>,
+    /// Every module declared `pub`, as `(crate, module path)`: a path into a
+    /// module outside this set does not compile from another crate.
+    public: std::collections::BTreeSet<(String, Vec<String>)>,
 }
 
 /// The crate roots a tree declares: each `Cargo.toml` with a `[package] name`,
@@ -173,6 +176,15 @@ impl Index {
                         }
                     }
                     ast::Item::Module(nested) => {
+                        if let Some(name) = nested.name()
+                            && nested.visibility().is_some_and(|visibility| {
+                                visibility.syntax().text().to_string() == "pub"
+                            })
+                        {
+                            let mut path = module.to_vec();
+                            path.push(name.text().to_string());
+                            self.public.insert((krate.to_owned(), path));
+                        }
                         if let (Some(name), Some(list)) = (nested.name(), nested.item_list()) {
                             inline
                                 .push((name.text().to_string(), list.items().collect::<Vec<_>>()));
@@ -327,6 +339,27 @@ impl Index {
     /// hop is one. The target is code that compiled, so the respelling is
     /// valid whether or not the index can follow it to the item (a glob
     /// re-export, an external crate).
+    /// [`Index::unshim`] as a reader in crate `from` may spell it: from
+    /// another crate, every module on the target path must be `pub`, or the
+    /// path is left as written, which keeps its shim reached and public.
+    fn respelled_for(&self, from: &str, segments: &[String]) -> Option<Vec<String>> {
+        let path = self.unshim(segments)?;
+        let (krate, rest) = path.split_first()?;
+        if krate != from {
+            let mut module: Vec<String> = Vec::new();
+            for segment in rest {
+                module.push(segment.clone());
+                if !self.modules.contains_key(&(krate.clone(), module.clone())) {
+                    break;
+                }
+                if !self.public.contains(&(krate.clone(), module.clone())) {
+                    return None;
+                }
+            }
+        }
+        Some(path)
+    }
+
     fn unshim(&self, segments: &[String]) -> Option<Vec<String>> {
         let (_, mut path) = self.first_shim(segments)?;
         for _ in 0..8 {
@@ -521,6 +554,9 @@ struct Reader {
     module: Vec<String>,
     at_root: bool,
     aliases: BTreeMap<String, Vec<String>>,
+    /// Every inline module in the file, as its byte span and name, outermost
+    /// first, so the module at a point is the file's plus each enclosing one.
+    inline: Vec<(usize, usize, String)>,
 }
 
 impl Index {
@@ -565,8 +601,10 @@ impl Index {
                 module: module.clone(),
                 at_root: module.is_empty(),
                 aliases: BTreeMap::new(),
+                inline: Vec::new(),
             });
-        for item in SourceFile::parse(text, Edition::Edition2024).tree().items() {
+        let tree = SourceFile::parse(text, Edition::Edition2024).tree();
+        for item in tree.items() {
             if let ast::Item::Use(declaration) = item
                 && let Some(tree) = declaration.use_tree()
             {
@@ -577,32 +615,65 @@ impl Index {
                 );
             }
         }
+        // `descendants` is pre-order, so an outer module precedes its inner.
+        reader.inline = tree
+            .syntax()
+            .descendants()
+            .filter_map(ast::Module::cast)
+            .filter_map(|module| {
+                let list = module.item_list()?;
+                let span = list.syntax().text_range();
+                Some((
+                    usize::from(span.start()),
+                    usize::from(span.end()),
+                    module.name()?.text().to_string(),
+                ))
+            })
+            .collect();
         reader
     }
 
-    /// The shim `path`, read by `reader`, reaches first. `self::` and
-    /// `super::` are read from the file's module, and `super::` also as the
-    /// module itself, since inside an inline module it is the file's: an
-    /// over-read only keeps a shim public.
-    fn reached_shim(&self, reader: &Reader, path: &[String]) -> Vec<Shim> {
-        let rooted = |module: &[String]| -> Vec<String> {
+    /// `path`, written at byte `at` of the reader's file, as an absolute
+    /// path. `self::` and `super::` are read from the module AT THAT POINT —
+    /// the file's module plus every inline module enclosing it — so
+    /// `crate::surface_table::Half` inside `lib.rs`'s `mod tests` is the crate root's
+    /// `rules`, exactly. Anything else is [`Index::absolute_in`].
+    fn rooted_at(&self, reader: &Reader, at: usize, path: &[String]) -> Option<Vec<String>> {
+        if !matches!(path.first().map(String::as_str), Some("self" | "super")) {
+            return self.absolute_in(reader, path);
+        }
+        if reader.krate.is_empty() {
+            return None;
+        }
+        let mut module = reader.module.clone();
+        module.extend(
+            reader
+                .inline
+                .iter()
+                .filter(|(start, end, _)| (*start..*end).contains(&at))
+                .map(|(_, _, name)| name.clone()),
+        );
+        let mut rest = path;
+        if rest.first().is_some_and(|head| head == "self") {
+            rest = &rest[1..];
+        }
+        while rest.first().is_some_and(|head| head == "super") {
+            module.pop()?;
+            rest = &rest[1..];
+        }
+        Some(
             std::iter::once(reader.krate.clone())
-                .chain(module.iter().cloned())
-                .chain(path[1..].iter().cloned())
-                .collect()
-        };
-        let candidates: Vec<Vec<String>> = match path.first().map(String::as_str) {
-            Some("self") => vec![rooted(&reader.module)],
-            Some("super") => {
-                let parent = &reader.module[..reader.module.len().saturating_sub(1)];
-                vec![rooted(parent), rooted(&reader.module)]
-            }
-            _ => self.absolute_in(reader, path).into_iter().collect(),
-        };
-        candidates
-            .iter()
-            .filter_map(|absolute| self.first_shim(absolute).map(|(shim, _)| shim))
-            .collect()
+                .chain(module)
+                .chain(rest.iter().cloned())
+                .collect(),
+        )
+    }
+
+    /// The shim `path`, written at byte `at` of the reader's file, reaches
+    /// first.
+    fn reached_shim(&self, reader: &Reader, at: usize, path: &[String]) -> Option<Shim> {
+        let absolute = self.rooted_at(reader, at, path)?;
+        self.first_shim(&absolute).map(|(shim, _)| shim)
     }
 
     /// Every shim a module holds.
@@ -692,18 +763,15 @@ pub fn respell_through_shims(
         .collect()
 }
 
-/// Whether a use tree holds a glob or an underscore import (`Trait as _`)
-/// anywhere: either binds no name a leaf can carry, so the tree is left whole.
+/// Whether a use tree holds a glob anywhere: a glob binds names no leaf can
+/// carry, so the tree is left whole. (`Trait as _` is a leaf named `_`, which
+/// regenerates with its `as _` and is never judged by a name it does not
+/// bind.)
 fn binds_unnamed(tree: &ast::UseTree) -> bool {
     tree.syntax()
         .descendants()
         .filter_map(ast::UseTree::cast)
         .any(|nested| nested.star_token().is_some())
-        || tree
-            .syntax()
-            .descendants()
-            .filter_map(ast::Rename::cast)
-            .any(|rename| rename.underscore_token().is_some())
 }
 
 /// Pass 1: a `use` with a leaf through a shim, regenerated by prefix.
@@ -725,13 +793,14 @@ fn regroup_uses(text: &str, reader: &Reader, index: &Index) -> String {
         if binds_unnamed(&tree) {
             continue;
         }
+        let at = usize::from(declaration.syntax().text_range().start());
         let resolved: Vec<(crate::module_graph::UseLeaf, Option<Vec<String>>)> =
             crate::module_graph::use_leaves(&tree)
                 .into_iter()
                 .map(|leaf| {
                     let hit = index
-                        .absolute_in(reader, &leaf.path)
-                        .and_then(|absolute| index.unshim(&absolute));
+                        .rooted_at(reader, at, &leaf.path)
+                        .and_then(|absolute| index.respelled_for(&reader.krate, &absolute));
                     (leaf, hit)
                 })
                 .collect();
@@ -852,8 +921,8 @@ fn respell_paths(body: &str, reader: &Reader, index: &Index) -> String {
     let mut out = body.to_owned();
     for (at, segments, len) in paths_in(body).into_iter().rev() {
         if let Some(path) = index
-            .absolute_in(reader, &segments)
-            .and_then(|absolute| index.unshim(&absolute))
+            .rooted_at(reader, at, &segments)
+            .and_then(|absolute| index.respelled_for(&reader.krate, &absolute))
         {
             out.replace_range(at..at + len, &spell(&path, &reader.krate));
         }
@@ -866,7 +935,7 @@ fn respell_paths(body: &str, reader: &Reader, index: &Index) -> String {
 fn reached_shims(text: &str, reader: &Reader, index: &Index) -> Vec<Shim> {
     let mut reached: Vec<Shim> = paths_in(text)
         .into_iter()
-        .flat_map(|(_, segments, _)| index.reached_shim(reader, &segments))
+        .filter_map(|(at, segments, _)| index.reached_shim(reader, at, &segments))
         .collect();
     let parse = SourceFile::parse(text, Edition::Edition2024);
     for tree in parse
@@ -876,7 +945,8 @@ fn reached_shims(text: &str, reader: &Reader, index: &Index) -> Vec<Shim> {
         .filter_map(ast::UseTree::cast)
     {
         if tree.star_token().is_some() {
-            // A glob from a child of the shim's own file needs no `pub`.
+            // A `super::*` glob comes from a child of the module it names,
+            // which sees that module's private imports: it needs no `pub`.
             let Some(prefix) = tree.path() else { continue };
             let segments: Vec<String> = prefix
                 .syntax()
@@ -902,8 +972,9 @@ fn reached_shims(text: &str, reader: &Reader, index: &Index) -> Vec<Shim> {
         .filter_map(ast::Use::cast)
     {
         if let Some(tree) = declaration.use_tree() {
+            let at = usize::from(declaration.syntax().text_range().start());
             for leaf in crate::module_graph::use_leaves(&tree) {
-                reached.extend(index.reached_shim(reader, &leaf.path));
+                reached.extend(index.reached_shim(reader, at, &leaf.path));
             }
         }
     }
@@ -1556,14 +1627,31 @@ mod tests {
         ("src/user.rs", "fn g(_: crate::rules::Kind) {}\n"),
     ];
 
-    /// Fails by: a shim made private while a `super::` path still reaches
-    /// it — a compile error the recipe made — or a shim nothing reaches kept.
+    /// `super::` is read at the point it is written: the file's module plus
+    /// each enclosing inline module. Fails by: `super::Rule` in a child file
+    /// left at its shim; `super::rules::Half` in `lib.rs`'s inline test module
+    /// (the measured remainder) read as anything but the crate root's
+    /// `rules`; or a shim either reaches kept public once both are respelled.
     #[test]
-    fn a_shim_a_path_still_reaches_stays_public() {
-        let changed = respelled(REACHED);
+    fn a_super_path_is_read_at_its_module_and_respelled() {
+        let mut files = REACHED.to_vec();
+        files[1] = (
+            "src/lib.rs",
+            "pub mod model;\npub mod rules;\npub mod user;\n#[cfg(test)]\nmod tests {\n    fn t(_: super::rules::Kind) {}\n}\n",
+        );
+        let changed = respelled(&files);
+        assert_eq!(
+            changed["src/rules/inner.rs"],
+            "fn f(_: crate::model::Rule) {}\n"
+        );
+        assert!(
+            changed["src/lib.rs"].contains("fn t(_: crate::model::Kind)"),
+            "{}",
+            changed["src/lib.rs"]
+        );
         assert_eq!(
             changed["src/rules.rs"],
-            "pub use crate::model::Rule;\nuse crate::model::Kind;\npub mod inner;\n"
+            "use crate::model::Rule;\nuse crate::model::Kind;\npub mod inner;\n"
         );
     }
 
@@ -1719,6 +1807,40 @@ mod tests {
             !changed.contains_key("src/action.rs"),
             "{:?}",
             changed.get("src/action.rs")
+        );
+    }
+
+    /// Fails by: a test outside the crate respelled into a module that is
+    /// not `pub`, which does not compile from there (the path must stay, and
+    /// so must its shim's `pub`); or a group holding `Streamed as _` (the
+    /// measured `exec_streamed.rs` remainder) left whole, or regenerated
+    /// without its `as _`.
+    #[test]
+    fn an_outside_reader_is_never_respelled_into_a_private_module_and_as_underscore_survives() {
+        let changed = respelled(&[
+            ROOT,
+            ("src/lib.rs", "mod hidden;\npub mod open;\npub mod exec;\n"),
+            ("src/hidden.rs", "pub struct Keep;\n"),
+            ("src/open.rs", "pub trait Streamed {}\npub struct Plain;\n"),
+            (
+                "src/exec.rs",
+                "pub use crate::hidden::Keep;\npub use crate::open::{Plain, Streamed};\n",
+            ),
+            (
+                "tests/it.rs",
+                "use app::exec::{Keep, Plain, Streamed as _};\n",
+            ),
+        ]);
+        let test = &changed["tests/it.rs"];
+        assert!(test.contains("use app::exec::Keep;"), "{test}");
+        assert!(
+            test.contains("use app::open::{Plain, Streamed as _};"),
+            "{test}"
+        );
+        assert!(
+            changed["src/exec.rs"].starts_with("pub use crate::hidden::Keep;"),
+            "{}",
+            changed["src/exec.rs"]
         );
     }
 }

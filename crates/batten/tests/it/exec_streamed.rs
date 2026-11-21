@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use batten::exec::{Keep, Streamed as _};
+use batten::capture::{Keep, Streamed as _};
 
 /// Fails by: a stream lost or crossed, the status dropped, stdin left open
 /// (the child hangs reading it), or a stream past one pipe's 64 KiB
