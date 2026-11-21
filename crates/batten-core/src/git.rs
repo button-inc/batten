@@ -777,13 +777,24 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     // `--all`: every ref is a tip, and the walk keeps only the commits with no
     // parents. Selecting commits, never deciding reachability — the distinction
     // this module's ancestry gate draws.
-    let tips: Vec<gix::ObjectId> = all
+    let mut tips: Vec<gix::ObjectId> = all
         .filter_map(std::result::Result::ok)
         .filter_map(|reference| reference.into_fully_peeled_id().ok())
         .map(gix::Id::detach)
         .collect();
+    tips.sort_unstable();
+    tips.dedup();
+    // ONE WALK PER CALL (CLOUD-2813). The walk inflates every commit in the
+    // history, and `store::resolve` reached it three times per `stop`: measured
+    // by callgrind, 3 calls and 1.585 G of the path's 1.845 G instructions. The
+    // answer is a function of the tips ([`RootsKey`]), so within a hook call's
+    // scope it is computed once per distinct tip set.
+    let key: RootsKey = (repo.git_dir().to_path_buf(), tips);
+    if let Some(found) = with_opens(|opens| opens.2.get(&key).cloned()).flatten() {
+        return Ok(found);
+    }
     let mut found: Vec<String> = Vec::new();
-    if let Ok(walk) = repo.rev_walk(tips).all() {
+    if let Ok(walk) = repo.rev_walk(key.1.iter().copied()).all() {
         for info in walk.flatten() {
             if info.parent_ids().count() == 0 {
                 found.push(info.id().to_hex().to_string());
@@ -792,6 +803,7 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     }
     found.sort();
     found.dedup();
+    let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
     Ok(found)
 }
 
@@ -961,11 +973,25 @@ struct OpenKey {
 /// shape a source scan can tell from a read. A read that only needs an unshared
 /// handle takes [`open_fresh`], which spends nothing.
 ///
-/// `.0` is the remembered opens; `.1` is whether a write has spent the scope.
-/// A tuple rather than named fields so the memo's existing cases keep their
-/// base form (`test replay`).
+/// `.0` is the remembered opens; `.1` is whether a write has spent the scope;
+/// `.2` is [`root_commits`]' answers ([`RootsKey`]). A tuple rather than named
+/// fields so the memo's existing cases keep their base form (`test replay`).
 #[derive(Default)]
-struct Opens(BTreeMap<OpenKey, Opened>, bool);
+struct Opens(
+    BTreeMap<OpenKey, Opened>,
+    bool,
+    BTreeMap<RootsKey, Vec<String>>,
+);
+
+/// A [`root_commits`] answer's whole input: the repository's git directory and
+/// its sorted, deduplicated ref tips.
+///
+/// **Exact by construction, so a write need not spend it.** Commits are
+/// immutable, so the commits reachable from a set of tips, and the parentless
+/// ones among them, are a function of the tips alone. A write that moves a ref
+/// changes the tips and therefore the key; one that does not leaves the answer
+/// true.
+type RootsKey = (PathBuf, Vec<gix::ObjectId>);
 
 /// One remembered open: the repository, and the bytes its open read.
 struct Opened {
@@ -7331,6 +7357,30 @@ mod tests {
         (dir, [first, second, third])
     }
 
+    /// Fails by: the call's root-commit memo answering from a stale tip set — a
+    /// root added under a new ref mid-scope not reported — or two calls over
+    /// unchanged tips disagreeing (CLOUD-2813).
+    #[test]
+    fn a_root_added_mid_scope_is_seen_by_the_next_read() {
+        let (dir, [first, _, _]) = history("roots-memo");
+        let _scope = open_scope();
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        set_config_local(&dir, "user.name", "Fixture").expect("name");
+        set_config_local(&dir, "user.email", "fixture@example.invalid").expect("email");
+        let repo = gix::open(&dir).expect("open");
+        let tree = repo.empty_tree().id;
+        let orphan = repo
+            .commit("refs/heads/orphan", "orphan\n", tree, None::<gix::ObjectId>)
+            .expect("an orphan commit")
+            .detach()
+            .to_hex()
+            .to_string();
+        let mut both = vec![first, orphan];
+        both.sort();
+        assert_eq!(root_commits(&dir).unwrap(), both);
+    }
+
     /// Fails by: any history walk answering other than git does over the
     /// fixture — a range, a count, a reachable set, a message, an ancestry or a
     /// merge base — or answering nothing.
@@ -8676,7 +8726,14 @@ mod tests {
         ];
         let mut definitions = 0;
         for (dir, scan_tokens) in [("src", true), ("tests", false)] {
-            for entry in fs::read_dir(manifest.join(dir)).unwrap() {
+            // A crate with no integration tests has no `tests/`, and this one
+            // has none since the split: absent is an empty set there. `src/`
+            // absent is could-not-look and still panics.
+            let entries = match fs::read_dir(manifest.join(dir)) {
+                Err(e) if dir == "tests" && e.kind() == std::io::ErrorKind::NotFound => continue,
+                read => read.unwrap(),
+            };
+            for entry in entries {
                 let path = entry.unwrap().path();
                 if path.extension() != Some(OsStr::new("rs")) {
                     continue;
