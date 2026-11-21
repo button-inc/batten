@@ -44,6 +44,7 @@ use crate::budget::BudgetExt as _;
 use crate::commit::CommitExt as _;
 use crate::rules::RuleExt as _;
 use crate::rules::VerdictProgramExt as _;
+use crate::verdict::ApplicabilityExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -75,18 +76,12 @@ use crate::shell::shell_commands;
 use crate::shell::{Segment, SegmentLine, Separator, segments};
 use crate::verbs::{MutatingVerb, OperandScope};
 
-impl Harness {
+/// `Harness` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait HarnessExt: Sized {
     /// Every harness, so anything ranging over them is derived rather than
     /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
     /// stops a further adapter from landing with no fixture row.
-    pub const ALL: &'static [Harness] = &[
-        Harness::ClaudeCode,
-        Harness::Cursor,
-        Harness::CopilotCli,
-        Harness::GeminiCli,
-        Harness::CodexCli,
-        Harness::ExitCode,
-    ];
+    const ALL: &'static [Harness];
 
     /// The CLI token, identical to the `ValueEnum` spelling `--harness` accepts.
     ///
@@ -94,16 +89,7 @@ impl Harness {
     /// without building a command; `tests::every_harness_token_matches_its_clap_spelling`
     /// is what keeps the two from drifting.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Harness::ClaudeCode => "claude-code",
-            Harness::Cursor => "cursor",
-            Harness::CopilotCli => "copilot-cli",
-            Harness::GeminiCli => "gemini-cli",
-            Harness::CodexCli => "codex-cli",
-            Harness::ExitCode => "exit-code",
-        }
-    }
+    fn as_str(self) -> &'static str;
 
     /// Where this host reads its hook registrations, and which events to
     /// register under — or `None` for a variant that is a contract, not a host.
@@ -131,9 +117,7 @@ impl Harness {
     /// Cursor's four pre-tool events all normalize to [`Event::PreTool`], so
     /// reversing it would have to invent which of the four to register.
     #[must_use]
-    pub fn wiring(self) -> Option<Wiring> {
-        self.wiring_row()
-    }
+    fn wiring(self) -> Option<Wiring>;
 
     /// The variable this host sets to the session owner's email (CLOUD-2659).
     ///
@@ -141,12 +125,7 @@ impl Harness {
     /// name. Measured for Claude Code in a cloud container; every other host is
     /// `None` until surveyed, which is could-not-look, not "sets none".
     #[must_use]
-    pub const fn session_owner_email_var(self) -> Option<&'static str> {
-        match self {
-            Self::ClaudeCode => Some("CLAUDE_CODE_USER_EMAIL"),
-            _ => None,
-        }
-    }
+    fn session_owner_email_var(self) -> Option<&'static str>;
 
     /// Whether this host's payload at `spelling` omits `hook_event_name`, so
     /// the registration must name the event on argv (CLOUD-2700).
@@ -156,7 +135,197 @@ impl Harness {
     /// Without the name, the decoder would assume pre-tool, which is the wrong
     /// moment entirely.
     #[must_use]
-    pub fn names_event_on_argv(self, spelling: &str) -> bool {
+    fn names_event_on_argv(self, spelling: &str) -> bool;
+
+    fn wiring_row(self) -> Option<Wiring>;
+
+    /// Whether a deny on this host must carry its reason **in the JSON body**
+    /// rather than on stderr.
+    ///
+    /// The property is [`Capabilities::reason_travels_in_band`]'s and this reads
+    /// it (CLOUD-372). It was a `matches!` over two harness names until then —
+    /// a host property declared outside the table CLOUD-45 made the authority,
+    /// so a seventh harness was correct only if whoever added it remembered the
+    /// second place, and a forgotten `matches!` arm stays compiling and answers
+    /// `false`. The accessor survives the move because callers ask a harness,
+    /// not a table; what changed is where the answer comes from.
+    #[must_use]
+    fn reason_travels_in_band(self) -> bool;
+
+    /// How this harness states that it runs hosted: the variable it exports and
+    /// the value meaning a hosted, disposable session (CLOUD-2709), or `None`
+    /// where its hosted form states nothing and the declaration decides.
+    ///
+    /// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured
+    /// in this repository's own sessions, 2026-11-10). A harness gains a signal
+    /// here when its hosted form is measured stating one.
+    #[must_use]
+    fn host_signal(self) -> Option<crate::environment::HostSignal>;
+
+    /// The tools on this host whose call **writes the path it names**.
+    ///
+    /// A host fact, so it lives in the adapter rather than in `[[rule]]`: the
+    /// consumer declares *which paths* are protected, and the adapter declares
+    /// *which of its tools* are a write. Neither table can be derived from the
+    /// other, and a consumer cannot be asked to name a host's tool inventory.
+    ///
+    /// The set has to be named because a path alone does not say what is being
+    /// done to it. `Read` and `Write` both carry `file_path`, so judging every
+    /// payload that has one would refuse reading a protected file — a deny with
+    /// no rationale, and the kind of false positive that gets a guard switched
+    /// off.
+    ///
+    /// Each host answers for itself even where the answers coincide, because
+    /// coincidence is not agreement: [`Harness::CodexCli`] is a near-verbatim
+    /// clone of Claude's wire format *today*, and folding it into a shared
+    /// constant would silently re-point it if that ever stopped being true.
+    #[must_use]
+    fn write_tools(self) -> &'static [&'static str];
+
+    /// The tool through which this host puts a question to its human, if it has
+    /// one (CLOUD-1078).
+    ///
+    /// A host fact for [`Harness::write_tools`]' reason: the consumer cannot be
+    /// asked to name a host's tool inventory. It is what [`crate::asked`] records
+    /// from, and so the ONLY route by which a weakening is admitted — a host that
+    /// answers `None` can admit no weakening at all, which is the safe direction.
+    ///
+    /// Only Claude Code's is surveyed. The neutral [`Harness::ExitCode`] contract
+    /// answers `None` on purpose: it is a caller composing an envelope by hand,
+    /// and a hand-composed answer is precisely the one this route must not
+    /// accept. Every other host answers `None` until its tool is measured, for
+    /// [`Harness::operation_of`]'s reason — a safe unknown over a confident guess.
+    #[must_use]
+    fn question_tool(self) -> Option<&'static str>;
+
+    /// Classify this host's tool name into the neutral [`Operation`] vocabulary.
+    ///
+    /// The write arm reuses [`Harness::write_tools`] rather than restating it:
+    /// that table is what [`Envelope::writes`] is already derived from, and two
+    /// lists of the same host fact is how the two come to disagree.
+    ///
+    /// **What is NOT declared here is as deliberate as what is.** Gemini and
+    /// Copilot get no read/shell/MCP/subagent spellings, because the M1 survey
+    /// (CLOUD-209) recorded their event names and their write tools and did not
+    /// record those, and its own instruction is that "anything re-derived without
+    /// a fetch should be assumed wrong". Their other calls therefore classify as
+    /// [`Operation::Other`] — could not look — which every dispatch below reads
+    /// as *unknown* rather than as *harmless*. Inventing a spelling would trade a
+    /// safe unknown for a confident wrong answer.
+    ///
+    /// Cursor's three constants are the ones its specialized events already
+    /// synthesize (`Shell`/`Read`/`MCP`, from `cursor_specialized_tool`), so this
+    /// classifies what that adapter actually produces rather than a second guess
+    /// at the same host.
+    #[must_use]
+    fn operation_of(self, raw_tool: &str) -> Operation;
+
+    /// The record shape this host writes its session transcript in, or that
+    /// nobody has looked (CLOUD-1624).
+    ///
+    /// **`transcript.rs` used to carry one host's shape with no dispatch at all**,
+    /// so a transcript from any other host decoded to a record whose every field
+    /// was `None`, `parse` yielded zero events, and the four gates over it —
+    /// declared-done-not-landed, deny-then-retry, non-empty frontier at stop,
+    /// unprompted self-write — all reported clean. That is the false green the
+    /// module's own header forbids, and it is what this table exists to stop.
+    ///
+    /// The three-valued reading is [`PlanTools`]'s, one layer over: an
+    /// unsurveyed host is **could-not-look**, never "this host records nothing".
+    /// A host measured to write no transcript would be a surveyed answer and
+    /// would get its own arm; none is measured today.
+    #[must_use]
+    fn transcript_shape(self) -> TranscriptShape;
+
+    /// This host's capability row.
+    ///
+    /// Every field is a survey finding (CLOUD-209), not a guess. The neutral
+    /// `exit-code` adapter declares the converged core: it stands for "some host
+    /// whose only channel is an exit status", and claiming a Claude-only event
+    /// for it would be claiming something about a host nobody named.
+    #[must_use]
+    fn capabilities(self) -> Capabilities;
+
+    /// The **home-relative** files this host merges hook configuration from,
+    /// beyond the committed one [`Harness::wiring`] names (CLOUD-525).
+    ///
+    /// # Why this is a harness fact and not a consumer's
+    ///
+    /// Non-negotiable rule 1 keeps consumer identifiers out of the core, and
+    /// this satisfies it exactly the way [`WiringFile`] does: **which files a
+    /// host merges its own hook config from is a fact about the host**, no more
+    /// a consumer identifier than `.claude/settings.json` is. A grep of
+    /// `crates/batten` for any particular repository's names still returns
+    /// nothing.
+    ///
+    /// # Home-relative, because absolute would be unstatable
+    ///
+    /// The paths are relative to the user's home directory and joined at the
+    /// read. An absolute path differs per machine and per user, so it could not
+    /// be a `const` here and could never be reported — §6 byte-stability and
+    /// rule 4 both forbid emitting one. What the core states is the **layout**;
+    /// where that layout lives is resolved once, at the boundary.
+    ///
+    /// # What this does NOT answer
+    ///
+    /// *What did this process load at start* — CLOUD-187's boundary, untouched
+    /// and unreachable from inside. This answers *what does this host merge*,
+    /// which is a different question with a different mechanism, and conflating
+    /// the two is what made the census look impossible. The merged set is a
+    /// strictly better approximation of the running wiring than the committed
+    /// set alone, and it is what every reader of the committed file already
+    /// treats as the whole story.
+    #[must_use]
+    fn merge_surfaces(self) -> &'static [&'static str];
+
+    /// The **home-relative** tree this host keeps its per-project MCP connection
+    /// logs under, or `None` where nobody has surveyed one (CLOUD-843).
+    ///
+    /// A harness fact for [`Harness::merge_surfaces`]' reason: where a host
+    /// writes its own logs is a fact about the host, and `mcp posture` reads the
+    /// last connection outcome there. The host keys the project directory
+    /// beneath it; that joining is the caller's.
+    ///
+    /// **`None` is unsurveyed, not "keeps none"** — the same reading
+    /// `project_dir_var` takes — so a posture run on such a host says it could
+    /// not look rather than reporting a clean attach.
+    #[must_use]
+    fn mcp_logs(self) -> Option<&'static str>;
+}
+
+impl HarnessExt for Harness {
+    const ALL: &'static [Harness] = &[
+        Harness::ClaudeCode,
+        Harness::Cursor,
+        Harness::CopilotCli,
+        Harness::GeminiCli,
+        Harness::CodexCli,
+        Harness::ExitCode,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "claude-code",
+            Harness::Cursor => "cursor",
+            Harness::CopilotCli => "copilot-cli",
+            Harness::GeminiCli => "gemini-cli",
+            Harness::CodexCli => "codex-cli",
+            Harness::ExitCode => "exit-code",
+        }
+    }
+
+    fn wiring(self) -> Option<Wiring> {
+        self.wiring_row()
+    }
+
+    fn session_owner_email_var(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("CLAUDE_CODE_USER_EMAIL"),
+            _ => None,
+        }
+    }
+
+    fn names_event_on_argv(self, spelling: &str) -> bool {
         self == Harness::CopilotCli && spelling.starts_with(|c: char| c.is_ascii_lowercase())
     }
 
@@ -269,30 +438,11 @@ impl Harness {
         }
     }
 
-    /// Whether a deny on this host must carry its reason **in the JSON body**
-    /// rather than on stderr.
-    ///
-    /// The property is [`Capabilities::reason_travels_in_band`]'s and this reads
-    /// it (CLOUD-372). It was a `matches!` over two harness names until then —
-    /// a host property declared outside the table CLOUD-45 made the authority,
-    /// so a seventh harness was correct only if whoever added it remembered the
-    /// second place, and a forgotten `matches!` arm stays compiling and answers
-    /// `false`. The accessor survives the move because callers ask a harness,
-    /// not a table; what changed is where the answer comes from.
-    #[must_use]
-    pub const fn reason_travels_in_band(self) -> bool {
+    fn reason_travels_in_band(self) -> bool {
         self.capabilities().reason_travels_in_band
     }
 
-    /// How this harness states that it runs hosted: the variable it exports and
-    /// the value meaning a hosted, disposable session (CLOUD-2709), or `None`
-    /// where its hosted form states nothing and the declaration decides.
-    ///
-    /// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured
-    /// in this repository's own sessions, 2026-11-10). A harness gains a signal
-    /// here when its hosted form is measured stating one.
-    #[must_use]
-    pub const fn host_signal(self) -> Option<crate::environment::HostSignal> {
+    fn host_signal(self) -> Option<crate::environment::HostSignal> {
         match self {
             Harness::ClaudeCode => Some(("CLAUDE_CODE_REMOTE", "true")),
             Harness::CodexCli
@@ -303,25 +453,7 @@ impl Harness {
         }
     }
 
-    /// The tools on this host whose call **writes the path it names**.
-    ///
-    /// A host fact, so it lives in the adapter rather than in `[[rule]]`: the
-    /// consumer declares *which paths* are protected, and the adapter declares
-    /// *which of its tools* are a write. Neither table can be derived from the
-    /// other, and a consumer cannot be asked to name a host's tool inventory.
-    ///
-    /// The set has to be named because a path alone does not say what is being
-    /// done to it. `Read` and `Write` both carry `file_path`, so judging every
-    /// payload that has one would refuse reading a protected file — a deny with
-    /// no rationale, and the kind of false positive that gets a guard switched
-    /// off.
-    ///
-    /// Each host answers for itself even where the answers coincide, because
-    /// coincidence is not agreement: [`Harness::CodexCli`] is a near-verbatim
-    /// clone of Claude's wire format *today*, and folding it into a shared
-    /// constant would silently re-point it if that ever stopped being true.
-    #[must_use]
-    pub const fn write_tools(self) -> &'static [&'static str] {
+    fn write_tools(self) -> &'static [&'static str] {
         match self {
             Harness::ClaudeCode | Harness::CodexCli => {
                 &["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -335,21 +467,7 @@ impl Harness {
         }
     }
 
-    /// The tool through which this host puts a question to its human, if it has
-    /// one (CLOUD-1078).
-    ///
-    /// A host fact for [`Harness::write_tools`]' reason: the consumer cannot be
-    /// asked to name a host's tool inventory. It is what [`crate::asked`] records
-    /// from, and so the ONLY route by which a weakening is admitted — a host that
-    /// answers `None` can admit no weakening at all, which is the safe direction.
-    ///
-    /// Only Claude Code's is surveyed. The neutral [`Harness::ExitCode`] contract
-    /// answers `None` on purpose: it is a caller composing an envelope by hand,
-    /// and a hand-composed answer is precisely the one this route must not
-    /// accept. Every other host answers `None` until its tool is measured, for
-    /// [`Harness::operation_of`]'s reason — a safe unknown over a confident guess.
-    #[must_use]
-    pub const fn question_tool(self) -> Option<&'static str> {
+    fn question_tool(self) -> Option<&'static str> {
         match self {
             Harness::ClaudeCode => Some("AskUserQuestion"),
             Harness::CodexCli
@@ -360,27 +478,7 @@ impl Harness {
         }
     }
 
-    /// Classify this host's tool name into the neutral [`Operation`] vocabulary.
-    ///
-    /// The write arm reuses [`Harness::write_tools`] rather than restating it:
-    /// that table is what [`Envelope::writes`] is already derived from, and two
-    /// lists of the same host fact is how the two come to disagree.
-    ///
-    /// **What is NOT declared here is as deliberate as what is.** Gemini and
-    /// Copilot get no read/shell/MCP/subagent spellings, because the M1 survey
-    /// (CLOUD-209) recorded their event names and their write tools and did not
-    /// record those, and its own instruction is that "anything re-derived without
-    /// a fetch should be assumed wrong". Their other calls therefore classify as
-    /// [`Operation::Other`] — could not look — which every dispatch below reads
-    /// as *unknown* rather than as *harmless*. Inventing a spelling would trade a
-    /// safe unknown for a confident wrong answer.
-    ///
-    /// Cursor's three constants are the ones its specialized events already
-    /// synthesize (`Shell`/`Read`/`MCP`, from `cursor_specialized_tool`), so this
-    /// classifies what that adapter actually produces rather than a second guess
-    /// at the same host.
-    #[must_use]
-    pub fn operation_of(self, raw_tool: &str) -> Operation {
+    fn operation_of(self, raw_tool: &str) -> Operation {
         // An absent tool name is not a tool called "": it is a payload that did
         // not say. `Other` carries the empty spelling so the distinction stays
         // readable, and no arm below can mistake it for a classification.
@@ -417,29 +515,8 @@ impl Harness {
         }
     }
 
-    /// The record shape this host writes its session transcript in, or that
-    /// nobody has looked (CLOUD-1624).
-    ///
-    /// **`transcript.rs` used to carry one host's shape with no dispatch at all**,
-    /// so a transcript from any other host decoded to a record whose every field
-    /// was `None`, `parse` yielded zero events, and the four gates over it —
-    /// declared-done-not-landed, deny-then-retry, non-empty frontier at stop,
-    /// unprompted self-write — all reported clean. That is the false green the
-    /// module's own header forbids, and it is what this table exists to stop.
-    ///
-    /// The three-valued reading is [`PlanTools`]'s, one layer over: an
-    /// unsurveyed host is **could-not-look**, never "this host records nothing".
-    /// A host measured to write no transcript would be a surveyed answer and
-    /// would get its own arm; none is measured today.
-    #[must_use]
-    // `match_same_arms` would collapse the two surveyed rows. Refused for
-    // `merge_surfaces`'s reason: they are JSONL for DIFFERENT measured reasons —
-    // one is a host's fetched wire format, the other the neutral contract's
-    // normalized record, which is not a host's at all. Collapsing them would
-    // delete the distinction and make the day either moves a structural edit
-    // rather than a one-value one.
     #[allow(clippy::match_same_arms)]
-    pub const fn transcript_shape(self) -> TranscriptShape {
+    fn transcript_shape(self) -> TranscriptShape {
         match self {
             Harness::ClaudeCode => TranscriptShape::Surveyed(RecordShape::Jsonl),
             // The neutral contract states the normalized shape, exactly as
@@ -457,6 +534,406 @@ impl Harness {
             Harness::CodexCli | Harness::Cursor | Harness::GeminiCli | Harness::CopilotCli => {
                 TranscriptShape::Unsurveyed("CLOUD-1781")
             }
+        }
+    }
+
+    #[allow(clippy::match_same_arms)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a per-host capability table grows by rows; splitting it would re-create the split this row closed"
+    )]
+    fn capabilities(self) -> Capabilities {
+        match self {
+            Harness::ClaudeCode => Capabilities {
+                // Fetched: this session's own tool surface; and `TodoWrite` from
+                // the tools reference (code.claude.com/docs/en/tools-reference,
+                // 2026-10-16), the checklist tool a session gets in place of the
+                // Task tools under `CLAUDE_CODE_ENABLE_TASKS=0` (CLOUD-2400).
+                plan_tools: PlanTools::Surveyed(&["TaskCreate", "TaskUpdate", "TodoWrite"]),
+                events: CLAUDE_EVENTS,
+                // Documented, and merged most-restrictive-first by the host
+                // itself (`deny > defer > ask > allow`), so an ask cannot
+                // override another hook's deny. `PreToolUse` is the only event
+                // that carries the verdict and the only one Batten adjudicates.
+                ask: AskReach {
+                    enforced_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // The four surfaces this repository has actually run an
+                // advisory on, which is why they and not the other four are
+                // listed. `PostToolBatch` is documented for exactly this —
+                // "return additionalContext via hookSpecificOutput to inject
+                // context once for the whole batch" — and CLOUD-187 measured the
+                // entry firing; `SessionStart` seeds the same notice; `Stop`
+                // carries the end-of-turn nudges, whose header records all three
+                // channels verified by probe.
+                //
+                // `PreToolUse` IS ONE OF THEM, AND IT WAS ADDED BY MEASUREMENT
+                // RATHER THAN BY READING THE DOCS (CLOUD-1131). It was excluded
+                // for its whole life on the claim that this event's only
+                // model-facing channel is exit 2 — a deny — so an advisory there
+                // would either be discarded or become a refusal. **That claim was
+                // never probed, and it is false.** Measured 2026-08-29 as a
+                // discriminating pair over one command, one word of this list
+                // apart: `jq --version` (which trips `pinned-toolchain-preset`,
+                // a live `severity = "warn"` mediated row) delivered
+                // `PreToolUse:Bash hook additional context: … pin reach loose …`
+                // to the agent with the entry present, and delivered nothing with
+                // it absent. The call was ALLOWED both times and the exit code
+                // never moved, which is the half that matters: the host carries a
+                // non-blocking advisory at `PreToolUse`, and the only thing that
+                // had ever suppressed it was `encode_advice` consulting this list
+                // before building a wire shape.
+                //
+                // The lesson is the `Unknown`-versus-`No` discipline read the
+                // wrong way round. Leaving an unprobed surface out is the safe
+                // default for DELIVERY — it costs silence rather than a notice
+                // that vanishes — but it is not evidence about the host, and the
+                // comment here had hardened into one. CLOUD-1131's first attempt
+                // then cited this table's position as a measurement of Claude
+                // Code and declined to ship a gate over it.
+                //
+                // `PostToolUse` and `UserPromptSubmit` are documented to accept
+                // the field and are still NOT listed, because nothing here has
+                // probed them — the discipline stands, now stated as what it is.
+                // `ADVISORY_GAPS` names them.
+                advisory: AdvisoryReach {
+                    delivered_on: &["PreToolUse", "PostToolBatch", "SessionStart", "Stop"],
+                    declared: Declaration::Yes,
+                },
+                // THE COMPLEMENT OF THE ROW ABOVE, and the only host that fills
+                // this column. `permissionDecision: "allow"` is documented on
+                // `PreToolUse` and is what stops the host prompting; the advisory
+                // row reaches three OTHER events and not this one, so the two
+                // columns partition the surfaces rather than overlapping on any.
+                //
+                // `PreToolUse` alone, not the other three pre-tool-ish events this
+                // host emits: a permission decision is meaningless after the call
+                // has run, and the host documents the field on exactly this one.
+                // That is a measurement rather than a narrowing — there is no
+                // `PostToolUse` prompt to suppress.
+                preapprove: PreapproveReach {
+                    honoured_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // MEASURED 2026-10-08 (CLOUD-2171), live in a Claude Code cloud
+                // session through this engine's own `PostToolUse` hook: a Bash
+                // call printing a full arm the context had already seen, plus a
+                // trailing line, came back as the pointer arm and the trailing
+                // line. The rewrite reaches the model; the rest is untouched.
+                rewrites_tool_output: Declaration::Yes,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // exit 2 discards this host's stdout JSON, so the two channels are
+                // exclusive and the richer one wins.
+                reason_travels_in_band: true,
+                // The one host whose attribution rows are not the shared
+                // "unsurveyed" group, because this repository measured its own
+                // history under it (2026-08-09, recorded in
+                // [`crate::attribution`]'s module docs): 18 of the first 50
+                // `main` commits carried a model-versioned co-authorship
+                // trailer and 20 a session URL, and one trailer survived the
+                // host's own off-switch.
+                attribution: AttributionCapabilities {
+                    // Measured as environment-injected — container git config
+                    // plus harness prompt — which cannot separate the host from
+                    // the container, so the host is not credited with it.
+                    sets_git_identity: Declaration::Unknown,
+                    injects_coauthorship_trailer: Declaration::Yes,
+                    injects_session_link_trailer: Declaration::Yes,
+                    exposes_model_id: Declaration::Unknown,
+                    exposes_session_id: Declaration::Yes,
+                    // A setting exists and demonstrably does not govern every
+                    // injection path. Neither `Yes` nor `No` is true of it.
+                    config_surface: Declaration::Partial,
+                },
+                // The one host with a measured capture row, and it is one cell
+                // of three. `tests/board-write-record.bats` reads this host's
+                // MCP content-block response shape, so the post-tool member is
+                // reachable — as DECODED content, because [`decode`] hands the
+                // engine an already-parsed value and the member's original
+                // bytes are gone by then. `LexicalBytes` would need the decoder
+                // to keep the member's raw span, which no surface here does, so
+                // claiming it would be the one claim
+                // [`crate::capture::Fidelity`]'s reserved word forbids.
+                //
+                // Nothing here spills a response to a file, and nothing reads
+                // the transcript for one, so both are unreachable rather than
+                // unmeasured — but `Unavailable` is the same answer either way
+                // and does not overstate which.
+                capture: CaptureCapabilities {
+                    post_tool_member: crate::capture::Fidelity::DecodedContent,
+                    spill_path: crate::capture::Fidelity::Unavailable,
+                    transcript: crate::capture::Fidelity::Unavailable,
+                },
+            },
+            Harness::Cursor => Capabilities {
+                // Searched 2026-09-01 and NOT fetched: the host has a Todos
+                // feature from 1.2, but no vendor-documented tool spelling was
+                // found, and a name taken from a forum post is exactly what
+                // CLOUD-209's "assume it wrong without a fetch" refuses.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
+                events: CURSOR_EVENTS,
+                // The row that forced this column to become event-scoped
+                // (CLOUD-601). M1 records the verdict vocabulary as
+                // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
+                // `beforeMCPExecution`, `allow|deny` on the generic `preToolUse`
+                // where `ask` "parses but is not enforced" — and coerced to deny
+                // on `subagentStart`. `Harness::wiring` registers the generic
+                // event, so escalation is declared and today unreachable; that
+                // gap is stated in `ASK_GAPS` rather than smoothed over, and it
+                // closes on its own when CLOUD-777 registers these two surfaces.
+                ask: AskReach {
+                    enforced_on: &["beforeShellExecution", "beforeMCPExecution"],
+                    declared: Declaration::Yes,
+                },
+                // `Unknown`, not `No`: M1 surveys this host's verdict vocabulary
+                // and carries no row for a non-blocking message to the model at
+                // all, so the evidence does not answer. Recorded as a gap rather
+                // than guessed into either value.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // `Unknown` for this host's own reason: M1 surveys its verdict
+                // vocabulary as allow/deny/ask and says nothing about a
+                // pre-approval that suppresses a prompt. `ask` here is enforced on
+                // two events, so the host clearly HAS a permission dialogue — what
+                // the evidence does not answer is whether anything skips it.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: true,
+                stdout_must_stay_clean: false,
+                // the one surveyed host that assigns no meaning to stderr at all, so a
+                // deny explained there would explain itself to nobody.
+                reason_travels_in_band: true,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            Harness::CopilotCli => Capabilities {
+                // Not fetched, like the rest of this host's tool surface — the
+                // same survey gap `operation_of` records for it.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
+                events: COPILOT_EVENTS,
+                // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
+                // verdict exists and names the `preToolUse` output *fields*
+                // (`permissionDecision`/`permissionDecisionReason`) without
+                // naming the object they sit in. Claude's `hookSpecificOutput`
+                // envelope is a guess on the strength of the field names, and a
+                // guessed envelope that fails to parse is read as no decision —
+                // an allow. "Could not confirm" is a legitimate stored answer
+                // (CLOUD-757's three-valued discipline); guessing is not, so
+                // `enforced_on` is empty until a primary-doc fetch fills it.
+                ask: AskReach::unreachable(Declaration::Unknown),
+                // Same evidentiary state as this host's `ask` row and for the
+                // same reason: the output object is unconfirmed by primary
+                // docs, so no envelope can be emitted without guessing one.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Same evidentiary state as this host's other two channels: M1
+                // names the `preToolUse` output FIELDS without naming the object
+                // they sit in, so no document can be emitted without guessing an
+                // envelope, and a guessed envelope reads as no decision at all.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                timeout_fails_open: true,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            Harness::GeminiCli => Capabilities {
+                // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
+                // default and disableable with `"useWriteTodos": false`.
+                plan_tools: PlanTools::Surveyed(&["write_todos"]),
+                events: GEMINI_EVENTS,
+                // Allow/deny only. A policy wanting confirmation must hard-deny
+                // here — degrading to *allow* would turn "ask a human" into "go
+                // ahead".
+                ask: AskReach::unreachable(Declaration::No),
+                // REACHABLE SINCE CLOUD-1362, AND THE ROW ABOVE IT IS WHY IT
+                // ALWAYS WAS. This read `AdvisoryReach::unreachable(Yes)` with
+                // the reason "the only door is writing bytes this host's own
+                // `stdout_must_stay_clean` row forbids". That conflated two
+                // different things and stalled CLOUD-1152 for days.
+                //
+                // `stdout_must_stay_clean` is about STRAY output: unparseable
+                // stdout ON EXIT 0 defaults to Allow and is read as a
+                // `systemMessage`. The hazard it guards is a DECISION document
+                // corrupted into an accidental allow. An advisory is not a
+                // decision — it wants allow-plus-a-message, which is precisely
+                // what the Golden Rule delivers. The door is the mechanism, not
+                // the obstacle.
+                //
+                // The collision that would have made it an obstacle is closed by
+                // construction: `emit_channel` returns early when the decision is
+                // `Deny` or `Ask` (CLOUD-1175), so an advisory and a verdict never
+                // share one invocation's stdout. On the path where advice is
+                // emitted at all, the decision is already `Allow` — so the bytes
+                // this host reads as "allow, and tell the model" say exactly what
+                // the engine decided.
+                //
+                // Corroborated rather than argued: `admit_mediated` already
+                // writes a bare prose line to stdout on the admitted-call path,
+                // so this door has been open on a live allow path with no defect
+                // reported, for the same reason.
+                //
+                // All four spellings, and the per-event probe discipline
+                // `ADVISORY_GAPS` applies to Claude Code does NOT transfer here —
+                // reading that rejection without its scope is the error
+                // `rules/scanning.md` records. There the question is
+                // whether a documented FIELD is honoured at a given event, which
+                // is genuinely per-event. Here it is how the host parses a hook's
+                // stdout, which is a property of the host's reader and not of the
+                // moment. If it is ever measured otherwise the cost is silence,
+                // the sanctioned direction.
+                advisory: AdvisoryReach {
+                    delivered_on: &["BeforeTool", "AfterTool", "AfterAgent", "BeforeAgent"],
+                    declared: Declaration::Yes,
+                },
+                // `Unknown` rather than the `Yes` its advisory row carries. That
+                // row is `Yes` because the host demonstrably HAS the channel and
+                // Batten cannot reach it; here the evidence does not establish the
+                // channel exists at all. Two different unreachabilities, and
+                // collapsing them would be the guess `Declaration` exists to
+                // refuse.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: true,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            Harness::CodexCli => Capabilities {
+                // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
+                plan_tools: PlanTools::Surveyed(&["update_plan"]),
+                events: CODEX_EVENTS,
+                // Advertised in the output schema, marked "parsed but not
+                // supported yet" in the docs. Advertised is not available, and
+                // that is a measurement rather than a gap — hence `No`.
+                ask: AskReach::unreachable(Declaration::No),
+                // The survey names this host's verdict fields and no advisory
+                // one. Unanswered, so `Unknown`.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Unsurveyed, like this host's advisory row. Its `ask` field is
+                // "parsed but not supported yet", which says nothing either way
+                // about a grant.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            Harness::ExitCode => Capabilities {
+                // The neutral contract carries no host tool surface of its own.
+                plan_tools: PlanTools::Surveyed(&[]),
+                // Every moment, not the converged four: this is Batten's own
+                // envelope, so it carries whatever the core normalizes, and a
+                // handler keyed on any of them runs here (CLOUD-2674).
+                events: Event::MOMENTS,
+                // Not a host: the channel is the exit status alone, which has no
+                // third value to carry an escalation. Measured, not unsurveyed.
+                ask: AskReach::unreachable(Declaration::No),
+                // `No`, and measured for the same reason: an exit status has no
+                // room for a message. This is the normalized envelope Batten
+                // itself defines, so the shape IS the answer rather than a gap
+                // in somebody else's documentation.
+                advisory: AdvisoryReach::unreachable(Declaration::No),
+                // `No`, measured, for the reason this adapter's other channels
+                // are: an exit status has three values and none of them can say
+                // "and do not prompt". This is Batten's own normalized envelope,
+                // so the shape IS the answer rather than a gap in somebody's
+                // documentation.
+                preapprove: PreapproveReach::unreachable(Declaration::No),
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // the caller reads the exit code and stderr; there is no document.
+                reason_travels_in_band: false,
+                // The one column that is `No` rather than `Unknown`, and it is a
+                // measurement rather than a guess: this is not a third party. It
+                // is the normalized envelope Batten itself defines, and that
+                // shape carries a session and nothing else on this list — no
+                // identity, no trailers, no model id, no config surface. A
+                // caller composing it by hand states the shape, so the shape is
+                // the answer.
+                attribution: AttributionCapabilities {
+                    sets_git_identity: Declaration::No,
+                    injects_coauthorship_trailer: Declaration::No,
+                    injects_session_link_trailer: Declaration::No,
+                    exposes_model_id: Declaration::No,
+                    exposes_session_id: Declaration::Yes,
+                    config_surface: Declaration::No,
+                },
+                // `Unavailable` here is a measurement rather than a gap, for
+                // this arm's usual reason: this is not a third party. It is the
+                // normalized envelope Batten itself defines, and a caller
+                // composing it by hand carries no response surface at all — so
+                // the shape IS the answer. It coincides with the unsurveyed
+                // group's value and does not mean the same thing, which is why
+                // it is spelled out rather than borrowed.
+                capture: CaptureCapabilities {
+                    post_tool_member: crate::capture::Fidelity::Unavailable,
+                    spill_path: crate::capture::Fidelity::Unavailable,
+                    transcript: crate::capture::Fidelity::Unavailable,
+                },
+            },
+        }
+    }
+
+    #[allow(clippy::match_same_arms)]
+    fn merge_surfaces(self) -> &'static [&'static str] {
+        match self {
+            // Measured in one container 2026-08-21: the committed file declares
+            // two `Stop` handlers and three on `SessionStart`, while the runtime
+            // ran three and four. The extra registrations came from a
+            // user-level file and a launcher-provisioned one, neither of which
+            // any committed surface declares and neither of which any gate read.
+            Harness::ClaudeCode => &[
+                ".claude/settings.json",
+                ".claude/settings.local.json",
+                ".claude/launcher-settings.json",
+            ],
+            // Gemini merges the same user-level file its committed wiring is
+            // keyed in — one layout, two locations.
+            Harness::GeminiCli => &[".gemini/settings.json"],
+            // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
+            // hooks-only project file and the survey records no user-level merge
+            // for them, so there is nothing beyond the committed surface to
+            // read. Stated per host rather than wildcarded, so a host that turns
+            // out to merge has to be answered for rather than defaulting to
+            // "does not".
+            Harness::Cursor | Harness::CopilotCli | Harness::CodexCli => &[],
+            // Not a host: the neutral contract is an envelope in and an exit
+            // status out, with no file to merge.
+            Harness::ExitCode => &[],
+        }
+    }
+
+    fn mcp_logs(self) -> Option<&'static str> {
+        match self {
+            // Measured on the retired `mcp-attach-check` (CLOUD-316): the CLI
+            // writes `mcp-logs-<server>/<attempt>.jsonl` beneath this tree.
+            Harness::ClaudeCode => Some(".cache/claude-cli-nodejs"),
+            Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::CodexCli
+            | Harness::GeminiCli
+            | Harness::ExitCode => None,
         }
     }
 }
@@ -1463,6 +1940,27 @@ pub(crate) enum EntryShape {
     },
 }
 
+/// The `Harness` behaviour that names a `pub(crate)` type, kept at that
+/// visibility. On the `pub` [`HarnessExt`] it exposed `EntryShape`, which is
+/// crate-internal on purpose (CLOUD-2793).
+pub(crate) trait HarnessWiringExt: Sized {
+    /// The entry shape this host reads (CLOUD-2694); the one function every
+    /// writer and reader asks, so render, register, doctor and reclaim agree.
+    fn entry_shape(self) -> EntryShape;
+}
+
+impl HarnessWiringExt for Harness {
+    fn entry_shape(self) -> EntryShape {
+        match self {
+            Harness::Cursor => CURSOR_ENTRY,
+            Harness::CopilotCli => COPILOT_ENTRY,
+            Harness::ClaudeCode | Harness::CodexCli | Harness::GeminiCli | Harness::ExitCode => {
+                EntryShape::Nested
+            }
+        }
+    }
+}
+
 /// Cursor's flat entry: `{"type": "command", "command": …}`.
 const CURSOR_ENTRY: EntryShape = EntryShape::Flat {
     write: "command",
@@ -1474,20 +1972,6 @@ const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
     write: "bash",
     read: &["bash", "command"],
 };
-
-impl Harness {
-    /// The entry shape this host reads (CLOUD-2694); the one function every
-    /// writer and reader asks, so render, register, doctor and reclaim agree.
-    pub(crate) const fn entry_shape(self) -> EntryShape {
-        match self {
-            Harness::Cursor => CURSOR_ENTRY,
-            Harness::CopilotCli => COPILOT_ENTRY,
-            Harness::ClaudeCode | Harness::CodexCli | Harness::GeminiCli | Harness::ExitCode => {
-                EntryShape::Nested
-            }
-        }
-    }
-}
 
 /// The command a host's registration invokes.
 ///
@@ -1784,479 +2268,6 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::MessageDisplay,
 ];
 
-impl Harness {
-    /// This host's capability row.
-    ///
-    /// Every field is a survey finding (CLOUD-209), not a guess. The neutral
-    /// `exit-code` adapter declares the converged core: it stands for "some host
-    /// whose only channel is an exit status", and claiming a Claude-only event
-    /// for it would be claiming something about a host nobody named.
-    #[must_use]
-    // `match_same_arms` would collapse the rows that happen to agree today.
-    // Refused: two hosts whose measured capabilities coincide are still two
-    // hosts, and each arm carries the citation for *why* its values are what
-    // they are — Codex's `ask` is false because its docs say "parsed but not
-    // supported yet", the neutral adapter's because it stands for a host nobody
-    // named. Collapsing them would delete those reasons and make a future
-    // divergence a structural edit rather than a one-value one.
-    #[allow(clippy::match_same_arms)]
-    // `too_many_lines` is the same misfire one axis over, and CLOUD-372 is what
-    // crossed the threshold: this function is a DATA TABLE, so its length is the
-    // host count times the column count and both of those are the point. The
-    // remedy the lint implies — split it — would put one host's row away from
-    // the others, which is the two-places defect CLOUD-372 exists to remove.
-    // `expect` rather than `allow`, so if the table ever shrinks back under the
-    // ceiling this annotation goes red instead of outliving its reason.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "a per-host capability table grows by rows; splitting it would re-create the split this row closed"
-    )]
-    pub const fn capabilities(self) -> Capabilities {
-        match self {
-            Harness::ClaudeCode => Capabilities {
-                // Fetched: this session's own tool surface; and `TodoWrite` from
-                // the tools reference (code.claude.com/docs/en/tools-reference,
-                // 2026-10-16), the checklist tool a session gets in place of the
-                // Task tools under `CLAUDE_CODE_ENABLE_TASKS=0` (CLOUD-2400).
-                plan_tools: PlanTools::Surveyed(&["TaskCreate", "TaskUpdate", "TodoWrite"]),
-                events: CLAUDE_EVENTS,
-                // Documented, and merged most-restrictive-first by the host
-                // itself (`deny > defer > ask > allow`), so an ask cannot
-                // override another hook's deny. `PreToolUse` is the only event
-                // that carries the verdict and the only one Batten adjudicates.
-                ask: AskReach {
-                    enforced_on: &["PreToolUse"],
-                    declared: Declaration::Yes,
-                },
-                // The four surfaces this repository has actually run an
-                // advisory on, which is why they and not the other four are
-                // listed. `PostToolBatch` is documented for exactly this —
-                // "return additionalContext via hookSpecificOutput to inject
-                // context once for the whole batch" — and CLOUD-187 measured the
-                // entry firing; `SessionStart` seeds the same notice; `Stop`
-                // carries the end-of-turn nudges, whose header records all three
-                // channels verified by probe.
-                //
-                // `PreToolUse` IS ONE OF THEM, AND IT WAS ADDED BY MEASUREMENT
-                // RATHER THAN BY READING THE DOCS (CLOUD-1131). It was excluded
-                // for its whole life on the claim that this event's only
-                // model-facing channel is exit 2 — a deny — so an advisory there
-                // would either be discarded or become a refusal. **That claim was
-                // never probed, and it is false.** Measured 2026-08-29 as a
-                // discriminating pair over one command, one word of this list
-                // apart: `jq --version` (which trips `pinned-toolchain-preset`,
-                // a live `severity = "warn"` mediated row) delivered
-                // `PreToolUse:Bash hook additional context: … pin reach loose …`
-                // to the agent with the entry present, and delivered nothing with
-                // it absent. The call was ALLOWED both times and the exit code
-                // never moved, which is the half that matters: the host carries a
-                // non-blocking advisory at `PreToolUse`, and the only thing that
-                // had ever suppressed it was `encode_advice` consulting this list
-                // before building a wire shape.
-                //
-                // The lesson is the `Unknown`-versus-`No` discipline read the
-                // wrong way round. Leaving an unprobed surface out is the safe
-                // default for DELIVERY — it costs silence rather than a notice
-                // that vanishes — but it is not evidence about the host, and the
-                // comment here had hardened into one. CLOUD-1131's first attempt
-                // then cited this table's position as a measurement of Claude
-                // Code and declined to ship a gate over it.
-                //
-                // `PostToolUse` and `UserPromptSubmit` are documented to accept
-                // the field and are still NOT listed, because nothing here has
-                // probed them — the discipline stands, now stated as what it is.
-                // `ADVISORY_GAPS` names them.
-                advisory: AdvisoryReach {
-                    delivered_on: &["PreToolUse", "PostToolBatch", "SessionStart", "Stop"],
-                    declared: Declaration::Yes,
-                },
-                // THE COMPLEMENT OF THE ROW ABOVE, and the only host that fills
-                // this column. `permissionDecision: "allow"` is documented on
-                // `PreToolUse` and is what stops the host prompting; the advisory
-                // row reaches three OTHER events and not this one, so the two
-                // columns partition the surfaces rather than overlapping on any.
-                //
-                // `PreToolUse` alone, not the other three pre-tool-ish events this
-                // host emits: a permission decision is meaningless after the call
-                // has run, and the host documents the field on exactly this one.
-                // That is a measurement rather than a narrowing — there is no
-                // `PostToolUse` prompt to suppress.
-                preapprove: PreapproveReach {
-                    honoured_on: &["PreToolUse"],
-                    declared: Declaration::Yes,
-                },
-                // MEASURED 2026-10-08 (CLOUD-2171), live in a Claude Code cloud
-                // session through this engine's own `PostToolUse` hook: a Bash
-                // call printing a full arm the context had already seen, plus a
-                // trailing line, came back as the pointer arm and the trailing
-                // line. The rewrite reaches the model; the rest is untouched.
-                rewrites_tool_output: Declaration::Yes,
-                stop_vetoes_completion: false,
-                timeout_fails_open: false,
-                needs_fail_closed_config: false,
-                stdout_must_stay_clean: false,
-                // exit 2 discards this host's stdout JSON, so the two channels are
-                // exclusive and the richer one wins.
-                reason_travels_in_band: true,
-                // The one host whose attribution rows are not the shared
-                // "unsurveyed" group, because this repository measured its own
-                // history under it (2026-08-09, recorded in
-                // [`crate::attribution`]'s module docs): 18 of the first 50
-                // `main` commits carried a model-versioned co-authorship
-                // trailer and 20 a session URL, and one trailer survived the
-                // host's own off-switch.
-                attribution: AttributionCapabilities {
-                    // Measured as environment-injected — container git config
-                    // plus harness prompt — which cannot separate the host from
-                    // the container, so the host is not credited with it.
-                    sets_git_identity: Declaration::Unknown,
-                    injects_coauthorship_trailer: Declaration::Yes,
-                    injects_session_link_trailer: Declaration::Yes,
-                    exposes_model_id: Declaration::Unknown,
-                    exposes_session_id: Declaration::Yes,
-                    // A setting exists and demonstrably does not govern every
-                    // injection path. Neither `Yes` nor `No` is true of it.
-                    config_surface: Declaration::Partial,
-                },
-                // The one host with a measured capture row, and it is one cell
-                // of three. `tests/board-write-record.bats` reads this host's
-                // MCP content-block response shape, so the post-tool member is
-                // reachable — as DECODED content, because [`decode`] hands the
-                // engine an already-parsed value and the member's original
-                // bytes are gone by then. `LexicalBytes` would need the decoder
-                // to keep the member's raw span, which no surface here does, so
-                // claiming it would be the one claim
-                // [`crate::capture::Fidelity`]'s reserved word forbids.
-                //
-                // Nothing here spills a response to a file, and nothing reads
-                // the transcript for one, so both are unreachable rather than
-                // unmeasured — but `Unavailable` is the same answer either way
-                // and does not overstate which.
-                capture: CaptureCapabilities {
-                    post_tool_member: crate::capture::Fidelity::DecodedContent,
-                    spill_path: crate::capture::Fidelity::Unavailable,
-                    transcript: crate::capture::Fidelity::Unavailable,
-                },
-            },
-            Harness::Cursor => Capabilities {
-                // Searched 2026-09-01 and NOT fetched: the host has a Todos
-                // feature from 1.2, but no vendor-documented tool spelling was
-                // found, and a name taken from a forum post is exactly what
-                // CLOUD-209's "assume it wrong without a fetch" refuses.
-                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CURSOR_EVENTS,
-                // The row that forced this column to become event-scoped
-                // (CLOUD-601). M1 records the verdict vocabulary as
-                // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
-                // `beforeMCPExecution`, `allow|deny` on the generic `preToolUse`
-                // where `ask` "parses but is not enforced" — and coerced to deny
-                // on `subagentStart`. `Harness::wiring` registers the generic
-                // event, so escalation is declared and today unreachable; that
-                // gap is stated in `ASK_GAPS` rather than smoothed over, and it
-                // closes on its own when CLOUD-777 registers these two surfaces.
-                ask: AskReach {
-                    enforced_on: &["beforeShellExecution", "beforeMCPExecution"],
-                    declared: Declaration::Yes,
-                },
-                // `Unknown`, not `No`: M1 surveys this host's verdict vocabulary
-                // and carries no row for a non-blocking message to the model at
-                // all, so the evidence does not answer. Recorded as a gap rather
-                // than guessed into either value.
-                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
-                // `Unknown` for this host's own reason: M1 surveys its verdict
-                // vocabulary as allow/deny/ask and says nothing about a
-                // pre-approval that suppresses a prompt. `ask` here is enforced on
-                // two events, so the host clearly HAS a permission dialogue — what
-                // the evidence does not answer is whether anything skips it.
-                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
-                rewrites_tool_output: Declaration::Unknown,
-                stop_vetoes_completion: false,
-                timeout_fails_open: false,
-                needs_fail_closed_config: true,
-                stdout_must_stay_clean: false,
-                // the one surveyed host that assigns no meaning to stderr at all, so a
-                // deny explained there would explain itself to nobody.
-                reason_travels_in_band: true,
-                attribution: UNSURVEYED_ATTRIBUTION,
-                capture: UNSURVEYED_CAPTURE,
-            },
-            Harness::CopilotCli => Capabilities {
-                // Not fetched, like the rest of this host's tool surface — the
-                // same survey gap `operation_of` records for it.
-                plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: COPILOT_EVENTS,
-                // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
-                // verdict exists and names the `preToolUse` output *fields*
-                // (`permissionDecision`/`permissionDecisionReason`) without
-                // naming the object they sit in. Claude's `hookSpecificOutput`
-                // envelope is a guess on the strength of the field names, and a
-                // guessed envelope that fails to parse is read as no decision —
-                // an allow. "Could not confirm" is a legitimate stored answer
-                // (CLOUD-757's three-valued discipline); guessing is not, so
-                // `enforced_on` is empty until a primary-doc fetch fills it.
-                ask: AskReach::unreachable(Declaration::Unknown),
-                // Same evidentiary state as this host's `ask` row and for the
-                // same reason: the output object is unconfirmed by primary
-                // docs, so no envelope can be emitted without guessing one.
-                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
-                // Same evidentiary state as this host's other two channels: M1
-                // names the `preToolUse` output FIELDS without naming the object
-                // they sit in, so no document can be emitted without guessing an
-                // envelope, and a guessed envelope reads as no decision at all.
-                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
-                rewrites_tool_output: Declaration::Unknown,
-                stop_vetoes_completion: false,
-                timeout_fails_open: true,
-                needs_fail_closed_config: false,
-                stdout_must_stay_clean: false,
-                // stderr carries the reason.
-                reason_travels_in_band: false,
-                attribution: UNSURVEYED_ATTRIBUTION,
-                capture: UNSURVEYED_CAPTURE,
-            },
-            Harness::GeminiCli => Capabilities {
-                // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
-                // default and disableable with `"useWriteTodos": false`.
-                plan_tools: PlanTools::Surveyed(&["write_todos"]),
-                events: GEMINI_EVENTS,
-                // Allow/deny only. A policy wanting confirmation must hard-deny
-                // here — degrading to *allow* would turn "ask a human" into "go
-                // ahead".
-                ask: AskReach::unreachable(Declaration::No),
-                // REACHABLE SINCE CLOUD-1362, AND THE ROW ABOVE IT IS WHY IT
-                // ALWAYS WAS. This read `AdvisoryReach::unreachable(Yes)` with
-                // the reason "the only door is writing bytes this host's own
-                // `stdout_must_stay_clean` row forbids". That conflated two
-                // different things and stalled CLOUD-1152 for days.
-                //
-                // `stdout_must_stay_clean` is about STRAY output: unparseable
-                // stdout ON EXIT 0 defaults to Allow and is read as a
-                // `systemMessage`. The hazard it guards is a DECISION document
-                // corrupted into an accidental allow. An advisory is not a
-                // decision — it wants allow-plus-a-message, which is precisely
-                // what the Golden Rule delivers. The door is the mechanism, not
-                // the obstacle.
-                //
-                // The collision that would have made it an obstacle is closed by
-                // construction: `emit_channel` returns early when the decision is
-                // `Deny` or `Ask` (CLOUD-1175), so an advisory and a verdict never
-                // share one invocation's stdout. On the path where advice is
-                // emitted at all, the decision is already `Allow` — so the bytes
-                // this host reads as "allow, and tell the model" say exactly what
-                // the engine decided.
-                //
-                // Corroborated rather than argued: `admit_mediated` already
-                // writes a bare prose line to stdout on the admitted-call path,
-                // so this door has been open on a live allow path with no defect
-                // reported, for the same reason.
-                //
-                // All four spellings, and the per-event probe discipline
-                // `ADVISORY_GAPS` applies to Claude Code does NOT transfer here —
-                // reading that rejection without its scope is the error
-                // `rules/scanning.md` records. There the question is
-                // whether a documented FIELD is honoured at a given event, which
-                // is genuinely per-event. Here it is how the host parses a hook's
-                // stdout, which is a property of the host's reader and not of the
-                // moment. If it is ever measured otherwise the cost is silence,
-                // the sanctioned direction.
-                advisory: AdvisoryReach {
-                    delivered_on: &["BeforeTool", "AfterTool", "AfterAgent", "BeforeAgent"],
-                    declared: Declaration::Yes,
-                },
-                // `Unknown` rather than the `Yes` its advisory row carries. That
-                // row is `Yes` because the host demonstrably HAS the channel and
-                // Batten cannot reach it; here the evidence does not establish the
-                // channel exists at all. Two different unreachabilities, and
-                // collapsing them would be the guess `Declaration` exists to
-                // refuse.
-                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
-                rewrites_tool_output: Declaration::Unknown,
-                stop_vetoes_completion: false,
-                timeout_fails_open: false,
-                needs_fail_closed_config: false,
-                stdout_must_stay_clean: true,
-                // stderr carries the reason.
-                reason_travels_in_band: false,
-                attribution: UNSURVEYED_ATTRIBUTION,
-                capture: UNSURVEYED_CAPTURE,
-            },
-            Harness::CodexCli => Capabilities {
-                // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
-                plan_tools: PlanTools::Surveyed(&["update_plan"]),
-                events: CODEX_EVENTS,
-                // Advertised in the output schema, marked "parsed but not
-                // supported yet" in the docs. Advertised is not available, and
-                // that is a measurement rather than a gap — hence `No`.
-                ask: AskReach::unreachable(Declaration::No),
-                // The survey names this host's verdict fields and no advisory
-                // one. Unanswered, so `Unknown`.
-                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
-                // Unsurveyed, like this host's advisory row. Its `ask` field is
-                // "parsed but not supported yet", which says nothing either way
-                // about a grant.
-                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
-                rewrites_tool_output: Declaration::Unknown,
-                stop_vetoes_completion: false,
-                timeout_fails_open: false,
-                needs_fail_closed_config: false,
-                stdout_must_stay_clean: false,
-                // stderr carries the reason.
-                reason_travels_in_band: false,
-                attribution: UNSURVEYED_ATTRIBUTION,
-                capture: UNSURVEYED_CAPTURE,
-            },
-            Harness::ExitCode => Capabilities {
-                // The neutral contract carries no host tool surface of its own.
-                plan_tools: PlanTools::Surveyed(&[]),
-                // Every moment, not the converged four: this is Batten's own
-                // envelope, so it carries whatever the core normalizes, and a
-                // handler keyed on any of them runs here (CLOUD-2674).
-                events: Event::MOMENTS,
-                // Not a host: the channel is the exit status alone, which has no
-                // third value to carry an escalation. Measured, not unsurveyed.
-                ask: AskReach::unreachable(Declaration::No),
-                // `No`, and measured for the same reason: an exit status has no
-                // room for a message. This is the normalized envelope Batten
-                // itself defines, so the shape IS the answer rather than a gap
-                // in somebody else's documentation.
-                advisory: AdvisoryReach::unreachable(Declaration::No),
-                // `No`, measured, for the reason this adapter's other channels
-                // are: an exit status has three values and none of them can say
-                // "and do not prompt". This is Batten's own normalized envelope,
-                // so the shape IS the answer rather than a gap in somebody's
-                // documentation.
-                preapprove: PreapproveReach::unreachable(Declaration::No),
-                rewrites_tool_output: Declaration::Unknown,
-                stop_vetoes_completion: false,
-                timeout_fails_open: false,
-                needs_fail_closed_config: false,
-                stdout_must_stay_clean: false,
-                // the caller reads the exit code and stderr; there is no document.
-                reason_travels_in_band: false,
-                // The one column that is `No` rather than `Unknown`, and it is a
-                // measurement rather than a guess: this is not a third party. It
-                // is the normalized envelope Batten itself defines, and that
-                // shape carries a session and nothing else on this list — no
-                // identity, no trailers, no model id, no config surface. A
-                // caller composing it by hand states the shape, so the shape is
-                // the answer.
-                attribution: AttributionCapabilities {
-                    sets_git_identity: Declaration::No,
-                    injects_coauthorship_trailer: Declaration::No,
-                    injects_session_link_trailer: Declaration::No,
-                    exposes_model_id: Declaration::No,
-                    exposes_session_id: Declaration::Yes,
-                    config_surface: Declaration::No,
-                },
-                // `Unavailable` here is a measurement rather than a gap, for
-                // this arm's usual reason: this is not a third party. It is the
-                // normalized envelope Batten itself defines, and a caller
-                // composing it by hand carries no response surface at all — so
-                // the shape IS the answer. It coincides with the unsurveyed
-                // group's value and does not mean the same thing, which is why
-                // it is spelled out rather than borrowed.
-                capture: CaptureCapabilities {
-                    post_tool_member: crate::capture::Fidelity::Unavailable,
-                    spill_path: crate::capture::Fidelity::Unavailable,
-                    transcript: crate::capture::Fidelity::Unavailable,
-                },
-            },
-        }
-    }
-}
-
-impl Harness {
-    /// The **home-relative** files this host merges hook configuration from,
-    /// beyond the committed one [`Harness::wiring`] names (CLOUD-525).
-    ///
-    /// # Why this is a harness fact and not a consumer's
-    ///
-    /// Non-negotiable rule 1 keeps consumer identifiers out of the core, and
-    /// this satisfies it exactly the way [`WiringFile`] does: **which files a
-    /// host merges its own hook config from is a fact about the host**, no more
-    /// a consumer identifier than `.claude/settings.json` is. A grep of
-    /// `crates/batten` for any particular repository's names still returns
-    /// nothing.
-    ///
-    /// # Home-relative, because absolute would be unstatable
-    ///
-    /// The paths are relative to the user's home directory and joined at the
-    /// read. An absolute path differs per machine and per user, so it could not
-    /// be a `const` here and could never be reported — §6 byte-stability and
-    /// rule 4 both forbid emitting one. What the core states is the **layout**;
-    /// where that layout lives is resolved once, at the boundary.
-    ///
-    /// # What this does NOT answer
-    ///
-    /// *What did this process load at start* — CLOUD-187's boundary, untouched
-    /// and unreachable from inside. This answers *what does this host merge*,
-    /// which is a different question with a different mechanism, and conflating
-    /// the two is what made the census look impossible. The merged set is a
-    /// strictly better approximation of the running wiring than the committed
-    /// set alone, and it is what every reader of the committed file already
-    /// treats as the whole story.
-    #[must_use]
-    // `match_same_arms` would collapse the two empty rows. Refused for the
-    // reason `capabilities` refuses it: they are empty for DIFFERENT measured
-    // reasons — three hosts declare a hooks-only project file and no user-level
-    // merge, and the neutral adapter is not a host at all — and collapsing them
-    // would delete the distinction and make a future divergence a structural
-    // edit rather than a one-value one.
-    #[allow(clippy::match_same_arms)]
-    pub const fn merge_surfaces(self) -> &'static [&'static str] {
-        match self {
-            // Measured in one container 2026-08-21: the committed file declares
-            // two `Stop` handlers and three on `SessionStart`, while the runtime
-            // ran three and four. The extra registrations came from a
-            // user-level file and a launcher-provisioned one, neither of which
-            // any committed surface declares and neither of which any gate read.
-            Harness::ClaudeCode => &[
-                ".claude/settings.json",
-                ".claude/settings.local.json",
-                ".claude/launcher-settings.json",
-            ],
-            // Gemini merges the same user-level file its committed wiring is
-            // keyed in — one layout, two locations.
-            Harness::GeminiCli => &[".gemini/settings.json"],
-            // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
-            // hooks-only project file and the survey records no user-level merge
-            // for them, so there is nothing beyond the committed surface to
-            // read. Stated per host rather than wildcarded, so a host that turns
-            // out to merge has to be answered for rather than defaulting to
-            // "does not".
-            Harness::Cursor | Harness::CopilotCli | Harness::CodexCli => &[],
-            // Not a host: the neutral contract is an envelope in and an exit
-            // status out, with no file to merge.
-            Harness::ExitCode => &[],
-        }
-    }
-
-    /// The **home-relative** tree this host keeps its per-project MCP connection
-    /// logs under, or `None` where nobody has surveyed one (CLOUD-843).
-    ///
-    /// A harness fact for [`Harness::merge_surfaces`]' reason: where a host
-    /// writes its own logs is a fact about the host, and `mcp posture` reads the
-    /// last connection outcome there. The host keys the project directory
-    /// beneath it; that joining is the caller's.
-    ///
-    /// **`None` is unsurveyed, not "keeps none"** — the same reading
-    /// `project_dir_var` takes — so a posture run on such a host says it could
-    /// not look rather than reporting a clean attach.
-    #[must_use]
-    pub const fn mcp_logs(self) -> Option<&'static str> {
-        match self {
-            // Measured on the retired `mcp-attach-check` (CLOUD-316): the CLI
-            // writes `mcp-logs-<server>/<attempt>.jsonl` beneath this tree.
-            Harness::ClaudeCode => Some(".cache/claude-cli-nodejs"),
-            Harness::Cursor
-            | Harness::CopilotCli
-            | Harness::CodexCli
-            | Harness::GeminiCli
-            | Harness::ExitCode => None,
-        }
-    }
-}
-
 /// Where an adjudication event reaches batten (CLOUD-1728).
 ///
 /// CLOUD-777's invariant — batten hooked exactly once on every available hook
@@ -2425,9 +2436,100 @@ fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
     entries
 }
 
-impl Event {
+/// `Event` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait EventExt: Sized {
     /// Every event, so a census is derived rather than hand-maintained.
-    pub const ALL: &'static [Event] = &[
+    const ALL: &'static [Event];
+
+    /// Every event that is a moment: [`Event::ALL`] without `Unrecognized`.
+    ///
+    /// Derived in const context, so a new variant in `ALL` is a moment here with
+    /// no second edit. The `panic!` arm makes "`Unrecognized` stays last" a
+    /// compile error rather than a comment, so a reordered `ALL` cannot quietly
+    /// drop a real moment. The neutral exit-code adapter declares exactly this set
+    /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
+    /// would be a statement about nobody.
+    const MOMENTS: &'static [Event];
+
+    /// Whether a refusal is a thing this moment can carry at all.
+    ///
+    /// **Four events cannot, and [`adjudicate`] returns [`Decision::Allow`] at
+    /// each of them before any rule is read.** Their reasons differ and are
+    /// stated on their own arms — `Stop` because CLOUD-889 made the end-of-turn
+    /// gate structurally unable to refuse, `SessionStart` and `ConfigChange`
+    /// because neither moment carries `Decision` semantics on any host,
+    /// `TaskCompleted` because the stop gate is the one reconciliation point and
+    /// deciding twice would give one question two answers.
+    ///
+    /// **This exists because that property has a SECOND producer now.** A
+    /// `[[hook.handler]]` refusal becomes a [`Decision::Deny`] too, on a path
+    /// that never consults [`adjudicate`] — so without one authority the engine
+    /// could be structurally unable to refuse at `Stop` while a handler declared
+    /// on `stop` refused every turn, which is the runaway CLOUD-889 removed,
+    /// re-entering through the door CLOUD-898 added.
+    ///
+    /// **Two native Stop refusals stand outside it, and only two.** Neither is a
+    /// module or a handler, and both are engine predicates bounded by a receipt
+    /// rather than by `stop_hook_active`: CLOUD-2441's unlanded refusal and
+    /// CLOUD-2370's watchdog over a crashed declared task. Both ride
+    /// `stop_nudges`, never this answer, so a module or handler still cannot
+    /// refuse at `Stop`.
+    ///
+    /// `dispatch_handlers` consults this rather than re-listing the events,
+    /// because a second list is a copy that can disagree — and
+    /// `every_undecidable_event_allows_in_adjudicate` is the gate that this one
+    /// and [`adjudicate`]'s arms still say the same thing.
+    #[must_use]
+    fn carries_a_verdict(self) -> bool;
+
+    /// Whether this moment decides **permission** for a call that has not run.
+    ///
+    /// **Narrower than [`Event::carries_a_verdict`], and deliberately not derived
+    /// from it.** The two questions look alike and diverge on exactly the events
+    /// that matter: `post-tool` and `post-tool-batch` carry a verdict — a deny
+    /// there is a finding about what already happened — and decide no permission,
+    /// because the call is over. A grant on those surfaces would be permission for
+    /// something already done, which is not a weaker version of a grant but a
+    /// meaningless one. `user-prompt-submit` carries a verdict too and names no
+    /// tool at all, so there is nothing to permit.
+    ///
+    /// This distinction was found by a test rather than by reading: the first
+    /// version of [`crate::config_model::Handler::preapproves`]' load-time refusal
+    /// borrowed `carries_a_verdict`, which admitted `post-tool`.
+    ///
+    /// Host-independent by construction, which is what makes it usable at config
+    /// load. WHICH host honours a grant on a permitted moment is
+    /// [`Capabilities::preapprove_reachable`]'s question, asked at the boundary
+    /// against the host's own event spelling.
+    #[must_use]
+    fn decides_permission(self) -> bool;
+
+    /// Whether any HOST emits this moment (CLOUD-2689). Only [`Event::Forge`]
+    /// is not a host's: it arrives through `forge intake`, so it appears in no
+    /// harness vocabulary and in no wiring, and a census of host spellings
+    /// exempts it.
+    #[must_use]
+    fn host_emitted(self) -> bool;
+
+    /// The normalized token. Deliberately not a host spelling — a host's own
+    /// word for an event travels in [`Envelope::raw_event`] and is echoed back
+    /// verbatim, so this one is free to name the concept.
+    #[must_use]
+    fn as_str(self) -> &'static str;
+
+    /// Normalize a host's spelling.
+    ///
+    /// The spellings matched here are the converged ones — Claude Code's, which
+    /// Codex CLI and Gemini CLI also ship (CLOUD-210). The residual renames
+    /// (Cursor's split camelCase events, Gemini's `BeforeTool`) belong to the
+    /// per-host shims in CLOUD-44, not here: normalizing them in the core would
+    /// put host-specific vocabulary in the harness-blind layer.
+    #[must_use]
+    fn normalize(raw: &str) -> Event;
+}
+
+impl EventExt for Event {
+    const ALL: &'static [Event] = &[
         Event::PreTool,
         Event::PostTool,
         Event::Stop,
@@ -2482,49 +2584,12 @@ impl Event {
         Event::Unrecognized,
     ];
 
-    /// Every event that is a moment: [`Event::ALL`] without `Unrecognized`.
-    ///
-    /// Derived in const context, so a new variant in `ALL` is a moment here with
-    /// no second edit. The `panic!` arm makes "`Unrecognized` stays last" a
-    /// compile error rather than a comment, so a reordered `ALL` cannot quietly
-    /// drop a real moment. The neutral exit-code adapter declares exactly this set
-    /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
-    /// would be a statement about nobody.
-    pub const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
+    const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
         Some((Event::Unrecognized, moments)) => moments,
         _ => panic!("Event::ALL ends with Unrecognized"),
     };
 
-    /// Whether a refusal is a thing this moment can carry at all.
-    ///
-    /// **Four events cannot, and [`adjudicate`] returns [`Decision::Allow`] at
-    /// each of them before any rule is read.** Their reasons differ and are
-    /// stated on their own arms — `Stop` because CLOUD-889 made the end-of-turn
-    /// gate structurally unable to refuse, `SessionStart` and `ConfigChange`
-    /// because neither moment carries `Decision` semantics on any host,
-    /// `TaskCompleted` because the stop gate is the one reconciliation point and
-    /// deciding twice would give one question two answers.
-    ///
-    /// **This exists because that property has a SECOND producer now.** A
-    /// `[[hook.handler]]` refusal becomes a [`Decision::Deny`] too, on a path
-    /// that never consults [`adjudicate`] — so without one authority the engine
-    /// could be structurally unable to refuse at `Stop` while a handler declared
-    /// on `stop` refused every turn, which is the runaway CLOUD-889 removed,
-    /// re-entering through the door CLOUD-898 added.
-    ///
-    /// **Two native Stop refusals stand outside it, and only two.** Neither is a
-    /// module or a handler, and both are engine predicates bounded by a receipt
-    /// rather than by `stop_hook_active`: CLOUD-2441's unlanded refusal and
-    /// CLOUD-2370's watchdog over a crashed declared task. Both ride
-    /// `stop_nudges`, never this answer, so a module or handler still cannot
-    /// refuse at `Stop`.
-    ///
-    /// `dispatch_handlers` consults this rather than re-listing the events,
-    /// because a second list is a copy that can disagree — and
-    /// `every_undecidable_event_allows_in_adjudicate` is the gate that this one
-    /// and [`adjudicate`]'s arms still say the same thing.
-    #[must_use]
-    pub const fn carries_a_verdict(self) -> bool {
+    fn carries_a_verdict(self) -> bool {
         // CLOUD-2581's pass-through events carry no verdict either: allowed
         // before any rule until a rule needs one. The worktree pair is absent on
         // purpose, so a handler can refuse the host's worktree request.
@@ -2571,44 +2636,15 @@ impl Event {
         )
     }
 
-    /// Whether this moment decides **permission** for a call that has not run.
-    ///
-    /// **Narrower than [`Event::carries_a_verdict`], and deliberately not derived
-    /// from it.** The two questions look alike and diverge on exactly the events
-    /// that matter: `post-tool` and `post-tool-batch` carry a verdict — a deny
-    /// there is a finding about what already happened — and decide no permission,
-    /// because the call is over. A grant on those surfaces would be permission for
-    /// something already done, which is not a weaker version of a grant but a
-    /// meaningless one. `user-prompt-submit` carries a verdict too and names no
-    /// tool at all, so there is nothing to permit.
-    ///
-    /// This distinction was found by a test rather than by reading: the first
-    /// version of [`crate::config_model::Handler::preapproves`]' load-time refusal
-    /// borrowed `carries_a_verdict`, which admitted `post-tool`.
-    ///
-    /// Host-independent by construction, which is what makes it usable at config
-    /// load. WHICH host honours a grant on a permitted moment is
-    /// [`Capabilities::preapprove_reachable`]'s question, asked at the boundary
-    /// against the host's own event spelling.
-    #[must_use]
-    pub const fn decides_permission(self) -> bool {
+    fn decides_permission(self) -> bool {
         matches!(self, Event::PreTool)
     }
 
-    /// Whether any HOST emits this moment (CLOUD-2689). Only [`Event::Forge`]
-    /// is not a host's: it arrives through `forge intake`, so it appears in no
-    /// harness vocabulary and in no wiring, and a census of host spellings
-    /// exempts it.
-    #[must_use]
-    pub const fn host_emitted(self) -> bool {
+    fn host_emitted(self) -> bool {
         !matches!(self, Event::Forge)
     }
 
-    /// The normalized token. Deliberately not a host spelling — a host's own
-    /// word for an event travels in [`Envelope::raw_event`] and is echoed back
-    /// verbatim, so this one is free to name the concept.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Event::PreTool => "pre-tool",
             Event::PostTool => "post-tool",
@@ -2658,15 +2694,7 @@ impl Event {
         }
     }
 
-    /// Normalize a host's spelling.
-    ///
-    /// The spellings matched here are the converged ones — Claude Code's, which
-    /// Codex CLI and Gemini CLI also ship (CLOUD-210). The residual renames
-    /// (Cursor's split camelCase events, Gemini's `BeforeTool`) belong to the
-    /// per-host shims in CLOUD-44, not here: normalizing them in the core would
-    /// put host-specific vocabulary in the harness-blind layer.
-    #[must_use]
-    pub fn normalize(raw: &str) -> Event {
+    fn normalize(raw: &str) -> Event {
         match raw {
             "PreToolUse" => Event::PreTool,
             "PostToolUse" => Event::PostTool,
@@ -4175,7 +4203,7 @@ impl Policy {
     /// silently degraded. Compiled-in data, so the answer costs nothing on the
     /// hottest path in the binary.
     #[must_use]
-    pub const fn capabilities(&self) -> Capabilities {
+    pub fn capabilities(&self) -> Capabilities {
         self.harness.capabilities()
     }
 
@@ -13542,8 +13570,10 @@ pub const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
 mod tests {
 
     #[cfg(test)]
+    use crate::hook::EventExt as _;
     #[cfg(test)]
-    use crate::action::ActionExt as _;
+    use crate::hook::HarnessExt as _;
+    #[cfg(test)]
     /// The last element of a list carries no `;` or `||` of its own, which is
     /// what lets `pipeline_rules` read a sequence off the separator alone.
     ///

@@ -233,9 +233,6 @@ pub(crate) const JUNIT: &str = "cover.xml";
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::rules::VerdictProgramExt as _;
-
     #[test]
     fn a_test_program_names_its_binary_from_its_package() {
         let dir = crate::scratch::scratch("cover-binary-id");

@@ -85,19 +85,6 @@ use serde::Serialize;
 use crate::config_check::startup::validate;
 use crate::config_model::{Decided, Startup};
 
-impl Decided {
-    /// Whether this is the value an absent key means, so the derived schema and
-    /// the round-tripped config both stay quiet about the ordinary case.
-    #[must_use]
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde's `skip_serializing_if` calls this with a reference to the field, so the signature is the derive's rather than this author's; taking `self` by value does not compile"
-    )]
-    pub(crate) const fn is_default(&self) -> bool {
-        matches!(self, Self::ExitStatus)
-    }
-}
-
 /// What one row decided, in the §6 pointer shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Outcome {

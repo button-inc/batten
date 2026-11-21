@@ -11,6 +11,7 @@ pub mod action {
     use crate::config_model::Action;
     use crate::config_model::Event;
     use crate::error::UsageError;
+    use crate::hook::EventExt as _;
     use std::collections::BTreeSet;
 
     /// Reject a table that cannot honestly fire, and duplicate ids within it.
@@ -511,6 +512,7 @@ pub mod handler {
     use crate::config_model::Handler;
     use crate::error::UsageError;
     use crate::handler::HandlerExt as _;
+    use crate::hook::EventExt as _;
     use regex::Regex;
     use std::collections::BTreeSet;
 
@@ -2574,7 +2576,10 @@ pub mod rules {
     };
     use crate::error::UsageError;
     use crate::preset_catalog::RuleScope;
+    use crate::rules::DirectionExt as _;
     use crate::rules::RuleExt as _;
+    use crate::rules::RuleKindExt as _;
+    use crate::rules::RuleScopeExt as _;
 
     use crate::selector::Selector;
 

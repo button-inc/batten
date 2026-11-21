@@ -511,8 +511,6 @@ impl Default for Pipeline {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
 
     /// **A WAIT THAT DID NOT SUCCEED STILL OWES ITS ABANDON, AND A READY THAT
     /// DID NOT SUCCEED OWES NOTHING.**

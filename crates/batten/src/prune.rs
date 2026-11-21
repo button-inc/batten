@@ -56,14 +56,31 @@ use crate::error::UsageError;
 /// after a collection.
 pub const DEFAULT_FREE_BAND: (u64, u64) = (4096, 8192);
 
-impl Prune {
+/// `Prune` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PruneExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
     ///
     /// `keep = 0`, which deletes the artifact the next build reads, and a band
     /// that is half-declared or has no width.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+
+    /// The collector's band (CLOUD-2197): the declared one, or
+    /// [`DEFAULT_FREE_BAND`] where `[prune]` declares none.
+    ///
+    /// **ON BY DEFAULT, because off was measured to fail.** A declared band is
+    /// a key the pinned release must read, so a branch carrying the collector
+    /// had to hold the keys until a release shipped them — and with them held
+    /// the collector it carried never armed, and that branch's own `verify`
+    /// filled the disk (2026-10-13, #1132). The band belongs to the code that
+    /// collects, so the code carries it; the keys only move it.
+    #[must_use]
+    fn free_band(&self) -> Option<(u64, u64)>;
+}
+
+impl PruneExt for Prune {
+    fn validate(&self) -> Result<()> {
         if self.keep == 0 {
             return Err(UsageError::raise(
                 "[prune]: `keep = 0` deletes the artifact the next build reads, which is a clean rather than a prune",
@@ -86,17 +103,7 @@ impl Prune {
         Ok(())
     }
 
-    /// The collector's band (CLOUD-2197): the declared one, or
-    /// [`DEFAULT_FREE_BAND`] where `[prune]` declares none.
-    ///
-    /// **ON BY DEFAULT, because off was measured to fail.** A declared band is
-    /// a key the pinned release must read, so a branch carrying the collector
-    /// had to hold the keys until a release shipped them — and with them held
-    /// the collector it carried never armed, and that branch's own `verify`
-    /// filled the disk (2026-10-13, #1132). The band belongs to the code that
-    /// collects, so the code carries it; the keys only move it.
-    #[must_use]
-    pub const fn free_band(&self) -> Option<(u64, u64)> {
+    fn free_band(&self) -> Option<(u64, u64)> {
         match (self.min_free_mb, self.max_free_mb) {
             (Some(min), Some(max)) => Some((min, max)),
             _ => Some(DEFAULT_FREE_BAND),
@@ -840,8 +847,6 @@ const fn mebibytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
 
     /// The volume a suite is writing to has room for more than the one MiB a
     /// constant reading would claim.

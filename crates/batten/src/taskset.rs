@@ -571,8 +571,6 @@ fn argv(entry: &Node) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     fn table(text: &str) -> Node {
         match crate::facts::Format::Toml.read(text) {

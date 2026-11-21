@@ -49,6 +49,7 @@
 
 use crate::common;
 use batten::capture::StreamedChild as _;
+use batten::hook::HarnessExt as _;
 
 use std::path::{Path, PathBuf};
 

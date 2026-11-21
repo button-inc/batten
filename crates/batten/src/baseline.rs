@@ -696,8 +696,6 @@ pub fn prune(baseline: &Baseline, scan: &Scan) -> (Baseline, Vec<Drifted>) {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     /// A `Code`-kind finding for `rule` at `path`, whose identity is a function
     /// of `span` — so two findings with the same span are one identity with a

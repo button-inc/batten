@@ -22,6 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::rules::RuleKindExt as _;
 
 use std::fs;
 use std::path::PathBuf;

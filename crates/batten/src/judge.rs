@@ -300,13 +300,20 @@ pub fn effective_cap(authority: Option<usize>, local: Option<usize>) -> usize {
     }
 }
 
-impl PayloadClass {
+/// `PayloadClass` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PayloadClassExt: Sized {
     /// Every class, so a census cannot go stale — the `Effect::ALL` idiom.
-    pub const ALL: &'static [PayloadClass] = &[PayloadClass::SpanText, PayloadClass::FileText];
+    const ALL: &'static [PayloadClass];
 
     /// The stable token, used in config, output, and the hash preimage.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+}
+
+impl PayloadClassExt for PayloadClass {
+    const ALL: &'static [PayloadClass] = &[PayloadClass::SpanText, PayloadClass::FileText];
+
+    fn as_str(self) -> &'static str {
         match self {
             PayloadClass::SpanText => "span_text",
             PayloadClass::FileText => "file_text",

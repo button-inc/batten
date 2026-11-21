@@ -54,6 +54,8 @@
 //! answer are recorded, which is what [`admissions`] now decides over.
 
 use crate::config::ConfigExt as _;
+use crate::config::UnresolvableExt as _;
+use crate::rules::RuleKindExt as _;
 use crate::waiver::WaiverExt as _;
 use std::fmt;
 use std::path::Path;
@@ -1308,8 +1310,6 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::waiver::Date;
 
     /// A fixed date, so a lint verdict never depends on when the suite ran — the

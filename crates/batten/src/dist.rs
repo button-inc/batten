@@ -756,8 +756,6 @@ fn run_cargo_dist(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     const TARGET: &str = "x86_64-unknown-linux-gnu";
 

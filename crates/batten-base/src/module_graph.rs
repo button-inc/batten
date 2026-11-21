@@ -632,18 +632,21 @@ fn extension_trait(name: &str, blocks: &[ast::Impl]) -> Option<ExtensionTrait> {
             let whole = syntax.text_range();
             let base = usize::from(whole.start());
             let text = syntax.text().to_string();
-            let body_text = text[past_visibility - base..].trim_start().to_owned();
+            let mut body_text = text[past_visibility - base..].trim_start().to_owned();
+            // Only a function loses `const`; an associated const keeps it.
+            if matches!(item, ast::AssocItem::Fn(_)) {
+                body_text = body_text.trim_start_matches("const ").to_owned();
+            }
             let (signature, item_name) = match &item {
-                // A trait cannot declare a `const fn`, and dropping `const`
-                // breaks its callers in const contexts: the block stays.
-                ast::AssocItem::Fn(function) if function.const_token().is_some() => return None,
                 ast::AssocItem::Fn(function) => {
                     let body = function.body()?.syntax().text_range();
                     let head = &text[past_visibility - base..usize::from(body.start()) - base];
-                    (
-                        format!("{};", head.trim()),
-                        function.name()?.text().to_string(),
-                    )
+                    // A trait cannot declare a `const fn`, so `const` is dropped.
+                    // A caller that is really in a const context is then a
+                    // compile error naming a function that belongs with its
+                    // type in the vocabulary layer, which is where it moves.
+                    let head = head.trim().trim_start_matches("const ");
+                    (format!("{head};"), function.name()?.text().to_string())
                 }
                 ast::AssocItem::Const(constant) => {
                     let ty = constant.ty()?.syntax().text().to_string();
