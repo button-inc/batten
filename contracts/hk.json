@@ -428,7 +428,8 @@
             "batten-check",
             "policy-test",
             "config-lint-pinned",
-            "cfg-gated-test-pinned"
+            "cfg-gated-test-pinned",
+            "module-census-pinned"
           ]
         }
       ],
@@ -683,6 +684,12 @@
           "name": "cfg-gated-test-pinned",
           "status": "included",
           "orderIndex": 41,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "module-census-pinned",
+          "status": "included",
+          "orderIndex": 42,
           "parallelGroupId": "group_0"
         }
       ]
