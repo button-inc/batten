@@ -57,9 +57,8 @@ use crate::surface_table::RECEIPT_OR;
 #[cfg(test)]
 use crate::surface_table::STEP_ARG;
 use crate::surface_table::Verbosity;
-pub use crate::surface_table::{
-    CommandDecl, EXITS_DISPATCHES, EXITS_STANDARD, EXITS_VERDICT, EnvDecl, FlagDecl, Rung, SURFACE,
-    ValueDecl,
+use crate::surface_table::{
+    CommandDecl, EXITS_DISPATCHES, EnvDecl, FlagDecl, Rung, SURFACE, ValueDecl,
 };
 
 /// `--strictness`, the one global flag.
@@ -775,7 +774,8 @@ pub fn command_for(verb: Option<&str>) -> Command {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod narrowed_tests {
-    use super::{SURFACE, command, command_for, is_child_of, parent_of};
+    use super::{command, command_for, is_child_of, parent_of};
+    use crate::surface_table::SURFACE;
 
     /// The prefix test answers as the backward search it replaced, for every
     /// declared path against every declared parent (and the root).
@@ -896,7 +896,9 @@ mod narrowed_tests {
     /// past `--`, before clap runs, or as a leaf's positional, the leaf decides.
     #[test]
     fn an_informational_flag_is_a_read_wherever_clap_answers_it() {
-        use super::{Effect, SURFACE, effect_for, effect_of_argv, has_children};
+        use super::{effect_for, effect_of_argv, has_children};
+        use crate::effect::Effect;
+        use crate::surface_table::SURFACE;
         for argv in [
             &["--version"][..],
             &["-V"],
@@ -943,7 +945,8 @@ mod narrowed_tests {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod identity_tests {
-    use super::{ROOT, SURFACE};
+    use super::ROOT;
+    use crate::surface_table::SURFACE;
 
     /// Every declared command carries a stable id (CLOUD-969).
     ///
@@ -990,7 +993,7 @@ mod identity_tests {
     /// An id is not the path, and this is what stops it drifting back into one.
     ///
     /// The seeds resemble their paths because they were seeded from them once
-    /// (see [`super::CommandDecl::id`]), and the failure mode is a later author
+    /// (see [`crate::surface_table::CommandDecl::id`]), and the failure mode is a later author
     /// reading that resemblance as a RULE and "fixing" an id during a rename —
     /// which undoes the whole field. There is no honest exit code over intent,
     /// so what is asserted is the reachable half: the lookup answers by path and

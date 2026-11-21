@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-pub(crate) use crate::config_check::rules::Declared;
+use crate::config_check::rules::Declared;
 #[cfg(test)]
 use crate::config_check::rules::Located;
 #[cfg(test)]
@@ -56,20 +56,33 @@ use crate::config_check::rules::validate;
 #[cfg(test)]
 use crate::config_check::rules::validate_composition;
 use crate::config_check::rules::{COLUMN_CENSUS, Declares};
+use crate::config_model::CeilingUnit;
+use crate::config_model::Conserves;
+use crate::config_model::Direction;
+#[cfg(test)]
+use crate::config_model::FieldBound;
+use crate::config_model::GitRead;
+use crate::config_model::NativeGate;
+#[cfg(test)]
+use crate::config_model::ReceiptKey;
+#[cfg(test)]
+use crate::config_model::ReceiptTrigger;
+use crate::config_model::RequireVia;
+#[cfg(test)]
+use crate::config_model::Rewrite;
+use crate::config_model::Rule;
+use crate::config_model::RuleKind;
+use crate::config_model::VerdictProgram;
 #[cfg(test)]
 use crate::config_model::preset_name_schema;
-pub use crate::config_model::{
-    CallEvent, CeilingUnit, Conserves, Direction, FieldBound, GitRead, NativeGate, ReceiptKey,
-    ReceiptTrigger, RequireVia, Rewrite, Rule, RuleKind, VerdictProgram,
-};
 use crate::error::UsageError;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
-pub use crate::preset_catalog::RuleScope;
+use crate::preset_catalog::RuleScope;
 use crate::refusal::{Fix, Refusal};
 use crate::selector::glob_match;
 use crate::severity::{self, ReportLevel, RuleSeverity};
-pub use crate::surface_table::Half;
+use crate::surface_table::Half;
 
 /// The columns a [`RuleKind::Pipeline`] row may carry — both predicate families
 /// plus the shared remedy (CLOUD-864).
@@ -1448,7 +1461,7 @@ impl Rule {
 // `Finding` lives in `findings` (CLOUD-2789), beside the `Check` and
 // `Remediation` it carries, so the modules below `rules` can name a finding
 // without reaching up here.
-pub use crate::findings::Finding;
+use crate::findings::Finding;
 
 /// Whether a rule kind's predicate decides its question or approximates it
 /// (CLOUD-331).
@@ -9818,11 +9831,11 @@ mod tests {
     #[test]
     fn a_check_finding_line_labels_its_rule() {
         use crate::output::Line as _;
-        let finding = super::Finding {
+        let finding = crate::findings::Finding {
             carried: Vec::new(),
             owner: None,
             rule: "r".to_owned(),
-            severity: super::RuleSeverity::Deny,
+            severity: crate::severity::RuleSeverity::Deny,
             path: "src/a.rs".to_owned(),
             line: Some(3),
             identity: crate::identity::StoredIdentity::new(
@@ -9849,7 +9862,7 @@ mod tests {
                 artifact: "CLOUD-1".to_owned(),
             },
         ];
-        let finding = super::Finding {
+        let finding = crate::findings::Finding {
             owner: None,
             rule: "issue file same".to_owned(),
             severity: RuleSeverity::Deny,
@@ -10302,7 +10315,7 @@ mod tests {
         let empty: BTreeMap<(String, super::Wanted), super::Acquired> = BTreeMap::new();
         let (input, _) = super::tree_document(
             &empty,
-            &super::Declared {
+            &crate::config_check::rules::Declared {
                 documents: &[],
                 lines: &[],
                 invocations: &[],
@@ -10923,7 +10936,7 @@ mod tests {
         // files missing if a lookup asked for the wrong form.
         let (_, not_acquired) = super::tree_document(
             &cache,
-            &super::Declared {
+            &crate::config_check::rules::Declared {
                 documents: &[],
                 lines: &["subject.rs".to_owned()],
                 invocations: &["subject.rs".to_owned()],
@@ -17678,8 +17691,11 @@ violation contains {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod half_tests {
-    use super::{Half, Rule, RuleKind, RuleScope, null_live_keys};
+    use super::null_live_keys;
+    use crate::config_model::{Rule, RuleKind};
     use crate::facts::{Fact, Subject};
+    use crate::preset_catalog::RuleScope;
+    use crate::surface_table::Half;
 
     /// A blank row of `kind` on its first permitted scope, plus `extra`.
     fn row(kind: RuleKind, extra: &serde_json::Value) -> Rule {
