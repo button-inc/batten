@@ -1,12 +1,8 @@
-use crate::config_model::{
-    CeilingUnit, Direction, ReceiptKey, ReceiptTrigger, Rule, RuleKind, VerdictProgram,
-};
+use crate::config_model::{CeilingUnit, Direction, ReceiptKey, ReceiptTrigger, Rule, RuleKind};
 use crate::error::UsageError;
 use crate::preset_catalog::RuleScope;
-use crate::rules::DirectionExt as _;
 use crate::rules::RuleExt as _;
 use crate::rules::RuleKindExt as _;
-use crate::rules::RuleScopeExt as _;
 
 use crate::selector::Selector;
 
@@ -2313,62 +2309,6 @@ impl Located<'_> {
             }
         }
         self.source.to_owned()
-    }
-}
-
-/// `VerdictProgram` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait VerdictProgramExt: Sized {
-    /// Reject a row that cannot mean anything.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty `program`, an empty
-    /// list in any column, a `nested` with no `subcommands`, a row carrying both
-    /// `subcommands` and `except`, an `any_argument` beside either of them, and a
-    /// row declaring no column at all. Every one of those either matches nothing
-    /// or contradicts itself, and both read as coverage from the file.
-    fn validate(&self, rule: &str) -> anyhow::Result<()>;
-}
-
-impl VerdictProgramExt for VerdictProgram {
-    fn validate(&self, rule: &str) -> anyhow::Result<()> {
-        let refuse = |detail: &str| {
-            Err(UsageError::raise(format!(
-                "rule {rule}: verdict {}: {detail}",
-                self.program
-            )))
-        };
-        if self.program.trim().is_empty() || self.program.split_whitespace().count() != 1 {
-            return Err(UsageError::raise(format!(
-                "rule {rule}: a verdict entry names one program, not {:?}",
-                self.program
-            )));
-        }
-        for (name, list) in [
-            ("subcommands", self.subcommands.as_deref()),
-            ("nested", self.nested.as_deref()),
-            ("except", self.except.as_deref()),
-        ] {
-            if list.is_some_and(<[String]>::is_empty) {
-                return refuse(&format!("`{name}` is empty, so it narrows nothing"));
-            }
-        }
-        if self.subcommands.is_some() && self.except.is_some() {
-            return refuse("`subcommands` and `except` are opposite readings of the same position");
-        }
-        if self.nested.is_some() && self.subcommands.is_none() {
-            return refuse(
-                "`nested` needs `subcommands` — a second word with no first names nothing",
-            );
-        }
-        let any = self.any_argument.unwrap_or_default();
-        if any && (self.subcommands.is_some() || self.except.is_some()) {
-            return refuse("`any_argument` already admits every word, so it cannot be narrowed");
-        }
-        if !any && self.subcommands.is_none() && self.except.is_none() {
-            return refuse("declares no condition, so it never matches");
-        }
-        Ok(())
     }
 }
 

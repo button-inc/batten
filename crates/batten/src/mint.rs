@@ -62,23 +62,6 @@ use crate::config_model::MintKey;
 #[cfg(test)]
 use crate::config_model::MintMode;
 
-/// `Authority` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait AuthorityExt: Sized {
-    /// The authority this name selects, or `None` for a name no authority
-    /// answers to — which every caller turns into a load error rather than into
-    /// a value that renders as itself.
-    fn named(name: &str) -> Option<Self>;
-}
-
-impl AuthorityExt for Authority {
-    fn named(name: &str) -> Option<Self> {
-        match name {
-            "ready" => Some(Self::Ready),
-            _ => None,
-        }
-    }
-}
-
 /// The token an absent optional records.
 ///
 /// **Load-bearing, and inherited rather than invented.** `issue-read-check.sh`
@@ -89,35 +72,6 @@ impl AuthorityExt for Authority {
 /// makes a later gate LOUDER, never quieter, which is the direction the incentive
 /// has to point.
 const ABSENT: &str = "-";
-
-/// `Piece` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait PieceExt: Sized {
-    /// Whether rendering this piece consults the tool RESULT.
-    ///
-    /// Exhaustive with no wildcard arm, which is `facts.rs`' rule and for its
-    /// reason: a variant added later must fail to compile rather than classify
-    /// itself as reading nothing, because that is the direction that silently
-    /// re-opens the record this predicate exists to withhold.
-    fn reads_the_result(&self) -> bool;
-}
-
-impl PieceExt for Piece {
-    fn reads_the_result(&self) -> bool {
-        match self {
-            // `{authority:…}` is grouped with the path forms rather than given its
-            // own arm because `clippy::match_same_arms` refuses a repeated body —
-            // the distinction a reader wants lives here, as `git.rs` states for the
-            // same lint. It judges the whole result DOCUMENT where the others read
-            // a path into it, and both consult the result, which is all this asks.
-            Piece::Path(_)
-            | Piece::Digest(_)
-            | Piece::Slug(_)
-            | Piece::Join(_)
-            | Piece::Authority(_) => true,
-            Piece::Literal(_) | Piece::Now | Piece::Git(_) => false,
-        }
-    }
-}
 
 // Housed in `crate::facts` (CLOUD-2789), which walks the same paths; the path
 // here is unchanged.

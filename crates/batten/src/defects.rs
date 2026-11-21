@@ -52,42 +52,6 @@ use crate::severity::RuleSeverity;
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_model::Defects;
 
-/// `Defects` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait DefectsExt: Sized {
-    /// Validate the table at load.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty path or an empty or
-    /// duplicated taxonomy. An empty `classes` would refuse every record, which
-    /// is a table that cannot be used rather than one that permits nothing.
-    fn validate(&self) -> Result<()>;
-}
-
-impl DefectsExt for Defects {
-    fn validate(&self) -> Result<()> {
-        if self.path.trim().is_empty() {
-            return Err(UsageError::raise(
-                "defects.path: names no file; a ledger with no path is not a ledger".to_owned(),
-            ));
-        }
-        if self.classes.is_empty() {
-            return Err(UsageError::raise(
-                "defects.classes: declares no class; every record would be refused, which is a \
-                 table that cannot be used rather than one that permits nothing"
-                    .to_owned(),
-            ));
-        }
-        let unique: BTreeSet<&String> = self.classes.iter().collect();
-        if unique.len() != self.classes.len() {
-            return Err(UsageError::raise(
-                "defects.classes: contains a duplicate".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-}
-
 /// One defect record — the schema, defined once.
 ///
 /// Every field is a pointer or an identifier. `evidence` is where the temptation

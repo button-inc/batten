@@ -8078,6 +8078,15 @@ pub enum Half {
     Live,
 }
 
+impl Half {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Half::Tree => "tree",
+            Half::Live => "live",
+        }
+    }
+}
+
 /// The formats `batten spec` can emit.
 ///
 /// One, deliberately. House-style §2 and §11 advertised `kdl|json`; KDL was

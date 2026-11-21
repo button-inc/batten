@@ -53,7 +53,9 @@ use crate::config_check::verdict::vendored;
 use crate::config_model::VocabularyWord;
 use crate::config_model::{DeclaredVerdict, Route, Vocabulary};
 use crate::error::UsageError;
-use crate::preset_catalog::{Applicability, RouteKind};
+#[cfg(test)]
+use crate::preset_catalog::Applicability;
+use crate::preset_catalog::RouteKind;
 
 // THE `V-` AND `R-` PREFIXES ARE GONE (CLOUD-1284).
 //
@@ -92,24 +94,6 @@ use crate::preset_catalog::{Applicability, RouteKind};
 /// perfectly well.
 pub(crate) const GLOSS_MAX: usize = 120;
 
-/// `RouteKind` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait RouteKindExt: Sized {
-    /// The token a rendered route carries.
-    #[must_use]
-    fn as_str(self) -> &'static str;
-}
-
-impl RouteKindExt for RouteKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            RouteKind::Command => "command",
-            RouteKind::Document => "document",
-            RouteKind::Issue => "issue",
-            RouteKind::Override => "override",
-        }
-    }
-}
-
 /// The name of each slot, for a refusal that has to say which one failed.
 const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
 
@@ -121,31 +105,6 @@ const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
 /// pointers. Relax it and the line needs a separator, which is the free-text
 /// namespace this grammar replaced, wearing a delimiter.
 const SLOTS: usize = 3;
-
-/// `Applicability` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait ApplicabilityExt: Sized {
-    /// Whether the boundary may run a repair for this class.
-    #[must_use]
-    fn repairs(&self) -> bool;
-
-    /// The stable lowercase spelling, for machine output (§6).
-    #[must_use]
-    fn as_str(self) -> &'static str;
-}
-
-impl ApplicabilityExt for Applicability {
-    fn repairs(&self) -> bool {
-        !self.is_default()
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Applicability::Advice => "advice",
-            Applicability::Retry => "retry",
-            Applicability::Silent => "silent",
-        }
-    }
-}
 
 /// `DeclaredVerdict` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait DeclaredVerdictExt: Sized {
