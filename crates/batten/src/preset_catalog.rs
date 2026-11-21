@@ -88,10 +88,6 @@ impl Applicability {
     /// BESIDE ITS TYPE because serde names it by path from `config_model`'s
     /// attributes, where no extension trait's import reaches (CLOUD-2793).
     #[must_use]
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde's `skip_serializing_if` calls this with a reference to the field"
-    )]
     pub const fn is_default(&self) -> bool {
         matches!(self, Self::Advice)
     }
