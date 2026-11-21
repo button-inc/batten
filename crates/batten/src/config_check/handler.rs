@@ -27,7 +27,8 @@ pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
     Ok(())
 }
 
-impl Handler {
+/// `Handler` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait HandlerExt: Sized {
     /// Reject a handler that cannot honestly run.
     ///
     /// # Errors
@@ -35,7 +36,11 @@ impl Handler {
     /// Returns a [`UsageError`] (→ exit `1`) for an empty `id`, an `on` naming
     /// no known event or naming `unrecognized`, an empty `run`, a `run` whose
     /// program is empty, or a zero timeout.
-    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+    fn validate(&self) -> anyhow::Result<()>;
+}
+
+impl HandlerExt for Handler {
+    fn validate(&self) -> anyhow::Result<()> {
         if self.id.is_empty() {
             return Err(UsageError::raise("hook.handler: `id` must not be empty"));
         }
