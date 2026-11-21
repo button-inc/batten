@@ -472,6 +472,7 @@ fn read_tracked(dir: &Path, path: &str, base_ref: Option<&str>) -> Result<Vec<u8
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    #[cfg(test)]
     use std::fs;
     use std::path::PathBuf;
 

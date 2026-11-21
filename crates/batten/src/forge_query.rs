@@ -752,6 +752,7 @@ pub fn run(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::rest::{Answer, Since};
 
     fn query(endpoint: &str) -> Query {

@@ -6,6 +6,7 @@
 //! load that depends on every module whose section it validates, so the model
 //! stops tying its readers into one cycle. `config` re-exports every name here.
 
+use crate::verdict::VocabularyExt as _;
 use std::collections::BTreeMap;
 
 use anyhow::Result;

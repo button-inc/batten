@@ -516,6 +516,7 @@ pub fn forget_result(store_dir: &Path, root: &Root) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     fn store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

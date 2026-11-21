@@ -232,6 +232,9 @@ pub(crate) const JUNIT: &str = "cover.xml";
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::rules::VerdictProgramExt as _;
 
     #[test]
     fn a_test_program_names_its_binary_from_its_package() {

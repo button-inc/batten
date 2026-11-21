@@ -608,6 +608,9 @@ impl Report {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// A capture whose digest and count are honest, so a test that is not about
     /// the capture gates does not trip them.

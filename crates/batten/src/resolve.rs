@@ -62,6 +62,7 @@
 //! default is missing. `--config-from` is the one exception and stays strict;
 //! [`authority`] says why.
 
+use crate::verdict::VocabularyExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -2002,6 +2003,9 @@ fn attribution(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use std::fs;
 
     use super::*;

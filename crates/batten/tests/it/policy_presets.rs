@@ -15,6 +15,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use batten::preset::ManifestExt as _;
 use std::fs;
 use std::path::PathBuf;
 

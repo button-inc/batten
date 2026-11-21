@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::verdict::DeclaredVerdictExt as _;
 
 use std::fs;
 use std::path::Path;

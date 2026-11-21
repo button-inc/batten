@@ -1295,6 +1295,9 @@ pub(crate) fn line_of(text: &str, offset: usize) -> usize {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::identity::{FindingKind, SpanNormalization, code_fingerprint};
 
     fn identity_for(rule: &str, path: &str, span: &str) -> StoredIdentity {

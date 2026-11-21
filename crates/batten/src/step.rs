@@ -101,6 +101,7 @@
 //! crosses that hop is a file list, never a verdict: no `Finding` is minted on
 //! this path and no rule is evaluated.
 
+use crate::exec::ExecConfigExt as _;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
@@ -1616,6 +1617,9 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     #[test]
     fn a_held_step_lock_excludes_its_own_step_and_no_other() {

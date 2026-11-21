@@ -229,6 +229,7 @@ pub fn run_settings(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     fn answer(status: u16, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {

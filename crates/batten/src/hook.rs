@@ -40,6 +40,10 @@
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
 
+use crate::budget::BudgetExt as _;
+use crate::commit::CommitExt as _;
+use crate::rules::RuleExt as _;
+use crate::rules::VerdictProgramExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3221,7 +3225,8 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     (!rendered.is_empty()).then_some(rendered)
 }
 
-impl Field {
+/// `Field` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait FieldExt: Sized {
     /// This field's value in `envelope`, or `None` when the payload had none.
     ///
     /// Absent and empty are deliberately collapsed to `None` here, because the
@@ -3230,7 +3235,11 @@ impl Field {
     /// them identically. Preserving a distinction no consumer can read would be
     /// a difference that only ever surprises someone.
     #[must_use]
-    pub fn read(self, envelope: &Envelope) -> Option<String> {
+    fn read(self, envelope: &Envelope) -> Option<String>;
+}
+
+impl FieldExt for Field {
+    fn read(self, envelope: &Envelope) -> Option<String> {
         let value = match self {
             Field::HookEventName => Some(envelope.raw_event.clone()),
             Field::SessionId => envelope.session.clone(),
@@ -13532,6 +13541,9 @@ pub const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::action::ActionExt as _;
     /// The last element of a list carries no `;` or `||` of its own, which is
     /// what lets `pipeline_rules` read a sequence off the separator alone.
     ///

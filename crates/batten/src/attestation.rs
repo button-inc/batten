@@ -373,6 +373,7 @@ fn find(dir: &Path, binary: &str) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{find, is_binary, untar, unzip, verifier_of};
+    #[cfg(test)]
 
     fn scratch(name: &str) -> std::path::PathBuf {
         crate::scratch::scratch(&format!("attestation-unit-{name}"))

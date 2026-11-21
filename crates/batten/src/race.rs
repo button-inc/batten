@@ -837,6 +837,9 @@ pub fn repo_slug(root: &std::path::Path) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// Fails by: the committed grammar's keys dropped or replaced on their way
     /// through the trait this module asks.

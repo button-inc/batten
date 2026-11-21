@@ -775,6 +775,9 @@ pub fn command_for(verb: Option<&str>) -> Command {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod narrowed_tests {
     use super::{command, command_for, is_child_of, parent_of};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::surface_table::SURFACE;
 
     /// The prefix test answers as the backward search it replaced, for every
@@ -946,6 +949,9 @@ mod narrowed_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod identity_tests {
     use super::ROOT;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::surface_table::SURFACE;
 
     /// Every declared command carries a stable id (CLOUD-969).
@@ -1015,6 +1021,9 @@ mod identity_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// [`command_path`]'s argv handling, which the mediated boundary depends on
     /// to stop reading our own subcommand words as paths (CLOUD-1804).

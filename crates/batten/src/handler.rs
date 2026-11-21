@@ -148,12 +148,11 @@ const POLL: Duration = Duration::from_millis(10);
 /// verdict that has not arrived by now is not coming, and the bound is the promise.
 const DRAIN_GRACE: Duration = Duration::from_millis(200);
 
-impl Handler {
+/// `Handler` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait HandlerExt: Sized {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
-    pub fn event(&self) -> Option<Event> {
-        event_of(&self.on)
-    }
+    fn event(&self) -> Option<Event>;
 
     /// Whether this handler runs for `raw_tool`.
     ///
@@ -164,15 +163,7 @@ impl Handler {
     /// contract is to RUN it — a handler that silently stopped being dispatched is
     /// the absence the door exists to close.
     #[must_use]
-    pub fn selects_tool(&self, raw_tool: &str) -> bool {
-        let Some(matcher) = self.matcher.as_deref() else {
-            return true;
-        };
-        match Regex::new(matcher) {
-            Ok(regex) => regex.is_match(raw_tool),
-            Err(_) => true,
-        }
-    }
+    fn selects_tool(&self, raw_tool: &str) -> bool;
 
     /// Whether this handler runs for `command` (CLOUD-1650).
     ///
@@ -190,32 +181,16 @@ impl Handler {
     /// reading for a participant in a fail-open contract is to run — a handler
     /// that silently stopped being dispatched is the absence the door closes.
     #[must_use]
-    pub fn selects_command(&self, command: Option<&str>) -> bool {
-        let Some(matcher) = self.command_matcher.as_deref() else {
-            return true;
-        };
-        let Some(command) = command else {
-            return false;
-        };
-        match Regex::new(matcher) {
-            Ok(regex) => regex.is_match(command),
-            Err(_) => true,
-        }
-    }
+    fn selects_command(&self, command: Option<&str>) -> bool;
 
     /// Whether this handler runs for a call writing `writes` (CLOUD-2390): see
     /// [`Handler::tree_only`].
     #[must_use]
-    pub fn selects_path(&self, writes: Option<&str>) -> bool {
-        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).has_root())
-    }
+    fn selects_path(&self, writes: Option<&str>) -> bool;
 
     /// The bound this handler runs under.
     #[must_use]
-    pub fn timeout(&self) -> Duration {
-        self.timeout_ms
-            .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
-    }
+    fn timeout(&self) -> Duration;
 
     /// Why this handler's transitional declaration is not in good standing, if
     /// it is not: a stable reason id, or `None` when it is (CLOUD-984).
@@ -232,7 +207,47 @@ impl Handler {
     /// passed in rather than read, because a predicate that consults the clock
     /// cannot be tested at the boundary it actually fires on.
     #[must_use]
-    pub fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str> {
+    fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str>;
+}
+
+impl HandlerExt for Handler {
+    fn event(&self) -> Option<Event> {
+        event_of(&self.on)
+    }
+
+    fn selects_tool(&self, raw_tool: &str) -> bool {
+        let Some(matcher) = self.matcher.as_deref() else {
+            return true;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(raw_tool),
+            Err(_) => true,
+        }
+    }
+
+    fn selects_command(&self, command: Option<&str>) -> bool {
+        let Some(matcher) = self.command_matcher.as_deref() else {
+            return true;
+        };
+        let Some(command) = command else {
+            return false;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(command),
+            Err(_) => true,
+        }
+    }
+
+    fn selects_path(&self, writes: Option<&str>) -> bool {
+        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).has_root())
+    }
+
+    fn timeout(&self) -> Duration {
+        self.timeout_ms
+            .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
+    }
+
+    fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str> {
         match self.owner.as_deref() {
             None => return Some("handler-unowned"),
             // A key that is not a key names nobody, which is the state the
@@ -273,8 +288,6 @@ fn is_issue_key(text: &str) -> bool {
         && !number.is_empty()
         && number.chars().all(|c| c.is_ascii_digit())
 }
-
-impl Handler {}
 
 // THE OBLIGATION CLOUD-1650 OWES, BOUND TO THE LINE THAT SELECTS.
 //
@@ -917,7 +930,12 @@ fn reason(stderr: &str, stdout: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
+    #[cfg(test)]
+    use crate::handler::HandlerExt as _;
 
     /// A Batten child's refusal reaches the session as its deny lines alone:
     /// the remedy line and the task runner's error line are dropped, and the
