@@ -141,10 +141,17 @@ fn a_session_rooted_at_the_clone_still_registers_the_roots_above_it() {
     let text = std::fs::read_to_string(parent.join(".claude/settings.json"))
         .unwrap_or_else(|error| panic!("the parent is registered: {error}: {}", stderr(&done)));
     let document: serde_json::Value = serde_json::from_str(&text).expect("a JSON surface");
+    let derived = common::batten()
+        .current_dir(&repo)
+        .args(["generate", "hooks", "--harness", "claude-code"])
+        .streamed_output()
+        .expect("the binary runs");
+    let derived: serde_json::Value =
+        serde_json::from_slice(&derived.stdout).expect("generate hooks parses");
     assert_eq!(
-        document["hooks"].as_object().map(serde_json::Map::len),
-        Some(8),
-        "all eight events"
+        events_of(&document).len(),
+        events_of(&derived).len(),
+        "every derived event is registered"
     );
     assert!(
         !home.join(".claude/settings.json").exists(),

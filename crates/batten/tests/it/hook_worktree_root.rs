@@ -368,6 +368,17 @@ fn a_session_that_never_stood_in_a_repository_stays_fail_open() {
 /// this file sends.
 const ALLOWS: &str = "version = 1\nprotected = [\"elsewhere/**\"]\n";
 
+/// A checkout's config refusing a write of its own `f`, so a `Write` of `f`
+/// is denied only where this checkout judges it.
+const PROTECTS_F: &str = r#"version = 1
+protected = ["f"]
+
+[[verb]]
+verb = "Write"
+effect = "write"
+redirect = "write through the surface that owns the file"
+"#;
+
 /// A session root outside this tree, and the case's base directory above it.
 fn session_root(name: &str) -> PathBuf {
     let root = common::scratch_outside_tree("hook-root-registered", name).join("root");
@@ -438,14 +449,6 @@ fn merge_call(session: Option<&str>) -> serde_json::Value {
     payload
 }
 
-/// The refused `gh pr merge`, in `session`, carrying `path` as the raw absolute
-/// `file_path` the path rule reads off any tool's input.
-fn merge_naming(session: &str, path: &Path) -> serde_json::Value {
-    let mut payload = merge_call(Some(session));
-    payload["tool_input"]["file_path"] = serde_json::Value::from(path.to_string_lossy());
-    payload
-}
-
 fn recorded(root: &Path) -> Option<Vec<PathBuf>> {
     batten::state::recorded_root_authorities(&batten::git::canonical(root), "batten.toml")
 }
@@ -488,15 +491,18 @@ fn with_two_authorities_the_first_by_name_judges_a_call_with_no_path() {
 fn a_call_naming_a_path_in_one_checkout_is_judged_by_that_one() {
     let root = session_root("by-path");
     let a = member(&root, "a", ALLOWS);
-    let b = member(&root, "b", ONE_DENY);
+    let b = member(&root, "b", PROTECTS_F);
     setup(&root);
     let session = "cloud-2752-by-path";
-    assert!(!denied(&adjudicate(&a, &merge_call(Some(session)))));
-    let output = adjudicate(&root, &merge_naming(session, &b.join("f")));
+    assert!(!denied(&adjudicate(
+        &a,
+        &write_call(Some(session), &a.join("f"))
+    )));
+    let output = adjudicate(&root, &write_call(Some(session), &b.join("f")));
     assert!(
         denied(&output),
-        "a call naming a path in `b` is judged by `b`, not by the `a` the session \
-         last stood in: {}",
+        "a write of a path in `b` is judged by `b`, not by the `a` the session \
+         first stood in: {}",
         common::stderr(&output)
     );
 }
@@ -507,17 +513,20 @@ fn an_authority_cloned_after_setup_joins_the_set() {
     let a = member(&root, "a", ALLOWS);
     let b = member(&root, "b", ALLOWS);
     setup(&root);
-    let c = member(&root, "c", ONE_DENY);
+    let c = member(&root, "c", PROTECTS_F);
     let _ = adjudicate(&c, &merge_call(Some("cloud-2752-grows")));
     let canonical = |path: &Path| batten::git::canonical(path);
     assert_eq!(
         recorded(&root),
         Some(vec![canonical(&a), canonical(&b), canonical(&c)])
     );
-    let output = adjudicate(&root, &merge_naming("cloud-2752-grows-later", &c.join("f")));
+    let output = adjudicate(
+        &root,
+        &write_call(Some("cloud-2752-grows-later"), &c.join("f")),
+    );
     assert!(
         denied(&output),
-        "a call naming a path in the late checkout is judged by it: {}",
+        "a write of a path in the late checkout is judged by it: {}",
         common::stderr(&output)
     );
 }

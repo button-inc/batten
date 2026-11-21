@@ -970,9 +970,9 @@ fn the_skill_contract_is_wired_into_the_hk_gate() {
 
 // --- seeded evals (CLOUD-2765) -----------------------------------------------
 //
-// #MUTANT evals-shape-unread: empty the body of `evals_case_findings`. INERT: a
-// row in a test file is not reached by the mutation sweep, so the case below
-// carries its own negative fixture, which is what kills it.
+// Emptying the body of `evals_case_findings` must fail a case: the function
+// lives in a test file, which the mutation sweep does not reach, so the case
+// below carries its own negative fixture, and that fixture is what catches it.
 
 /// What is wrong with one seeded case: a `seed` with `old`, `new` and `class`,
 /// and a non-empty `assertions` list.

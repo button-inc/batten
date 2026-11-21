@@ -61,6 +61,23 @@ fn registered_events(dir: &Path) -> usize {
         .map_or(0, serde_json::Map::len)
 }
 
+/// How many events the engine derives batten's Claude Code registration over,
+/// read from the binary rather than restated, so a new event moves both sides.
+fn derived_events(dir: &Path) -> usize {
+    let output = common::batten()
+        .current_dir(dir)
+        .args(["generate", "hooks", "--harness", "claude-code"])
+        .output()
+        .expect("the binary runs");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("generate hooks parses");
+    document
+        .get("hooks")
+        .unwrap_or(&document)
+        .as_object()
+        .map_or(0, serde_json::Map::len)
+}
+
 /// The authorities `startup` recorded for `root`, read back off the store the
 /// child wrote.
 fn recorded(home: &Path, root: &Path) -> Option<Vec<PathBuf>> {
@@ -86,8 +103,8 @@ fn repair_above_one_checkout_registers_the_root_and_records_its_authority() {
     assert!(registers_batten(&root), "{}", stderr(&output));
     assert_eq!(
         registered_events(&root),
-        8,
-        "all eight events are registered"
+        derived_events(&repo),
+        "every derived event is registered"
     );
     assert_eq!(recorded(&home, &root), Some(vec![canonical(&repo)]));
     assert!(

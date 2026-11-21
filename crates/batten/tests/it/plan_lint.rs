@@ -70,12 +70,22 @@ fn write_plan(root: &Path, text: &str) -> PathBuf {
 
 /// Record the plan through the real writer.
 fn record(root: &Path, lines: &[&str]) {
+    record_with(root, lines, &["record", "plan"]);
+}
+
+/// Record `lines` as the WHOLE plan: `record plan` merges by id since
+/// CLOUD-2807, so dropping an entry takes `--replace`.
+fn record_replacing(root: &Path, lines: &[&str]) {
+    record_with(root, lines, &["record", "plan", "--replace"]);
+}
+
+fn record_with(root: &Path, lines: &[&str], argv: &[&str]) {
     let body = if lines.is_empty() {
         String::new()
     } else {
         format!("{}\n", lines.join("\n"))
     };
-    let output = common::run_with_stdin(root, &["record", "plan"], &body);
+    let output = common::run_with_stdin(root, argv, &body);
     assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
 }
 
@@ -377,8 +387,9 @@ fn the_steps_must_be_the_recorded_entries() {
     assert_eq!(clauses(&lint(&root)), ["step-unrecorded"]);
     record(&root, &["S1 pending", "S2 pending", "S3 pending"]);
     assert_eq!(clauses(&lint(&root)), ["entry-unplanned"]);
-    record(&root, RECORD);
-    assert_eq!(lint(&root).status.code(), Some(0));
+    record_replacing(&root, RECORD);
+    let passed = lint(&root);
+    assert_eq!(passed.status.code(), Some(0), "{}", common::stderr(&passed));
 }
 
 #[test]

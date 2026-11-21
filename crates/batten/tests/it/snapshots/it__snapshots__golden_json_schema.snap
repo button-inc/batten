@@ -2808,6 +2808,58 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "modules impls",
+          "id": "modules.impls",
+          "about": "Print how many inherent impls sit away from their type's module, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "modules shims",
+          "id": "modules.shims",
+          "about": "Print how many re-exports of the crate's own items sit outside its root, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -4095,7 +4147,16 @@ expression: stdout_of(&output)
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
           "effect": "write",
           "data_channel": false,
-          "flags": [],
+          "flags": [
+            {
+              "name": "replace",
+              "short": null,
+              "long": "replace",
+              "takes_value": false,
+              "positional": false,
+              "help": "Replace the whole plan instead of merging these entries into it by id"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -5520,6 +5581,14 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "structural",
+              "short": null,
+              "long": "structural",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge only removed tests, without building: the seconds half the lap runs first"
             }
           ],
           "subcommands": []
@@ -5893,6 +5962,14 @@ expression: stdout_of(&output)
     {
       "id": "modules.cycle",
       "path": "modules cycle"
+    },
+    {
+      "id": "modules.impls",
+      "path": "modules impls"
+    },
+    {
+      "id": "modules.shims",
+      "path": "modules shims"
     },
     {
       "id": "mutate.census",
