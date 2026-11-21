@@ -48,32 +48,10 @@ use std::ffi::OsStr;
 use std::io::Write;
 
 use anyhow::Result;
-use clap::ValueEnum;
 
 use crate::UsageError;
 use crate::surface;
-
-/// How much Batten says on stderr, quietest first.
-///
-/// The derived [`Ord`] is the ladder: `Silent < Quiet < Normal < Verbose < Debug
-/// < Trace`, which is what makes [`Verbosity::admits`] a comparison rather than
-/// a table anyone maintains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[non_exhaustive]
-pub enum Verbosity {
-    /// Say nothing but a verdict or a usage error.
-    Silent,
-    /// Suppress ordinary progress; keep warnings.
-    Quiet,
-    /// The default.
-    Normal,
-    /// Explain what is being checked.
-    Verbose,
-    /// Add resolution detail.
-    Debug,
-    /// Add everything.
-    Trace,
-}
+pub use crate::surface_table::Verbosity;
 
 impl Verbosity {
     /// Every rung, so anything ranging over the ladder is derived rather than
