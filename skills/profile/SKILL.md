@@ -17,9 +17,11 @@ agent has been measured getting wrong.
    yours.
 2. **Classify: on-CPU or off-CPU** (Gregg). Run `mise exec -- hyperfine -N -i`.
    When `User` is close to the wall time, I/O work will not move it.
-3. **Read a curated report, not a dump.** Use `batten-profile hot`. A curated
-   hotspot report beat profiler instructions 44.1 to 17.6 Opt@1, and raw
-   profiler output "floods the agent's context window" (PerfAgent). Never read
+3. **Read a curated report, not a dump.** Use `batten-profile hot`. The whole
+   PerfAgent loop, curated report plus patch-and-re-profile, beat profiler
+   instructions alone 44.1 to 17.6 Opt@1 (the paper does not isolate the
+   report's share), and raw profiler output "floods the agent's context
+   window". Never read
    a flame graph or folded stacks: they are for eyes, and cost thousands of
    tokens for what ten rows say.
 4. **Localize before patching.** Where to act, not how big a patch, is what
@@ -39,12 +41,14 @@ after.json`, which also reports the frames that vanished. Keep the best
    - Instructions: cachegrind `Ir`, which is deterministic.
    - Wall time: hyperfine on `release`.
 
-   Both go in the commit. Agent performance PRs carry validation less often
-   than human ones (45.7% vs 63.6%).
+   Both go in the commit. One study found agent performance PRs carry
+   validation less often than human ones (45.7% vs 63.6%, arXiv 2512.21757);
+   a larger one found comparable rates but fewer benchmarks (arXiv
+   2610.03969). Either way, the numbers are the claim.
 
 8. **Write the summary to the tracker row between iterations.** Restarting from
-   an externalized summary recovers headroom after a session stops
-   (PERFOPT-Bench). In this repository the summary belongs on the row, never in
+   an externalized summary recovered headroom after a session stopped, in
+   PERFOPT-Bench's exploratory pilot. In this repository the summary belongs on the row, never in
    chat.
 9. **Turn the fix into an efficiency rule.** Rules taken from 25 patches found
    332 new performance bugs (Jin et al.), and Uber PerfInsights and Google ECO
@@ -64,12 +68,17 @@ after.json`, which also reports the frames that vanished. Keep the best
   - std frames resolve to a function, never a line.
   - LTO folds callers together. The tool reads inline frames from the symbol
     sidecar; to split one out for good, add `#[inline(never)]` temporarily.
-- **Fixture:** the paths `batten perf measure` times run in
-  `target/perf/check-repo`, with payloads from
-  `crates/batten/tests/fixtures/hooks/`. If it is missing, run `mise run perf`
-  once.
-- **Exit 2 is the deny channel.** `stop` exits 2 by design, so hyperfine needs
-  `-i`.
+- **Fixture:** of the paths `batten perf measure` times, `check` and `stop` run
+  in `target/perf/check-repo` (a one-rule repo); `hook`, `passthrough`,
+  `posttool` and `wired` run at the repo root against its full config. Profile a
+  path where it is measured, or you cut a cheaper path than the number. Payloads
+  are in `crates/batten/tests/fixtures/hooks/`. If the fixture is missing, run
+  `mise run perf` once; it deletes `target/perf` first, so keep recordings in
+  your scratch directory.
+- **Exit 2 is the deny channel.** `stop` exits 2 whenever it denies, and it
+  denies in `check-repo` too while the branch carries unlanded commits
+  (measured: samply reported `Exited(…, 2)` there). hyperfine needs `-i`, and
+  `mise run profile` discards the status so every iteration is recorded.
 - **Background every recorder.** valgrind runs 20 to 100 times slower than
   native.
 - **The query tool:**
@@ -81,6 +90,9 @@ after.json`, which also reports the frames that vanished. Keep the best
 ```sh
 mise run profile -- stop            # backgrounded; any arm: noop check hook passthrough posttool stop
 ```
+
+samply needs `kernel.perf_event_paranoid` at 1 or lower, and lowering it needs
+root. Where the command reports it cannot, use callgrind below instead.
 
 It does every step that cost a rerun when done by hand:
 
@@ -147,8 +159,8 @@ counted. Delete raw traces once reduced.
   robustness work; bottleneck-aware filtering, arXiv 2603.07169.
 - Antipattern catalogs: Jin et al., PLDI 2012; Uber PerfInsights; Google ECO,
   arXiv 2503.15669.
-- Redundancy: RedSpy, LoadSpy and RVN (Wen, Su, Zhou et al.); Toddler (Nistor
-  et al., ICSE 2013).
+- Redundancy: RedSpy (Wen, Chabbi, Liu, ASPLOS 2017); LoadSpy (Su, Wen, Yang,
+  Chabbi, Liu, ICSE 2019); RVN; Toddler (Nistor et al., ICSE 2013).
 - Scaling: Zaparanuks & Hauswirth, _Algorithmic profiling_; Coppa et al.,
   _Input-sensitive profiling_; both PLDI 2012.
 - Method: Gregg (USE, off-CPU, differential flame graphs); pprof's
