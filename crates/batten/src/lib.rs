@@ -105,6 +105,7 @@ pub mod hookcost;
 pub use batten_facts::identity;
 pub mod init;
 pub mod install;
+pub mod item_index;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
 pub use batten_facts::invocation;
 pub mod journal;
@@ -166,7 +167,6 @@ pub mod release_state;
 pub mod release_verify;
 pub mod released;
 pub use batten_base::remedy;
-pub mod item_index;
 pub mod render;
 pub mod repair;
 pub mod replay;
