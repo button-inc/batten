@@ -412,6 +412,100 @@ fn impl_sites(parsed: &[(String, Vec<String>, SourceFile)]) -> Sites {
     Sites { sites, declared }
 }
 
+/// Every file of `files` that changes, or is created, when a module file
+/// made only of inline modules is split: each `mod name { … }` becomes its
+/// own file beside it (`x.rs` gives `x/name.rs`; a `mod.rs`, `lib.rs` or
+/// `main.rs` gives `name.rs` in its directory), its body dedented one level,
+/// and its declaration stays as `mod name;` with its docs and attributes.
+/// Module paths are unchanged, so every `super::` and every caller still
+/// resolves.
+///
+/// ONLY A FILE THAT IS NOTHING BUT INLINE MODULES (and `use` items), with
+/// two or more of them: a file that groups modules in one text. A test
+/// module, a `#[path]` module, or a target that already exists leaves the
+/// file whole. Measured: `config_check.rs`, 23 inline modules over 5,600
+/// lines, whose impls the extension-trait recipe could not reach
+/// (CLOUD-2793).
+#[must_use]
+pub fn split_inline_modules(files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (path, text) in files {
+        if let Some(split) = split_one(path, text, files) {
+            out.extend(split);
+        }
+    }
+    out
+}
+
+/// [`split_inline_modules`] for one file, or `None` when it does not qualify.
+fn split_one(
+    path: &str,
+    text: &str,
+    files: &BTreeMap<String, String>,
+) -> Option<BTreeMap<String, String>> {
+    let dir = match path.rsplit_once('/') {
+        Some((parent, "mod.rs" | "lib.rs" | "main.rs")) => format!("{parent}/"),
+        _ => format!("{}/", path.strip_suffix(".rs")?),
+    };
+    let tree = parse(text).ok()?;
+    let items: Vec<ast::Item> = tree.items().collect();
+    if !items
+        .iter()
+        .all(|item| matches!(item, ast::Item::Module(_) | ast::Item::Use(_)))
+    {
+        return None;
+    }
+    let inline: Vec<ast::Module> = items
+        .iter()
+        .filter_map(|item| match item {
+            ast::Item::Module(module) if module.item_list().is_some() => Some(module.clone()),
+            _ => None,
+        })
+        .collect();
+    let guarded = inline.iter().any(|module| {
+        cfg_test(module.syntax())
+            || module
+                .attrs()
+                .any(|attribute| attribute.syntax().text().to_string().contains("path"))
+    });
+    if inline.len() < 2 || guarded {
+        return None;
+    }
+    let mut out = BTreeMap::new();
+    let mut parent = text.to_owned();
+    for module in inline.iter().rev() {
+        let name = module.name()?.text().to_string();
+        let list = module.item_list()?.syntax().text_range();
+        let (open, close) = (usize::from(list.start()), usize::from(list.end()));
+        let child = format!("{dir}{name}.rs");
+        if files.contains_key(&child) {
+            return None;
+        }
+        out.insert(child, dedent(&text[open + 1..close - 1]));
+        // From the end of the name to the closing brace becomes `;`.
+        let after_name = usize::from(module.name()?.syntax().text_range().end());
+        parent.replace_range(after_name..close, ";");
+    }
+    out.insert(path.to_owned(), parent);
+    Some(out)
+}
+
+/// A module body moved to its own file: one level of indentation removed,
+/// leading blank lines dropped, ending in one newline.
+fn dedent(body: &str) -> String {
+    let lines: Vec<&str> = body
+        .lines()
+        .map(|line| {
+            line.strip_prefix("    ")
+                .unwrap_or(if line.trim().is_empty() { "" } else { line })
+        })
+        .skip_while(|line| line.is_empty())
+        .collect();
+    let mut out = lines.join("\n").trim_end().to_owned();
+    out.push('\n');
+    out
+}
+
 /// The files of `files` under `src` that parse, as their keys and their
 /// `(node, module, tree)`, index for index.
 fn parse_src(
@@ -2086,5 +2180,34 @@ mod tests {
         let found = calls("fn f(r: &R) { let _ = vec![r.twice()]; }\n", &items);
         assert_eq!(found, BTreeMap::from([(None, false)]));
         assert!(calls("fn f() { let _ = vec![twice]; }\n", &items).is_empty());
+    }
+
+    /// The measured shape: `config_check.rs`, nothing but inline modules.
+    /// Fails by: a body not moved to its own file, or moved without its
+    /// indentation removed; the declaration losing its doc comment or not
+    /// left as `mod name;`; or a file holding anything but modules split.
+    #[test]
+    fn a_file_of_only_inline_modules_splits_into_one_file_each() {
+        let files: BTreeMap<String, String> = [
+            (
+                "src/check.rs",
+                "/// Actions.\npub mod action {\n    use crate::model::Action;\n\n    pub fn f() {}\n}\n\npub mod budget {\n    pub fn g() {}\n}\n",
+            ),
+            ("src/mixed.rs", "pub mod a {\n    pub fn f() {}\n}\npub mod b {}\nfn h() {}\n"),
+        ]
+        .into_iter()
+        .map(|(path, text)| (path.to_owned(), text.to_owned()))
+        .collect();
+        let split = split_inline_modules(&files);
+        assert_eq!(
+            split["src/check.rs"],
+            "/// Actions.\npub mod action;\n\npub mod budget;\n"
+        );
+        assert_eq!(
+            split["src/check/action.rs"],
+            "use crate::model::Action;\n\npub fn f() {}\n"
+        );
+        assert_eq!(split["src/check/budget.rs"], "pub fn g() {}\n");
+        assert!(!split.contains_key("src/mixed.rs"), "{split:?}");
     }
 }

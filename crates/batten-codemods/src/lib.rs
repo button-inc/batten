@@ -108,12 +108,27 @@ pub const TREE_RECIPES: &[TreeRecipe] = &[
         apply: item_index::respell_through_shims,
     },
     TreeRecipe {
+        name: "split-inline-modules",
+        summary: "a module file that is nothing but inline modules becomes one file per module, paths unchanged (CLOUD-2793)",
+        skip: &["mutation_markers.rs"],
+        apply: split_inline_modules,
+    },
+    TreeRecipe {
         name: "impl-to-extension-trait",
         summary: "an inherent impl in a higher layer than its type becomes that layer's extension trait, so behaviour stays above the vocabulary (CLOUD-2793)",
         skip: &["mutation_markers.rs"],
         apply: impl_to_extension_trait,
     },
 ];
+
+/// `split-inline-modules` over the whole tree: the predicate is a file's
+/// shape, not its package, so manifests are not needed.
+fn split_inline_modules(
+    files: &BTreeMap<String, String>,
+    _manifests: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    batten::module_graph::split_inline_modules(files)
+}
 
 /// `impl-to-extension-trait` over every package `manifests` declares: each
 /// package's `src/` is one run, importing the trait from outside `src/` by
