@@ -429,7 +429,8 @@
             "policy-test",
             "config-lint-pinned",
             "cfg-gated-test-pinned",
-            "module-census-pinned"
+            "module-census-pinned",
+            "merge-conflict-markers"
           ]
         }
       ],
@@ -690,6 +691,12 @@
           "name": "module-census-pinned",
           "status": "included",
           "orderIndex": 42,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "merge-conflict-markers",
+          "status": "included",
+          "orderIndex": 43,
           "parallelGroupId": "group_0"
         }
       ]
