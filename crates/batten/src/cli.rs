@@ -2022,7 +2022,10 @@ pub enum RecordCommand {
     /// No argument, for [`RecordCommand::Tool`]'s reason one layer over: the
     /// branch is the key and the engine reads it, so a caller cannot record
     /// against a branch it is not on.
-    Plan,
+    Plan {
+        /// Replace the whole store rather than merge by id (CLOUD-2807).
+        replace: bool,
+    },
     /// Record which rows this branch's pull request body closes, read on stdin.
     ///
     /// The same record a `[[recorder]]` row mints from an observed `gh pr view`
@@ -3902,7 +3905,9 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         // No positional to read: the branch is the key and the engine resolves
         // it, so this arm takes the sub-verb and nothing else.
-        ("plan", _) => Some(RecordCommand::Plan),
+        ("plan", matches) => Some(RecordCommand::Plan {
+            replace: matches.get_flag("replace"),
+        }),
         ("closes", _) => Some(RecordCommand::Closes),
         (name, matches) => record_producer_of(name, matches),
     }

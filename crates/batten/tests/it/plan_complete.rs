@@ -337,3 +337,62 @@ fn the_plan_store_is_declared_as_verb_written() {
         batten::config_check::record::VERB_WRITTEN
     );
 }
+
+/// Run `batten record plan` in `root` with `lines` on stdin; return its stdout.
+fn record_plan(root: &Path, lines: &str, replace: bool) -> String {
+    use batten::capture::StreamedChild as _;
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut command = common::batten();
+    command.args(["record", "plan"]);
+    if replace {
+        command.arg("--replace");
+    }
+    let mut child = command
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the compiled binary");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(lines.as_bytes())
+        .expect("write the plan lines");
+    let output = child.streamed_wait().expect("the verb terminates");
+    assert!(output.status.success(), "record plan exits 0");
+    String::from_utf8(output.stdout).expect("utf-8 stdout")
+}
+
+/// The store, read back through the engine's own path derivation.
+fn plan_store(root: &Path) -> String {
+    let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
+    let git_dir = Path::new(git_dir.trim());
+    let claim = batten::claim::claimed_token(&git_dir.join("batten-receipts"), "work");
+    fs::read_to_string(batten::recorder::record_path(
+        git_dir,
+        "plan",
+        "work",
+        claim.as_deref(),
+    ))
+    .expect("the plan store")
+}
+
+/// Fails by: recording one entry wiping the entries already held, which is
+/// what silently un-held 28 declared items on 2026-11-21 (CLOUD-2807).
+#[test]
+fn recording_one_entry_keeps_the_others() {
+    let root = repo("plan-merge-keeps", &[], Some(&["a completed", "b pending"]));
+    let said = record_plan(&root, "c pending\nb completed\n", false);
+    assert_eq!(said, "record plan: added 1, changed 1, kept 1\n");
+    assert_eq!(plan_store(&root), "a completed\nb completed\nc pending\n");
+
+    record_plan(&root, "z pending\n", true);
+    assert_eq!(
+        plan_store(&root),
+        "z pending\n",
+        "--replace rewrites the store"
+    );
+}
