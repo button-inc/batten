@@ -198,8 +198,13 @@ fn a_task_body_grown_by_one_line_is_refused() {
     let dir = repo(
         "shell-ban-grown",
         // Two lines at the base: a one-command body is argv to the detector
-        // (CLOUD-2625), and a base of zero would make this a new unit.
-        &[("mise.toml", &manifest(&[("a", &["echo one", "echo two"])]))],
+        // (CLOUD-2625), and a base of zero would make this a new unit. The
+        // standing script is what migrating admits and presence refuses, so
+        // only a module that read the declaration leaves it alone.
+        &[
+            ("mise.toml", &manifest(&[("a", &["echo one", "echo two"])])),
+            ("tools/old.sh", "#!/bin/sh\necho old\n"),
+        ],
     );
     change(
         &dir,
@@ -208,11 +213,7 @@ fn a_task_body_grown_by_one_line_is_refused() {
     );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
-    assert!(grew(&found, "mise.toml"), "{found:?}");
-    assert!(
-        !found.iter().any(|(_, line)| line.is_some()),
-        "no task gained shell it did not have: {found:?}"
-    );
+    assert_eq!(found, [("mise.toml".to_owned(), None)], "{found:?}");
 }
 
 #[test]
@@ -626,8 +627,8 @@ fn a_shebang_under_any_suffix_is_refused() {
 /// One `[[census.shell.generated]]` row.
 fn generated_row(path: &str, check: &str) -> String {
     format!(
-        "\n[[census.shell.generated]]\npath = \"{path}\"\n\
-         generator = \"batten completions bash\"\ncheck = \"{check}\"\n"
+        "\n[[census.shell.generated]]\npath = '{path}'\n\
+         generator = \"batten completions bash\"\ncheck = '{check}'\n"
     )
 }
 

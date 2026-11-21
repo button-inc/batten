@@ -19058,23 +19058,7 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
-        shell_introduced: shell_introduced_for(policy, envelope),
-    }
-}
-
-/// Whether this call's write authors shell (CLOUD-2335), resolved only for a
-/// pre-tool write some policy row selects, so every other call reads nothing.
-fn shell_introduced_for(
-    policy: &hook::Policy,
-    envelope: &hook::Envelope,
-) -> hook::ShellIntroducedFacts {
-    if envelope.event == hook::Event::PreTool
-        && envelope.operation == hook::Operation::Write
-        && policy.reads_pinned(envelope)
-    {
-        hook::shell_introduced(hook_authority_root(), envelope)
-    } else {
-        facts::Look::CouldNotLook
+        shell_introduced: policy.shell_fact(hook_authority_root(), envelope),
     }
 }
 

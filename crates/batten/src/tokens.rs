@@ -1038,6 +1038,15 @@ pub fn unmethodical(report: &str) -> Vec<Unmethodical> {
 mod tests {
     use super::*;
 
+    /// A refusal renders as its own sentence, which is what the verb prints.
+    #[test]
+    fn a_refusal_renders_its_reason() {
+        assert_eq!(
+            Refused("workloads.toml did not parse".to_owned()).to_string(),
+            "workloads.toml did not parse"
+        );
+    }
+
     #[test]
     fn tokens_round_up_because_a_partial_token_is_paid_for() {
         assert_eq!(tokens_of(0, 4), 0);

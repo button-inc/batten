@@ -1227,7 +1227,9 @@ fn a_job_installs_what_its_mise_steps_say() {
 fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     use yaml_rust2::YamlLoader;
     let (required, spawned) = required_tools();
-    for floor in ["cargo-dist", "pkl", "node", "jq"] {
+    // `jq` left the floor with `lint_deno`'s bash stub (CLOUD-2336): the
+    // stand-in that replaced it parses JSON itself, so no case requires jq.
+    for floor in ["cargo-dist", "pkl", "node"] {
         assert!(
             required.contains(floor),
             "the {floor} requirement went unread: {required:?}"

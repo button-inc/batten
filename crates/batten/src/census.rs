@@ -2029,6 +2029,231 @@ mod tests {
         assert_eq!(report.totals.total, 0, "exempt lines are never totalled");
     }
 
+    /// The walk finds a shell argv in every place engine code holds one, names
+    /// the item that owns it, and skips test code by attribute on every item
+    /// kind (CLOUD-2770).
+    ///
+    /// Fails by: an item, impl, trait or macro body left unwalked, an owner
+    /// misnamed, a `cfg` other than exactly `test` read as test code, a
+    /// test-only item of any kind walked, or a call that is not
+    /// `Command::new` read as one.
+    #[test]
+    fn a_spawn_is_found_wherever_engine_code_holds_one() {
+        let source = [
+            r#"const SHELL: (&str, &str) = ("sh", "-c");"#,
+            r#"static PWSH: [&str; 2] = ["pwsh", "-c"];"#,
+            r#"fn by_call() { let _ = Command::new("bash"); }"#,
+            r#"fn by_chain() { Command::new("env").arg("-i").arg("sh"); }"#,
+            r#"fn by_args() { Command::new("env").args(&["-i", "sh"]); }"#,
+            r#"fn by_macro() { let _ = vec!["zsh", "-c"]; }"#,
+            r#"fn by_reference() { Command::new(&"sh"); }"#,
+            r#"fn by_paren() { Command::new(("sh")); }"#,
+            "struct S;",
+            "impl S {",
+            r#"    fn method() { Command::new("dash"); }"#,
+            r#"    const C: [&str; 2] = ["ksh", "-c"];"#,
+            "    #[test]",
+            r#"    fn case() { Command::new("sh"); }"#,
+            "}",
+            r#"trait T { fn provided() { Command::new("mksh"); } }"#,
+            "#[cfg(not(test))]",
+            r#"fn kept() { Command::new("ash"); }"#,
+            r#"fn plain() { Command::new("git").arg("x"); let _ = ("sh", 1); Other::new("sh"); Command::open("sh"); }"#,
+            r#"#[cfg(test)] const X: [&str; 2] = ["sh", "-c"];"#,
+            r#"#[cfg(test)] fn tested() { Command::new("sh"); }"#,
+            r#"#[cfg(test)] impl S { fn m() { Command::new("sh"); } }"#,
+            r#"#[cfg(test)] wrapped!(Command::new("sh"));"#,
+            r#"#[cfg(test)] mod tests { fn x() { Command::new("sh"); } }"#,
+            r#"#[cfg(test)] static Y: [&str; 2] = ["sh", "-c"];"#,
+            r#"#[cfg(test)] trait U { fn p() { Command::new("sh"); } }"#,
+        ]
+        .join("\n");
+        let found: Vec<(usize, Option<String>)> = spawn_sites("src/a.rs", &source)
+            .into_iter()
+            .map(|site| (site.line, site.function))
+            .collect();
+        let expected: Vec<(usize, Option<String>)> = [
+            (1, "SHELL"),
+            (2, "PWSH"),
+            (3, "by_call"),
+            (4, "by_chain"),
+            (5, "by_args"),
+            (6, "by_macro"),
+            (7, "by_reference"),
+            (8, "by_paren"),
+            (11, "method"),
+            (12, "C"),
+            (16, "provided"),
+            (18, "kept"),
+        ]
+        .into_iter()
+        .map(|(line, function)| (line, Some(function.to_owned())))
+        .collect();
+        assert_eq!(found, expected);
+    }
+
+    /// The two on-disk readers measure the tracked tree at `root`: generated
+    /// entries against their globs and check files, and spawns in engine
+    /// source only.
+    ///
+    /// Fails by: either reader answering nothing.
+    #[test]
+    fn the_on_disk_readers_measure_the_tracked_tree() {
+        let root = crate::scratch::scratch("census-on-disk");
+        std::fs::create_dir_all(root.join("gen")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("gen/a.sh"), "x\n").unwrap();
+        std::fs::write(root.join("t.rs"), "fn holds_it() {}\n").unwrap();
+        let spawning = "fn f() { Command::new(\"sh\"); }\n";
+        std::fs::write(root.join("src/a.rs"), spawning).unwrap();
+        std::fs::write(root.join("tests/b.rs"), spawning).unwrap();
+        let tracked: BTreeSet<String> = ["gen/a.sh", "t.rs", "src/a.rs", "tests/b.rs"]
+            .map(str::to_owned)
+            .into();
+        let declared = ShellCensus {
+            generated: vec![Generated {
+                path: "gen/*.sh".to_owned(),
+                generator: Some("g".to_owned()),
+                check: Some("t.rs::holds_it".to_owned()),
+            }],
+            ..ShellCensus::default()
+        };
+        assert_eq!(
+            generated_on_disk(&root, &declared, &tracked),
+            [GeneratedEntry {
+                path: "gen/*.sh".to_owned(),
+                matches: 1,
+                check_found: true,
+            }]
+        );
+        assert_eq!(
+            spawns_on_disk(&root, &tracked),
+            [SpawnEntry {
+                path: "src/a.rs".to_owned(),
+                line: 1,
+                function: Some("f".to_owned()),
+            }]
+        );
+        // `#!` is read off the first two bytes, and a short file has none.
+        std::fs::write(root.join("bang"), "#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("hash"), "#").unwrap();
+        assert!(hash_bang(&root.join("bang")));
+        assert!(!hash_bang(&root.join("hash")));
+        assert!(!hash_bang(&root.join("t.rs")));
+    }
+
+    /// A `check` is `<file>::<name>`, both halves present and unspaced; a
+    /// spawn row names its file, its function and a cited contract.
+    ///
+    /// Fails by: either half of a check, or any one of a spawn row's three
+    /// fields, accepted alone.
+    #[test]
+    fn a_check_and_a_spawn_row_carry_every_part() {
+        assert_eq!(check_parts("t.rs::holds"), Some(("t.rs", "holds")));
+        for bad in ["t.rs::", "::holds", "t rs::holds", "t.rs::a b", "t.rs"] {
+            assert_eq!(check_parts(bad), None, "{bad}");
+        }
+        let spawn = |path: &str, function: Option<&str>, contract: Option<&str>| ShellCensus {
+            spawns: vec![Spawn {
+                path: path.to_owned(),
+                function: function.map(str::to_owned),
+                contract: contract.map(str::to_owned),
+            }],
+            ..ShellCensus::default()
+        };
+        let cited = Some("an MCP `headersHelper`, https://example.com/spec");
+        assert!(spawn("src/a.rs", Some("f"), cited).validate().is_ok());
+        assert!(spawn(" ", Some("f"), cited).validate().is_err(), "no file");
+        assert!(
+            spawn("src/a.rs", None, cited).validate().is_err(),
+            "no function"
+        );
+        assert!(
+            spawn("src/a.rs", Some("f"), None).validate().is_err(),
+            "no contract"
+        );
+        assert!(
+            spawn("src/a.rs", Some("f"), Some("a format"))
+                .validate()
+                .is_err(),
+            "no citation"
+        );
+    }
+
+    /// Migrating is `mode = "migrate"` or a non-empty legacy `exempt`;
+    /// presence is everything else.
+    #[test]
+    fn the_mode_is_migrate_only_when_declared_or_legacy() {
+        assert!(!ShellCensus::default().migrating());
+        let declared = ShellCensus {
+            mode: Some(ShellMode::Migrate),
+            ..ShellCensus::default()
+        };
+        assert!(declared.migrating());
+        let legacy = ShellCensus {
+            exempt: keys(&["x.sh"]),
+            ..ShellCensus::default()
+        };
+        assert!(legacy.migrating());
+    }
+
+    /// A TOML array is judged as the list it holds, not as its bracketed text.
+    ///
+    /// Fails by: the array arm dropped, which reads `["cargo test"]` as a glob.
+    #[test]
+    fn a_toml_array_is_judged_as_its_items() {
+        assert_eq!(toml_reason(r#"["cargo test"]"#, None), None);
+        assert_eq!(toml_reason(r#"["a", "b && c"]"#, None), Some("List"));
+        assert_eq!(toml_reason(r#""a | b""#, None), Some("Pipeline"));
+    }
+
+    /// Two rows naming one manifest union their keys, each once.
+    ///
+    /// Fails by: a key already held compared the wrong way round, which drops
+    /// every key after the first.
+    #[test]
+    fn rows_naming_one_manifest_union_their_keys() {
+        let documents: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"b.toml": {"census": {"shell": {"manifest": [
+                {"path": "m", "keys": ["run", "x"]},
+                {"path": "m", "keys": ["x", "y"]},
+            ]}}}}),
+        )
+        .unwrap();
+        let homes = Homes::find(&documents);
+        assert!(homes.declared);
+        assert_eq!(homes.manifests["m"].0, keys(&["run", "x", "y"]));
+    }
+
+    /// A reach that asks for the whole tree reads it even where no document
+    /// declares a census; one that does not reads only the row's own lines.
+    ///
+    /// Fails by: the two conditions both required, which reads nothing for
+    /// a consumer that declares nothing.
+    #[test]
+    fn an_always_reach_reads_the_whole_tree_without_a_declaration() {
+        let root = crate::scratch::scratch("census-reach");
+        std::fs::write(root.join("x.sh"), "echo one\n").unwrap();
+        let tracked = vec!["x.sh".to_owned()];
+        let reader = TreeReader::new(&root, &tracked);
+        let none = serde_json::Map::new();
+        let fact = |always: bool| {
+            tree_fact(
+                &none,
+                &none,
+                None,
+                &tracked,
+                Some(Reach {
+                    reader: &reader,
+                    always,
+                }),
+            )
+        };
+        assert_ne!(fact(true), fact(false));
+        assert_eq!(fact(false), tree_fact(&none, &none, None, &tracked, None));
+    }
+
     #[test]
     fn the_source_bakes_in_no_consumer_path() {
         // Non-negotiable rule 1: which manifest, which workflow directory and

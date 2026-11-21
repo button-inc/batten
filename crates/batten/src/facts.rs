@@ -5844,3 +5844,51 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two shell facts (CLOUD-2625, CLOUD-2335): their tokens, their
+    /// classes, which surface resolves each, and the keys each schema states.
+    ///
+    /// Fails by: a token, class or tree key misrouted, or a schema that does
+    /// not state what the fact carries, so `opa check -s` admits a module
+    /// reading a key the fact never holds.
+    #[test]
+    fn the_shell_facts_are_named_classed_and_described() {
+        assert_eq!(Fact::Shell.as_str(), "shell");
+        assert_eq!(Fact::ShellIntroduced.as_str(), "shell-introduced");
+        assert_eq!(Fact::Shell.class(), SHELL);
+        assert_eq!(Fact::ShellIntroduced.class(), SHELL_INTRODUCED);
+        assert_eq!(Fact::Shell.tree_key(), Some("shell"));
+        assert_eq!(Fact::ShellIntroduced.tree_key(), None);
+        assert!(!Fact::Shell.minted_at_session_start());
+        assert!(!Fact::ShellIntroduced.minted_at_session_start());
+        let shell = Fact::Shell.schema_fragment();
+        for key in ["head", "base", "generated", "spawn"] {
+            assert!(shell["properties"].get(key).is_some(), "shell.{key}");
+        }
+        let introduced = Fact::ShellIntroduced.schema_fragment();
+        assert_eq!(
+            introduced["required"],
+            serde_json::json!(["look", "reason"])
+        );
+    }
+
+    /// Every fact is listed once, by a token no other fact carries, and
+    /// routes to a schema of its own rather than a delegate's placeholder.
+    ///
+    /// Fails by: a fact added to the enum but left out of `ALL`, two facts
+    /// sharing a token, or a fact falling through to an `unrouted` arm.
+    #[test]
+    fn every_fact_has_one_token_and_a_routed_schema() {
+        let mut tokens = std::collections::BTreeSet::new();
+        for fact in Fact::ALL {
+            assert!(tokens.insert(fact.as_str()), "{} twice", fact.as_str());
+            let fragment = fact.schema_fragment();
+            let described = fragment["description"].as_str().unwrap_or_default();
+            assert!(!described.starts_with("unrouted fact"), "{}", fact.as_str());
+        }
+    }
+}

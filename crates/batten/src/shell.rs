@@ -393,9 +393,9 @@ fn switch_script(program: &str, arguments: &[&str]) -> bool {
         if name == "f" || (name.len() >= 2 && "file".starts_with(&name)) {
             return false;
         }
-        let valued = POWERSHELL_VALUED.iter().any(|full| {
-            *full == name || (name.len() >= 3 && full.len() > 3 && full.starts_with(&name))
-        });
+        let valued = POWERSHELL_VALUED
+            .iter()
+            .any(|full| *full == name || (name.len() >= 3 && full.starts_with(&name)));
         if valued && !word.contains(':') {
             words.next();
         }
@@ -512,27 +512,27 @@ const XARGS_VALUED: &[&str] = &["-E", "-I", "-L", "-n", "-s", "-a", "-d", "-P"];
 /// `-S` string split into words, followed by whatever comes after it.
 /// <https://man7.org/linux/man-pages/man1/env.1.html>
 fn env_utility<'a>(arguments: &[&'a str]) -> Option<Vec<&'a str>> {
-    let mut at = 0;
-    while let Some(word) = arguments.get(at) {
+    let mut rest = arguments;
+    while let Some((word, tail)) = rest.split_first() {
         let split = match *word {
-            "-S" | "--split-string" => arguments.get(at + 1).copied().map(|text| (text, at + 2)),
+            "-S" | "--split-string" => tail.split_first().map(|(text, after)| (*text, after)),
             _ => word
                 .strip_prefix("--split-string=")
                 .or_else(|| word.strip_prefix("-S").filter(|text| !text.is_empty()))
-                .map(|text| (text, at + 1)),
+                .map(|text| (text, tail)),
         };
-        if let Some((text, rest)) = split {
+        if let Some((text, after)) = split {
             let mut utility: Vec<&str> = text.split_whitespace().collect();
-            utility.extend(arguments.get(rest..).unwrap_or_default());
+            utility.extend(after);
             return Some(utility);
         }
-        if matches!(*word, "-u" | "-C" | "--unset" | "--chdir") {
-            at += 2;
+        rest = if matches!(*word, "-u" | "-C" | "--unset" | "--chdir") {
+            tail.get(1..).unwrap_or_default()
         } else if word.starts_with('-') || word.contains('=') {
-            at += 1;
+            tail
         } else {
-            return Some(arguments.get(at..).unwrap_or_default().to_vec());
-        }
+            return Some(rest.to_vec());
+        };
     }
     None
 }
@@ -540,18 +540,21 @@ fn env_utility<'a>(arguments: &[&'a str]) -> Option<Vec<&'a str>> {
 /// The words from the first operand on, past options and the values of those
 /// in `valued` given as a separate word.
 fn after_options<'a>(arguments: &[&'a str], valued: &[&str]) -> Vec<&'a str> {
-    let mut at = 0;
-    while let Some(word) = arguments.get(at) {
+    let mut rest = arguments;
+    while let Some((word, tail)) = rest.split_first() {
         if *word == "--" {
-            at += 1;
-            break;
+            return tail.to_vec();
         }
         if !word.starts_with('-') {
             break;
         }
-        at += if valued.contains(word) { 2 } else { 1 };
+        rest = if valued.contains(word) {
+            tail.get(1..).unwrap_or_default()
+        } else {
+            tail
+        };
     }
-    arguments.get(at..).unwrap_or_default().to_vec()
+    rest.to_vec()
 }
 
 /// Rules 5 to 9, over the one top-level node.
@@ -1225,6 +1228,9 @@ mod tests {
             ["rg", "--exclude=*.md", "a?", "*"]
         );
         assert_eq!(argv("echo 'a*b'"), ["echo", "a*b"]);
+        // A closed quote ends: the glob after it is bare.
+        assert_eq!(shell("echo 'a' *"), "glob");
+        assert_eq!(shell("echo \"a\" ?"), "glob");
     }
 
     #[test]
@@ -1288,6 +1294,11 @@ mod tests {
             "pwsh -",
             "powershell -NoLogo Get-Item",
             "powershell -ExecutionPolicy Bypass Get-Item",
+            // A valued parameter's value is skipped, whole or shortened, so
+            // the switch after it is read; under `pwsh` a value read as the
+            // first operand would be a file.
+            "pwsh -ExecutionPolicy Bypass -Command x",
+            "pwsh -exe Bypass -c x",
         ] {
             assert_eq!(shell(text), "interpreter-script", "{text}");
         }
@@ -1298,7 +1309,12 @@ mod tests {
             "pwsh -ExecutionPolicy Bypass -File s.ps1",
             "powershell -f s.ps1",
             "pwsh -wd C:/x s.ps1",
+            // `-fi` is `-File` shortened, so `powershell`'s default `-Command`
+            // does not take the operand after it.
+            "powershell -fi s.ps1",
             "cmd",
+            // Switches that carry no string.
+            "cmd /D /Q",
         ] {
             assert!(matches!(logic(text), Verdict::Argv(_)), "{text}");
         }
@@ -1394,13 +1410,51 @@ mod tests {
             "env FOO=1 perl -e 'x'",
             "nohup sh -c 'x'",
             "timeout 5 python3 -c 'x'",
+            "env '-Ssh -c x'",
+            "env -i -S perl -e 'x'",
+            "env -u FOO sh -c 'x'",
+            "xargs -- sh -c 'x'",
         ] {
             assert_eq!(shell(text), "interpreter-script", "{text}");
         }
+        // A program that wraps nothing: its operands are its own.
+        assert_eq!(argv("echo sh -c 'x'").len(), 4);
         assert_eq!(argv("find . -exec rm {} \\;").len(), 6);
         assert_eq!(argv("xargs rm"), ["xargs", "rm"]);
         assert_eq!(argv("env -S 'cargo test'").len(), 3);
         assert_eq!(argv("find . -name sh").len(), 4);
+    }
+
+    #[test]
+    fn a_wrapper_hands_on_exactly_the_words_after_its_own() {
+        // `env`: options, assignments and `-u`/`-C`'s values are its own; a
+        // `-S` string is split and what follows it is appended.
+        assert_eq!(
+            env_utility(&["-i", "A=1", "sh", "x"]),
+            Some(vec!["sh", "x"])
+        );
+        assert_eq!(env_utility(&["-u", "A", "-C", "d", "sh"]), Some(vec!["sh"]));
+        assert_eq!(
+            env_utility(&["-i", "-S", "perl -w", "-e", "x"]),
+            Some(vec!["perl", "-w", "-e", "x"])
+        );
+        assert_eq!(
+            env_utility(&["-i", "-Sperl -w", "-e"]),
+            Some(vec!["perl", "-w", "-e"])
+        );
+        assert_eq!(
+            env_utility(&["--split-string=perl", "-e"]),
+            Some(vec!["perl", "-e"])
+        );
+        assert_eq!(env_utility(&["-i", "A=1"]), None);
+        assert_eq!(env_utility(&["-S"]), None);
+        // `xargs`: a valued option takes the next word, and `--` ends options.
+        assert_eq!(
+            after_options(&["-n", "1", "-0", "rm", "-f"], XARGS_VALUED),
+            ["rm", "-f"]
+        );
+        assert_eq!(after_options(&["-0", "--", "-rm"], XARGS_VALUED), ["-rm"]);
+        assert_eq!(after_options(&["-n"], XARGS_VALUED), Vec::<&str>::new());
     }
 
     #[test]
@@ -1547,6 +1601,16 @@ mod tests {
         assert_eq!(
             judge(Some(&GIT_ALIAS), &Spelling::Text("log --oneline")),
             Verdict::Argv(vec!["log".to_owned(), "--oneline".to_owned()])
+        );
+        // The `!` is the carrier's marker, not the script's negation.
+        assert_eq!(
+            judge(Some(&GIT_ALIAS), &Spelling::Text("!git log")),
+            Verdict::Argv(vec!["git".to_owned(), "log".to_owned()])
+        );
+        // ...and only a `!` carrier strips one.
+        assert_eq!(
+            judge(Some(&DEVCONTAINER), &Spelling::Text("! git log")),
+            Verdict::Shell("Negation")
         );
         // Claude Code: with `args` exec, without shell.
         assert_eq!(
