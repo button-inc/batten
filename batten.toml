@@ -5825,6 +5825,28 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a person's choice between restore and waive): restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
+# CLOUD-2808. An `allow` or `expect` of `unused_imports` turns the compiler's
+# dead-code signal off for exactly the items most likely to rot: stripping them
+# under CLOUD-2793 let rustc report 243 imports unused in both the library and
+# its test build, each a dead re-export kept alive only by the attribute. The
+# count cannot grow; the remedy is to delete the import, or gate it
+# `#[cfg(test)]` when only tests name it.
+#
+# THE PATTERN ENDS IN A REAL NEWLINE, so it counts an attribute that closes its
+# line (`#[allow(unused_imports)]`, `#![expect(dead_code, unused_imports)]`)
+# and never a test fixture that spells one inside a string literal, where the
+# line break is the two characters `\n`.
+[[rule]]
+id = "symbol skip unused"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "unused_imports)]\n"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (a person's choice per import): delete the import, or gate it `#[cfg(test)]` where only tests name it; which applies is decided per site by what names it"
+
 # `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
 # this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
 # `.bats` files, and the two sides of a ratchet used to disagree about

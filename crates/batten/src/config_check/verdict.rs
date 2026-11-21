@@ -1,12 +1,7 @@
-#![allow(unused_imports)]
-use crate::config_model::{DeclaredVerdict, Route, Vocabulary, VocabularyWord};
-use crate::error::UsageError;
-use crate::hook::FieldExt as _;
-use crate::preset_catalog::{Applicability, RouteKind};
+use crate::config_model::{DeclaredVerdict, Route};
+use crate::preset_catalog::Applicability;
 use crate::preset_catalog::{VendoredRoute, VendoredVerdict};
 use crate::preset_catalog::{admit, read, run};
-use serde::Serialize;
-use std::collections::BTreeSet;
 
 /// CLOUD-1823's route, shared by the two receipt classes a `turn mint ahead`
 /// deadlock can carry (CLOUD-1977) so the precondition is written once.
