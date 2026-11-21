@@ -45,68 +45,11 @@
 //! whole engine, never a second implementation.
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 use crate::rules::glob_match;
-
-/// One declared path class and the mutation sanctioned for it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Redirect {
-    /// The path class this redirect speaks for, in the engine's one glob
-    /// dialect.
-    ///
-    /// Deliberately independent of `protected`: this table answers "what should
-    /// they run instead", never "is this guarded". A glob here matching a path
-    /// no `protected` entry covers simply never comes up, which is the harmless
-    /// direction — the alternative, deriving protection from a redirect, is the
-    /// set-collapsing CLOUD-37 exists to prevent.
-    pub glob: String,
-    /// The sanctioned mutation for that class — the "run this instead" a deny
-    /// carries.
-    pub mutation: String,
-    /// The sanctioned READ for that class, and the whole of the read-side gate
-    /// (CLOUD-1258).
-    ///
-    /// # Why a read is gated at all
-    ///
-    /// `no-tool-substitution` is `kind = "pipeline"` and decides over shell
-    /// argv, so a structured-tool call is invisible to it; `protected` crossed
-    /// with `[[verb]]` enumerates MUTATIONS, and CLOUD-442's port states "reads
-    /// stay allowed". So a generic file read of a memory was gated by nothing,
-    /// measured 2026-08-31 with the Serena server healthy and `read_memory`
-    /// loadable. That is not a style preference: a path read couples the caller
-    /// to the tree layout, and CLOUD-868 proposes moving that tree — `read_memory`
-    /// survives the move and a hardcoded path does not, so every flat-path read
-    /// is an unmigrated call site against it.
-    ///
-    /// # OPTIONAL, AND THE ABSENCE IS THE "SESSION DOES NOT OFFER IT" ARM
-    ///
-    /// The row demands that the gate allow where the tool is not available,
-    /// because a redirect naming a tool the session does not carry is CLOUD-998's
-    /// defect one layer over. The boundary cannot see whether an MCP server is
-    /// healthy — that is not a fact any mediated payload carries — so the
-    /// question is answered where it IS decidable: the consumer declares the
-    /// read remedy, and a consumer without the tool declares none and is refused
-    /// nothing. The remedy is therefore a string its own author wrote, which is
-    /// the strongest available guarantee that it names something reachable.
-    ///
-    /// A row with no `read` key gates nothing on the read side and keeps its
-    /// mutation half exactly as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<String>,
-    /// The MCP server whose tool `read` names (CLOUD-2229).
-    ///
-    /// Declared, the read is refused only where some `[[mcp.source]]` resolves
-    /// this server, which is the question `batten mcp call` answers before it
-    /// dispatches. Measured on #1132: in a cloud session no source resolved
-    /// `serena`, so the refusal named a route the session could not take and
-    /// every memory read was refused outright. Absent, `read` refuses as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_server: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Redirect;
 
 /// The table with every `read` dropped whose `read_server` `resolves` says no
 /// source can reach (CLOUD-2229): a refusal must name a route that can be taken.

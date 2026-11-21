@@ -58,30 +58,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::identity::{self, FindingKind, StoredIdentity};
 use crate::rules::{Finding, glob_match, tree_files};
 use crate::severity::RuleSeverity;
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
 
 /// Bytes per estimated token. A convention-level constant, not a
 /// literature-backed claim — see the module docs for why an approximation is the
 /// right shape here.
 const BYTES_PER_TOKEN: usize = 4;
-
-/// The `[budget]` table: **named** file sets and what each may cost.
-///
-/// A map, not a struct with a field per set. The set name is the *consumer's*
-/// — `[budget.instructions]` is this repository's name for its always-loaded
-/// context, and an engine type carrying that name would be a consumer-specific
-/// identifier in `crates/batten` (non-negotiable rule 1). A second consumer
-/// budgeting a different surface declares `[budget.<their-name>]` and needs no
-/// engine change; before this it needed a new field.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(transparent)]
-pub struct Budget(pub BTreeMap<String, BudgetSet>);
 
 impl Budget {
     /// The declared sets, in name order — the fixed evaluation and report order.
@@ -94,67 +83,6 @@ impl Budget {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-/// One `[budget.<name>]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BudgetSet {
-    /// The counted file set, as globs over repo-relative `/`-separated paths.
-    /// Every entry must match at least one file — see the module docs. Defaulted
-    /// because a set may count only `embedded` entries; the two being empty
-    /// *together* is what `measure` refuses.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    /// The ceiling on estimated tokens over the whole set. The boundary is
-    /// `<=`: exactly at budget passes.
-    pub max_tokens: usize,
-    /// The optional ceiling on loaded lines, the second predicate the shell gate
-    /// this replaces carried. Absent means unenforced — a threshold nobody
-    /// declared is not a threshold of zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_lines: Option<usize>,
-    /// The optional ceiling on ONE file's loaded bytes (CLOUD-1934).
-    ///
-    /// **A different question from `max_tokens`, not a finer one.** The total
-    /// bounds what a set costs when all of it loads, which is the right question
-    /// for an always-loaded surface. A file that is read ON DEMAND, one call at a
-    /// time, costs nothing until it is read and then fails whole if it is larger
-    /// than one read can return — so its ceiling is per file, and a set total can
-    /// be comfortably under budget while every read of its largest member fails.
-    ///
-    /// Bytes rather than estimated tokens because the ceiling it stands for is
-    /// MEASURED in bytes: the largest file a host returned whole. Absent means
-    /// unenforced, and the boundary is `<=` like every other one here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bytes_per_file: Option<usize>,
-    /// Always-loaded strings carried *inside* a config file rather than in a
-    /// file of their own. Empty by default: a repository with no such surface
-    /// declares nothing (CLOUD-298).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub embedded: Vec<EmbeddedDecl>,
-}
-
-/// One `[[budget.<name>.embedded]]` entry: a string inside a config file that a
-/// host loads on every session.
-///
-/// Both fields are the **consumer's**. A host that always injects a key from its
-/// own config — Serena's project file, an editor's workspace settings — is a
-/// property of the repository using that host, not of Batten, so naming either
-/// one in `crates/batten` would be the consumer-specific identifier
-/// non-negotiable rule 1 forbids. The engine knows only "parse this file, read
-/// this key, count the string".
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EmbeddedDecl {
-    /// The repo-relative, `/`-separated path of the config file to read. A
-    /// literal path and never a glob: a key is read from one document, and a
-    /// pattern would leave "which file's key" unanswered.
-    pub path: String,
-    /// The key whose string value is counted. Dotted for a nested key
-    /// (`a.b.c`); the engine walks maps only, so a key under a sequence is a
-    /// miss rather than a guess.
-    pub key: String,
 }
 
 /// One measured file. Pointer-only: a path and its counts, never a byte of the

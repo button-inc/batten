@@ -202,8 +202,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
@@ -251,68 +250,6 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
 pub(crate) const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// hk's format axis, adopted rather than invented.
-///
-/// `hk/src/structured_output.rs` already spells these three for a tool that
-/// reports on child processes, and a caller who knows hk must not have to learn
-/// a second vocabulary to read Batten. The names are hk's; what they range over
-/// is Batten's own record.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum OutputFormat {
-    /// Pointer lines, one per fact.
-    #[default]
-    Human,
-    /// One JSON document.
-    Json,
-    /// One JSON record per line.
-    Jsonl,
-}
-
-/// mise's style axis, adopted rather than invented.
-///
-/// `mise/src/task/task_output.rs` spells these seven, and its `style_only()`
-/// separates the stream *style* from the *suppression* of the tool's own
-/// metadata — a distinction Batten needs and would otherwise have conflated into
-/// one key. [`OutputStyle::style_only`] is that function, by that name.
-///
-/// **With one command in flight, `prefix`, `replacing` and `timed` render
-/// alike.** They are still accepted, because adopting half a vocabulary is how a
-/// caller learns that Batten's version of a name means something else; what
-/// distinguishes them is a bundle of concurrent children, which is CLOUD-430's
-/// subject and not this one's.
-///
-/// **`timed` emits no wall-clock field, and that is the byte-stability answer**
-/// §6 demands rather than a limitation. A duration in Batten's own output would
-/// make the same run print differently twice, and [`crate::capture`] already
-/// refuses a timestamp for exactly that reason.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum OutputStyle {
-    /// Each line carries the child's program name.
-    Prefix,
-    /// The child's bytes, verbatim and as they arrive.
-    #[default]
-    Interleave,
-    /// Each stream whole, in a fixed order, after the child exits.
-    KeepOrder,
-    /// As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten
-    /// never assumes it has.
-    Replacing,
-    /// As [`OutputStyle::Prefix`], minus the clock — see the type's docs.
-    Timed,
-    /// Batten says nothing of its own; the child still speaks.
-    Quiet,
-    /// Nobody speaks.
-    Silent,
-}
-
 impl OutputStyle {
     /// mise's `style_only()`: the stream style with the suppression removed.
     ///
@@ -335,79 +272,6 @@ impl OutputStyle {
     const fn suppresses_child(self) -> bool {
         matches!(self, OutputStyle::Silent)
     }
-}
-
-/// The `[exec]` table: how `batten exec` owns what it dispatched.
-///
-/// One key today, and it is an opt-in rather than a tuning knob. `false` is not
-/// a conservative default chosen for taste — it is the *only* value that leaves
-/// the process topology byte-for-byte what it was, which is what an existing
-/// consumer's orchestrator is already built against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ExecConfig {
-    /// Whether Batten may put a dispatched command in its own process group and
-    /// take responsibility for tearing that group down.
-    ///
-    /// Declared rather than inferred, because the residual case is not
-    /// observable: an orchestrator two levels up intending to `kill(-pgid)` looks
-    /// exactly like one that is not. Even when this is `true`, Batten still
-    /// declines whenever mise's own two rules say an ancestor is already
-    /// managing — see [`GroupDecision`].
-    #[serde(default)]
-    pub manage_process_group: bool,
-    /// Whether the child's bytes are copied onto Batten's own streams.
-    ///
-    /// `false` is the CLOUD-429 default and the whole point: the bytes are
-    /// already stored, content-addressed and addressable, so printing them again
-    /// charges the caller a second time for output the engine has. `--tee`
-    /// restores the old behaviour verbatim.
-    #[serde(default)]
-    pub tee: bool,
-    /// How Batten's own record is encoded (hk's axis).
-    #[serde(default)]
-    pub format: OutputFormat,
-    /// How a teed child's bytes are presented, and whose output is suppressed
-    /// (mise's axis).
-    #[serde(default)]
-    pub style: OutputStyle,
-    /// How many of a `:::` bundle's commands run at once — mise's `--jobs`.
-    ///
-    /// `1` by default, which is stricter than mise's own default and chosen
-    /// rather than inherited: a bundle's commands share one working tree, and
-    /// widening concurrency a caller did not ask for is how two of them start
-    /// writing the same file. Zero is read as one.
-    #[serde(default = "one")]
-    pub jobs: usize,
-    /// Whether a bundle keeps going past a command that failed — mise's
-    /// `--continue-on-error`.
-    #[serde(default)]
-    pub continue_on_error: bool,
-    /// Echo the child's PROGRESS lines to stderr even when its bytes are not
-    /// teed (#1276): `stage <step> ran|hit <s>` and the mutant sweep's per-row
-    /// and schema lines ([`is_progress_line`]). A stored gate log is a pointer
-    /// at its end (CLOUD-2223), so without this a lap that ran for an hour said
-    /// nothing about which stage it was in. Never configuration: a caller's
-    /// own choice, so it is skipped by serde and absent from the schema.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub progress: Progress,
-}
-
-/// Whether a stream that is not teed still echoes its progress lines
-/// ([`ExecConfig::progress`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Progress {
-    /// Nothing but what the tee setting shows.
-    #[default]
-    Silent,
-    /// Each [`is_progress_line`] reaches stderr as it arrives.
-    Echo,
-}
-
-/// The `jobs` default, as a function because `serde` needs one.
-const fn one() -> usize {
-    1
 }
 
 impl Default for ExecConfig {
@@ -3041,6 +2905,8 @@ fn report_bundle(
 // captured through it, and reaching `exec` pulled `task` along, past the
 // recorded worst closure. Re-exported so `exec::Streamed` keeps resolving.
 pub use crate::capture::{Keep, Streamed, StreamedChild};
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{ExecConfig, ExecProgress as Progress, OutputFormat, OutputStyle};
 
 // THE ONE SPAWN of the adapter stays in `exec`, the placed module: the traits
 // live in `capture` so a caller names them without an edge onto `exec`, and the

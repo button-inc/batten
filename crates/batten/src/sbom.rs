@@ -57,13 +57,13 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::resolve::Overrides;
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Conformance, SbomDeclared as Declared};
 
 /// `sbom`'s options, filled by `lib.rs` from `cli::Options`.
 ///
@@ -118,51 +118,6 @@ const NONE: &str = "NONE";
 
 /// The file-name prefixes a copyright statement is looked for in first.
 const LICENSE_PREFIXES: [&str; 4] = ["LICENSE", "COPYING", "COPYRIGHT", "NOTICE"];
-
-/// The `[sbom]` table (CLOUD-843).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(rename = "SbomDeclared")]
-#[non_exhaustive]
-pub struct Declared {
-    /// The subject's name: the documents' source name, and the stem both the
-    /// tree's documents and a binary's asset are named from.
-    pub subject: String,
-    /// Where the tree's two documents are written, relative to the repository
-    /// root unless absolute.
-    pub out_dir: String,
-    /// Where a binary's asset is written, relative to the repository root unless
-    /// absolute.
-    pub binary_out_dir: String,
-    /// Paths the tree scan skips, passed to the scanner verbatim.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-    /// The pinned-actions licence table, repository-relative. Absent skips the
-    /// actions pass; declared and unreadable is could-not-look.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actions: Option<String>,
-    /// The `[[rule.tools]]` row `--record` keys its reduction under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inventory: Option<String>,
-    /// What `--conformance` runs and where it records.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conformance: Option<Conformance>,
-}
-
-/// The `[sbom.conformance]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(rename = "SbomConformance")]
-#[non_exhaustive]
-pub struct Conformance {
-    /// The record family the checker's answers are written under.
-    pub record: String,
-    /// The checker program, run as `<checker> <document> --comply <standard>
-    /// --output json --output-file <report>`.
-    pub checker: String,
-    /// The standards asked, in order. Never empty.
-    pub standards: Vec<String>,
-}
 
 impl Declared {
     /// Refuse a table the verb could not act on, naming the key.
