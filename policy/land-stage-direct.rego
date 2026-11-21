@@ -226,8 +226,35 @@ same_stage(program, step) if {
 # nothing and a workspace-wide run is still the stage.
 selected(program) := {pick |
 	some at, word in program.arguments
-	some option in {"--target", "--profile", "--package"}
+	some option in {"--target", "--profile", "--package", "--manifest-path"}
 	pick := choice(program.arguments, at, package_spelled(word), option)
+}
+
+# A MANIFEST OTHER THAN THE ROOT'S IS SELECTION, as a package is (CLOUD-2813).
+# `--manifest-path crates/x/Cargo.toml` runs that one member, and
+# `--manifest-path tools/batten-profile/Cargo.toml` runs a separate workspace no
+# step receipts at all, so neither answers `test:cargo`'s question. Refusing one
+# left a tool's unit tests with no way to run. The root manifest, spelled any
+# way, is still the workspace and still the stage.
+filtered(program) if {
+	some manifest in manifests(program.arguments)
+	not root_manifest(manifest)
+}
+
+manifests(words) := {words[at + 1] |
+	some at, word in words
+	word == "--manifest-path"
+	at + 1 < count(words)
+} | {substring(word, 16, -1) |
+	some word in words
+	startswith(word, "--manifest-path=")
+}
+
+root_manifest(manifest) if manifest in {"Cargo.toml", "./Cargo.toml"}
+
+root_manifest(manifest) if {
+	some root in input.call.roots
+	manifest == concat("/", [root, "Cargo.toml"])
 }
 
 package_spelled("-p") := "--package"
@@ -462,6 +489,33 @@ test_a_single_package_clippy_is_not_a_stage if {
 			"task-programs": [],
 			"step-programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"], "subcommand": "clippy", "nested": "-D", "global-options": [], "via": "step run", "receipted": true, "task": "lint:clippy", "mediated": true}],
 		}}
+	}
+}
+
+# Fails by: a test run of another workspace's manifest, or one member's, read as
+# the `test:cargo` suite — while the root manifest, however spelled, still is.
+suite_with(argv) := {"call": {
+	"command": concat(" ", array.concat(["cargo"], argv)),
+	"segments": [],
+	"programs": [{"program": "cargo", "name": "cargo", "arguments": argv, "subcommand": argv[0], "nested": null, "global-options": [], "via": null, "mediated": false}],
+	"roots": ["/r"],
+	"task-programs": [],
+	"step-programs": [],
+}}
+
+test_a_manifest_other_than_the_roots_is_selection if {
+	every argv in [
+		["test", "-q", "--manifest-path", "tools/batten-profile/Cargo.toml"],
+		["test", "--manifest-path=crates/batten-core/Cargo.toml"],
+	] {
+		count(violation) == 0 with input as suite_with(argv)
+	}
+	every argv in [
+		["test", "--manifest-path", "Cargo.toml"],
+		["test", "--manifest-path=./Cargo.toml"],
+		["test", "--manifest-path", "/r/Cargo.toml"],
+	] {
+		some _ in violation with input as suite_with(argv)
 	}
 }
 
