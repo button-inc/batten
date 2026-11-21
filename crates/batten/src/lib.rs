@@ -12,6 +12,7 @@ use crate::attribution::AttributionExt as _;
 use crate::commit::CommitExt as _;
 use crate::config::ConfigExt as _;
 use crate::config::UnresolvableExt as _;
+use crate::config_check::mint::DeclaredExt as _;
 use crate::engine::PinExt as _;
 use crate::exec::ExecConfigExt as _;
 use crate::hook::EventExt as _;

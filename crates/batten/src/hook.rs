@@ -42,6 +42,7 @@
 
 use crate::budget::BudgetExt as _;
 use crate::commit::CommitExt as _;
+use crate::config_check::rules::RuleExt as _;
 use crate::rules::RuleExt as _;
 use crate::rules::VerdictProgramExt as _;
 use crate::verdict::ApplicabilityExt as _;
