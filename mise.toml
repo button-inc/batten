@@ -3777,8 +3777,8 @@ description = "Gate: no more inherent impls sit away from their type's module th
 # type is a crate cut that cannot compile. An impl whose type the census cannot
 # resolve to one declaring module counts too, so an unread impl cannot hide.
 # Baseline when this gate landed, matching by name: 40 outside + 153 ambiguous.
-# Resolved the way each file reads the name (CLOUD-2793): 50 outside + 7
-# ambiguous. CLOUD-2793 lowers it to 0.
+# Resolved the way each file reads the name, inline modules' own imports
+# included (CLOUD-2793): 57 outside + 0 ambiguous. CLOUD-2793 lowers it to 0.
 run = "{{vars.batten}} modules impls --root crates/batten/src --max 57"
 
 [tasks.modules-shims]
