@@ -10982,6 +10982,51 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     }
 }
 
+/// Every command `command` runs, one entry per command line (CLOUD-2377): the
+/// per-line split [`segments`] keeps, quoting resolved, and a segment's own
+/// words where it holds a single command.
+///
+/// **THE ONE SHELL READING FOR A READER OUTSIDE THIS MODULE.** Four readers used
+/// to split the command text by hand, so a quoted `;` split a command and a
+/// commit message naming a verb read as running it. `None` where the shell
+/// grammar will not parse; each reader then keeps its own prior reading of that
+/// command, so nothing it recognised before stops being recognised.
+pub(crate) fn command_lines(command: &str) -> Option<Vec<Vec<String>>> {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return None;
+    };
+    Some(
+        parsed
+            .into_iter()
+            .flat_map(|segment| {
+                if segment.lines.is_empty() {
+                    vec![segment.words]
+                } else {
+                    segment.lines.into_iter().map(|line| line.words).collect()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// `line` from its effective program on (CLOUD-2377): the leading environment
+/// assignments, shell grammar and look-through wrappers [`effective_program`]
+/// steps past are skipped. Empty where the line names no program.
+pub(crate) fn program_words(line: &[String]) -> &[String] {
+    let tokens: Vec<&str> = line.iter().map(String::as_str).collect();
+    effective_program(&tokens)
+        .and_then(|at| line.get(at..))
+        .unwrap_or_default()
+}
+
+/// Whether `word` names the engine, by name or by path (CLOUD-2377).
+pub(crate) fn names_engine(word: &str) -> bool {
+    std::path::Path::new(program_token(word))
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        == Some(crate::surface::BINARY)
+}
+
 pub(crate) fn is_env_assignment(token: &str) -> bool {
     let mut chars = token.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')

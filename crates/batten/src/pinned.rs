@@ -683,12 +683,15 @@ fn resolve(root: &Path) -> PinnedFacts {
 /// Pure, and separated from the spawn for that reason: the interesting decision
 /// here is the difference, and a test that had to install a toolchain to reach
 /// it would be asserting its own premise (`rules/rust.md`).
+///
+/// Split as the platform splits a `PATH` (CLOUD-2377): `;` on Windows, where a
+/// split on `:` cut `C:\a` at its drive letter.
 fn added_directories(composed: &str, ambient: &str) -> Vec<PathBuf> {
-    let already: BTreeSet<&str> = ambient.split(':').filter(|dir| !dir.is_empty()).collect();
-    composed
-        .split(':')
-        .filter(|dir| !dir.is_empty() && !already.contains(dir))
-        .map(PathBuf::from)
+    let already: BTreeSet<PathBuf> = std::env::split_paths(ambient)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect();
+    std::env::split_paths(composed)
+        .filter(|dir| !dir.as_os_str().is_empty() && !already.contains(dir))
         .collect()
 }
 
@@ -1024,6 +1027,19 @@ mod tests {
         let _ = repaired(&root);
         assert!(!record_is_stale(&root));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The platform's own split (CLOUD-2377). Equivalent to a split on `:` on
+    /// Unix, which is why this asserts the reference rather than a value a
+    /// Unix-only mutant would change.
+    #[test]
+    fn added_directories_splits_like_split_paths() {
+        let (composed, ambient) = ("/pin/bin:/usr/bin:/extra", "/usr/bin");
+        let already: BTreeSet<PathBuf> = std::env::split_paths(ambient).collect();
+        let reference: Vec<PathBuf> = std::env::split_paths(composed)
+            .filter(|dir| !already.contains(dir))
+            .collect();
+        assert_eq!(added_directories(composed, ambient), reference);
     }
 
     #[test]

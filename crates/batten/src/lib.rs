@@ -21489,8 +21489,27 @@ fn expire_history_reads(envelope: &hook::Envelope) {
 /// whose program is `batten`, by name or path, directly or after
 /// `mise exec --`, or a task runner (`mise run`/`mise r`, `hk`) whose output
 /// carries the engine's nested lines.
-//MUTANT data-output-collapsed|s@\.rsplit('/')\.next() == Some("batten")@.rsplit('/').next().is_some()@|only_a_call_that_runs_the_engine_has_its_output_collapsed
+///
+/// READ AS SHELL (CLOUD-2377): each command line's program, past leading
+/// environment assignments and `mise exec --`. A hand split on `| ; & \n` read
+/// `BATTEN_ENGINE=local batten check` as no engine and `echo "a; batten check"`
+/// as one. A command the shell grammar will not parse keeps that split.
+//MUTANT data-output-collapsed|s@^            \[first, \.\.\] if hook::names_engine(first) => true,$@            [_first, ..] => true,@|only_a_call_that_runs_the_engine_has_its_output_collapsed
 fn runs_engine(command: &str) -> bool {
+    let Some(lines) = hook::command_lines(command) else {
+        return runs_engine_split(command);
+    };
+    lines.iter().any(|line| match hook::program_words(line) {
+        [first, ..] if hook::names_engine(first) => true,
+        [mise, run, ..] if mise == "mise" && matches!(run.as_str(), "run" | "r") => true,
+        [hk, ..] => hk == "hk",
+        [] => false,
+    })
+}
+
+/// [`runs_engine`] for a command the shell grammar will not parse: the split it
+/// used before reading shell.
+fn runs_engine_split(command: &str) -> bool {
     command
         .split(['|', ';', '&', '\n'])
         .map(|segment| {
@@ -21506,7 +21525,7 @@ fn runs_engine(command: &str) -> bool {
                 [] => None,
             }
         })
-        .any(|program| program.is_some_and(|program| program.rsplit('/').next() == Some("batten")))
+        .any(|program| program.is_some_and(hook::names_engine))
 }
 
 /// What the model reads of a post-tool result: the seen-finding collapse and
@@ -30357,6 +30376,16 @@ mod tests {
     /// with its view lines and size, then the routes to read one.
     /// CLOUD-2215: the collapse rewrites what the engine printed, never a
     /// document another program printed that happens to quote a finding.
+    /// Fails by: the hand split on `| ; & \n`, which reads an env-prefixed
+    /// `batten` as no engine and a quoted one as the engine (CLOUD-2377).
+    #[test]
+    fn an_env_prefixed_batten_runs_the_engine_and_a_quoted_one_does_not() {
+        assert!(runs_engine("BATTEN_ENGINE=local batten check"));
+        assert!(!runs_engine("echo \"a; batten check\""));
+        assert!(runs_engine("mise run verify"));
+        assert!(runs_engine("cd /r\nbatten check"));
+    }
+
     #[test]
     fn only_a_call_that_runs_the_engine_has_its_output_collapsed() {
         for command in [

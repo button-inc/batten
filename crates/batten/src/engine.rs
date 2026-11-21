@@ -1390,7 +1390,14 @@ pub fn workflow_literals(
 /// such calls were invisible to this scan. Every `-- batten ` on a command line
 /// is a released-binary call of its own.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT wrapped-verb-unseen|s@^        for (at, _) in command.match_indices("-- batten ") {$@        for (at, _) in command.match_indices("\\u{0}") {@|a_wrapped_released_call_invokes_its_verb
+///
+/// READ AS SHELL (CLOUD-2377): a `run:` value is unquoted once (a YAML quoted
+/// scalar), then each of its command lines contributes the verb of a `batten`
+/// program past leading environment assignments and `mise exec --`, so
+/// `FOO=1 batten checks green`, `"batten pr ensure"` and `cd d && batten land
+/// replay` each invoke their verb. A line the shell grammar will not parse keeps
+/// the prefix check.
+//MUTANT wrapped-verb-unseen|s@^        if pair\[0\] == "--" && crate::hook::names_engine(\&pair\[1\]) \{$@        if false {@|a_wrapped_released_call_invokes_its_verb
 #[must_use]
 pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     fn verb(rest: &str) -> String {
@@ -1408,6 +1415,28 @@ pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
         let trimmed = line.trim_start();
         let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
         let command = trimmed.strip_prefix("run: ").unwrap_or(trimmed);
+        let command = unquoted_scalar(command);
+        if let Some(lines) = crate::hook::command_lines(command) {
+            for words in &lines {
+                let program = crate::hook::program_words(words);
+                let Some(first) = program.first() else {
+                    continue;
+                };
+                if crate::hook::names_engine(first) {
+                    verbs.insert(verb(&program[1..].join(" ")));
+                } else if first != "mise" {
+                    continue;
+                }
+                // Every `-- batten` on a `batten` or `mise` line is a released
+                // call of its own (CLOUD-2033).
+                for (at, pair) in program.windows(2).enumerate() {
+                    if pair[0] == "--" && crate::hook::names_engine(&pair[1]) {
+                        verbs.insert(verb(&program[at + 2..].join(" ")));
+                    }
+                }
+            }
+            continue;
+        }
         if let Some(rest) = command.strip_prefix("batten ") {
             verbs.insert(verb(rest));
         } else if !command.starts_with("mise ") {
@@ -1421,6 +1450,21 @@ pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     }
     verbs.retain(|verb| !verb.is_empty());
     verbs
+}
+
+/// `value` without one surrounding pair of matching quotes: a YAML quoted
+/// scalar's content (CLOUD-2377). Escapes inside are left as written; a verb is
+/// lowercase words, which no escape spells.
+fn unquoted_scalar(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
 }
 
 /// The directory release `tag` is cached in: its binary ([`cached_release`]) and
@@ -1496,6 +1540,18 @@ mod tests {
             "# head\nversion = 1\nengine = { release = \"v0.0.201\" }\n\n# rows\n[x]\nengine = 2\n"
         );
         assert_eq!(declared(&inserted), Some(release));
+    }
+
+    /// Fails by: the prefix check, which strips `run: ` and a `batten ` prefix
+    /// and so adds no verb for any of these three lines (CLOUD-2377).
+    #[test]
+    fn an_env_prefixed_quoted_or_chained_run_still_invokes_its_verb() {
+        let verbs = invoked_verbs(
+            "      - run: FOO=1 batten checks green\n      - run: \"batten pr ensure\"\n        cd d && batten land replay\n",
+        );
+        for verb in ["checks green", "pr ensure", "land replay"] {
+            assert!(verbs.contains(verb), "{verb} in {verbs:?}");
+        }
     }
 
     #[test]

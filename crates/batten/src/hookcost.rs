@@ -445,15 +445,37 @@ fn takes(route: &str, name: &str, command: &str) -> bool {
         // route `mise run land`, and a prefix test of the whole line never saw
         // it. Measured: every Bash call of the census's own session opened
         // with a `cd`.
+        let followed = |said: &[&str]| {
+            said.starts_with(&words[..opening])
+                && words[opening..]
+                    .iter()
+                    .filter(|word| !word.contains('<'))
+                    .all(|word| said.contains(word))
+        };
+        // READ AS SHELL FOR A BASH CALL (CLOUD-2377): a hand split on `& ; |`
+        // counted `git commit -m "x; mise run land now"` as following `mise run
+        // land`, and missed `FOO=1 mise run land`. Only leading environment
+        // assignments are skipped, never a wrapper, so a route whose opening
+        // words ARE a wrapper (`mise exec -- … --pinned`) stays matchable. Any
+        // other call's "command" is JSON text, and keeps the split.
+        let lines = (name == "Bash")
+            .then(|| crate::hook::command_lines(command))
+            .flatten();
         return opening > 0
-            && command.split(['&', ';', '|']).any(|segment| {
-                let said: Vec<&str> = segment.split_whitespace().collect();
-                said.starts_with(&words[..opening])
-                    && words[opening..]
+            && match lines {
+                Some(lines) => lines.iter().any(|line| {
+                    let said: Vec<&str> = line
                         .iter()
-                        .filter(|word| !word.contains('<'))
-                        .all(|word| said.contains(word))
-            });
+                        .map(String::as_str)
+                        .skip_while(|word| crate::hook::is_env_assignment(word))
+                        .collect();
+                    followed(&said)
+                }),
+                None => command.split(['&', ';', '|']).any(|segment| {
+                    let said: Vec<&str> = segment.split_whitespace().collect();
+                    followed(&said)
+                }),
+            };
     }
     if let Some(read) = route.strip_prefix("read ") {
         let (path, via) = match read.split_once(" via ") {
@@ -751,6 +773,19 @@ mod tests {
     /// (CLOUD-2141). Measured before this: 0 of 81 refusals bucketed as
     /// followed, the history read the history gate names among them.
     ///
+    /// Fails by: the hand split on `& ; |`, which follows a route quoted inside
+    /// a commit message and misses one behind an env assignment (CLOUD-2377).
+    #[test]
+    fn a_route_quoted_inside_another_command_is_not_followed() {
+        let route = "run mise run land";
+        assert!(!takes(
+            route,
+            "Bash",
+            "git commit -m \"x; mise run land now\""
+        ));
+        assert!(takes(route, "Bash", "FOO=1 mise run land"));
+    }
+
     /// The suite `offered-routes-unread` is killed in.
     #[test]
     fn a_route_the_refusal_printed_is_followed() {

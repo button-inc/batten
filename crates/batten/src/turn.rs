@@ -147,20 +147,50 @@ fn orchestrator_blocks(line: &Value) -> &[Value] {
 /// so the module's durable-write arm credited a route the retired body never
 /// did. Which mediated methods are a home is the module's decision, and it can
 /// only make it if the record says which route a call took.
+///
+/// **READ AS SHELL, NOT AS TEXT** (CLOUD-2377). A whitespace scan for `mcp call`
+/// credited `git commit -m "batten mcp call Linear save_issue"` as a mediated
+/// `save_issue`, so a commit message suppressed `turn file missing`. A call is
+/// a command line whose program is `batten` and whose next words are `mcp call`;
+/// a command the shell grammar will not parse keeps the scan.
 fn mediated_call(command: &str) -> Option<String> {
+    let Some(lines) = crate::hook::command_lines(command) else {
+        return mediated_call_scanned(command);
+    };
+    lines.iter().find_map(|line| {
+        let [batten, mcp, call, server, method, ..] = crate::hook::program_words(line) else {
+            return None;
+        };
+        if !crate::hook::names_engine(batten) || mcp != "mcp" || call != "call" {
+            return None;
+        }
+        Some(format!(
+            "mcp call {} {}",
+            route_word(server)?,
+            route_word(method)?
+        ))
+    })
+}
+
+/// A server or method name as a call's name carries it: its leading
+/// identifier characters, or nothing.
+fn route_word(word: &str) -> Option<String> {
+    let found: String = word
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        .collect();
+    (!found.is_empty()).then_some(found)
+}
+
+/// [`mediated_call`] for a command the shell grammar will not parse: the
+/// whitespace scan it used before reading shell.
+fn mediated_call_scanned(command: &str) -> Option<String> {
     let words: Vec<&str> = command.split_whitespace().collect();
     let at = words
         .windows(2)
         .position(|pair| pair.first() == Some(&"mcp") && pair.get(1) == Some(&"call"))?;
     // `mcp call <server> <method>`: the server and method follow `mcp call`.
-    let word = |offset: usize| -> Option<String> {
-        let found: String = words
-            .get(at + offset)?
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-            .collect();
-        (!found.is_empty()).then_some(found)
-    };
+    let word = |offset: usize| route_word(words.get(at + offset)?);
     let (server, method) = (word(2)?, word(3)?);
     Some(format!("mcp call {server} {method}"))
 }
@@ -549,6 +579,23 @@ mod tests {
     }
 
     /// Fails by: a `call` word that does not follow `mcp` read as the route.
+    /// Fails by: a whitespace scan, which reads the quoted commit message as a
+    /// mediated `save_issue` and credits it as a durable home (CLOUD-2377).
+    #[test]
+    fn a_quoted_mcp_call_in_a_commit_message_is_not_a_mediated_call() {
+        assert_eq!(
+            mediated_call("git commit -m \"batten mcp call Linear save_issue\""),
+            None
+        );
+        for command in [
+            "batten mcp call Linear save_issue '{}'",
+            "mise exec -- batten mcp call Linear get_issue '{}'",
+            "cd /r\nbatten mcp call Linear get_issue '{}'",
+        ] {
+            assert!(mediated_call(command).is_some(), "{command}");
+        }
+    }
+
     #[test]
     fn the_route_is_the_words_after_mcp_call() {
         assert_eq!(
