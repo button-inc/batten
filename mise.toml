@@ -3771,6 +3771,21 @@ description = "Gate: the crate's largest module cycle holds no more modules than
 # same change, and a commit that grows one is refused here.
 run = "{{vars.batten}} modules cycle --root crates/batten/src --max 67"
 
+[tasks.modules-impls]
+description = "Gate: no more inherent impls sit away from their type's module than the committed bound (CLOUD-2792)"
+# An inherent impl may live only in its type's own crate, so one away from its
+# type is a crate cut that cannot compile. Ambiguous names (a type name declared
+# in two modules) count too: no single home means no cut. Baseline when this gate
+# landed: 40 outside + 153 ambiguous; CLOUD-2793 lowers it to 0, batch by batch.
+run = "{{vars.batten}} modules impls --root crates/batten/src --max 193"
+
+[tasks.modules-shims]
+description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"
+# A `pub use crate::…` outside `lib.rs` keeps an old spelling alive and draws a
+# graph edge that exists only because of spelling. The unit is the leaf.
+# Baseline when this gate landed: 499 (12 aliased); CLOUD-2793 lowers it to 0.
+run = "{{vars.batten}} modules shims --root crates/batten/src --max 499"
+
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
 # The aggregate half of the gate above, and the reason it is a separate task
@@ -4978,6 +4993,8 @@ depends = ["tree-clean"]
 run = [
   "{{vars.batten}} step graph run verify-1",
   "mise run modules-cycle",
+  "mise run modules-impls",
+  "mise run modules-shims",
   "{{vars.batten}} step graph run verify-2 --jobs 2",
   "{{vars.batten}} step run ci-suite -- mise run ci",
   "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",

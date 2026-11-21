@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-modules-shims 1  batten 
+.SH NAME
+batten\-modules\-shims \- Print how many re\-exports of the crate\*(Aqs own items sit outside its root, refusing more than \-\-max
+.SH SYNOPSIS
+\fBbatten modules shims\fR [\fB\-\-max\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-root\fR> 
+.SH DESCRIPTION
+Print how many re\-exports of the crate\*(Aqs own items sit outside its root, refusing more than \-\-max
+.SH OPTIONS
+.TP
+\fB\-\-root\fR \fI<root>\fR
+The crate\*(Aqs source root, the directory holding lib.rs
+.TP
+\fB\-\-max\fR \fI<max>\fR
+Refuse when more than this many re\-exports of the crate\*(Aqs own items sit outside its root (a non\-negative integer)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
