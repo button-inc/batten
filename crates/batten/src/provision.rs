@@ -65,17 +65,23 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::config_check::provision::platform_key;
+#[cfg(test)]
+use crate::config_check::provision::validate;
+#[cfg(test)]
+use crate::config_check::provision::validate_env;
+#[cfg(test)]
+use crate::config_check::provision::validate_subtree;
+use crate::config_model::Artifact;
+#[cfg(test)]
+use crate::config_model::Backend;
+use crate::config_model::CredentialProbe;
+use crate::config_model::Provision;
+use crate::config_model::ProvisionEnv;
+use crate::config_model::Unpack;
+use crate::digest::sha256_hex as digest;
 use crate::error::UsageError;
 use crate::secret::Secret;
-// The section's declaration lives with the model (CLOUD-2789).
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::provision::{
-    check_sha256, check_url, validate_artifact_spelling, validate_env, validate_subtree,
-};
-pub use crate::config_check::provision::{platform_key, validate};
-pub use crate::config_model::CredentialProbe;
-pub use crate::config_model::{Artifact, Backend, Provision, ProvisionEnv, Unpack};
-pub use crate::digest::sha256_hex as digest;
 
 /// The subdirectory of the repository's out-of-tree state that holds provisioned
 /// tools.
@@ -527,7 +533,7 @@ pub fn apply(
             crate::verdict::artifact(&format!("fetched {found}")),
         ];
         let refusal = crate::refusal::Refusal::engine(
-            crate::verdict::Native::ProvisionPinOther,
+            crate::error::Native::ProvisionPinOther,
             &subjects,
             crate::refusal::Fix::None,
         );

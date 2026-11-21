@@ -27,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use batten::provision::digest;
+use batten::digest::sha256_hex as digest;
 use common::{Fixture, StateHome, batten, git_in, scratch};
 
 /// A repository plus the out-of-tree state it writes into.

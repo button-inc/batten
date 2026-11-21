@@ -98,12 +98,13 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub use crate::config_check::handler::declarable_tokens;
-pub use crate::config_check::handler::validate;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::handler::{PROBE_SERVERS, event_of};
+#[cfg(test)]
+use crate::config_check::handler::declarable_tokens;
+use crate::config_check::handler::event_of;
+#[cfg(test)]
+use crate::config_check::handler::validate;
 use crate::config_model::Event;
-pub use crate::config_model::Handler;
+use crate::config_model::Handler;
 
 /// The exit code a handler refuses with.
 ///
@@ -353,7 +354,7 @@ impl Violation {
 /// its own words travel as subjects of `hook report now`.
 #[must_use]
 pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
-    let class = crate::verdict::Native::HookReportNow;
+    let class = crate::error::Native::HookReportNow;
     let row = crate::verdict::artifact(&format!("hook.handler.{id}"));
     crate::refusal::Refusal::engine(
         class,
@@ -366,7 +367,7 @@ pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
 #[must_use]
 pub fn violation_refusal(id: &str, violation: &Violation) -> crate::refusal::Refusal {
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::HookAnswerBroken,
+        crate::error::Native::HookAnswerBroken,
         &[
             crate::verdict::artifact(&format!("hook.handler.{id}")),
             crate::verdict::artifact(&violation.token()),
@@ -894,8 +895,8 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
 fn reason(stderr: &str, stdout: &str) -> String {
     let head = format!(
         "{} {} ",
-        crate::refusal::PROVENANCE,
-        crate::refusal::Severity::Deny.word()
+        crate::grammar::PROVENANCE,
+        crate::grammar::Severity::Deny.word()
     );
     let denials: Vec<&str> = stderr
         .lines()
@@ -1236,7 +1237,9 @@ mod tests {
         // because a side effect there runs before a possible deny; a handler is
         // part of that decision, so there is no ordering to invert.
         assert!(declarable_tokens().contains(&Event::PreTool.as_str()));
-        assert!(!crate::action::declarable_tokens().contains(&Event::PreTool.as_str()));
+        assert!(
+            !crate::config_check::action::declarable_tokens().contains(&Event::PreTool.as_str())
+        );
     }
 
     #[test]

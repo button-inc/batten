@@ -60,15 +60,15 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
+#[cfg(test)]
+use crate::config_check::budget::validate;
+use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
 use crate::error::UsageError;
 use crate::findings::Finding;
 use crate::git::tree_files;
 use crate::identity::{self, FindingKind, StoredIdentity};
 use crate::selector::glob_match;
 use crate::severity::RuleSeverity;
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::budget::validate;
-pub use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
 
 /// Bytes per estimated token. A convention-level constant, not a
 /// literature-backed claim — see the module docs for why an approximation is the

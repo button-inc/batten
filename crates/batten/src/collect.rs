@@ -1443,7 +1443,7 @@ struct Skipped {
 /// trees are the checkout's `[prune] root` and each linked worktree's.
 pub fn collect_if_pressed(
     repo: &Path,
-    prune: &crate::prune::Prune,
+    prune: &crate::config_model::Prune,
     kept: &[Kept],
     free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
     deadline: Option<Instant>,
@@ -1463,7 +1463,7 @@ pub fn collect_if_pressed(
 /// checkout collected could see it. The mirror is the same case, measured on
 /// #1276 (`mutate::schema::mirror_target`).
 #[must_use]
-pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
+pub fn trees(repo: &Path, prune: &crate::config_model::Prune) -> Vec<PathBuf> {
     std::iter::once(repo.to_path_buf())
         .chain(crate::git::linked_worktree_dirs(repo))
         .map(|dir| dir.join(&prune.root))
@@ -1479,7 +1479,7 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 /// `None` where the band is undeclared.
 pub fn collect_toward_max(
     repo: &Path,
-    prune: &crate::prune::Prune,
+    prune: &crate::config_model::Prune,
     kept: &[Kept],
     free: u64,
     free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
@@ -2015,8 +2015,8 @@ mod tests {
     }
 
     /// A `[prune]` table rooted at `target`, with the band `band`.
-    fn band(band: Option<(u64, u64)>) -> crate::prune::Prune {
-        crate::prune::Prune {
+    fn band(band: Option<(u64, u64)>) -> crate::config_model::Prune {
+        crate::config_model::Prune {
             root: "target".to_owned(),
             keep: 2,
             warm: None,

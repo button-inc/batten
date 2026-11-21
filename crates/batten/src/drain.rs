@@ -10,7 +10,7 @@
 //!
 //! **Claude Code emits a batch event** — CLOUD-187 wired a hook on
 //! `PostToolBatch` and measured it firing — and four of the five surveyed hosts
-//! do not. Since CLOUD-389 both paths exist: [`crate::hook::Event::PostToolBatch`]
+//! do not. Since CLOUD-389 both paths exist: [`crate::config_model::Event::PostToolBatch`]
 //! is in Claude Code's capability row, and
 //! [`crate::hook::Capabilities::degrade`] hands the boundary-seeking caller that
 //! event where the host declares it and `PostToolUse` where it does not. Which
@@ -173,10 +173,7 @@ const DRAIN_DIR: &str = "drain";
 pub const UNCHANGED: &str = "batten unchanged";
 
 // The `[drain]` section lives with the model (CLOUD-2789).
-pub use crate::config_model::{
-    DEFAULT_CARDINALITY_CAP, DEFAULT_EMIT_CAP, DEFAULT_EMPTY_POLL_GIVEUP, DEFAULT_FLAP_PERCENT,
-    DEFAULT_FLAP_WINDOW, DEFAULT_INTERVAL_MS, DEFAULT_TOKEN_BUDGET, DrainConfig,
-};
+use crate::config_model::DrainConfig;
 
 /// What a wake resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,7 +553,7 @@ fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -
     // THE RULE'S OWN SEVERITY (CLOUD-2145), never the advisory tier's: one rule
     // reads with one word whether `check` or a drain shows it.
     let severity = group.severity.finding_severity();
-    let mut line = crate::refusal::head(severity, group.rule);
+    let mut line = crate::grammar::head(severity, group.rule);
     line.push_str(" at");
     if listed > 0 {
         let _ = write!(line, " {}", locations(&group.fresh[..listed], previous));
@@ -596,13 +593,13 @@ fn told_line(groups: &[&Group<'_>]) -> String {
 /// so — the definition is a lookup the legend names.
 fn budget_summary(withheld: usize, budget: usize) -> String {
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::DrainFitBroken,
+        crate::error::Native::DrainFitBroken,
         &[crate::verdict::artifact(&format!(
             "{withheld} line(s) past {budget} tokens"
         ))],
         crate::refusal::Fix::None,
     )
-    .with_severity(crate::refusal::Severity::Note)
+    .with_severity(crate::grammar::Severity::Note)
     .render_finding(crate::refusal::Arm::Pointer)
 }
 

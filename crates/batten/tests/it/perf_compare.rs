@@ -98,7 +98,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use common::{Fixture, run_with_stdin, stderr, stdout};
 

@@ -75,7 +75,7 @@ impl Advice {
     /// One classed entry, rendered through the finding projection at emission.
     #[must_use]
     pub fn finding(tier: AdvisoryTier, refusal: Refusal) -> Advice {
-        let severity = crate::refusal::Severity::of_tier(tier);
+        let severity = crate::grammar::Severity::of_tier(tier);
         Advice {
             tier,
             text: String::new(),
@@ -96,9 +96,9 @@ impl Advice {
     }
 }
 
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::advisory::validate;
-pub use crate::config_model::Channel;
+#[cfg(test)]
+use crate::config_check::advisory::validate;
+use crate::config_model::Channel;
 
 /// What one emission carries, and what it left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +183,7 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
                     .is_some_and(|other| other.absorb(refusal))
                 {
                     held.tier = held.tier.max(entry.tier);
-                    let severity = crate::refusal::Severity::of_tier(held.tier);
+                    let severity = crate::grammar::Severity::of_tier(held.tier);
                     if let Some(finding) = held.finding.take() {
                         held.finding = Some(Box::new((*finding).with_severity(severity)));
                     }
@@ -331,7 +331,7 @@ mod tests {
     }
 
     fn finding(tier: AdvisoryTier, subject: &str) -> Advice {
-        classed(tier, crate::verdict::Native::RunBroken, subject)
+        classed(tier, crate::error::Native::RunBroken, subject)
     }
 
     /// A drained rule's remedy is said in full once per window, and never as a
@@ -342,7 +342,7 @@ mod tests {
             Advice::first_sighting(
                 AdvisoryTier::Advisory,
                 Refusal::engine(
-                    crate::verdict::Native::CheckRunRed,
+                    crate::error::Native::CheckRunRed,
                     &[crate::verdict::artifact("remedy-subject")],
                     crate::refusal::Fix::None,
                 ),
@@ -359,7 +359,7 @@ mod tests {
         assert!(fresh.text.contains("remedy-subject"), "{}", fresh.text);
     }
 
-    fn classed(tier: AdvisoryTier, class: crate::verdict::Native, subject: &str) -> Advice {
+    fn classed(tier: AdvisoryTier, class: crate::error::Native, subject: &str) -> Advice {
         Advice::finding(
             tier,
             Refusal::engine(
@@ -481,7 +481,7 @@ mod tests {
                 entry(AdvisoryTier::Caution, &"c".repeat(80)),
                 classed(
                     AdvisoryTier::Advisory,
-                    crate::verdict::Native::CheckRunRed,
+                    crate::error::Native::CheckRunRed,
                     "a-subject",
                 ),
             ],

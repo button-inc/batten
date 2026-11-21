@@ -38,7 +38,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -354,16 +354,15 @@ fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
     // the two must travel together. This one stays because it localises the
     // failure: green here and red there says the registry is fine and the boundary
     // is not, which is a different repair from the route having been dropped.
-    let entry = batten::verdict::vendored()
+    let entry = batten::config_check::verdict::vendored()
         .into_iter()
         .find(|entry| entry.id == "receipt read other")
         .expect("the class is vendored");
     assert!(
-        entry
-            .routes
-            .iter()
-            .any(|route| route.kind == batten::verdict::RouteKind::Override
-                && route.precondition.is_some()),
+        entry.routes.iter().any(
+            |route| route.kind == batten::preset_catalog::RouteKind::Override
+                && route.precondition.is_some()
+        ),
         "the class must declare an articulation route, or the wedge returns"
     );
 }

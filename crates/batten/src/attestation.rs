@@ -106,7 +106,7 @@ pub fn run(
     verifier: Option<&str>,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let binary = crate::record::safe_component("binary", binary)?;
+    let binary = crate::config_check::record::safe_component("binary", binary)?;
     let verifier = verifier_of(verifier);
     let root = Path::new(".");
     match produce(root, tag, &binary, verifier) {

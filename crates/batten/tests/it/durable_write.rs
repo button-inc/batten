@@ -19,7 +19,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The module's own rule id, which is what a finding carries.
 const RAW: &str = "path write unsafe";

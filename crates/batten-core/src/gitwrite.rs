@@ -1993,7 +1993,7 @@ fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
     }
 }
 
-pub use crate::propose::diff3;
+use crate::propose::diff3;
 
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out

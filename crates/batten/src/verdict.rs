@@ -48,15 +48,10 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::verdict::{SHAPE_ADMIT_ROUTE, STALE_RECEIPT_ROUTE, VENDORED};
-pub use crate::config_check::verdict::{declared_from, vendored};
-pub use crate::config_model::{
-    Applicability, DeclaredVerdict, Route, RouteKind, Vocabulary, VocabularyWord,
-};
+use crate::config_check::verdict::vendored;
+use crate::config_model::{DeclaredVerdict, Route, Vocabulary, VocabularyWord};
 use crate::error::UsageError;
-pub use crate::preset_catalog::{VendoredRoute, VendoredVerdict};
-pub use crate::preset_catalog::{admit, read, run};
+use crate::preset_catalog::{Applicability, RouteKind};
 
 // THE `V-` AND `R-` PREFIXES ARE GONE (CLOUD-1284).
 //
@@ -1033,7 +1028,7 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 // `Native` lives in `crate::error` (CLOUD-2789), which a `UsageError` names
 // it from, so the module every other one reports through reaches no higher.
 // Its path here is unchanged.
-pub use crate::error::Native;
+use crate::error::Native;
 
 /// Every token the crate's own refusal sites may raise.
 ///

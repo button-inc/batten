@@ -35,8 +35,8 @@
 // remainder is not dead code, it is another target's.
 #![allow(dead_code)]
 
-use batten::exec::Streamed as _;
-use batten::exec::StreamedChild as _;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[expect(
@@ -45,7 +45,8 @@ use std::path::{Path, PathBuf};
 )]
 use std::process::{Command, Output};
 
-use batten::surface::{ROOT, SURFACE};
+use batten::surface::ROOT;
+use batten::surface_table::SURFACE;
 
 /// Set `path`'s times, file or directory, on every platform the suite runs on.
 ///
@@ -707,7 +708,7 @@ pub(crate) fn batten() -> Batten {
     // fails the fetch at once; a case that wants a release serves its own and
     // sets this after, as the engine suites do.
     command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
-    Batten(command, batten::exec::Keep::NONE)
+    Batten(command, batten::capture::Keep::NONE)
 }
 
 /// The case's own home, and the toolchain the developer's home holds pinned
@@ -798,7 +799,7 @@ pub(crate) fn homes(command: &Command) -> Vec<(String, PathBuf)> {
     clippy::disallowed_types,
     reason = "stays, and test-only: the door wraps the one spawn of the binary under test"
 )]
-pub(crate) struct Batten(Command, batten::exec::Keep);
+pub(crate) struct Batten(Command, batten::capture::Keep);
 
 #[expect(
     clippy::disallowed_types,
@@ -920,7 +921,7 @@ impl Batten {
     /// [`batten::stream::Streamed::streamed_output`], refused first where it would
     /// fall through: every stream of the binary under test through the one pump.
     pub(crate) fn streamed_output(&mut self) -> std::io::Result<Output> {
-        use batten::exec::Streamed as _;
+        use batten::capture::Streamed as _;
         self.refuse_fall_through();
         self.0.streamed_output()
     }
@@ -943,9 +944,9 @@ impl Batten {
     /// `stderr` set are kept, as `output` kept them.
     pub(crate) fn streamed_output_keeping(
         &mut self,
-        keep: batten::exec::Keep,
+        keep: batten::capture::Keep,
     ) -> std::io::Result<Output> {
-        use batten::exec::Streamed as _;
+        use batten::capture::Streamed as _;
         self.refuse_fall_through();
         self.0.streamed_output_keeping(keep)
     }
@@ -1266,7 +1267,7 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> Batten {
     // so a fixture that is no repository of its own falls through to this
     // checkout here exactly as it would there. Returned as a `Batten`, the check
     // reads the final directory — a caller's later `current_dir` included.
-    Batten(command, batten::exec::Keep::NONE)
+    Batten(command, batten::capture::Keep::NONE)
 }
 
 /// `[tasks.<task>]` ready to run in `dir` under [`batten`]'s scrubbed
@@ -2800,9 +2801,9 @@ impl Fixture {
 /// Returned by value so the caller can borrow it into a
 /// [`batten::policy::Vocabulary`], which is a borrowing type on purpose.
 #[must_use]
-pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
+pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::config_model::DeclaredVerdict> {
     ids.iter()
-        .map(|id| batten::verdict::DeclaredVerdict {
+        .map(|id| batten::config_model::DeclaredVerdict {
             id: (*id).to_owned(),
             gloss: format!("the fixture class {id}"),
             doc: batten::doc::Doc::default(),
@@ -2810,10 +2811,10 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
             // Advice, which is the default and what every fixture class wants:
             // a repairing class would make the boundary spawn this row's `fix`
             // in suites whose subject is something else entirely (CLOUD-1639).
-            applicability: batten::verdict::Applicability::Advice,
-            routes: vec![batten::verdict::Route {
+            applicability: batten::preset_catalog::Applicability::Advice,
+            routes: vec![batten::config_model::Route {
                 id: "read the authority".to_owned(),
-                kind: batten::verdict::RouteKind::Document,
+                kind: batten::preset_catalog::RouteKind::Document,
                 target: "batten.toml".to_owned(),
                 precondition: None,
             }],
@@ -2898,7 +2899,7 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// file, the tokens are literals in it, and a Rego parser here would be a second
 /// one to keep in step with the engine's.
 ///
-/// **Recursive, over the file set the gates see — `batten::rules::tree_files`,
+/// **Recursive, over the file set the gates see — `batten::git::tree_files`,
 /// never a hand-rolled `read_dir` walk** (CLOUD-2035). Three callers pass the
 /// checkout root, and an ignore-blind walk from there descends into `target/`,
 /// where the running suite writes and removes other cases' fixture modules: 270
@@ -2908,13 +2909,13 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// it. A scratch fixture carries no `.gitignore`, so it is walked in full as
 /// before.
 #[must_use]
-pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
+pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::config_model::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // An absent root declares nothing, as the `read_dir` walk it replaces did; an
     // unreadable PRESENT one is loud, since an empty registry would pass a case
     // asserting that some token is declared nowhere.
     let files = if root.exists() {
-        batten::rules::tree_files(root).expect("the vocabulary root is walkable")
+        batten::git::tree_files(root).expect("the vocabulary root is walkable")
     } else {
         Vec::new()
     };
@@ -2934,7 +2935,7 @@ pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> 
     // again is the collision `check` refuses (CLOUD-2089) — the binary's
     // definition is the one that renders, so the row would be dead. A fixture module raising a vendored class is a legitimate thing to
     // write, so the filter belongs here rather than in the fixtures.
-    let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
+    let vendored: std::collections::BTreeSet<String> = batten::config_check::verdict::vendored()
         .into_iter()
         .map(|entry| entry.id)
         .collect();

@@ -41,8 +41,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use batten::config_model::RuleKind;
+use batten::preset_catalog::RuleScope;
 use batten::release_state::{self, Files};
-use batten::rules::{self, RuleKind, RuleScope};
+use batten::rules;
 
 use crate::common;
 
@@ -77,7 +79,7 @@ fn move_to_next_release(scratch: &Path) -> String {
     let current = batten::release_path::version_of(&manifest).expect("a workspace version");
     // `main` pins the release it carries; a working tree pinned to a source
     // build (`install:local`) is put back to that before the move.
-    let pinned = batten::engine::Pin {
+    let pinned = batten::config_model::Pin {
         release: Some(format!("v{current}")),
         source: None,
     };
@@ -104,7 +106,7 @@ fn the_release_rules_are_clean_one_release_ahead() {
         .expect("this checkout is where the manifest says it is");
     let config =
         batten::config::load(&root.join("batten.toml")).expect("the committed config loads");
-    let selected: Vec<rules::Rule> = config
+    let selected: Vec<batten::config_model::Rule> = config
         .rules
         .iter()
         .filter(|rule| {

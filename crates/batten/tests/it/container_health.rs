@@ -35,7 +35,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::Path;
 use std::process::{Output, Stdio};

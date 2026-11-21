@@ -38,7 +38,8 @@ use crate::common::{self, Fixture, batten, git_in};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// A repository with one commit to diff against, and a second the checkout sits
 /// on. The config declares the inert list this tree's own does.

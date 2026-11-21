@@ -51,7 +51,7 @@ use anyhow::Result;
 
 use crate::UsageError;
 use crate::surface;
-pub use crate::surface_table::Verbosity;
+use crate::surface_table::Verbosity;
 
 impl Verbosity {
     /// Every rung, so anything ranging over the ladder is derived rather than
@@ -536,7 +536,7 @@ pub fn verdict(err: &mut dyn Write, text: &str) -> std::io::Result<()> {
 /// distinction is exactly what a name-based census could not draw. Implementing
 /// this is what draws it.
 ///
-/// [`crate::rules::Finding`] is the asymmetry that proved the gap: the
+/// [`crate::findings::Finding`] is the asymmetry that proved the gap: the
 /// most-emitted type in the engine had no renderer at all, so its pointer was
 /// composed by an inline `match` on `Option<usize>` at two separate call sites.
 ///

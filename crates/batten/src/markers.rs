@@ -26,7 +26,7 @@
 //!   [`crate::identity::count_occurrences`]: [`counts`] is a multiset, so a
 //!   file that suppresses the same rule twice reads as two occurrences of one
 //!   marker rather than two unrelated findings.
-//! * **The tree walk is [`crate::rules::tree_files`]**, not a second walker.
+//! * **The tree walk is [`crate::git::tree_files`]**, not a second walker.
 //!   Two answers to "what does Batten look at" is the divergence this module
 //!   would otherwise introduce.
 //!
@@ -41,8 +41,8 @@ use anyhow::Result;
 use serde::Serialize;
 
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::markers::validate;
-pub use crate::config_model::Marker;
+use crate::config_check::markers::validate;
+use crate::config_model::Marker;
 
 impl Marker {
     /// Whether this marker looks at `path`.

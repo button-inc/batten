@@ -3011,7 +3011,9 @@ pub struct RenderRecord {
 /// A class this repository does not declare. That is a property of the
 /// configuration rather than a verdict about the cost, and reporting a
 /// zero-length rendering for an absent class would be a measurement of nothing.
-pub fn refusal_render(registry: &[crate::verdict::DeclaredVerdict]) -> Result<Vec<RenderRecord>> {
+pub fn refusal_render(
+    registry: &[crate::config_model::DeclaredVerdict],
+) -> Result<Vec<RenderRecord>> {
     let mut records = Vec::new();
     for (class, rule) in MEASURED_CLASSES {
         let refusal = crate::refusal::Refusal::from_class(
@@ -4464,7 +4466,7 @@ mod tests {
                      arm=base path=e p50=10\narm=base path=f p50=10\n\
                      arm=head path=a p50=13\narm=head path=b p50=26.2\narm=head path=c p50=15\n\
                      arm=head path=e p50=11\narm=head path=f p50=13\n";
-        let exempt = |path: &str, expires: &str| crate::config::PerfExempt {
+        let exempt = |path: &str, expires: &str| crate::config_model::PerfExempt {
             path: path.to_owned(),
             ratio: String::from("2.0"),
             expires: expires.to_owned(),

@@ -29,10 +29,12 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batten::config_model::DeclaredVerdict;
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Vocabulary};
-use batten::rules::Rule;
-use batten::verdict::{self, DeclaredVerdict, Subject};
+use batten::verdict;
+use batten::verdict::Subject;
 
 /// A mediated-call policy row naming `module`.
 fn row(id: &str, module: &str) -> Rule {
@@ -206,7 +208,7 @@ fn a_tombstoned_token_that_is_still_raised_is_refused() {
 fn a_tombstone_resolves_through_its_chain() {
     let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
     table[0].successor = Some("new probe probe".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a terminating chain is well formed");
     let (resolved, retired) =
         verdict::resolve(&table, "old probe probe").expect("the token resolves");
@@ -229,7 +231,7 @@ fn a_tombstone_resolves_through_its_chain() {
 fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
     let mut table = common::verdicts(&["gone probe probe"]);
     table[0].withdrawn = Some("the thing it refused is no longer refused by anything".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a withdrawal is a well-formed retirement");
     assert!(
         table[0].retired(),
@@ -265,7 +267,7 @@ fn an_empty_withdrawal_reason_is_refused() {
     for blank in ["", "   ", "\n"] {
         let mut table = common::verdicts(&["gone probe probe"]);
         table[0].withdrawn = Some(blank.to_owned());
-        let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+        let err = verdict::validate(&table, &batten::config_model::Vocabulary::default())
             .expect_err("an empty withdrawal explains nothing");
         let text = format!("{err}");
         assert!(
@@ -286,7 +288,7 @@ fn a_row_naming_both_arms_is_refused() {
     let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
     table[0].successor = Some("new probe probe".to_owned());
     table[0].withdrawn = Some("and also nobody refuses it".to_owned());
-    let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect_err("a row cannot be both replaced and withdrawn");
     let text = format!("{err}");
     assert!(
@@ -303,14 +305,14 @@ fn a_row_naming_both_arms_is_refused() {
 fn the_withdrawal_arm_weakens_neither_successor_refusal() {
     let mut dangling = common::verdicts(&["old probe probe"]);
     dangling[0].successor = Some("never declared probe".to_owned());
-    let err = verdict::validate(&dangling, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&dangling, &batten::config_model::Vocabulary::default())
         .expect_err("a successor nothing declares is refused");
     assert!(format!("{err}").contains("never declared probe"));
 
     let mut cycle = common::verdicts(&["a probe probe", "b probe probe"]);
     cycle[0].successor = Some("b probe probe".to_owned());
     cycle[1].successor = Some("a probe probe".to_owned());
-    let err = verdict::validate(&cycle, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&cycle, &batten::config_model::Vocabulary::default())
         .expect_err("a chain that cycles terminates nowhere");
     assert!(format!("{err}").contains("cycles"));
 }
@@ -322,7 +324,7 @@ fn the_withdrawal_arm_weakens_neither_successor_refusal() {
 fn a_withdrawal_is_not_read_as_a_successor() {
     let mut table = common::verdicts(&["gone probe probe"]);
     table[0].withdrawn = Some("something that isnotatoken".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a withdrawal reason is prose, never a token the registry must declare");
 }
 
@@ -602,7 +604,7 @@ fn every_native_class_is_raised_by_production_code() {
 /// The `Debug` name is the variant's own identifier, the spelling a raising site
 /// writes after `Native::`.
 fn declared_native_variants() -> Vec<String> {
-    verdict::Native::ALL
+    batten::error::Native::ALL
         .iter()
         .map(|native| format!("{native:?}"))
         .collect()

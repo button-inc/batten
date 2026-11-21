@@ -161,7 +161,7 @@ impl StopFacts {
             );
         Some(Refusal::declared(
             RULE,
-            crate::verdict::Native::StopConditionUnmet,
+            crate::error::Native::StopConditionUnmet,
             &subjects,
             fix,
         ))
