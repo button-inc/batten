@@ -274,6 +274,9 @@ fn collect_read_only(node: &CommandSpec, root_name: &str, out: &mut Vec<ReadOnly
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::surface;
 
     fn spec() -> CommandSpec {

@@ -413,6 +413,9 @@ pub fn unmediated_session() -> crate::refusal::Refusal {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     fn manifest(rows: &[(&str, &str)]) -> Manifest {
         rows.iter()

@@ -39,6 +39,7 @@
 //! unlanded sets is a separate concern (CLOUD-36, CLOUD-37) that layers on top of
 //! this walk without changing the rule model.
 
+use crate::verdict::RouteKindExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -1051,7 +1052,8 @@ fn declared_sinks(rules: &[Rule]) -> impl Iterator<Item = (&str, &Sink)> {
 // unchanged.
 use crate::facts::selects_tool_name;
 
-impl VerdictProgram {
+/// `VerdictProgram` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait VerdictProgramExt: Sized {
     /// Whether `program` and `words` — the effective program and the non-flag
     /// words after it — make this invocation verdict-bearing.
     ///
@@ -1061,7 +1063,11 @@ impl VerdictProgram {
     /// command carrying any argument, and `git log … | head` — a read-only query,
     /// the exact false positive this kind must not produce — was refused.
     #[must_use]
-    pub(crate) fn matches(&self, program: &str, words: &[&str]) -> bool {
+    fn matches(&self, program: &str, words: &[&str]) -> bool;
+}
+
+impl VerdictProgramExt for VerdictProgram {
+    fn matches(&self, program: &str, words: &[&str]) -> bool {
         if self.program != program {
             return false;
         }
@@ -1111,7 +1117,8 @@ impl Direction {
     }
 }
 
-impl Rule {
+/// `Rule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait RuleExt: Sized {
     /// The program a [`RuleKind::Command`] rule invokes: the first
     /// whitespace-separated token of [`Rule::check`].
     ///
@@ -1127,12 +1134,7 @@ impl Rule {
     /// `None` for any other kind, and for a `check` with no tokens (which the
     /// runner refuses as a usage error).
     #[must_use]
-    pub fn program(&self) -> Option<&str> {
-        if self.kind != RuleKind::Command {
-            return None;
-        }
-        self.check.as_deref()?.split_whitespace().next()
-    }
+    fn program(&self) -> Option<&str>;
 
     /// What a match does, for the kinds that decide anything.
     ///
@@ -1148,9 +1150,7 @@ impl Rule {
     /// column is required at load, so the `unwrap_or` is unreachable through a
     /// config that parsed.
     #[must_use]
-    pub fn severity(&self) -> RuleSeverity {
-        self.severity.unwrap_or(RuleSeverity::Allow)
-    }
+    fn severity(&self) -> RuleSeverity;
 
     /// The severity a denial is reported at: the predicate's own when
     /// [`Rule::predicate_severity`] names it, the row's otherwise (CLOUD-832).
@@ -1163,16 +1163,7 @@ impl Rule {
     /// [`Rule::severity`] — which is the pre-CLOUD-832 behaviour reached without
     /// a special case.
     #[must_use]
-    pub fn severity_for(&self, predicate: Option<&str>) -> RuleSeverity {
-        let Some(predicate) = predicate else {
-            return self.severity();
-        };
-        self.predicate_severity
-            .as_ref()
-            .and_then(|table| table.get(predicate))
-            .copied()
-            .unwrap_or_else(|| self.severity())
-    }
+    fn severity_for(&self, predicate: Option<&str>) -> RuleSeverity;
 
     /// Every receipt name this row mentions, in either column (CLOUD-1297).
     ///
@@ -1190,12 +1181,7 @@ impl Rule {
     /// So ADJUDICATION reads the two columns apart, because they mean different
     /// things, and RESOLUTION reads them together, because the question there is
     /// only "which facts does this row need answered".
-    pub fn receipt_names(&self) -> impl Iterator<Item = &String> {
-        self.checks
-            .iter()
-            .flatten()
-            .chain(self.checks_any.iter().flatten())
-    }
+    fn receipt_names(&self) -> impl Iterator<Item = &String>;
 
     /// The mediator this row requires, if it requires one.
     ///
@@ -1203,9 +1189,7 @@ impl Rule {
     /// CLOUD-271 and is why the column is optional rather than defaulted: a
     /// default would silently narrow every existing shape row.
     #[must_use]
-    pub fn require_via(&self) -> Option<RequireVia> {
-        self.require_via
-    }
+    fn require_via(&self) -> Option<RequireVia>;
 
     /// The predicate that settles this rule's findings (CLOUD-81).
     ///
@@ -1224,7 +1208,149 @@ impl Rule {
     ///
     /// `None` for [`RuleKind::Shape`], which never reaches the store.
     #[must_use]
-    pub fn settling_check(&self) -> Option<Check> {
+    fn settling_check(&self) -> Option<Check>;
+
+    /// [`Rule::settling_check`] for a judge row, given the resolved command.
+    ///
+    /// Split from the method above because the judge's argv is not on the row:
+    /// `[judge].run` is a table-level key, so the row alone cannot answer, and
+    /// returning a placeholder that a caller *might* fill would be the kind of
+    /// half-built value that reads as complete. This one takes what it needs.
+    #[must_use]
+    fn settling_argv(&self, argv: &[String]) -> Option<Check>;
+
+    /// The fix, or the stated reason there is none.
+    ///
+    /// Reads the existing [`Rule::fix`] column rather than declaring a second
+    /// spelling of it. CLOUD-215 reserved `fix` and has `run_all` refuse a rule
+    /// that declares one, because serialised fix execution is not a capability
+    /// this build has — but *recording* a repair on a finding is not running it,
+    /// so the two coexist: the column says what would fix this, and nothing here
+    /// executes it.
+    ///
+    /// `None` for a row carrying neither, which is what
+    /// [`crate::findings::record`] refuses at ingest.
+    #[must_use]
+    fn remediation(&self) -> Option<Remediation>;
+
+    /// Whether this row's [`Rule::tool`] selector names `raw_tool` (CLOUD-924).
+    ///
+    /// `false` for a row carrying no selector, so a caller can ask this of any
+    /// row without first testing the column — the same totality every other
+    /// modifier accessor here has.
+    ///
+    /// The match is the whole name **or** the whole final `__`-delimited segment
+    /// of it, never a bare suffix. `Rule::tool`'s doc carries the argument; the
+    /// short form is that a bare suffix makes `Edit` select `NotebookEdit`,
+    /// which widens a row onto a tool nobody named, while the delimiter is what
+    /// lets `save_issue` survive the host rotating the server label it minted
+    /// (CLOUD-665, CLOUD-684).
+    ///
+    /// An empty selector is refused at load, so it cannot reach here and match
+    /// the empty segment of a name ending in `__`.
+    #[must_use]
+    fn selects_tool(&self, raw_tool: &str) -> bool;
+
+    /// The banned command shape: the effective program, then the adjacent words
+    /// that must follow it.
+    ///
+    /// `None` for any kind but [`RuleKind::Shape`], and for a `pattern` with no
+    /// program token.
+    #[must_use]
+    fn shape(&self) -> Option<(&str, Vec<&str>)>;
+
+    /// Every fact this row declares, read off [`COLUMN_CENSUS`] (step 13a).
+    fn census_facts(&self) -> impl Iterator<Item = crate::facts::Fact> + '_;
+
+    /// Which half of a split `enforce` judges this row (step 13a).
+    ///
+    /// [`Half::Tree`] only where the verdict is provably a function of the
+    /// indexed tree, so a receipt keyed on that tree may stand in for it; every
+    /// other answer — and every answer this cannot establish — is
+    /// [`Half::Live`], the half that always re-runs.
+    ///
+    /// * `forbid`, `document`, `secrets`, `reference`: tree when every fact the
+    ///   row declares is [`crate::facts::Subject::Tree`].
+    /// * `ratchet`: tree when its `base` is one of `keyed_bases` — the refs the
+    ///   caller's receipt keys the merge base of — and its facts are tree.
+    /// * `policy`: tree when its facts are tree and its bundle's
+    ///   [`crate::policy::Bundle::tree_reads`] names only tree keys. No bundle
+    ///   is live.
+    /// * every spawning, mediated or native kind, any `scope = "mediated_call"`
+    ///   row, and any row gated on `requires_path` (an existence test the tree
+    ///   key does not cover, since the path may be ignored): live.
+    #[must_use]
+    fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half;
+
+    /// The command shape this row keys on, for **any** kind that keys on one.
+    ///
+    /// Split out of [`Rule::shape`] because two kinds now match a command line
+    /// and they mean different things by it: `shape` names a command that is
+    /// banned, `receipt` names one that is gated on a precondition. `shape()`
+    /// keeps its kind check so its existing callers cannot be handed a receipt
+    /// row by accident — the failure that costs nothing to prevent here and is
+    /// invisible when it happens, since an unmatched rule simply allows.
+    #[must_use]
+    fn trigger(&self) -> Option<(&str, Vec<&str>)>;
+
+    /// The first [`Rule::requires_path`] entry the tree does not carry, or
+    /// `None` when the rule's declared inputs are all present (CLOUD-125).
+    ///
+    /// **The FIRST rather than all of them**, which is the pointer discipline
+    /// applied to a precondition: the reader has one thing to go and create, and
+    /// a row declaring four absent paths reports one line rather than four
+    /// saying the same thing. Declaration order decides, so the answer is
+    /// byte-stable for a given config (§6) — it does not depend on the walk, the
+    /// filesystem's ordering, or how many entries happen to be missing.
+    ///
+    /// A rule declaring nothing answers `None`, so a caller can ask this of any
+    /// row without first testing the column — the totality every other modifier
+    /// accessor here has.
+    ///
+    /// This is the one place the precondition touches the filesystem, and it is
+    /// a `try_exists` per declared entry: no glob expansion, no read, and
+    /// nothing spawned. A path that exists but cannot be *stated* (a permission
+    /// error on an ancestor) counts as missing, which is the fail-closed
+    /// reading — could-not-look is not evidence the input is there.
+    #[must_use]
+    fn unmet_requirement(&self, root: &Path) -> Option<&str>;
+}
+
+impl RuleExt for Rule {
+    fn program(&self) -> Option<&str> {
+        if self.kind != RuleKind::Command {
+            return None;
+        }
+        self.check.as_deref()?.split_whitespace().next()
+    }
+
+    fn severity(&self) -> RuleSeverity {
+        self.severity.unwrap_or(RuleSeverity::Allow)
+    }
+
+    fn severity_for(&self, predicate: Option<&str>) -> RuleSeverity {
+        let Some(predicate) = predicate else {
+            return self.severity();
+        };
+        self.predicate_severity
+            .as_ref()
+            .and_then(|table| table.get(predicate))
+            .copied()
+            .unwrap_or_else(|| self.severity())
+    }
+
+    fn receipt_names(&self) -> impl Iterator<Item = &String> {
+        self.checks
+            .iter()
+            .flatten()
+            .chain(self.checks_any.iter().flatten())
+    }
+
+    fn require_via(&self) -> Option<RequireVia> {
+        self.require_via
+    }
+
+    fn settling_check(&self) -> Option<Check> {
         match self.kind {
             RuleKind::Command => Some(Check::Argv(
                 self.check
@@ -1273,33 +1399,14 @@ impl Rule {
         }
     }
 
-    /// [`Rule::settling_check`] for a judge row, given the resolved command.
-    ///
-    /// Split from the method above because the judge's argv is not on the row:
-    /// `[judge].run` is a table-level key, so the row alone cannot answer, and
-    /// returning a placeholder that a caller *might* fill would be the kind of
-    /// half-built value that reads as complete. This one takes what it needs.
-    #[must_use]
-    pub fn settling_argv(&self, argv: &[String]) -> Option<Check> {
+    fn settling_argv(&self, argv: &[String]) -> Option<Check> {
         match self.kind {
             RuleKind::Judge => Some(Check::Argv(argv.to_vec())),
             _ => self.settling_check(),
         }
     }
 
-    /// The fix, or the stated reason there is none.
-    ///
-    /// Reads the existing [`Rule::fix`] column rather than declaring a second
-    /// spelling of it. CLOUD-215 reserved `fix` and has `run_all` refuse a rule
-    /// that declares one, because serialised fix execution is not a capability
-    /// this build has — but *recording* a repair on a finding is not running it,
-    /// so the two coexist: the column says what would fix this, and nothing here
-    /// executes it.
-    ///
-    /// `None` for a row carrying neither, which is what
-    /// [`crate::findings::record`] refuses at ingest.
-    #[must_use]
-    pub fn remediation(&self) -> Option<Remediation> {
+    fn remediation(&self) -> Option<Remediation> {
         if let Some(fix) = &self.fix {
             return Some(Remediation::Fix(
                 fix.split_whitespace().map(ToOwned::to_owned).collect(),
@@ -1308,44 +1415,21 @@ impl Rule {
         self.no_fix_reason.clone().map(Remediation::NoFix)
     }
 
-    /// Whether this row's [`Rule::tool`] selector names `raw_tool` (CLOUD-924).
-    ///
-    /// `false` for a row carrying no selector, so a caller can ask this of any
-    /// row without first testing the column — the same totality every other
-    /// modifier accessor here has.
-    ///
-    /// The match is the whole name **or** the whole final `__`-delimited segment
-    /// of it, never a bare suffix. `Rule::tool`'s doc carries the argument; the
-    /// short form is that a bare suffix makes `Edit` select `NotebookEdit`,
-    /// which widens a row onto a tool nobody named, while the delimiter is what
-    /// lets `save_issue` survive the host rotating the server label it minted
-    /// (CLOUD-665, CLOUD-684).
-    ///
-    /// An empty selector is refused at load, so it cannot reach here and match
-    /// the empty segment of a name ending in `__`.
-    #[must_use]
-    pub fn selects_tool(&self, raw_tool: &str) -> bool {
+    fn selects_tool(&self, raw_tool: &str) -> bool {
         let Some(selector) = self.tool.as_deref() else {
             return false;
         };
         selects_tool_name(selector, raw_tool)
     }
 
-    /// The banned command shape: the effective program, then the adjacent words
-    /// that must follow it.
-    ///
-    /// `None` for any kind but [`RuleKind::Shape`], and for a `pattern` with no
-    /// program token.
-    #[must_use]
-    pub fn shape(&self) -> Option<(&str, Vec<&str>)> {
+    fn shape(&self) -> Option<(&str, Vec<&str>)> {
         if self.kind != RuleKind::Shape {
             return None;
         }
         self.trigger()
     }
 
-    /// Every fact this row declares, read off [`COLUMN_CENSUS`] (step 13a).
-    pub fn census_facts(&self) -> impl Iterator<Item = crate::facts::Fact> + '_ {
+    fn census_facts(&self) -> impl Iterator<Item = crate::facts::Fact> + '_ {
         COLUMN_CENSUS
             .iter()
             .filter_map(|column| match column.declares {
@@ -1354,25 +1438,7 @@ impl Rule {
             })
     }
 
-    /// Which half of a split `enforce` judges this row (step 13a).
-    ///
-    /// [`Half::Tree`] only where the verdict is provably a function of the
-    /// indexed tree, so a receipt keyed on that tree may stand in for it; every
-    /// other answer — and every answer this cannot establish — is
-    /// [`Half::Live`], the half that always re-runs.
-    ///
-    /// * `forbid`, `document`, `secrets`, `reference`: tree when every fact the
-    ///   row declares is [`crate::facts::Subject::Tree`].
-    /// * `ratchet`: tree when its `base` is one of `keyed_bases` — the refs the
-    ///   caller's receipt keys the merge base of — and its facts are tree.
-    /// * `policy`: tree when its facts are tree and its bundle's
-    ///   [`crate::policy::Bundle::tree_reads`] names only tree keys. No bundle
-    ///   is live.
-    /// * every spawning, mediated or native kind, any `scope = "mediated_call"`
-    ///   row, and any row gated on `requires_path` (an existence test the tree
-    ///   key does not cover, since the path may be ignored): live.
-    #[must_use]
-    pub fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half {
+    fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half {
         use crate::facts::Subject;
         if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
             return Half::Live;
@@ -1412,42 +1478,13 @@ impl Rule {
         if tree { Half::Tree } else { Half::Live }
     }
 
-    /// The command shape this row keys on, for **any** kind that keys on one.
-    ///
-    /// Split out of [`Rule::shape`] because two kinds now match a command line
-    /// and they mean different things by it: `shape` names a command that is
-    /// banned, `receipt` names one that is gated on a precondition. `shape()`
-    /// keeps its kind check so its existing callers cannot be handed a receipt
-    /// row by accident — the failure that costs nothing to prevent here and is
-    /// invisible when it happens, since an unmatched rule simply allows.
-    #[must_use]
-    pub fn trigger(&self) -> Option<(&str, Vec<&str>)> {
+    fn trigger(&self) -> Option<(&str, Vec<&str>)> {
         let mut words = self.pattern.as_deref()?.split_whitespace();
         let program = words.next()?;
         Some((program, words.collect()))
     }
 
-    /// The first [`Rule::requires_path`] entry the tree does not carry, or
-    /// `None` when the rule's declared inputs are all present (CLOUD-125).
-    ///
-    /// **The FIRST rather than all of them**, which is the pointer discipline
-    /// applied to a precondition: the reader has one thing to go and create, and
-    /// a row declaring four absent paths reports one line rather than four
-    /// saying the same thing. Declaration order decides, so the answer is
-    /// byte-stable for a given config (§6) — it does not depend on the walk, the
-    /// filesystem's ordering, or how many entries happen to be missing.
-    ///
-    /// A rule declaring nothing answers `None`, so a caller can ask this of any
-    /// row without first testing the column — the totality every other modifier
-    /// accessor here has.
-    ///
-    /// This is the one place the precondition touches the filesystem, and it is
-    /// a `try_exists` per declared entry: no glob expansion, no read, and
-    /// nothing spawned. A path that exists but cannot be *stated* (a permission
-    /// error on an ancestor) counts as missing, which is the fail-closed
-    /// reading — could-not-look is not evidence the input is there.
-    #[must_use]
-    pub fn unmet_requirement(&self, root: &Path) -> Option<&str> {
+    fn unmet_requirement(&self, root: &Path) -> Option<&str> {
         self.requires_path
             .iter()
             .find(|declared| !root.join(declared).try_exists().unwrap_or(false))
@@ -9826,6 +9863,13 @@ impl Sets {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::PathSet;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::rules::RuleExt as _;
+    #[cfg(test)]
+    use crate::rules::VerdictProgramExt as _;
 
     /// CLOUD-2075 §7 case 21: a `check` finding labels its rule.
     #[test]
@@ -17693,8 +17737,13 @@ violation contains {
 mod half_tests {
     use super::null_live_keys;
     use crate::config_model::{Rule, RuleKind};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::engine::PinExt as _;
     use crate::facts::{Fact, Subject};
     use crate::preset_catalog::RuleScope;
+    #[cfg(test)]
+    use crate::rules::RuleExt as _;
     use crate::surface_table::Half;
 
     /// A blank row of `kind` on its first permitted scope, plus `extra`.

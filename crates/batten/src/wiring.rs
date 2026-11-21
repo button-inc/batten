@@ -830,7 +830,8 @@ fn add_missing(
 // what to disarm would find nothing, exactly when it is needed. The paths are the
 // consumer's to declare and this module never guesses one.
 
-impl Wiring {
+/// `Wiring` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait WiringExt: Sized {
     /// Refuse a row that could write outside the home directory.
     ///
     /// Refused at LOAD rather than skipped at the write, for the reason every
@@ -843,7 +844,11 @@ impl Wiring {
     ///
     /// Returns the offending key's reason when a `path` is empty, absolute, or
     /// climbs out with `..`, or when a `marker` is blank.
-    pub fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String>;
+}
+
+impl WiringExt for Wiring {
+    fn validate(&self) -> Result<(), String> {
         for row in &self.disarm {
             if row.path.is_empty() {
                 return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
@@ -1223,6 +1228,9 @@ fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// Build a claude-code merged surface carrying `commands` on one event.
     fn surface(commands: &[&str]) -> serde_json::Value {

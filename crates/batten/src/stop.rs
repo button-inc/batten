@@ -303,6 +303,9 @@ fn discharge_of(check: &Check) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::worktree::Unlanded;
 
     fn clean() -> AtRisk {

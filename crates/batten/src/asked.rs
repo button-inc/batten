@@ -338,6 +338,9 @@ pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     const PAIR: &str = "rule-removed rule[task carry other]";
 

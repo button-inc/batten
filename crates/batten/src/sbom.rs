@@ -121,14 +121,19 @@ const NONE: &str = "NONE";
 /// The file-name prefixes a copyright statement is looked for in first.
 const LICENSE_PREFIXES: [&str; 4] = ["LICENSE", "COPYING", "COPYRIGHT", "NOTICE"];
 
-impl Declared {
+/// `Declared` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait DeclaredExt: Sized {
     /// Refuse a table the verb could not act on, naming the key.
     ///
     /// # Errors
     ///
     /// A [`UsageError`] for a subject or record name that is not one path
     /// component, a blank directory, or a conformance table asking nothing.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+}
+
+impl DeclaredExt for Declared {
+    fn validate(&self) -> Result<()> {
         crate::config_check::record::safe_component("[sbom] subject", &self.subject)?;
         for (key, value) in [
             ("out_dir", &self.out_dir),
@@ -1634,6 +1639,11 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::sbom::DeclaredExt as _;
 
     /// The binary reaches syft absolute and never verbatim (CLOUD-2563): a
     /// `\\?\` prefix is what `canonicalize` returns on Windows, and syft scanned

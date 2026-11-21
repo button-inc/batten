@@ -90,10 +90,15 @@ use crate::preset_catalog::{Applicability, RouteKind};
 /// perfectly well.
 pub(crate) const GLOSS_MAX: usize = 120;
 
-impl RouteKind {
+/// `RouteKind` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait RouteKindExt: Sized {
     /// The token a rendered route carries.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+}
+
+impl RouteKindExt for RouteKind {
+    fn as_str(self) -> &'static str {
         match self {
             RouteKind::Command => "command",
             RouteKind::Document => "document",
@@ -103,8 +108,20 @@ impl RouteKind {
     }
 }
 
-impl Vocabulary {
+/// `Vocabulary` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait VocabularyExt: Sized {
     /// The list for one slot, by position.
+    fn slot(&self, position: usize) -> &[VocabularyWord];
+
+    /// Whether this vocabulary declares anything at all.
+    #[must_use]
+    fn is_empty(&self) -> bool;
+
+    /// Every declared word, with the slot it was declared in.
+    fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)>;
+}
+
+impl VocabularyExt for Vocabulary {
     fn slot(&self, position: usize) -> &[VocabularyWord] {
         match position {
             0 => &self.subject,
@@ -113,13 +130,10 @@ impl Vocabulary {
         }
     }
 
-    /// Whether this vocabulary declares anything at all.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.subject.is_empty() && self.action.is_empty() && self.condition.is_empty()
     }
 
-    /// Every declared word, with the slot it was declared in.
     fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)> {
         (0..SLOTS).flat_map(move |slot| self.slot(slot).iter().map(move |word| (slot, word)))
     }
@@ -164,7 +178,8 @@ impl Applicability {
     }
 }
 
-impl DeclaredVerdict {
+/// `DeclaredVerdict` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait DeclaredVerdictExt: Sized {
     /// Whether this entry is a tombstone, by **either** arm.
     ///
     /// A withdrawn class is as retired as a replaced one — that is the point of
@@ -172,15 +187,21 @@ impl DeclaredVerdict {
     /// registry equality covers both, and a withdrawn token is still wrong to
     /// emit.
     #[must_use]
-    pub fn retired(&self) -> bool {
-        self.successor.is_some() || self.withdrawn.is_some()
-    }
+    fn retired(&self) -> bool;
 
     /// What a first sighting of this class carries after its pointers: the
     /// gloss, the doc's sections and each override's admissible precondition
     /// (CLOUD-2143). The one text both budget tiers measure.
     #[must_use]
-    pub fn first_sighting(&self) -> String {
+    fn first_sighting(&self) -> String;
+}
+
+impl DeclaredVerdictExt for DeclaredVerdict {
+    fn retired(&self) -> bool {
+        self.successor.is_some() || self.withdrawn.is_some()
+    }
+
+    fn first_sighting(&self) -> String {
         let act: Vec<&str> = self.doc.act.iter().map(String::as_str).collect();
         let mut body = self.gloss.trim().to_owned();
         let sections = crate::doc::render(&self.doc, &act);
@@ -1219,6 +1240,11 @@ pub fn routed_only_into_protection(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::verdict::RouteKindExt as _;
+    #[cfg(test)]
+    use crate::verdict::VocabularyExt as _;
 
     fn route(id: &str) -> Route {
         Route {

@@ -288,13 +288,18 @@ impl Default for ExecConfig {
     }
 }
 
-impl ExecConfig {
+/// `ExecConfig` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ExecConfigExt: Sized {
     /// The settings a caller that reads no config gets.
     ///
     /// A `const` rather than `Default::default()` at each call site so the
     /// library entry points can name it in a `&`-position without a temporary,
     /// and so "the default is off" is one object a reader can follow.
-    pub const DEFAULT: Self = Self {
+    const DEFAULT: Self;
+}
+
+impl ExecConfigExt for ExecConfig {
+    const DEFAULT: Self = Self {
         manage_process_group: false,
         tee: false,
         format: OutputFormat::Human,
@@ -2939,6 +2944,11 @@ impl Streamed for std::process::Command {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
+    #[cfg(test)]
+    use crate::exec::ExecConfigExt as _;
     use std::sync::Arc;
     use std::sync::mpsc;
 

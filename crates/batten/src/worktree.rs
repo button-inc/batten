@@ -501,6 +501,9 @@ fn pointer_if_outstanding(landing: &git::Landing, branch: &str) -> Option<Pointe
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     fn pointer(truncated: bool) -> Pointer {
         Pointer {

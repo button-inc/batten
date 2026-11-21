@@ -46,6 +46,7 @@
 //! `manifests_are_inside_the_rule_one_glob` asserts that coverage rather than
 //! leaving it true by accident.
 
+use crate::rules::RuleExt as _;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -57,7 +58,8 @@ use crate::preset_catalog::RuleScope;
 use crate::preset_catalog::find;
 use crate::preset_catalog::names;
 
-impl PresetModule {
+/// `PresetModule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PresetModuleExt: Sized {
     /// The source an engine compiles: the embedded one, or under the
     /// `preset-overlay` feature the mutated copy a mutation sweep wrote to
     /// `$BATTEN_PRESET_OVERLAY/<preset>/<module>.rego`, where one is there.
@@ -68,7 +70,16 @@ impl PresetModule {
     /// suite runs against a mutated module without recompiling the crate per row
     /// (`MUTANT_OVERLAY_*`, declared by the consumer's task runner).
     #[must_use]
-    pub fn text(&self) -> std::borrow::Cow<'static, str> {
+    fn text(&self) -> std::borrow::Cow<'static, str>;
+
+    /// The module's name: its file stem, as a row's `except` and
+    /// `batten preset eject` spell it (CLOUD-2290).
+    #[must_use]
+    fn name(&self) -> &'static str;
+}
+
+impl PresetModuleExt for PresetModule {
+    fn text(&self) -> std::borrow::Cow<'static, str> {
         #[cfg(feature = "preset-overlay")]
         if let Some(dir) = std::env::var_os("BATTEN_PRESET_OVERLAY")
             && let Some(relative) = self.pointer.strip_prefix("<preset:")
@@ -81,25 +92,21 @@ impl PresetModule {
         std::borrow::Cow::Borrowed(self.source)
     }
 
-    /// The module's name: its file stem, as a row's `except` and
-    /// `batten preset eject` spell it (CLOUD-2290).
-    #[must_use]
-    pub fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         let file = self.pointer.rsplit('/').next().unwrap_or(self.pointer);
         file.strip_suffix(".rego").unwrap_or(file)
     }
 }
 
-impl Manifest {
+/// `Manifest` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ManifestExt: Sized {
     /// Whether any module here decides `scope`.
     ///
     /// The load-time question `policy::load` asks. It replaces an equality
     /// against one manifest-level scope, and the difference is that a preset
     /// spanning two surfaces answers yes to both rather than having to pick.
     #[must_use]
-    pub fn decides(&self, scope: RuleScope) -> bool {
-        self.modules.iter().any(|module| module.scope == scope)
-    }
+    fn decides(&self, scope: RuleScope) -> bool;
 
     /// The surfaces this preset decides, in manifest order, without repeats.
     ///
@@ -108,15 +115,7 @@ impl Manifest {
     /// table inside the binary they cannot open — the gap CLOUD-1181 recorded
     /// and which a single scope could only half answer.
     #[must_use]
-    pub fn scopes(&self) -> Vec<RuleScope> {
-        let mut seen: Vec<RuleScope> = Vec::new();
-        for module in self.modules {
-            if !seen.contains(&module.scope) {
-                seen.push(module.scope);
-            }
-        }
-        seen
-    }
+    fn scopes(&self) -> Vec<RuleScope>;
 
     /// The modules deciding `scope`, as `(pointer, source)` for the compiler.
     ///
@@ -126,13 +125,7 @@ impl Manifest {
     /// `check_tree_paths_are_emittable` catches that today, and this keeps the
     /// case from arising rather than relying on a downstream guard to notice.
     #[must_use]
-    pub fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)> {
-        self.modules
-            .iter()
-            .filter(|module| module.scope == scope)
-            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
-            .collect()
-    }
+    fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)>;
 
     /// [`Manifest::modules_at`], narrowed to what this consumer's provider can
     /// decide (CLOUD-1625).
@@ -152,29 +145,16 @@ impl Manifest {
     /// it can claim its ids. Whether every name in `except` exists is the
     /// caller's question, asked before this.
     #[must_use]
-    pub fn modules_for(
+    fn modules_for(
         &self,
         scope: RuleScope,
         provider: Option<&str>,
         except: &[String],
-    ) -> Vec<(String, String)> {
-        self.modules
-            .iter()
-            .filter(|module| module.scope == scope)
-            .filter(|module| match module.provider {
-                None => true,
-                Some(reads) => provider == Some(reads),
-            })
-            .filter(|module| !except.iter().any(|name| name == module.name()))
-            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
-            .collect()
-    }
+    ) -> Vec<(String, String)>;
 
     /// The module named `name`, if this preset ships one.
     #[must_use]
-    pub fn module(&self, name: &str) -> Option<&'static PresetModule> {
-        self.modules.iter().find(|module| module.name() == name)
-    }
+    fn module(&self, name: &str) -> Option<&'static PresetModule>;
 
     /// The modules that must leave the binary together with `module` for
     /// either side to compile (CLOUD-2290).
@@ -193,7 +173,63 @@ impl Manifest {
     /// helper's name also used as a local, and never under-includes a call; an
     /// over-included module is one more file copied, not a bundle that fails.
     #[must_use]
-    pub fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule> {
+    fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule>;
+
+    /// What the modules at this scope read, for a refusal that names both sides.
+    ///
+    /// Deduplicated and ordered by the module table so the message is
+    /// byte-stable (§6). A module reading no provider's language renders as
+    /// `no provider`, which is an answer rather than an omission.
+    #[must_use]
+    fn providers_at(&self, scope: RuleScope) -> Vec<&'static str>;
+}
+
+impl ManifestExt for Manifest {
+    fn decides(&self, scope: RuleScope) -> bool {
+        self.modules.iter().any(|module| module.scope == scope)
+    }
+
+    fn scopes(&self) -> Vec<RuleScope> {
+        let mut seen: Vec<RuleScope> = Vec::new();
+        for module in self.modules {
+            if !seen.contains(&module.scope) {
+                seen.push(module.scope);
+            }
+        }
+        seen
+    }
+
+    fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
+            .collect()
+    }
+
+    fn modules_for(
+        &self,
+        scope: RuleScope,
+        provider: Option<&str>,
+        except: &[String],
+    ) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .filter(|module| match module.provider {
+                None => true,
+                Some(reads) => provider == Some(reads),
+            })
+            .filter(|module| !except.iter().any(|name| name == module.name()))
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
+            .collect()
+    }
+
+    fn module(&self, name: &str) -> Option<&'static PresetModule> {
+        self.modules.iter().find(|module| module.name() == name)
+    }
+
+    fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule> {
         let peers: Vec<&'static PresetModule> = self
             .modules
             .iter()
@@ -241,13 +277,7 @@ impl Manifest {
             .collect()
     }
 
-    /// What the modules at this scope read, for a refusal that names both sides.
-    ///
-    /// Deduplicated and ordered by the module table so the message is
-    /// byte-stable (§6). A module reading no provider's language renders as
-    /// `no provider`, which is an answer rather than an omission.
-    #[must_use]
-    pub fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
+    fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
         let mut seen: Vec<&'static str> = Vec::new();
         for module in self.modules.iter().filter(|m| m.scope == scope) {
             let reads = module.provider.unwrap_or("no provider");
@@ -546,8 +576,15 @@ pub fn mode_sources() -> Vec<(String, String)> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{eject, ejected_from, ejected_source, helpers_defined, mode_sources, uses};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::config_check::preset::verdict_rows;
     use crate::config_model::Rule;
+    #[cfg(test)]
+    use crate::preset::ManifestExt as _;
+    #[cfg(test)]
+    use crate::preset::PresetModuleExt as _;
     use crate::preset_catalog::RuleScope;
     use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
 

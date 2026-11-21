@@ -1461,6 +1461,7 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     /// A REFUSAL NAMES ITS CAUSE, AND A REPAIR IS SAID ONCE (CLOUD-2505).
     #[test]
@@ -2384,6 +2385,9 @@ mod tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod dependency_key_tests {
     use super::{compare, dependency_keys};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::mutate::schema;
     use std::collections::{BTreeMap, BTreeSet};
 

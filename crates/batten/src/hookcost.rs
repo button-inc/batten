@@ -628,6 +628,7 @@ fn charge(window: &mut Window, tokens: usize, findings: &[(String, crate::refusa
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::transcript::Record;
 
     fn emitted(line: usize, hook: &str, digest: &str, tokens: usize) -> Record {

@@ -45,6 +45,15 @@
 //! no fallback to a built-in grammar and no directory walk. A named directory
 //! with no `batten.toml` is could-not-look, for exactly `--config-from`'s reason.
 
+use crate::attribution::AttributionExt as _;
+use crate::census::ShellCensusExt as _;
+use crate::commit::CommitExt as _;
+use crate::defects::DefectsExt as _;
+#[cfg(test)]
+use crate::rules::RuleExt as _;
+use crate::sbom::DeclaredExt as _;
+use crate::verdict::VocabularyExt as _;
+use crate::wiring::WiringExt as _;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -3680,7 +3689,8 @@ pub fn config_parses() -> usize {
     CONFIG_PARSES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-impl Config {
+/// `Config` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ConfigExt: Sized {
     /// A config that declares no policy at all.
     ///
     /// Deliberately not a [`Default`] impl. `version` has exactly one accepted
@@ -3696,7 +3706,11 @@ impl Config {
     /// authority that cannot be read grants, so this is the honest comparand —
     /// every key the trusted side declares then reports as removed.
     #[must_use]
-    pub fn declaring_nothing() -> Self {
+    fn declaring_nothing() -> Self;
+}
+
+impl ConfigExt for Config {
+    fn declaring_nothing() -> Self {
         Config {
             credential: None,
             forge: None,
@@ -4208,6 +4222,9 @@ fn read(path: &Path) -> Result<String> {
 mod tests {
 
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
     use std::fs;
 

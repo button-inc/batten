@@ -91,12 +91,11 @@ impl Denial {
     }
 }
 
-impl Ceiling {
+/// `Ceiling` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait CeilingExt: Sized {
     /// Whether one emitted REPEAT line is over the declared ceiling.
     #[must_use]
-    pub fn over(&self, line: &str) -> bool {
-        crate::budget::estimate_tokens(line) > self.max_tokens
-    }
+    fn over(&self, line: &str) -> bool;
 
     /// Whether one emitted FIRST-SIGHTING line is over the declared ceiling.
     ///
@@ -105,7 +104,15 @@ impl Ceiling {
     /// A fallback would bound the long arm by the short arm's number, which is a
     /// ceiling nothing can satisfy wearing a default.
     #[must_use]
-    pub fn over_first_sighting(&self, line: &str) -> bool {
+    fn over_first_sighting(&self, line: &str) -> bool;
+}
+
+impl CeilingExt for Ceiling {
+    fn over(&self, line: &str) -> bool {
+        crate::budget::estimate_tokens(line) > self.max_tokens
+    }
+
+    fn over_first_sighting(&self, line: &str) -> bool {
         self.first_sighting_max_tokens
             .is_some_and(|max| crate::budget::estimate_tokens(line) > max)
     }
@@ -1371,6 +1378,11 @@ fn sentence(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
+    #[cfg(test)]
+    use crate::refusal::CeilingExt as _;
 
     /// AN ENGINE FINDING NAMES ITS CLASS, NEVER A RULE NOTHING RESOLVES
     /// (CLOUD-2078), and its first sighting names no raising row: it has none.

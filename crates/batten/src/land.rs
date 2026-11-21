@@ -40,6 +40,7 @@
 //! green over a module that performs every write CLOUD-1148 §D recorded as
 //! unreachable.
 
+use crate::exec::ExecConfigExt as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
@@ -4336,6 +4337,9 @@ mod mutate_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod forge_tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     #[test]
     fn a_draft_state_mutation_takes_by_graphql_or_else_by_the_proxy_route() {
@@ -5207,6 +5211,9 @@ mod lap_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     /// A HELD LAP ENDS ONLY ON A FINAL VERIFY (CLOUD-2783): green holds with
     /// `0`, refused with `2`; a verify's `3` laps as it does unheld, and no
     /// other step holds, so the replay still runs and nothing after the verify
@@ -6932,6 +6939,9 @@ mod tests {
 #[cfg(test)]
 mod hold_tests {
     use super::{Hold, Step};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// Fails by: a lap that keeps the last lap's phases, or records no entry.
     #[test]

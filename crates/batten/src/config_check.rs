@@ -142,6 +142,7 @@ pub mod advisory {
 }
 
 pub mod budget {
+    use crate::budget::BudgetExt as _;
     use crate::config_model::Budget;
     use crate::error::UsageError;
 
@@ -509,6 +510,7 @@ pub mod handler {
     use crate::config_model::Event;
     use crate::config_model::Handler;
     use crate::error::UsageError;
+    use crate::handler::HandlerExt as _;
     use regex::Regex;
     use std::collections::BTreeSet;
 
@@ -1140,6 +1142,7 @@ pub mod mcp {
 pub mod mint {
     use crate::config_check::receipt::safe_subject;
     use crate::config_model::{AfterMode, MintDeclared as Declared, MintKey, MintMode};
+    use crate::mint::AuthorityExt as _;
 
     /// A compiled authority a template may ask for a value.
     ///
@@ -2571,6 +2574,7 @@ pub mod rules {
     };
     use crate::error::UsageError;
     use crate::preset_catalog::RuleScope;
+    use crate::rules::RuleExt as _;
 
     use crate::selector::Selector;
 
@@ -5552,6 +5556,7 @@ pub mod transcript {
 pub mod waiver {
     use crate::config_model::Waiver;
     use crate::error::UsageError;
+    use crate::waiver::WaiverExt as _;
 
     use anyhow::Result;
 
@@ -5616,6 +5621,7 @@ pub mod verdict {
     #![allow(unused_imports)]
     use crate::config_model::{DeclaredVerdict, Route, Vocabulary, VocabularyWord};
     use crate::error::UsageError;
+    use crate::hook::FieldExt as _;
     use crate::preset_catalog::{Applicability, RouteKind};
     use crate::preset_catalog::{VendoredRoute, VendoredVerdict};
     use crate::preset_catalog::{admit, read, run};

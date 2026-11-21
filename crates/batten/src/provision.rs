@@ -136,7 +136,8 @@ pub enum EnvAction {
     Unset,
 }
 
-impl Provision {
+/// `Provision` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ProvisionExt: Sized {
     /// The name the binary is cached and linked under on this host.
     ///
     /// [`Provision::binary`] plus the platform's executable suffix: `.exe` on
@@ -144,9 +145,7 @@ impl Provision {
     /// so every Unix path is the one it always was. It is also the archive
     /// entry an unpack looks for, since a Windows build names its binary so.
     #[must_use]
-    pub fn cached_name(&self) -> String {
-        format!("{}{}", self.binary, std::env::consts::EXE_SUFFIX)
-    }
+    fn cached_name(&self) -> String;
 
     /// The artifact this host should install.
     ///
@@ -157,9 +156,7 @@ impl Provision {
     /// cannot be installed here is a manifest this host cannot satisfy, and
     /// reporting it as fresh would let a gate depending on the tool pass without
     /// the tool.
-    pub fn artifact(&self) -> Result<Artifact> {
-        self.artifact_for(platform_key().as_str())
-    }
+    fn artifact(&self) -> Result<Artifact>;
 
     /// [`Provision::artifact`] for a named platform, so the suite can drive a
     /// platform the test host is not.
@@ -167,7 +164,19 @@ impl Provision {
     /// # Errors
     ///
     /// As [`Provision::artifact`].
-    pub fn artifact_for(&self, platform: &str) -> Result<Artifact> {
+    fn artifact_for(&self, platform: &str) -> Result<Artifact>;
+}
+
+impl ProvisionExt for Provision {
+    fn cached_name(&self) -> String {
+        format!("{}{}", self.binary, std::env::consts::EXE_SUFFIX)
+    }
+
+    fn artifact(&self) -> Result<Artifact> {
+        self.artifact_for(platform_key().as_str())
+    }
+
+    fn artifact_for(&self, platform: &str) -> Result<Artifact> {
         if let (Some(url), Some(sha256)) = (self.url.as_ref(), self.sha256.as_ref()) {
             return Ok(Artifact {
                 url: url.clone(),
@@ -2456,6 +2465,9 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::provision::ProvisionExt as _;
     use std::collections::BTreeMap;
 
     /// CLOUD-2124: the measured case, a scratch clone's debug build provisioning

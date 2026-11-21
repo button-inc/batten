@@ -89,6 +89,7 @@
 //! and the reading carries none of them either: a claim is its key and column,
 //! a citation its token or path.
 
+use crate::preset::ManifestExt as _;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
@@ -1554,6 +1555,7 @@ mod tests {
         declared_row, field, graph, graph_findings, payload_set, present, read_claims, readiness,
         render_cites, render_refs, sort_lines,
     };
+    #[cfg(test)]
     use crate::board::Board;
     use crate::exit::ExitCode;
     use crate::pattern::NamedPattern;

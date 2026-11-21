@@ -1040,6 +1040,9 @@ pub fn run(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::preset::PresetModuleExt as _;
 
     fn reading(body: &str) -> Answer {
         Answer {

@@ -921,6 +921,9 @@ fn snapshot_event(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use serde_json::json;
 
     fn key_of(envelope: &Envelope) -> String {
