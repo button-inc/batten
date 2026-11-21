@@ -2963,6 +2963,23 @@ pub(crate) const MODULES_SHIMS_MAX: FlagDecl = FlagDecl::valued(
     "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)",
 );
 
+/// `--record <path>` on `modules ratchet` (CLOUD-2821).
+pub(crate) const MODULES_RECORD: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "record",
+        "record",
+        "The record file, one `<root> cycle=<n> propagation=<bp> impls=<n> shims=<n>` line per root",
+    )
+};
+
+/// `--check` on `modules ratchet` (CLOUD-2821).
+pub(crate) const MODULES_CHECK: FlagDecl = FlagDecl::switch(
+    "check",
+    "check",
+    "Never write the record: one looser than the tree is refused too",
+);
+
 pub(crate) const STEP_JOBS: FlagDecl = FlagDecl::valued(
     "jobs",
     "jobs",
@@ -7472,6 +7489,26 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[MODULES_ROOT, MODULES_SHIMS_MAX],
+    },
+    CommandDecl {
+        path: "modules metrics",
+        id: "modules.metrics",
+        about: "Print every module-graph metric of a source root as one record line",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MODULES_ROOT],
+    },
+    // `write`: it rewrites the record when every root scores at least as well
+    // and one scores better, so the record only tightens. `--check` writes nothing.
+    CommandDecl {
+        path: "modules ratchet",
+        id: "modules.ratchet",
+        about: "Refuse any module-graph metric worse than the committed record, and tighten the record on improvement",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[MODULES_RECORD, MODULES_CHECK],
     },
     // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
     // `sbom-binary-record`). `write`: it writes the documents and runs the
