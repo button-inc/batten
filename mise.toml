@@ -3774,10 +3774,12 @@ run = "{{vars.batten}} modules cycle --root crates/batten/src --max 67"
 [tasks.modules-impls]
 description = "Gate: no more inherent impls sit away from their type's module than the committed bound (CLOUD-2792)"
 # An inherent impl may live only in its type's own crate, so one away from its
-# type is a crate cut that cannot compile. Ambiguous names (a type name declared
-# in two modules) count too: no single home means no cut. Baseline when this gate
-# landed: 40 outside + 153 ambiguous; CLOUD-2793 lowers it to 0, batch by batch.
-run = "{{vars.batten}} modules impls --root crates/batten/src --max 193"
+# type is a crate cut that cannot compile. An impl whose type the census cannot
+# resolve to one declaring module counts too, so an unread impl cannot hide.
+# Baseline when this gate landed, matching by name: 40 outside + 153 ambiguous.
+# Resolved the way each file reads the name (CLOUD-2793): 50 outside + 7
+# ambiguous. CLOUD-2793 lowers it to 0.
+run = "{{vars.batten}} modules impls --root crates/batten/src --max 57"
 
 [tasks.modules-shims]
 description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"
