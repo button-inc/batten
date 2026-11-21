@@ -3224,7 +3224,7 @@ pub struct Rule {
     /// `Task` spawn all carry an empty command — so before this column the two
     /// connector guards had nothing to retire onto, which is CLOUD-312's rows 4
     /// and 5. It reads [`crate::hook::Envelope::raw_tool`], the host's own word,
-    /// and never the normalized [`crate::hook::Event`] (CLOUD-779's split).
+    /// and never the normalized [`Event`] (CLOUD-779's split).
     ///
     /// # Why a suffix, and why not a bare one
     ///
@@ -3459,7 +3459,7 @@ pub struct Rule {
     /// exists. A marker is not a proof and carries no conclusion to be stale.
     ///
     /// **The spend is deletion, by the sweep that already runs.** A row named here
-    /// must be one of [`crate::land::BRANCH_KEYED_RECEIPTS`], so landing clears it
+    /// must be one of [`BRANCH_KEYED_RECEIPTS`], so landing clears it
     /// and nothing else has to know how it is retired — which is also what stops
     /// this from becoming a state machine with its own lifecycle.
     ///
@@ -6881,4 +6881,353 @@ pub struct PlanQuery {
     /// answer stays hk's: this passes the words and parses nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profile: Vec<String>,
+}
+
+/// The lifecycle events the core normalizes, whatever a host spells them.
+///
+/// A vocabulary enum with a `const ALL`, the shape [`Harness`],
+/// [`crate::capture::Stream`] and [`crate::rules::RuleKind`] already use, so
+/// anything ranging over events is derived rather than re-typed — the golden
+/// census in `tests/cli.rs` reads this, which is what stops a new variant from
+/// landing with no fixture.
+///
+/// The set is what the dependent surfaces consume, not everything a host emits:
+/// which events a given host offers is the capability table's business
+/// (CLOUD-45), and per-host spellings beyond the converged ones below are the
+/// shims' (CLOUD-44).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Event {
+    /// Before a tool runs — the only point at which a deny still prevents
+    /// anything, and so the only event policy adjudicates.
+    PreTool,
+    /// After a tool ran. A deny here would refuse something that already
+    /// happened, which no host honours and none of them offer.
+    PostTool,
+    /// End of turn: the reconciliation point the stop gate uses (CLOUD-85).
+    Stop,
+    /// Start of a session.
+    SessionStart,
+    /// A task was marked complete. **Claude-only** across the surveyed hosts,
+    /// and the one Claude-exclusive capability that is load-bearing here: exit 2
+    /// prevents the completion, which is the literal machine form of Batten's
+    /// thesis about completion signals. A policy keyed on it degrades to the
+    /// Stop family elsewhere (see [`Capabilities::degrade`]).
+    TaskCompleted,
+    /// A settings file is being edited mid-session. Claude-only; a
+    /// self-protection surface no other surveyed host offers.
+    ConfigChange,
+    /// The host named an event this build does not normalize. Distinct from an
+    /// absent one: absent means nobody said, this means somebody said something
+    /// we do not know, and the two must not collapse.
+    Unrecognized,
+    // DECLARED AFTER the catch-all on purpose, which reads oddly and is the
+    // cheaper of two honest options. This enum is field-less and carries no
+    // `repr`, so a consumer may write `Event::Unrecognized as u8` and inserting
+    // ahead of it shifts that value — `cargo semver-checks` calls it
+    // `enum_no_repr_variant_discriminant_changed`. Appending keeps the change
+    // patch-compatible instead of putting a break in the changelog for a
+    // discriminant nothing observes. Reading order lives in `Event::ALL`, which
+    // is what every census and the wiring emitter iterate, so nothing but this
+    // declaration is affected.
+    /// Every tool call in a batch has resolved, before the next model request
+    /// (CLOUD-389). **Claude-only** across the surveyed hosts.
+    ///
+    /// The batch boundary [`crate::drain`] wants and, until this variant existed,
+    /// inferred with a coalescing window on every host including the one that
+    /// emits it. The window is not replaced — four of five surveyed hosts offer
+    /// no batch event, and CLOUD-79 puts the once-per-batch guarantee in the mask
+    /// rather than in any event — so this is the exact path where one exists and
+    /// the window is the fallback it was designed as. A policy keyed on it
+    /// degrades to [`Event::PostTool`] elsewhere (see [`Capabilities::degrade`]).
+    ///
+    /// No deny channel, and that is structural rather than a choice: a boundary
+    /// between batches is not a decision point, and [`adjudicate`] allows every
+    /// non-pre-tool event before any rule is consulted.
+    PostToolBatch,
+    /// A turn's prompt has been submitted, before the model sees it.
+    /// **Claude-only** across the surveyed hosts.
+    ///
+    /// Appended for the reason [`Event::PostToolBatch`] above it was: this enum
+    /// carries no `repr`, so inserting ahead of an existing variant shifts a
+    /// discriminant a consumer may have cast, which `cargo semver-checks` reports
+    /// as `enum_no_repr_variant_discriminant_changed`. Reading order is
+    /// [`Event::ALL`]'s, which is what every census and the wiring emitter
+    /// iterate.
+    ///
+    /// **It carries a deny channel, and that is measured rather than assumed**
+    /// (CLOUD-777, 2026-08-21). This repository's own wiring was the evidence:
+    /// two bash guards registered here reached `exit 2` on five paths between
+    /// them and emitted no advisory shape — deny-issuing gates on this surface,
+    /// honoured by the host. So this is **not** one of the stated no-ops beside
+    /// it: [`adjudicated`]'s arm says the channel is real and that no rule kind
+    /// selects for it yet, which is a gap with an owner rather than a decision
+    /// that there is nothing to decide.
+    ///
+    /// **The evidence moved rather than expired** (CLOUD-898). One of those two
+    /// guards is now a `[[hook.handler]]` dispatched by `batten hook` instead of
+    /// registered beside it, so the count above is history. The conclusion is
+    /// unchanged and is now demonstrated by the door itself: a handler exiting
+    /// `2` at this event produces the host's own deny document, asserted in
+    /// `tests/cli.rs`. What DID change is the advisory half — this host offers no
+    /// `additionalContext` field here, so a handler's advice at this event
+    /// degrades to the operator's stream. Deny reaches the model; advice does
+    /// not.
+    UserPromptSubmit,
+    // CLOUD-2581: the rest of Claude Code's 33 hook events (measured on
+    // 2.1.319), appended for the discriminant reason above. All but the
+    // worktree pair carry no verdict and pass through until a rule needs one.
+    /// A tool call failed. Claude Code (CLOUD-2581).
+    PostToolFailure,
+    /// The host showed the user a notification. Claude Code (CLOUD-2581).
+    Notification,
+    /// A submitted prompt was expanded (a slash command or mention). Claude Code (CLOUD-2581).
+    UserPromptExpansion,
+    /// A session ended. Claude Code (CLOUD-2581).
+    SessionEnd,
+    /// A turn ended on an error rather than a stop. Claude Code (CLOUD-2581).
+    StopFailure,
+    /// A subagent started. Claude Code (CLOUD-2581).
+    SubagentStart,
+    /// A subagent finished. Claude Code (CLOUD-2581).
+    SubagentStop,
+    /// Before the context is compacted. Claude Code (CLOUD-2581).
+    PreCompact,
+    /// After the context was compacted. Claude Code (CLOUD-2581).
+    PostCompact,
+    /// Before the session's model changes. Claude Code (CLOUD-2581).
+    PreModelSwitch,
+    /// After the session's model changed. Claude Code (CLOUD-2581).
+    PostModelSwitch,
+    /// The host is about to ask the user for a permission. Claude Code (CLOUD-2581).
+    PermissionRequest,
+    /// A permission was denied. Claude Code (CLOUD-2581).
+    PermissionDenied,
+    /// The host's setup phase. Claude Code (CLOUD-2581).
+    Setup,
+    /// A teammate agent went idle. Claude Code (CLOUD-2581).
+    TeammateIdle,
+    /// A task was created. Claude Code (CLOUD-2581).
+    TaskCreated,
+    /// An MCP server asked the user for input. Claude Code (CLOUD-2581).
+    Elicitation,
+    /// The user answered an elicitation. Claude Code (CLOUD-2581).
+    ElicitationResult,
+    /// The host asks for a linked worktree; stdout answers with its path. Claude Code (CLOUD-2581).
+    WorktreeCreate,
+    /// The host asks for a linked worktree to be removed. Claude Code (CLOUD-2581).
+    WorktreeRemove,
+    /// An instructions file was loaded. Claude Code (CLOUD-2581).
+    InstructionsLoaded,
+    /// The session's working directory changed. Claude Code (CLOUD-2581).
+    CwdChanged,
+    /// A watched file changed. Claude Code (CLOUD-2581).
+    FileChanged,
+    /// A directory was added to the session. Claude Code (CLOUD-2581).
+    DirectoryAdded,
+    /// The host displayed a message. Claude Code (CLOUD-2581).
+    MessageDisplay,
+    /// The host is about to send a model request. Codex `PreModelRequest`,
+    /// Gemini `BeforeModel` (CLOUD-2700).
+    ModelRequest,
+    /// A model response arrived. Codex `PostModelRequest`, Gemini `AfterModel`
+    /// (CLOUD-2700).
+    ModelResponse,
+    /// The host is about to choose which tools the model is offered. Gemini
+    /// `BeforeToolSelection` (CLOUD-2700).
+    ToolSelection,
+    /// The agent finished a response. Cursor `afterAgentResponse` (CLOUD-2700).
+    AgentResponse,
+    /// The agent finished a thinking block. Cursor `afterAgentThought`
+    /// (CLOUD-2700).
+    AgentThought,
+    /// The user interrupted the agent. Codex `Interrupt` (CLOUD-2700).
+    Interrupt,
+    /// The host reported an error. Copilot `ErrorOccurred` (CLOUD-2700).
+    ErrorOccurred,
+    /// A workspace was opened. Cursor `workspaceOpen` (CLOUD-2700).
+    WorkspaceOpen,
+    /// Tab completion is about to read a file. Cursor `beforeTabFileRead`
+    /// (CLOUD-2700). Not a tool call: the payload carries no tool.
+    TabFileRead,
+    /// Tab completion edited a file. Cursor `afterTabFileEdit` (CLOUD-2700).
+    TabFileEdit,
+    /// A forge event: one of GitHub's webhook events, normalized by
+    /// [`crate::forge_event`] (CLOUD-2689). No host emits it, so no wiring
+    /// registers it; `forge intake` is its door. Its verdict is a finding about
+    /// something that already happened, as on `post-tool`.
+    Forge,
+}
+
+/// What batten does about one name in a [`HookSource`]'s vocabulary.
+///
+/// Named `HookDisposition`, never bare `Disposition`:
+/// `findings::Disposition` and `selfwrite::Disposition` are public already.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookDisposition {
+    /// Batten is registered for it; `check` is the declared verb that checks the
+    /// registration on a live checkout.
+    Registered {
+        /// A `surface::SURFACE` path.
+        check: &'static str,
+    },
+    /// Deliberately not registered; `reason` is a stable kebab id.
+    Unsupported {
+        /// Why, as a kebab id rather than prose.
+        reason: &'static str,
+    },
+}
+
+#[rustfmt::skip]
+pub(crate) const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };
+
+/// Whether `name` is a githooks(5) hook name, one of [`GIT_HOOKS`] (CLOUD-2339).
+#[must_use]
+pub fn is_git_hook(name: &str) -> bool {
+    GIT_HOOKS.iter().any(|(hook, _)| *hook == name)
+}
+
+/// githooks(5) for git 2.43, one row per name, alphabetical.
+///
+/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The
+/// registered rows must equal `doctor::COMMIT_HOOKS`, which stays the runtime
+/// authority for which git hooks batten links.
+///
+/// `pre-push` IS REGISTERED, no longer `adjudicated-elsewhere`: the push was
+/// left to the mediated call and `land`, and a commit `git revert` made through
+/// the sequencer (no `commit-msg`) reached `verify` with a non-conventional
+/// subject. The push is the last local point every commit passes.
+///
+/// Every reason is a stable id: `after-the-fact` refuses nothing that has not
+/// already happened (the [`Event::PostTool`] argument), `server-side` runs on a
+/// remote, and `no-predicate` is a hook nothing here has a rule for yet.
+/// `pre-merge-commit` stays `no-predicate`: fast-forward landing makes no merge
+/// commits. Registering a further hook is per-source work, not this table's.
+pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
+    ("applypatch-msg", unsupported("no-predicate")),
+    ("commit-msg", BY_GATE),
+    ("fsmonitor-watchman", unsupported("not-a-gate")),
+    ("p4-changelist", unsupported("no-predicate")),
+    ("p4-post-changelist", unsupported("after-the-fact")),
+    ("p4-pre-submit", unsupported("no-predicate")),
+    ("p4-prepare-changelist", unsupported("no-predicate")),
+    ("post-applypatch", unsupported("after-the-fact")),
+    ("post-checkout", unsupported("after-the-fact")),
+    ("post-commit", unsupported("after-the-fact")),
+    ("post-index-change", unsupported("after-the-fact")),
+    ("post-merge", unsupported("after-the-fact")),
+    ("post-receive", unsupported("server-side")),
+    ("post-rewrite", unsupported("after-the-fact")),
+    ("post-update", unsupported("server-side")),
+    ("pre-applypatch", unsupported("no-predicate")),
+    ("pre-auto-gc", unsupported("no-predicate")),
+    ("pre-commit", BY_GATE),
+    ("pre-merge-commit", unsupported("no-predicate")),
+    ("pre-push", BY_GATE),
+    ("pre-rebase", unsupported("no-predicate")),
+    ("pre-receive", unsupported("server-side")),
+    ("prepare-commit-msg", unsupported("no-predicate")),
+    ("proc-receive", unsupported("server-side")),
+    ("push-to-checkout", unsupported("server-side")),
+    ("reference-transaction", unsupported("no-predicate")),
+    ("sendemail-validate", unsupported("no-predicate")),
+    ("update", unsupported("server-side")),
+];
+
+/// Fold a value for [`Rule::when_value`]'s comparison.
+///
+/// Case-insensitive, and the three separators a tracker's state parameter treats
+/// as noise are dropped. Deliberately NOT a general slug: nothing else is
+/// stripped, so a value that differs by any other character still differs.
+pub(crate) fn comparable(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The wrapper programs [`effective_program`] looks through **unconditionally**.
+///
+/// Declared once because two surfaces read it: the matcher, to step past a
+/// wrapper and judge what it wraps, and [`crate::rules::validate`], to refuse a
+/// `pattern` naming one — by the time a pattern is compared the wrapper has
+/// already been stepped past, so `pattern = "nohup rm"` is a row that can never
+/// fire (CLOUD-401). A second copy of this list in the validator would drift,
+/// and a drifted copy refuses rows the matcher would have honoured.
+///
+/// `mise` is deliberately **not** here: only `mise exec`/`mise x` is looked
+/// through, so `mise run` is judged as `mise` and `pattern = "mise run"` is a
+/// row the matcher honours.
+pub(crate) const LOOKTHROUGH_WRAPPERS: [&str; 10] = [
+    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup", "exec",
+];
+
+/// Is this token a program [`effective_program`] always looks through?
+#[must_use]
+pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
+    LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
+pub(crate) fn is_env_assignment(token: &str) -> bool {
+    let mut chars = token.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && token
+            .chars()
+            .take_while(|&c| c != '=')
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && token.contains('=')
+}
+
+/// The record this module writes, and the one `record::VERB_WRITTEN` names so a
+/// module can read it back.
+pub const LAP_RECORD: &str = "lap";
+
+/// The receipt families keyed by BRANCH NAME rather than by sha.
+///
+/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
+/// Each of these records something about a branch's whole filing history, so the
+/// next piece of work to reuse the name would be judged against rows that belong
+/// to the last one (CLOUD-774).
+///
+/// `filed-here-nudged` and `filed-set-nudged` are no longer written: the Stop
+/// ladder stopped withholding its pointers (CLOUD-2078). They stay listed so a
+/// clone that ran an older engine still has its leftovers swept when the branch
+/// lands, rather than keeping them forever.
+/// `unlanded-nudged` was missing once (CLOUD-1390). `unlanded_pointer` writes
+/// `unlanded-nudged.<slug>` under this same directory, keyed by the completion
+/// finding's own fingerprint, and `turn mint ahead` reads it as its
+/// `while_marker`: the claim was told.
+///
+/// **What a missed family costs is a marker that outlives the work it was
+/// about.** Left behind, the next piece of work to reuse the name inherits it,
+/// and is judged as though it had already been told what the last one was.
+///
+/// **`pub(crate)` because a `while_marker` row is validated against it**
+/// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:
+/// the row fires, the work lands, the file survives, and the next branch to reuse
+/// the name is denied for a punt it did not commit. `Rule::validate_marker`
+/// refuses that row at load rather than letting the pair drift, which is the same
+/// discipline this list's own header records having needed twice already.
+pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
+    "board-writes",
+    "filed-here-nudged",
+    "filed-set-nudged",
+    "unlanded-nudged",
+    "unlanded-spoken",
+    // The Stop's step for this claim (CLOUD-2655): land, or deepen the clone.
+    "unlanded-step",
+    // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
+    // a reused branch name would inherit a spent refusal or a free Stop.
+    "unlanded-refused",
+    "land-dispatched",
+    // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
+    // unlanded pull request, so opening a second one is the bundle split
+    // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
+    // lets the NEXT branch open its one PR.
+    "pr-open",
+];
+
+pub(crate) const fn unsupported(reason: &'static str) -> HookDisposition {
+    HookDisposition::Unsupported { reason }
 }

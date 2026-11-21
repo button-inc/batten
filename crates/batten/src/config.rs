@@ -53,8 +53,8 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::config_model::Rule;
 use crate::error::UsageError;
-use crate::rules::Rule;
 use crate::verdict::Native;
 use crate::{outputs, waiver};
 
@@ -673,15 +673,15 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // CLOUD-242 named, and it does not become acceptable for being uncommitted.
     under(
         Native::RuleTableRefused,
-        crate::rules::validate_in(&config.rules, text, source),
+        crate::config_check::rules::validate_in(&config.rules, text, source),
     )?;
     under(
         Native::OutputTableRefused,
-        crate::outputs::validate(&config.exec_patterns),
+        crate::config_check::outputs::validate(&config.exec_patterns),
     )?;
     under(
         Native::WaiverTableRefused,
-        crate::waiver::validate(&config.waivers),
+        crate::config_check::waiver::validate(&config.waivers),
     )?;
     // Always metered: an override is never read from a ref (CLOUD-1642).
     under(Native::ProseColumnRefused, meter_text(&config))?;
@@ -1444,7 +1444,7 @@ fn validate_remedy_tables(config: &Config) -> Result<()> {
         }));
     under(
         Native::RemedyUnresolved,
-        crate::redirect::validate_remedies(remedies, &rule_ids),
+        crate::config_check::redirect::validate_remedies(remedies, &rule_ids),
     )
 }
 
@@ -1571,7 +1571,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
         // second authority over one name, which is the shape the exemption
         // itself exists to avoid. The vendored and native halves stay unfiltered
         // for the other reason: they are never held to a consumer's lists at all.
-        let vendored = crate::preset::verdict_rows();
+        let vendored = crate::config_check::preset::verdict_rows();
         let declared: std::collections::BTreeSet<&str> = config
             .verdicts
             .iter()
@@ -1595,7 +1595,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     }
     under(
         Native::RedirectTableRefused,
-        crate::redirect::validate(&config.redirects),
+        crate::config_check::redirect::validate(&config.redirects),
     )?;
     validate_remedy_tables(config)?;
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
@@ -1604,7 +1604,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // without a network and belongs where a config fault is reported, rather than
     // being discovered by the one dispatch that needed it.
     if let Some(mcp) = &config.mcp {
-        crate::mcp::validate(mcp)?;
+        crate::config_check::mcp::validate(mcp)?;
     }
     // And `[receipt] verified_by`, which names checks that must be WRITABLE
     // (review of #848). `receipt record` and `receipt status` already refuse a
@@ -1614,7 +1614,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // absence rather than at the name that guaranteed it. The inert-typo class
     // every table above is refused at load for.
     if let Some(receipt) = &config.receipt {
-        crate::receipt::validate_verified_by(&receipt.verified_by)?;
+        crate::config_check::receipt::validate_verified_by(&receipt.verified_by)?;
     }
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
@@ -1623,7 +1623,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // test below is what stops the next table arriving orphaned the same way.
     under(
         Native::MarkerTableRefused,
-        crate::markers::validate(&config.markers),
+        crate::config_check::markers::validate(&config.markers),
     )?;
     // And the action table, where "validated only by the runner" would be worst
     // of all: an action is a command, and a row that loads clean but names no
@@ -1631,9 +1631,9 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // at no moment. Refused at load, so the failure lands on the config rather
     // than as silence at the event.
     if let Some(hook) = &config.hook {
-        crate::action::validate(&hook.actions)?;
-        crate::handler::validate(&hook.handlers)?;
-        crate::githook::validate(&hook.git)?;
+        crate::config_check::action::validate(&hook.actions)?;
+        crate::config_check::handler::validate(&hook.handlers)?;
+        crate::config_check::githook::validate(&hook.git)?;
     }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
@@ -1643,11 +1643,11 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
     under(
         Native::RuleTableRefused,
-        crate::rules::validate_in(&config.rules, text, source),
+        crate::config_check::rules::validate_in(&config.rules, text, source),
     )?;
     under(
         Native::OutputTableRefused,
-        crate::outputs::validate(&config.exec_patterns),
+        crate::config_check::outputs::validate(&config.exec_patterns),
     )?;
     // The same validator over the second pattern table, and deliberately the
     // same class: both are `OutputPattern`, so an empty id, an empty literal, an
@@ -1657,7 +1657,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // inert-typo shape this call site exists to refuse.
     under(
         Native::VerifyEnvironmentTableRefused,
-        crate::outputs::validate_environment(&config.verify_environment_patterns),
+        crate::config_check::outputs::validate_environment(&config.verify_environment_patterns),
     )?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
@@ -1665,7 +1665,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     under(
         Native::WaiverTableRefused,
-        crate::waiver::validate(&config.waivers),
+        crate::config_check::waiver::validate(&config.waivers),
     )?;
     under(
         Native::FactTableRefused,
@@ -1674,17 +1674,17 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // The cross-table half (CLOUD-859), which needs both lists and so cannot live
     // in either one's own validator: a `named` receipt row over an agent-sourced
     // check is a gate no record can satisfy.
-    crate::rules::validate_keying(&config.facts, &config.rules)?;
+    crate::config_check::rules::validate_keying(&config.facts, &config.rules)?;
     under(
         Native::MintTableRefused,
-        crate::mint::validate(&config.mints),
+        crate::config_check::mint::validate(&config.mints),
     )?;
     // AFTER the pattern table is validated, because a recorder's `section` names
     // a pattern id and the refusal for a missing one is only honest once the ids
     // are known to be well-formed themselves.
     under(
         Native::RecorderTableRefused,
-        crate::recorder::validate(
+        crate::config_check::recorder::validate(
             &config.recorders,
             &config.programs,
             &config
@@ -1724,7 +1724,7 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // validates is a refusal that cannot fire (CLOUD-253).
     under(
         Native::RecordTableRefused,
-        crate::record::validate(&config.records, &config.recorders),
+        crate::config_check::record::validate(&config.records, &config.recorders),
     )?;
     // `[[forge.query]]` rows (CLOUD-843), AFTER the record table because each
     // row writes a family a `[[record]]` row must declare, and that refusal is
@@ -1732,23 +1732,24 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // `?` rather than `under(..)`: `[forge]` is a singleton table, which the
     // `Vec<T>` census does not reach, exactly as `[ci]` and `[perf]` below.
     if let Some(forge) = &config.forge {
-        crate::forge_query::validate(&forge.query, &config.records)?;
+        crate::config_check::forge_query::validate(&forge.query, &config.records)?;
     }
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
     // with no `[budget.instructions]` under it is refused here (CLOUD-50).
-    crate::budget::validate(config.budget.as_ref())?;
+    crate::config_check::budget::validate(config.budget.as_ref())?;
     // Same shape, same reason, one table over: a `[refusal]` ceiling nothing can
     // satisfy is refused at load rather than discovered by the first person it
     // fires on.
-    crate::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
     // Same shape, same reason, one table over: a ceiling nothing can satisfy is
     // refused at load rather than discovered by the first advisory it silences.
-    crate::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
     // One table over again: a session ceiling nothing can satisfy is refused at
     // load rather than discovered by the first hook it silences.
-    crate::hookcost::validate(config.hook_output.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::hookcost::validate(config.hook_output.as_ref())
+        .map_err(UsageError::raise)?;
     // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
     // is that a table nothing validates is coverage that means nothing.
     if let Some(ci) = &config.ci {
@@ -1818,7 +1819,7 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
-    crate::transcript::validate(config.transcript.as_ref())?;
+    crate::config_check::transcript::validate(config.transcript.as_ref())?;
     // A step row keying nothing, trusting no tool, or reading a pathspec this
     // build cannot — each a receipt that answers for bytes nobody checked — is
     // refused here, where the row is named (CLOUD-843).
@@ -1831,14 +1832,14 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // failure would blame the artifact for a typo in this file.
     under(
         Native::ProvisionTableRefused,
-        crate::provision::validate(&config.provisions),
+        crate::config_check::provision::validate(&config.provisions),
     )?;
     // A row that could never decide, a repair that runs nothing, an id declared
     // twice: each refused here rather than once per session, where the failure
     // would look like a broken container instead of a typo in this file.
     under(
         Native::StartupTableRefused,
-        crate::startup::validate(&config.startup),
+        crate::config_check::startup::validate(&config.startup),
     )?;
     // LAST, after every table validator, so a multi-fault config still reports
     // its table's class first. Working tree only: a config read from a git ref is
@@ -3909,14 +3910,14 @@ pub fn defaults() -> Config {
 fn default_rules() -> Vec<Rule> {
     vec![Rule {
         id: "source carry broken".to_owned(),
-        kind: crate::rules::RuleKind::Forbid,
+        kind: crate::config_model::RuleKind::Forbid,
         // Every path, unlike the starter's `**/*/*`. That narrower glob exists
         // to keep the rule off the `batten.toml` that declares it — a `forbid`
         // pattern is a literal, so it appears in its own config — and this layer
         // has no config file to trip over.
         glob: Some("**/*".to_owned()),
         severity: Some(crate::severity::RuleSeverity::Deny),
-        scope: crate::rules::RuleScope::Tree,
+        scope: crate::config_model::RuleScope::Tree,
         pattern: Some("<<<<<<< ".to_owned()),
         regex: None,
         exclude: None,
@@ -5070,12 +5071,12 @@ mod tests {
         ),
         (
             "redirects",
-            "crate::redirect::validate(",
+            "crate::config_check::redirect::validate(",
             Native::RedirectTableRefused,
         ),
         (
             "markers",
-            "crate::markers::validate(",
+            "crate::config_check::markers::validate(",
             Native::MarkerTableRefused,
         ),
         // The LOCATED form (CLOUD-773): the loaders hold the config text, so a
@@ -5084,12 +5085,12 @@ mod tests {
         // an optional locator — so naming it here is naming the whole check.
         (
             "rules",
-            "crate::rules::validate_in(",
+            "crate::config_check::rules::validate_in(",
             Native::RuleTableRefused,
         ),
         (
             "exec_patterns",
-            "crate::outputs::validate(",
+            "crate::config_check::outputs::validate(",
             Native::OutputTableRefused,
         ),
         // The second `OutputPattern` table, sharing the validator and the class
@@ -5100,34 +5101,38 @@ mod tests {
         // fix wired up only one.
         (
             "verify_environment_patterns",
-            "crate::outputs::validate_environment(",
+            "crate::config_check::outputs::validate_environment(",
             Native::VerifyEnvironmentTableRefused,
         ),
         (
             "provisions",
-            "crate::provision::validate(",
+            "crate::config_check::provision::validate(",
             Native::ProvisionTableRefused,
         ),
         (
             "startup",
-            "crate::startup::validate(",
+            "crate::config_check::startup::validate(",
             Native::StartupTableRefused,
         ),
         (
             "waivers",
-            "crate::waiver::validate(",
+            "crate::config_check::waiver::validate(",
             Native::WaiverTableRefused,
         ),
         ("facts", "crate::facts::validate(", Native::FactTableRefused),
-        ("mints", "crate::mint::validate(", Native::MintTableRefused),
+        (
+            "mints",
+            "crate::config_check::mint::validate(",
+            Native::MintTableRefused,
+        ),
         (
             "recorders",
-            "crate::recorder::validate(",
+            "crate::config_check::recorder::validate(",
             Native::RecorderTableRefused,
         ),
         (
             "records",
-            "crate::record::validate(",
+            "crate::config_check::record::validate(",
             Native::RecordTableRefused,
         ),
         (
@@ -5147,7 +5152,7 @@ mod tests {
     /// CLOUD-1313: leaving it out would close the row without closing its cause.
     const CLASSED_BESIDE_THE_TABLES: &[(&str, Native)] = &[
         (
-            "crate::redirect::validate_remedies(",
+            "crate::config_check::redirect::validate_remedies(",
             Native::RemedyUnresolved,
         ),
         // Not a table: a census over every table's prose, run last (CLOUD-1642).
@@ -6302,7 +6307,8 @@ mod tests {
     fn the_default_rules_pass_the_validator() {
         // Held to the validator every committed rule passes, so a hand-written
         // literal cannot ship a shape the loader would refuse from a file.
-        crate::rules::validate(&defaults().rules).expect("the default rules validate");
+        crate::config_check::rules::validate(&defaults().rules)
+            .expect("the default rules validate");
     }
 
     #[test]

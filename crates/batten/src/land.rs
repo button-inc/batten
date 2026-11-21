@@ -44,6 +44,8 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 
+pub(crate) use crate::config_model::BRANCH_KEYED_RECEIPTS;
+pub use crate::config_model::LAP_RECORD;
 use crate::gitwrite::{self, Rebase};
 pub use crate::preset_catalog::RED_HEAD;
 
@@ -852,10 +854,6 @@ pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     }
     reached[1..].iter().any(|tip| contains(root, tip, remote))
 }
-
-/// The record this module writes, and the one `record::VERB_WRITTEN` names so a
-/// module can read it back.
-pub const LAP_RECORD: &str = "lap";
 
 /// Which arm of the lap's raced wait an answer came from (CLOUD-1338).
 ///
@@ -3353,51 +3351,6 @@ pub struct Retired {
     /// How many branch-keyed receipts were dropped.
     pub receipts: usize,
 }
-
-/// The receipt families keyed by BRANCH NAME rather than by sha.
-///
-/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
-/// Each of these records something about a branch's whole filing history, so the
-/// next piece of work to reuse the name would be judged against rows that belong
-/// to the last one (CLOUD-774).
-///
-/// `filed-here-nudged` and `filed-set-nudged` are no longer written: the Stop
-/// ladder stopped withholding its pointers (CLOUD-2078). They stay listed so a
-/// clone that ran an older engine still has its leftovers swept when the branch
-/// lands, rather than keeping them forever.
-/// `unlanded-nudged` was missing once (CLOUD-1390). `unlanded_pointer` writes
-/// `unlanded-nudged.<slug>` under this same directory, keyed by the completion
-/// finding's own fingerprint, and `turn mint ahead` reads it as its
-/// `while_marker`: the claim was told.
-///
-/// **What a missed family costs is a marker that outlives the work it was
-/// about.** Left behind, the next piece of work to reuse the name inherits it,
-/// and is judged as though it had already been told what the last one was.
-///
-/// **`pub(crate)` because a `while_marker` row is validated against it**
-/// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:
-/// the row fires, the work lands, the file survives, and the next branch to reuse
-/// the name is denied for a punt it did not commit. `Rule::validate_marker`
-/// refuses that row at load rather than letting the pair drift, which is the same
-/// discipline this list's own header records having needed twice already.
-pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
-    "board-writes",
-    "filed-here-nudged",
-    "filed-set-nudged",
-    "unlanded-nudged",
-    "unlanded-spoken",
-    // The Stop's step for this claim (CLOUD-2655): land, or deepen the clone.
-    "unlanded-step",
-    // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
-    // a reused branch name would inherit a spent refusal or a free Stop.
-    "unlanded-refused",
-    "land-dispatched",
-    // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
-    // unlanded pull request, so opening a second one is the bundle split
-    // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
-    // lets the NEXT branch open its one PR.
-    "pr-open",
-];
 
 /// Retire a branch whose pull request has merged.
 ///
