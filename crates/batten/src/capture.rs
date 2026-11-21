@@ -1525,12 +1525,12 @@ pub fn pointer(path: &Path, index: &[ViewField], stored: &[&Capture]) -> crate::
         )
         .collect();
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::OutputPointNow,
+        crate::error::Native::OutputPointNow,
         &subjects,
         crate::refusal::Fix::None,
     )
     .with_only_document_route(&path.display().to_string())
-    .with_severity(crate::refusal::Severity::Note)
+    .with_severity(crate::grammar::Severity::Note)
 }
 
 /// The fields a pointer names: each view field under its ADDRESS, the pointer
@@ -2176,11 +2176,11 @@ pub struct CallRow {
     pub session: String,
     /// Which surface the bytes came from — a fixed token, never a path.
     pub source: String,
-    /// The harness, as [`crate::hook::Harness::as_str`] spells it.
+    /// The harness, as [`crate::config_model::Harness::as_str`] spells it.
     pub host: String,
     /// The tool the host named.
     pub tool: String,
-    /// The event, as [`crate::hook::Event::as_str`] spells it.
+    /// The event, as [`crate::config_model::Event::as_str`] spells it.
     pub event: String,
     /// The fidelity, as [`Fidelity::as_str`] spells it.
     pub fidelity: String,
@@ -2212,9 +2212,8 @@ pub struct CallRow {
 }
 
 // Kept in `stream_input`, which bounds a result by it (CLOUD-2789).
-pub use crate::stream_input::LEAF_KEEP_BYTES;
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::CaptureConfig;
+use crate::config_model::CaptureConfig;
 
 /// The default bound on a tool result the model reads whole (CLOUD-2223), in
 /// `o200k` tokens. Measured on PR #1132: one task log read whole was 57,764
@@ -3028,7 +3027,7 @@ pub fn calls_in(dir: &Path) -> Result<Vec<CallRow>> {
 /// What a caller is looking for: a tool's response carrying a key at a path.
 #[derive(Debug, Clone)]
 pub struct Selector<'a> {
-    /// Tool selectors, matched by [`crate::rules::selects_tool_name`] so a row
+    /// Tool selectors, matched by [`crate::facts::selects_tool_name`] so a row
     /// naming `get_issue` matches `mcp__<server>__get_issue` whatever label the
     /// host has rotated the server under (CLOUD-178).
     ///
@@ -3136,7 +3135,7 @@ fn find_in_filtered(dir: &Path, selector: &Selector<'_>, by_tool: bool) -> Optio
             && !selector
                 .tools
                 .iter()
-                .any(|tool| crate::rules::selects_tool_name(tool, &row.tool))
+                .any(|tool| crate::facts::selects_tool_name(tool, &row.tool))
         {
             continue;
         }

@@ -83,16 +83,17 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub(crate) use crate::config_check::receipt::safe_subject;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::receipt::validate_check_name;
-pub use crate::config_check::receipt::validate_verified_by;
+use crate::config_check::receipt::safe_subject;
+use crate::config_check::receipt::validate_check_name;
+#[cfg(test)]
+use crate::config_check::receipt::validate_verified_by;
 use crate::config_model::ReceiptKey;
-pub use crate::digest::sha256_hex as hex_sha256;
+use crate::digest::sha256_hex as hex_sha256;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::output::{Mode, Verbosity};
-use crate::{config, git, identity, output, state};
+use crate::output::Mode;
+use crate::surface_table::Verbosity;
+use crate::{git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 ///
@@ -649,7 +650,7 @@ fn sourced_store_in(
 /// sides ask on different calls: the read resolves subjects for the checks a
 /// mediated call requires, and the write resolves one for the fact whose command
 /// just ran. That difference is exactly why
-/// [`crate::rules::validate_keying`] refuses `named` for an agent-sourced
+/// [`crate::config_check::rules::validate_keying`] refuses `named` for an agent-sourced
 /// check — this envelope carries no subject to project — so the third arm is
 /// unreachable through a loaded config and is written out rather than wildcarded.
 fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
@@ -1352,7 +1353,7 @@ fn load_statement(path: &Path) -> Option<Statement> {
 /// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`):
 /// the one formatter, kept in the `clock` leaf beside the civil-date arithmetic
 /// it reads (CLOUD-2789).
-pub use crate::clock::rfc3339_utc;
+use crate::clock::rfc3339_utc;
 
 /// How many paths differ from HEAD, or [`None`] when the tree matches it.
 ///
@@ -1523,7 +1524,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     validate_check_name(check)?;
     let facts = repo_facts()?;
     tree_is_head(&facts, err)?;
-    let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
+    let policy = git::show(Path::new("."), "HEAD", crate::config_model::CONFIG_FILE)
         .map_err(|_| {
             UsageError::raise(
                 "batten.toml is not committed at HEAD, so there is no policy to digest",
@@ -2216,7 +2217,7 @@ mod tests {
     fn a_field_bound_refutes_only_a_field_that_says_something_else() {
         let dir = std::env::temp_dir().join(format!("batten-field-bound-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
-        let bound = crate::rules::FieldBound {
+        let bound = crate::config_model::FieldBound {
             at: 6,
             is: "ready".to_owned(),
         };

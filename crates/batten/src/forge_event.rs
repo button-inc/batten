@@ -10,7 +10,7 @@
 //! rows.
 //!
 //! **The names are the forge's vocabulary, not a consumer's identifier** (rule
-//! 1), the same standing git's hook names have in [`crate::hook::GIT_HOOKS`].
+//! 1), the same standing git's hook names have in [`crate::config_model::GIT_HOOKS`].
 //!
 //! **Every projected value is a token, never a body** (rule 4): the envelope
 //! carries the event name, action, repository, number, SHA, ref and key, and
@@ -711,7 +711,7 @@ pub struct RoundInput<'a> {
     /// The git common dir the cursors live under.
     pub common_dir: &'a std::path::Path,
     /// The committed `[mcp]` table, where one is declared.
-    pub mcp: Option<&'a crate::mcp::McpConfig>,
+    pub mcp: Option<&'a crate::config_model::McpConfig>,
     /// The forge remote, where one resolves.
     pub slug: Option<&'a Slug>,
 }
@@ -755,7 +755,7 @@ pub fn read_round(
 fn available(source: &crate::rest::Source, input: &RoundInput<'_>) -> bool {
     use crate::rest::SourceKind::{Command, Mcp};
     let answers =
-        |mcp: &crate::mcp::McpConfig| crate::mcp::answers(mcp, input.root, &source.server);
+        |mcp: &crate::config_model::McpConfig| crate::mcp::answers(mcp, input.root, &source.server);
     match source.kind {
         Mcp => input.mcp.is_some_and(answers),
         Command => {

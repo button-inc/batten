@@ -91,7 +91,7 @@ const SHARED_KEY: &str = "shared";
 ///
 /// **There is no field a file's content could occupy**, which is what makes rule
 /// 4 structural here rather than a property of the renderer — the same shape
-/// [`crate::rules::Finding`] has for matched bytes.
+/// [`crate::findings::Finding`] has for matched bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeSet {
     /// Repo-relative paths whose bytes moved, and which the session read an
@@ -347,7 +347,7 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal 
     if touched {
         subjects.push(crate::verdict::artifact("hook wiring moved"));
     }
-    let class = crate::verdict::Native::ContractReadStale;
+    let class = crate::error::Native::ContractReadStale;
     crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::None)
 }
 
@@ -401,7 +401,7 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal 
 #[must_use]
 pub fn unmediated_session() -> crate::refusal::Refusal {
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::HookRunMissing,
+        crate::error::Native::HookRunMissing,
         &[crate::verdict::artifact(
             "SessionStart registration did not run",
         )],

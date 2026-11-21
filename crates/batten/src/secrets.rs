@@ -16,7 +16,7 @@
 //!   [`crate::identity::code_fingerprint`] therefore cannot be handed one — a
 //!   compile error, not a recall obligation. Routing, not hashing, is where an
 //!   offline-guessing oracle would be created (CLOUD-123).
-//! - **The finding has nowhere to put one.** [`crate::rules::Finding`] carries a
+//! - **The finding has nowhere to put one.** [`crate::findings::Finding`] carries a
 //!   rule, a severity, a path, a line and an identity. There is no span field, so
 //!   pointer-only output is structural in text and `-J` alike rather than a
 //!   property of the renderer.
@@ -72,11 +72,11 @@ use anyhow::{Context, Result};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config_model::Provision;
 use crate::config_model::Rule;
 use crate::error::UsageError;
 use crate::findings::Finding;
 use crate::identity::{Fingerprint, IdentityKey, SecretSpan};
-use crate::provision::Provision;
 use crate::refusal::{Fix, Refusal};
 use crate::waiver::Date;
 
@@ -1114,7 +1114,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
         return Err(UsageError::raise(
             Refusal::declared(
                 SCANNER,
-                crate::verdict::Native::ScannerUnpinned,
+                crate::error::Native::ScannerUnpinned,
                 &[crate::verdict::Subject::Artifact {
                     artifact: SCANNER.to_owned(),
                 }],
@@ -1143,7 +1143,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
         return Err(UsageError::raise(
             Refusal::declared(
                 SCANNER,
-                crate::verdict::Native::ScannerUnprovisioned,
+                crate::error::Native::ScannerUnprovisioned,
                 &[crate::verdict::Subject::Artifact {
                     artifact: SCANNER.to_owned(),
                 }],
@@ -1696,7 +1696,7 @@ sha256 = "00"
         assert!(err.downcast_ref::<UsageError>().is_some(), "{err}");
         let text = err.to_string();
         assert!(
-            text.contains(crate::verdict::Native::ScannerUnpinned.id()),
+            text.contains(crate::error::Native::ScannerUnpinned.id()),
             "{text}"
         );
         let mut findings = Vec::new();

@@ -52,12 +52,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub use crate::config_check::recorder::validate;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::recorder::{
-    validate_shape, validate_status_table, validate_value,
-};
-pub use crate::config_model::{
+#[cfg(test)]
+use crate::config_check::recorder::validate;
+use crate::config_model::{
     Ask, Column, Program, Read, RecordKey, Recorded, RecorderDeclared as Declared, Value,
 };
 
@@ -275,7 +272,7 @@ pub struct Context<'a> {
     ///
     /// **The clock is the BOUNDARY'S, never the decision's**, which is the same
     /// rule `.claude/rules/policy-modules.md` states for why no policy module
-    /// sees a timestamp and `crate::rules::Rule::max_age` states for a receipt's
+    /// sees a timestamp and `crate::config_model::Rule::max_age` states for a receipt's
     /// age. Carried here rather than read inside [`evaluate`] for [`Context`]'s
     /// whole reason — the function stays a pure function of its inputs — and it
     /// is what makes two evaluations over one lease produce one answer.

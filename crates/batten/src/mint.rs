@@ -21,7 +21,7 @@
 //!
 //! CLOUD-851's production axis looks like the home for this and structurally is
 //! not, measured against the tree rather than inferred:
-//! [`crate::rules::Rule::validate_sink`] refuses `produces` on any non-`Tree`
+//! [`crate::config_model::Rule::validate_sink`] refuses `produces` on any non-`Tree`
 //! scoped row **at load, by name**, and both rows this serves are
 //! `mediated_call`; and `hook`'s dispatch adjudicates only the PRE-tool event,
 //! so on the event this mint must happen on there is no decision and no
@@ -49,13 +49,18 @@
 //! selector, a key, a required projection and a body template, and `batten.toml`
 //! says which strings fill them.
 
-pub(crate) use crate::config_check::mint::Authority;
-pub use crate::config_check::mint::validate;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::mint::{
-    Piece, parse, piece_for, validate_across, validate_subject,
-};
-pub use crate::config_model::{AfterMode, MintDeclared as Declared, MintKey, MintMode};
+use crate::config_check::mint::Authority;
+use crate::config_check::mint::Piece;
+use crate::config_check::mint::parse;
+#[cfg(test)]
+use crate::config_check::mint::piece_for;
+#[cfg(test)]
+use crate::config_check::mint::validate;
+use crate::config_model::MintDeclared as Declared;
+#[cfg(test)]
+use crate::config_model::MintKey;
+#[cfg(test)]
+use crate::config_model::MintMode;
 
 impl Authority {
     /// The authority this name selects, or `None` for a name no authority
@@ -106,7 +111,7 @@ impl Piece {
 
 // Housed in `crate::facts` (CLOUD-2789), which walks the same paths; the path
 // here is unchanged.
-pub(crate) use crate::facts::select;
+use crate::facts::select;
 
 /// The single scalar a path selects, rendered as a bare string.
 ///
@@ -177,7 +182,7 @@ pub fn satisfied(declared: &Declared, result: &serde_json::Value) -> bool {
 
 /// The subject this result's receipt is filed under, for a [`MintKey::Named`] row.
 ///
-/// **Refused, never rewritten**, which is [`crate::receipt::safe_subject`]'s rule
+/// **Refused, never rewritten**, which is [`crate::config_check::receipt::safe_subject`]'s rule
 /// and its reason: rewriting a bad subject would file two different subjects
 /// under one receipt and let a fresh read of A authorise a stale write to B.
 ///

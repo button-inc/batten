@@ -46,23 +46,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::Serialize;
 use serde_json::Value;
 
-pub use crate::config_model::Event;
-pub use crate::config_model::Field;
-pub use crate::config_model::Harness;
-#[allow(unused_imports)]
-pub(crate) use crate::config_model::unsupported;
-#[allow(unused_imports)]
-pub(crate) use crate::config_model::{BY_GATE, LOOKTHROUGH_WRAPPERS};
-pub use crate::config_model::{GIT_HOOKS, HookDisposition, is_git_hook};
-pub(crate) use crate::config_model::{comparable, is_env_assignment, is_lookthrough_wrapper};
+use crate::config_model::Event;
+use crate::config_model::Field;
+use crate::config_model::GIT_HOOKS;
+use crate::config_model::Harness;
+use crate::config_model::HookDisposition;
+use crate::config_model::Redirect;
+#[cfg(test)]
+use crate::config_model::is_git_hook;
+use crate::config_model::unsupported;
+use crate::config_model::{
+    CallEvent, CeilingUnit, NativeGate, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
+};
+use crate::config_model::{comparable, is_env_assignment, is_lookthrough_wrapper};
+use crate::preset_catalog::RuleScope;
 use crate::receipt::Validity;
-use crate::redirect::{self, Redirect};
+use crate::redirect;
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::{
-    CallEvent, CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
-    RuleScope,
-};
+use crate::rules::PathSet;
 use crate::severity::{self, ReportLevel, RuleSeverity};
 #[cfg(test)]
 use crate::shell::shell_commands;
@@ -879,7 +881,7 @@ pub struct AttributionCapabilities {
 /// One column of the host × capability table.
 ///
 /// A vocabulary enum with a `const ALL`, the shape [`Harness`], [`Event`] and
-/// [`crate::rules::RuleKind`] already use — so CLOUD-45 §7's totality obligation
+/// [`crate::config_model::RuleKind`] already use — so CLOUD-45 §7's totality obligation
 /// is a test over `Harness::ALL × Capability::ALL` rather than a hand-kept list
 /// of per-field assertions that a new row joins only if someone remembers.
 ///
@@ -2354,7 +2356,7 @@ impl HookSource {
     #[must_use]
     pub fn vocabulary(self) -> Vec<(String, HookDisposition)> {
         match self {
-            HookSource::Cli => crate::surface::SURFACE
+            HookSource::Cli => crate::surface_table::SURFACE
                 .iter()
                 .map(|row| (row.path.to_owned(), BY_MEDIATOR))
                 .collect(),
@@ -2577,7 +2579,7 @@ impl Event {
     /// tool at all, so there is nothing to permit.
     ///
     /// This distinction was found by a test rather than by reading: the first
-    /// version of [`crate::handler::Handler::preapproves`]' load-time refusal
+    /// version of [`crate::config_model::Handler::preapproves`]' load-time refusal
     /// borrowed `carries_a_verdict`, which admitted `post-tool`.
     ///
     /// Host-independent by construction, which is what makes it usable at config
@@ -3396,7 +3398,7 @@ pub enum Decision {
     /// underneath the caller — and the record is the whole point.
     ///
     /// Only the `silent` posture reaches here. A `retry` repair is a
-    /// [`Decision::Deny`] carrying [`crate::verdict::Native::CallRetryNow`],
+    /// [`Decision::Deny`] carrying [`crate::error::Native::CallRetryNow`],
     /// because the call as made did not happen; reporting that as an allow is
     /// exactly the swap this arm's tests exist to catch.
     ///
@@ -3438,8 +3440,8 @@ impl Repair {
     /// place a drain line's counts sit, so it cannot read as one more subject.
     #[must_use]
     pub fn line_text(&self) -> String {
-        use crate::refusal::{Severity, head};
-        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
+        use crate::grammar::{Severity, head};
+        let head = head(Severity::Note, crate::error::Native::CallFixSilent.id());
         match self.subject.as_deref() {
             Some(subject) => format!(
                 "{head} at {} {subject} (repaired {})",
@@ -3772,10 +3774,10 @@ fn cursor_specialized_input(value: &Value) -> Value {
 pub struct Policy {
     /// The resolved `[commit]` convention, which the commit-subject gate judges
     /// a mediated commit's message against (CLOUD-2683). `None` arms nothing.
-    pub commit: Option<crate::commit::Commit>,
+    pub commit: Option<crate::config_model::Commit>,
     /// The resolved `[budget]` sets, judged at a write that would change one
     /// (CLOUD-2661). `None` arms nothing.
-    pub budget: Option<crate::budget::Budget>,
+    pub budget: Option<crate::config_model::Budget>,
     /// The ratchet rows a write can be judged against (CLOUD-2692), held apart
     /// from `shapes` because they are tree-scoped rows every `shapes` consumer
     /// would otherwise have to filter out.
@@ -3809,7 +3811,7 @@ pub struct Policy {
     ///
     /// Engine-side plumbing on `harness`'s reading: resolved at the boundary and
     /// carried in, so the emission site can ask without reaching for config.
-    pub advisory: Option<crate::advisory::Channel>,
+    pub advisory: Option<crate::config_model::Channel>,
     /// What ONE emitted mediated refusal line may cost (CLOUD-1050, CLOUD-1386).
     ///
     /// Carried here for `advisory`'s reason exactly — resolved at the boundary so
@@ -3821,7 +3823,7 @@ pub struct Policy {
     /// sighting could carry a consumer `[[rule]]` row's whole `reason`, prose and
     /// all, because nothing measured it. A second ceiling for the other arm would
     /// have been two thresholds that can disagree about one line.
-    pub refusal: Option<crate::refusal::Ceiling>,
+    pub refusal: Option<crate::config_model::Ceiling>,
     /// Programs known to only READ their operands (CLOUD-1141).
     ///
     /// The other half of the gate above, and the half that decides what an
@@ -3856,10 +3858,10 @@ pub struct Policy {
     /// decide what a completed call leaves behind, and [`adjudicate`] is
     /// contractually pure, so the table travels as a value rather than being
     /// re-read at the point of use.
-    mints: Vec<crate::mint::Declared>,
+    mints: Vec<crate::config_model::MintDeclared>,
     recorders: Vec<crate::config_model::RecorderDeclared>,
     patterns: Vec<crate::pattern::NamedPattern>,
-    programs: std::collections::BTreeMap<String, crate::recorder::Program>,
+    programs: std::collections::BTreeMap<String, crate::config_model::Program>,
     /// The enabled policy bundles, compiled at the boundary (CLOUD-647,
     /// CLOUD-837).
     ///
@@ -3882,7 +3884,7 @@ pub struct Policy {
     /// because the merge is fixed for the life of the load. A linear scan over a
     /// table this size is free against CLOUD-689's budget; what would not be is
     /// resolving the table again per mediated call.
-    verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    verdicts: Vec<crate::config_model::DeclaredVerdict>,
     /// The repository this policy speaks for, so an operand can be resolved the
     /// way the repository names it (CLOUD-1236).
     ///
@@ -4186,7 +4188,7 @@ impl Policy {
     /// one is keyed to a command the agent ran, this to the tool whose result
     /// carries the evidence — and read at the same boundary, on the same event.
     #[must_use]
-    pub fn declared_mints(&self) -> &[crate::mint::Declared] {
+    pub fn declared_mints(&self) -> &[crate::config_model::MintDeclared] {
         &self.mints
     }
 
@@ -4223,7 +4225,7 @@ impl Policy {
     #[must_use]
     pub fn declared_programs(
         &self,
-    ) -> &std::collections::BTreeMap<String, crate::recorder::Program> {
+    ) -> &std::collections::BTreeMap<String, crate::config_model::Program> {
         &self.programs
     }
 
@@ -4659,14 +4661,14 @@ impl Policy {
         rule: &str,
         token: &str,
         envelope: &Envelope,
-    ) -> Option<(String, crate::verdict::Applicability, Option<String>)> {
+    ) -> Option<(String, crate::preset_catalog::Applicability, Option<String>)> {
         let row = self.shapes.iter().find(|shape| shape.id == rule)?;
         let fix = row.fix.as_deref()?;
         let applicability = self
             .verdicts
             .iter()
             .find(|declared| declared.id == token)
-            .map_or(crate::verdict::Applicability::Advice, |declared| {
+            .map_or(crate::preset_catalog::Applicability::Advice, |declared| {
                 declared.applicability
             });
         if !applicability.repairs() {
@@ -4683,7 +4685,7 @@ impl Policy {
         Some((fix.to_owned(), applicability, key))
     }
 
-    /// The subject a [`crate::rules::ReceiptKey::Named`] row files under, read
+    /// The subject a [`crate::config_model::ReceiptKey::Named`] row files under, read
     /// from the row's own [`Rule::key_from`] projection (CLOUD-987).
     ///
     /// **The column test comes first**, so a repository declaring no such row
@@ -4751,7 +4753,7 @@ impl Policy {
             // (CLOUD-2683), which this short-circuit would otherwise never reach.
             && self.commit.is_none()
             // And a `[budget]` set arms the budget gate (CLOUD-2661).
-            && self.budget.as_ref().is_none_or(crate::budget::Budget::is_empty)
+            && self.budget.as_ref().is_none_or(crate::config_model::Budget::is_empty)
             // And a ratchet row arms the ratchet gate (CLOUD-2692).
             && self.ratchets.is_empty()
     }
@@ -4844,7 +4846,7 @@ impl Policy {
 ///   accepted for now", and an escalation has not refused anything yet — it asked
 ///   a person. Turning that into an allow would answer on their behalf.
 /// * a **derived** gate is unreachable in practice even though it carries a rule
-///   id here. [`crate::waiver::validate`]'s companion smell `waiver-names-no-rule`
+///   id here. [`crate::config_check::waiver::validate`]'s companion smell `waiver-names-no-rule`
 ///   fails `config lint` for a waiver naming no `[[rule]]` row, and a derived gate
 ///   has none — so a waiver over one is refused at the config surface long before
 ///   it could reach this match.
@@ -5222,7 +5224,7 @@ fn reach_refusal(reach: &Reach) -> Option<Refusal> {
     }?;
     Some(Refusal::declared(
         REPOSITORY_REACH,
-        crate::verdict::Native::CallReachLoose,
+        crate::error::Native::CallReachLoose,
         &[
             crate::verdict::Subject::Artifact {
                 artifact: home.to_owned(),
@@ -5241,7 +5243,7 @@ fn reach_refusal(reach: &Reach) -> Option<Refusal> {
 pub const COMMIT_SUBJECT: &str = "commit-subject";
 
 /// A mediated commit whose subject `[commit].subject_pattern` refuses, judged
-/// by [`crate::commit::Commit::judge`], the one matcher. Armed only where the
+/// by [`crate::config_model::Commit::judge`], the one matcher. Armed only where the
 /// table is declared and the boundary read a subject; could-not-look allows.
 fn commit_subject_gate(policy: &Policy, facts: &Facts<'_>) -> Option<Refusal> {
     let commit = policy.commit.as_ref()?;
@@ -5262,7 +5264,7 @@ fn commit_subject_gate(policy: &Policy, facts: &Facts<'_>) -> Option<Refusal> {
 fn commit_subject_refusal() -> Refusal {
     Refusal::declared(
         COMMIT_SUBJECT,
-        crate::verdict::Native::SubjectUnconventional,
+        crate::error::Native::SubjectUnconventional,
         &[crate::verdict::Subject::Artifact {
             artifact: "[commit].subject_pattern".to_owned(),
         }],
@@ -5389,7 +5391,7 @@ fn detached_call(envelope: &Envelope) -> Option<Refusal> {
     (detached > 0).then(|| {
         Refusal::declared(
             DETACHED_CALL,
-            crate::verdict::Native::RunOrphaned,
+            crate::error::Native::RunOrphaned,
             &[crate::verdict::Subject::Count {
                 count: detached as u64,
             }],
@@ -6695,15 +6697,15 @@ fn receipt_refusal(
     // (rule 4). Which KIND of thing the receipt is keyed to is the class's, and
     // `batten policy explain` answers it.
     let native = match verdict {
-        Validity::Expired => crate::verdict::Native::ReceiptExpired,
-        Validity::Refuted => crate::verdict::Native::ReceiptRefuted,
-        Validity::StaleHead => crate::verdict::Native::ReceiptSuperseded,
-        Validity::StaleMain => crate::verdict::Native::ReceiptOffTrunk,
+        Validity::Expired => crate::error::Native::ReceiptExpired,
+        Validity::Refuted => crate::error::Native::ReceiptRefuted,
+        Validity::StaleHead => crate::error::Native::ReceiptSuperseded,
+        Validity::StaleMain => crate::error::Native::ReceiptOffTrunk,
         // `Valid` is not reachable from the caller, which only refuses a
         // non-valid verdict. It resolves here rather than panicking so the match
         // stays total, and it renders as the missing case, which is the honest
         // reading of "there is no usable receipt".
-        Validity::Missing | Validity::Valid => crate::verdict::Native::ReceiptUnusable,
+        Validity::Missing | Validity::Valid => crate::error::Native::ReceiptUnusable,
     };
     // An agent-sourced fact's remedy is the DECLARED COMMAND, not the row's
     // prose (CLOUD-776). That is what makes the loop close: the agent is told
@@ -7069,7 +7071,7 @@ fn substitution_decision(
         };
         return Some(operand_refusal(
             rule,
-            crate::verdict::Native::ToolSubstituted,
+            crate::error::Native::ToolSubstituted,
             program,
             target,
         ));
@@ -7315,7 +7317,7 @@ fn interpreter_decision(
         {
             return Some(operand_refusal(
                 rule,
-                crate::verdict::Native::ScriptRunLoose,
+                crate::error::Native::ScriptRunLoose,
                 program,
                 operand,
             ));
@@ -7950,7 +7952,7 @@ fn names_a_repository_path(token: &str, root: Option<&Path>, cwd: Option<&Path>)
 /// same pair under its own class: the script path and the interpreter.
 fn operand_refusal(
     rule: &Rule,
-    class: crate::verdict::Native,
+    class: crate::error::Native,
     program: &str,
     target: &str,
 ) -> Refusal {
@@ -7987,9 +7989,9 @@ fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
     // less precise than the prose it replaced. Each carries its own `class`, and
     // `batten policy explain` answers with the one that fired.
     let native = match discard {
-        Discard::Piped => crate::verdict::Native::VerdictPiped,
-        Discard::Trailing => crate::verdict::Native::VerdictTrailing,
-        Discard::Orphaned => crate::verdict::Native::RunOrphaned,
+        Discard::Piped => crate::error::Native::VerdictPiped,
+        Discard::Trailing => crate::error::Native::VerdictTrailing,
+        Discard::Orphaned => crate::error::Native::RunOrphaned,
     };
     Refusal::declared(&rule.id, native, &[], Fix::declared(rule.reason.as_deref()))
 }
@@ -8066,7 +8068,7 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
 #[must_use]
 pub fn count_named_artifacts(
     value: &str,
-    resolves: &[crate::rules::Rewrite],
+    resolves: &[crate::config_model::Rewrite],
     tracked: &std::collections::BTreeSet<String>,
 ) -> usize {
     let compiled: Vec<(regex::Regex, &str)> = resolves
@@ -8264,7 +8266,7 @@ fn ceiling_refusal(rule: &Rule, count: usize, max: usize) -> Refusal {
     subjects.extend(policy_url_subject(rule));
     Refusal::declared(
         &rule.id,
-        crate::verdict::Native::CeilingExceeded,
+        crate::error::Native::CeilingExceeded,
         &subjects,
         Fix::declared(rule.reason.as_deref()),
     )
@@ -8374,7 +8376,7 @@ fn ratchet_rules(facts: &Facts<'_>) -> Option<Refusal> {
     moved.first().map(|found| {
         Refusal::declared(
             found.rule.clone(),
-            crate::verdict::Native::CeilingExceeded,
+            crate::error::Native::CeilingExceeded,
             &[
                 crate::verdict::Subject::Path {
                     path: found.path.clone(),
@@ -8395,7 +8397,7 @@ fn ratchet_rules(facts: &Facts<'_>) -> Option<Refusal> {
 fn budget_refusal(name: &str, count: usize, max: usize) -> Refusal {
     Refusal::declared(
         BUDGET_CALL,
-        crate::verdict::Native::CeilingExceeded,
+        crate::error::Native::CeilingExceeded,
         &[
             crate::verdict::Subject::Artifact {
                 artifact: format!("budget.{name}"),
@@ -8800,7 +8802,7 @@ pub fn policy_preapproval(
 /// A module's grant as `call grant now`, under the rule id that granted it
 /// (CLOUD-2078): a module finding id `policy explain` resolves.
 fn preapproval_refusal(id: &str) -> Refusal {
-    let class = crate::verdict::Native::CallGrantNow;
+    let class = crate::error::Native::CallGrantNow;
     Refusal::declared(id.to_owned(), class, &[], Fix::None)
 }
 
@@ -9876,7 +9878,7 @@ fn reach_argv(
     // AN OUTER MEDIATOR COVERS WHAT IT RUNS: `mise exec -- bash -c 'cargo x'`
     // runs that cargo under the pin, so the inner entry is mediated too.
     let mediated =
-        outer_mediated || mediator_present(crate::rules::RequireVia::Mise, &argv[..index]);
+        outer_mediated || mediator_present(crate::config_model::RequireVia::Mise, &argv[..index]);
     let mut reached = vec![program_entry(
         program,
         &arguments,
@@ -10854,7 +10856,7 @@ fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
 /// [`ReceiptFacts`].
 ///
 /// An expression that will not compile also allows, and cannot be reached from a
-/// config that loaded: [`crate::rules::Rule::validate`] compiles it first, so this
+/// config that loaded: [`crate::config_model::Rule::validate`] compiles it first, so this
 /// arm is the fail-open reading of an impossible state rather than a second
 /// policy.
 fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
@@ -11075,11 +11077,11 @@ fn draft_flag(value: &Value) -> Option<bool> {
 fn connector_event(envelope: &Envelope) -> Option<CallEvent> {
     let raw = &envelope.raw_tool;
     let draft = Field::InputDraft.read(envelope);
-    if crate::rules::selects_tool_name("create_pull_request", raw) {
+    if crate::facts::selects_tool_name("create_pull_request", raw) {
         let drafted = draft.as_deref() == Some("true");
         return (!drafted).then_some(CallEvent::PullRequestReady);
     }
-    if crate::rules::selects_tool_name("update_pull_request", raw) {
+    if crate::facts::selects_tool_name("update_pull_request", raw) {
         let undrafts = draft.as_deref() == Some("false");
         let reopens = draft.as_deref() != Some("true")
             && Field::InputState
@@ -11238,7 +11240,7 @@ fn rule_read_missing_refusal(ids: &[String]) -> Refusal {
     );
     Refusal::declared(
         RULE_READ_MISSING,
-        crate::verdict::Native::RuleReadMissing,
+        crate::error::Native::RuleReadMissing,
         &subjects,
         Fix::declared(Some(&remedy)),
     )
@@ -11394,7 +11396,7 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     // memory name over `[refusal] max_tokens` (101 bytes against 96).
     Decision::Deny(Refusal::declared(
         PROTECTED_MUTATION,
-        crate::verdict::Native::ReadRedirected,
+        crate::error::Native::ReadRedirected,
         &[
             crate::verdict::Subject::Path {
                 path: path.to_owned(),
@@ -11775,7 +11777,7 @@ fn unknown_program_refusal(program: &str, path: &str) -> Refusal {
         // ruling out their own configuration that an honest class would have
         // saved. It also makes the remedy below reachable from
         // `batten policy explain`, which resolved the other arm's class before.
-        crate::verdict::Native::ProgramUnknown,
+        crate::error::Native::ProgramUnknown,
         // Same two tagged pointers, same order, as the declared-verb refusal: the
         // path first so it becomes the finding's own pointer, the program second
         // so the caller recognises which command of theirs was read this way.
@@ -11827,7 +11829,7 @@ fn history_drop_refusal(unreferenced: &[String]) -> Refusal {
     );
     Refusal::declared(
         HISTORY_DROP,
-        crate::verdict::Native::HistoryDropUnpushed,
+        crate::error::Native::HistoryDropUnpushed,
         &subjects,
         Fix::declared(Some(
             "these commits are on no remote; `git reflog` still holds them",
@@ -11847,7 +11849,7 @@ fn history_drop_refusal(unreferenced: &[String]) -> Refusal {
 fn singleton_held_refusal(task: &str, holder: &str) -> Refusal {
     Refusal::declared(
         SINGLETON_HELD,
-        crate::verdict::Native::SingletonHeld,
+        crate::error::Native::SingletonHeld,
         &[
             crate::verdict::Subject::Artifact {
                 artifact: task.to_owned(),
@@ -12179,7 +12181,7 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
     };
     Refusal::declared(
         PROTECTED_MUTATION,
-        crate::verdict::Native::ProtectedMutation,
+        crate::error::Native::ProtectedMutation,
         // The path first, so it becomes the finding's own pointer; the action
         // second, because the class already says what a mutating verb is and the
         // caller needs to recognise WHICH command of theirs was read that way.
@@ -12224,7 +12226,7 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 ///
 /// **The row's `reason` column is the fix**, which looks like a liberty and is
 /// not: [`RuleKind::Shape`] *requires* that column
-/// ([`crate::rules::RuleKind::requires`]) and it is documented as "why this rule
+/// ([`crate::config_model::RuleKind::requires`]) and it is documented as "why this rule
 /// refuses, **and what to do instead** — the deny's whole text". So a shape deny
 /// carries a declared remedy by construction, with no new config column, and the
 /// crate supplies the cause clause it was never going to get from a consumer.
@@ -12233,7 +12235,7 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// pre-empted here. [`Fix::declared`] is what keeps a row whose reason is somehow
 /// blank from rendering a fix clause that says nothing.
 ///
-/// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
+/// [`RuleKind::Shape`]: crate::config_model::RuleKind::Shape
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
     // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
@@ -12248,7 +12250,7 @@ fn shape_refusal(rule: &Rule) -> Refusal {
     subjects.extend(policy_url_subject(rule));
     Refusal::declared(
         &rule.id,
-        crate::verdict::Native::ShapeRefused,
+        crate::error::Native::ShapeRefused,
         &subjects,
         Fix::declared(rule.reason.as_deref()),
     )
@@ -12280,7 +12282,7 @@ fn content_refusal(rule: &Rule, envelope: &Envelope) -> Refusal {
     subjects.extend(policy_url_subject(rule));
     Refusal::declared(
         &rule.id,
-        crate::verdict::Native::ContentRefused,
+        crate::error::Native::ContentRefused,
         &subjects,
         Fix::declared(rule.reason.as_deref()),
     )
@@ -12304,7 +12306,7 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
     // text back again.
     Refusal::declared(
         &rule.id,
-        crate::verdict::Native::KeyMissing,
+        crate::error::Native::KeyMissing,
         &policy_url_subject(rule),
         Fix::declared(rule.reason.as_deref()),
     )
@@ -12345,12 +12347,12 @@ fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
 /// `effective_program` steps past `env`/`timeout`/… on its way, and this looks
 /// at everything it stepped over. That is what stops
 /// `env RUSTFLAGS=-Awarnings cargo build` from laundering the bare call.
-fn mediator_present(via: crate::rules::RequireVia, before_program: &[&str]) -> bool {
+fn mediator_present(via: crate::config_model::RequireVia, before_program: &[&str]) -> bool {
     match via {
         // `mise exec -- cargo` and `mise x -- cargo` both leave `mise` here;
         // `mise run <task>` never reaches another program at all, so it is
         // judged as `mise` and no row keyed on the wrapped program sees it.
-        crate::rules::RequireVia::Mise => before_program.contains(&"mise"),
+        crate::config_model::RequireVia::Mise => before_program.contains(&"mise"),
     }
 }
 
@@ -13654,17 +13656,19 @@ mod tests {
 
     /// A class declaring two `command` routes and one `override`, so a renderer
     /// that takes "the first one" and one that takes them all are distinguishable.
-    fn two_route_class() -> Vec<crate::verdict::DeclaredVerdict> {
-        let route = |id: &str, kind, target: &str| crate::verdict::Route {
+    fn two_route_class() -> Vec<crate::config_model::DeclaredVerdict> {
+        let route = |id: &str, kind, target: &str| crate::config_model::Route {
             id: id.to_owned(),
             kind,
             target: target.to_owned(),
             precondition: match kind {
-                crate::verdict::RouteKind::Override => Some("why it should not stand".to_owned()),
+                crate::preset_catalog::RouteKind::Override => {
+                    Some("why it should not stand".to_owned())
+                }
                 _ => None,
             },
         };
-        vec![crate::verdict::DeclaredVerdict {
+        vec![crate::config_model::DeclaredVerdict {
             id: "branch write unsafe".to_owned(),
             gloss: "branch write unsafe".to_owned(),
             doc: crate::doc::Doc::default(),
@@ -13672,23 +13676,23 @@ mod tests {
             routes: vec![
                 route(
                     "branch read first",
-                    crate::verdict::RouteKind::Command,
+                    crate::preset_catalog::RouteKind::Command,
                     "git pull --rebase",
                 ),
                 route(
                     "branch write refused",
-                    crate::verdict::RouteKind::Command,
+                    crate::preset_catalog::RouteKind::Command,
                     "git push --force-with-lease=<ref>:<sha>",
                 ),
                 route(
                     "branch write first",
-                    crate::verdict::RouteKind::Override,
+                    crate::preset_catalog::RouteKind::Override,
                     "branch write unsafe",
                 ),
             ],
             successor: None,
             withdrawn: None,
-            applicability: crate::verdict::Applicability::Advice,
+            applicability: crate::preset_catalog::Applicability::Advice,
         }]
     }
 
@@ -13762,7 +13766,7 @@ mod tests {
     fn a_repeated_route_target_is_rendered_once() {
         let mut registry = two_route_class();
         let first = registry[0].routes[0].clone();
-        registry[0].routes.push(crate::verdict::Route {
+        registry[0].routes.push(crate::config_model::Route {
             id: "branch read again".to_owned(),
             ..first
         });
@@ -13919,7 +13923,7 @@ mod tests {
             // the class as bare, and suppresses a refusal production never
             // suppresses. Found by `the_bypass_hatch_does_not_reach_the_protected_gate`
             // going red — the fixture was the thing that was wrong.
-            verdicts: crate::verdict::vendored(),
+            verdicts: crate::config_check::verdict::vendored(),
             root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -14229,7 +14233,7 @@ mod tests {
         .into_iter()
         .map(ToOwned::to_owned)
         .collect();
-        let resolves = vec![crate::rules::Rewrite {
+        let resolves = vec![crate::config_model::Rewrite {
             reference: "^mem:(.+)$".to_owned(),
             path: ".serena/memories/$1.md".to_owned(),
         }];
@@ -14421,7 +14425,7 @@ mod tests {
         // Asserted here, on the consuming surface, because a lapse that worked in
         // `waiver` and was then dropped on the way in would pass that suite.
         let lapsed = crate::waiver::live(
-            &[crate::waiver::Waiver {
+            &[crate::config_model::Waiver {
                 rule: "gh-pr-merge".to_owned(),
                 reason: "tracked".to_owned(),
                 expires: "2020-01-01".to_owned(),
@@ -14818,7 +14822,7 @@ mod tests {
     /// so the pair of policies isolates what the key changes.
     fn require_via_policy() -> Policy {
         let mut rule = shape("no-bare-cargo", "cargo", None);
-        rule.require_via = Some(crate::rules::RequireVia::Mise);
+        rule.require_via = Some(crate::config_model::RequireVia::Mise);
         Policy {
             commit: None,
             budget: None,
@@ -15637,22 +15641,22 @@ mod tests {
         let fixture_verdicts = ["verify receipt stale", "refused by themodule"]
             .into_iter()
             .filter(|id| source.contains(id))
-            .map(|id| crate::verdict::DeclaredVerdict {
+            .map(|id| crate::config_model::DeclaredVerdict {
                 id: id.to_owned(),
                 gloss: format!("the fixture class {id}"),
                 doc: crate::doc::Doc::default(),
                 class: format!("What {id} means, at length."),
-                routes: vec![crate::verdict::Route {
+                routes: vec![crate::config_model::Route {
                     id: "read the authority".to_owned(),
-                    kind: crate::verdict::RouteKind::Document,
+                    kind: crate::preset_catalog::RouteKind::Document,
                     target: "batten.toml".to_owned(),
                     precondition: None,
                 }],
                 successor: None,
                 withdrawn: None,
-                applicability: crate::verdict::Applicability::Advice,
+                applicability: crate::preset_catalog::Applicability::Advice,
             })
-            .collect::<Vec<crate::verdict::DeclaredVerdict>>();
+            .collect::<Vec<crate::config_model::DeclaredVerdict>>();
         Policy {
             commit: None,
             budget: None,
@@ -16777,7 +16781,7 @@ deny contains "refused by themodule" if {
         // is where the words "amend" and "rebase" now live.
         assert_eq!(
             refusal.verdict(),
-            Some(crate::verdict::Native::ReceiptSuperseded.id()),
+            Some(crate::error::Native::ReceiptSuperseded.id()),
             "the class must say what invalidated it; got: {rendered}"
         );
         assert!(
@@ -17206,7 +17210,7 @@ deny contains "refused by themodule" if {
             let refused = denial(decision);
             assert_eq!(
                 refused.verdict(),
-                Some(crate::verdict::Native::ProgramUnknown.id()),
+                Some(crate::error::Native::ProgramUnknown.id()),
                 "{command}"
             );
         }
@@ -17244,7 +17248,7 @@ deny contains "refused by themodule" if {
             ..shape(SCRIPT_ROW, "unused", None)
         };
         let mut policy = ceiling_policy(vec![row]);
-        policy.verdicts = crate::verdict::vendored();
+        policy.verdicts = crate::config_check::verdict::vendored();
         policy.root = Some(root.clone());
         let mut envelope = envelope(command);
         envelope.cwd = Some(root);
@@ -17296,7 +17300,7 @@ deny contains "refused by themodule" if {
             let refused = denial(decision);
             assert_eq!(
                 refused.verdict(),
-                Some(crate::verdict::Native::ScriptRunLoose.id()),
+                Some(crate::error::Native::ScriptRunLoose.id()),
                 "{command}"
             );
             assert_eq!(refused.rule(), SCRIPT_ROW, "{command}");
@@ -17346,14 +17350,14 @@ deny contains "refused by themodule" if {
         let unknown = denial(guarded("frobnicate .serena/memories/core.md"));
         assert_eq!(
             unknown.verdict(),
-            Some(crate::verdict::Native::ProgramUnknown.id()),
+            Some(crate::error::Native::ProgramUnknown.id()),
             "an unclassifiable program must not be reported as a declared mutation"
         );
 
         let declared = denial(guarded("rm .serena/memories/core.md"));
         assert_eq!(
             declared.verdict(),
-            Some(crate::verdict::Native::ProtectedMutation.id()),
+            Some(crate::error::Native::ProtectedMutation.id()),
             "a declared mutating verb keeps the class that names one"
         );
     }
@@ -17365,11 +17369,11 @@ deny contains "refused by themodule" if {
     /// hand-kept list is what lets a class gain an override route and no binding
     /// with nothing noticing.
     fn classes_with_an_override_route() -> Vec<String> {
-        crate::verdict::vendored()
+        crate::config_check::verdict::vendored()
             .iter()
             .filter(|entry| {
                 entry.routes.iter().any(|route| {
-                    route.kind == crate::verdict::RouteKind::Override
+                    route.kind == crate::preset_catalog::RouteKind::Override
                         && route.precondition.is_some()
                 })
             })
@@ -17389,12 +17393,12 @@ deny contains "refused by themodule" if {
     /// which is why demanding a boundary binding of it would fail a class that is
     /// not broken.
     ///
-    /// Membership in [`crate::verdict::Native::ALL`] is the cut, and it is the
+    /// Membership in [`crate::error::Native::ALL`] is the cut, and it is the
     /// right one rather than a convenient one: those are the classes whose deny
     /// sites live in this file, and a new one added there with an override route
     /// and no binding still reaches the panic in [`sample_refusal`].
     fn mediated_classes_with_an_override_route() -> Vec<String> {
-        let native: std::collections::BTreeSet<&str> = crate::verdict::Native::ALL
+        let native: std::collections::BTreeSet<&str> = crate::error::Native::ALL
             .iter()
             .map(|native| native.id())
             .collect();
@@ -17410,16 +17414,16 @@ deny contains "refused by themodule" if {
     /// this guards was in what the deny sites PASS, so a case inventing its own
     /// subjects would have read clean throughout.
     fn sample_refusal(class: &str) -> Refusal {
-        if class == crate::verdict::Native::ProtectedMutation.id() {
+        if class == crate::error::Native::ProtectedMutation.id() {
             return denial(guarded("rm .serena/memories/core.md"));
         }
-        if class == crate::verdict::Native::HistoryDropUnpushed.id() {
+        if class == crate::error::Native::HistoryDropUnpushed.id() {
             return history_drop_refusal(&["aaaaaaa".to_owned()]);
         }
-        if class == crate::verdict::Native::ShapeRefused.id() {
+        if class == crate::error::Native::ShapeRefused.id() {
             return shape_refusal(&shape("r", "x", None));
         }
-        if class == crate::verdict::Native::ReceiptSuperseded.id() {
+        if class == crate::error::Native::ReceiptSuperseded.id() {
             return receipt_refusal(
                 &shape("r", "unused", None),
                 "verify",
@@ -17427,7 +17431,7 @@ deny contains "refused by themodule" if {
                 None,
             );
         }
-        if class == crate::verdict::Native::ReceiptUnusable.id() {
+        if class == crate::error::Native::ReceiptUnusable.id() {
             return receipt_refusal(
                 &shape("r", "unused", None),
                 "verify",
@@ -17435,7 +17439,7 @@ deny contains "refused by themodule" if {
                 None,
             );
         }
-        if class == crate::verdict::Native::RuleReadMissing.id() {
+        if class == crate::error::Native::RuleReadMissing.id() {
             // A row id with spaces, which is what most `[[rule]]` ids are.
             return rule_read_missing_refusal(&["tool pin other".to_owned()]);
         }
@@ -17499,7 +17503,7 @@ deny contains "refused by themodule" if {
         assert!(
             !mediated_classes_with_an_override_route()
                 .iter()
-                .any(|class| class == crate::verdict::Native::CeilingExceeded.id()),
+                .any(|class| class == crate::error::Native::CeilingExceeded.id()),
             "the ceiling class keeps its hatch; if it gained an override route its \
              count binding would no longer be inert"
         );
@@ -17924,10 +17928,10 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_finding_is_named_by_its_violation_class() {
         use crate::refusal::{Arm, Fix, Refusal};
-        let class = crate::verdict::Native::ProtectedMutation.id();
+        let class = crate::error::Native::ProtectedMutation.id();
         let split = Refusal::declared(
             PROTECTED_MUTATION,
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[],
             Fix::None,
         );
@@ -17945,14 +17949,15 @@ deny contains "refused by themodule" if {
     /// block from a nudge before reading on.
     #[test]
     fn an_advisory_finding_carries_its_severity() {
-        use crate::refusal::{Arm, Fix, Refusal, Severity};
+        use crate::grammar::Severity;
+        use crate::refusal::{Arm, Fix, Refusal};
         let refusal = Refusal::declared(
             PROTECTED_MUTATION,
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[],
             Fix::None,
         );
-        let class = crate::verdict::Native::ProtectedMutation.id();
+        let class = crate::error::Native::ProtectedMutation.id();
         for (severity, word) in [
             (Severity::Deny, "deny"),
             (Severity::Warn, "warn"),
@@ -17975,10 +17980,10 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_first_sighting_names_the_row_that_raised_it() {
         use crate::refusal::{Arm, Fix, Refusal};
-        let class = crate::verdict::Native::ProtectedMutation.id();
+        let class = crate::error::Native::ProtectedMutation.id();
         let split = Refusal::declared(
             PROTECTED_MUTATION,
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[],
             Fix::None,
         );
@@ -17989,7 +17994,7 @@ deny contains "refused by themodule" if {
         );
         let collapsed = Refusal::declared(
             class,
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[],
             Fix::None,
         )
@@ -18007,7 +18012,7 @@ deny contains "refused by themodule" if {
         use crate::refusal::{Arm, Fix, Refusal};
         let refusal = Refusal::declared(
             PROTECTED_MUTATION,
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[crate::verdict::artifact("src/a.rs")],
             Fix::declared(Some("restore it with git")),
         );
@@ -18030,7 +18035,7 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_rule_reason_replaces_the_class_do() {
         use crate::refusal::{Arm, Fix, Refusal};
-        let registry = vec![crate::verdict::DeclaredVerdict {
+        let registry = vec![crate::config_model::DeclaredVerdict {
             id: "task read first".to_owned(),
             gloss: "a task was run before it was read".to_owned(),
             doc: crate::doc::Doc {
@@ -18039,15 +18044,15 @@ deny contains "refused by themodule" if {
                 dont: vec!["retry it verbatim".to_owned()],
             },
             class: "The long definition.".to_owned(),
-            routes: vec![crate::verdict::Route {
+            routes: vec![crate::config_model::Route {
                 id: "task read other".to_owned(),
-                kind: crate::verdict::RouteKind::Document,
+                kind: crate::preset_catalog::RouteKind::Document,
                 target: "rules/tasks.md".to_owned(),
                 precondition: None,
             }],
             successor: None,
             withdrawn: None,
-            applicability: crate::verdict::Applicability::Advice,
+            applicability: crate::preset_catalog::Applicability::Advice,
         }];
         let class_only = Refusal::from_class("row-a", &registry, "task read first", &[], Fix::None)
             .render_finding(Arm::Full);
@@ -20961,8 +20966,8 @@ deny contains "refused by themodule" if {
     /// Fails by: an empty or placeholder line.
     #[test]
     fn a_repair_line_names_row_subject_and_class() {
-        use crate::refusal::{Severity, head};
-        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
+        use crate::grammar::{Severity, head};
+        let head = head(Severity::Note, crate::error::Native::CallFixSilent.id());
         let mut repair = Repair {
             rule: String::from("row"),
             repaired: String::from("class"),
@@ -21159,13 +21164,14 @@ deny contains "refused by themodule" if {
     /// repairing under an advice class.
     #[test]
     fn a_repair_is_the_named_rows_fix_under_a_repairing_class() {
-        let verdict: crate::verdict::DeclaredVerdict = serde_json::from_value(serde_json::json!({
-            "id": "push refused",
-            "applicability": "retry",
-            "gloss": "g",
-            "class": "c",
-        }))
-        .expect("a declared verdict");
+        let verdict: crate::config_model::DeclaredVerdict =
+            serde_json::from_value(serde_json::json!({
+                "id": "push refused",
+                "applicability": "retry",
+                "gloss": "g",
+                "class": "c",
+            }))
+            .expect("a declared verdict");
         let mut policy = ceiling_policy(vec![
             Rule {
                 fix: Some(String::from("repair {key}")),
@@ -21182,7 +21188,7 @@ deny contains "refused by themodule" if {
             policy.repair_for("keyed", "push refused", &call),
             Some((
                 String::from("repair {key}"),
-                crate::verdict::Applicability::Retry,
+                crate::preset_catalog::Applicability::Retry,
                 Some(String::from("origin/main"))
             ))
         );
@@ -21190,7 +21196,7 @@ deny contains "refused by themodule" if {
             policy.repair_for("plain", "push refused", &call),
             Some((
                 String::from("plain repair"),
-                crate::verdict::Applicability::Retry,
+                crate::preset_catalog::Applicability::Retry,
                 None
             ))
         );
@@ -21297,14 +21303,14 @@ deny contains "refused by themodule" if {
         std::fs::write(dir.join("batten.toml"), "version = 1\n").expect("write authority");
         let mut resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
             .expect("the authority resolves");
-        resolved.redirects = vec![crate::redirect::Redirect {
+        resolved.redirects = vec![crate::config_model::Redirect {
             glob: String::from(".serena/memories/**"),
             mutation: String::from("use Serena's memory tools"),
             read: Some(String::from("read_memory")),
             read_server: Some(String::from("serena")),
         }];
-        let mut mcp = crate::mcp::McpConfig::default();
-        mcp.sources.push(crate::mcp::Source {
+        let mut mcp = crate::config_model::McpConfig::default();
+        mcp.sources.push(crate::config_model::McpSource {
             endpoint_contains: std::collections::BTreeMap::new(),
             id: String::from("nowhere"),
             root: Some(String::from("BATTEN_MCP_ROOT_THAT_IS_NOT_SET")),
@@ -22278,7 +22284,7 @@ deny contains "refused by themodule" if {
                 .expect("a policy row"),
             );
             verdicts.push(
-                serde_json::from_value::<crate::verdict::DeclaredVerdict>(serde_json::json!({
+                serde_json::from_value::<crate::config_model::DeclaredVerdict>(serde_json::json!({
                     "id": token,
                     "gloss": format!("the fixture class {token}"),
                     "class": format!("What {token} means."),
@@ -22735,7 +22741,7 @@ deny contains "refused by themodule" if {
             "tool": "pull_request_read",
         }))
         .expect("a declared fact");
-        let mint: crate::mint::Declared = serde_json::from_value(serde_json::json!({
+        let mint: crate::config_model::MintDeclared = serde_json::from_value(serde_json::json!({
             "name": "issue-read",
             "tool": "get_issue",
             "key": "named",
@@ -22745,15 +22751,16 @@ deny contains "refused by themodule" if {
             "body": "{id}",
         }))
         .expect("a declared mint");
-        let recorder: crate::recorder::Declared = serde_json::from_value(serde_json::json!({
-            "name": "board-issue-created",
-            "record": "board-writes",
-            "tool": "save_issue",
-            "key": "branch",
-            "requires": ["id"],
-            "columns": [{"name": "kind", "value": {"literal": "issue"}}],
-        }))
-        .expect("a declared recorder");
+        let recorder: crate::config_model::RecorderDeclared =
+            serde_json::from_value(serde_json::json!({
+                "name": "board-issue-created",
+                "record": "board-writes",
+                "tool": "save_issue",
+                "key": "branch",
+                "requires": ["id"],
+                "columns": [{"name": "kind", "value": {"literal": "issue"}}],
+            }))
+            .expect("a declared recorder");
         let policy = Policy {
             facts: vec![fact.clone()],
             mints: vec![mint.clone()],
@@ -22773,7 +22780,7 @@ deny contains "refused by themodule" if {
         Rule {
             kind: RuleKind::Pipeline,
             pattern: None,
-            verdict: Some(vec![crate::rules::VerdictProgram {
+            verdict: Some(vec![crate::config_model::VerdictProgram {
                 program: String::from("mise"),
                 subcommands: Some(vec![String::from("run")]),
                 nested: None,
@@ -23034,16 +23041,18 @@ deny contains "refused by themodule" if {
     #[test]
     fn only_a_pre_tool_write_selects_a_budget_set() {
         let mut policy = Policy::declaring_nothing(Harness::ExitCode);
-        policy.budget = Some(crate::budget::Budget(std::collections::BTreeMap::from([(
-            "always".to_owned(),
-            crate::budget::BudgetSet {
-                files: vec!["CLAUDE.md".to_owned()],
-                max_tokens: 1,
-                max_lines: None,
-                max_bytes_per_file: None,
-                embedded: vec![],
-            },
-        )])));
+        policy.budget = Some(crate::config_model::Budget(
+            std::collections::BTreeMap::from([(
+                "always".to_owned(),
+                crate::config_model::BudgetSet {
+                    files: vec!["CLAUDE.md".to_owned()],
+                    max_tokens: 1,
+                    max_lines: None,
+                    max_bytes_per_file: None,
+                    embedded: vec![],
+                },
+            )]),
+        ));
         let write = write_envelope("Write", "CLAUDE.md");
         assert_eq!(policy.budget_sets_for(&write), vec!["always"]);
         let mut after = write_envelope("Write", "CLAUDE.md");

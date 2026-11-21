@@ -1116,16 +1116,16 @@ const REJECTED_ROUTE: &str = "rejected-route";
 /// this, an agent reaching for the override because the correct route was a
 /// clause the caller's paraphrase had dropped.
 #[must_use]
-pub fn questions_for(entry: &crate::verdict::DeclaredVerdict) -> Option<Vec<Question>> {
+pub fn questions_for(entry: &crate::config_model::DeclaredVerdict) -> Option<Vec<Question>> {
     let precondition = entry.routes.iter().find_map(|route| {
-        (route.kind == crate::verdict::RouteKind::Override)
+        (route.kind == crate::preset_catalog::RouteKind::Override)
             .then_some(route.precondition.as_deref())
             .flatten()
     })?;
     let declined: Vec<&str> = entry
         .routes
         .iter()
-        .filter(|route| route.kind != crate::verdict::RouteKind::Override)
+        .filter(|route| route.kind != crate::preset_catalog::RouteKind::Override)
         .map(|route| route.id.as_str())
         .collect();
     Some(vec![

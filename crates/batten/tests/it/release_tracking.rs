@@ -72,7 +72,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 const RELEASE: &str = ".github/workflows/release-land.yml";
 const BACKFILL: &str = ".github/workflows/linear-release-backfill.yml";

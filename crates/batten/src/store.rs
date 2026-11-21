@@ -619,7 +619,7 @@ fn now_rfc3339() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
-    crate::receipt::rfc3339_utc(seconds)
+    crate::clock::rfc3339_utc(seconds)
 }
 
 /// Mint a store identity.

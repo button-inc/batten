@@ -55,9 +55,9 @@ use crate::identity::{FindingKind, StoredIdentity};
 use crate::severity::RuleSeverity;
 use crate::transcript::{Event, Stream};
 
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::hookcost::validate;
-pub use crate::config_model::HookCeiling as Ceiling;
+#[cfg(test)]
+use crate::config_check::hookcost::validate;
+use crate::config_model::HookCeiling as Ceiling;
 
 /// One producer's cost over the session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

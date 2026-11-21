@@ -14,8 +14,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
-pub use crate::preset_catalog::RuleScope;
-pub use crate::preset_catalog::{Applicability, RouteKind};
+use crate::preset_catalog::RuleScope;
+use crate::preset_catalog::{Applicability, RouteKind};
 use crate::severity::{AdvisoryTier, RuleSeverity};
 use crate::sink::Sink;
 
@@ -155,7 +155,7 @@ pub struct Config {
     /// is in scope — not "everything", because a set that silently defaults to
     /// universal membership is the widening a policy engine must never do.
     ///
-    /// Not to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),
+    /// Not to be confused with [`Rule::scope`] ([`crate::preset_catalog::RuleScope`]),
     /// which is a per-rule axis saying *where a rule looks*. The two share a
     /// token and nothing else; their vocabularies never cross, exactly as
     /// severity's three axes do not (see [`crate::severity`]).
@@ -2077,7 +2077,7 @@ pub struct McpSource {
     /// **A launcher that mints its server key per registration episode leaves
     /// that key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one
     /// connector exposed as three different tool prefixes across episodes;
-    /// [`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a
+    /// [`crate::facts::selects_tool_name`] absorbs that for a RULE, by matching a
     /// `__`-delimited segment. Dispatch has no such analogue — the key IS the
     /// name — so a row naming one episode's key resolves nothing in the next, and
     /// a remedy citing it is a command that cannot run. Measured 2026-09-02: the
@@ -2749,7 +2749,7 @@ pub fn authorization() -> String {
 /// prompts to name its own files is a property of that repository, so naming
 /// either half in `crates/batten` would be the consumer-specific identifier
 /// non-negotiable rule 1 forbids — the same split
-/// [`crate::budget::EmbeddedDecl`] already makes for a config key it counts.
+/// [`crate::config_model::EmbeddedDecl`] already makes for a config key it counts.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
@@ -4010,7 +4010,7 @@ pub struct Rule {
     /// **A consumer fact, so it lives in the consumer's config** — which is
     /// non-negotiable rule 1 applied to the seam that broke it. The engine
     /// declares which provider's language a preset's modules read
-    /// ([`crate::preset::Manifest::provider`]); this declares which one is in
+    /// ([`crate::preset_catalog::Manifest::provider`]); this declares which one is in
     /// use here; and the two are compared at load. Neither guesses the other.
     ///
     /// Omitted is the ordinary case: six of the seven presets read no provider's
@@ -5157,7 +5157,7 @@ pub struct HookConfig {
 pub struct Action {
     /// The stable identifier a failure is reported under.
     ///
-    /// Separate from the command for [`crate::markers::Marker`]'s reason: the
+    /// Separate from the command for [`crate::config_model::Marker`]'s reason: the
     /// argv is free to change without the thing it is called in reports changing
     /// with it.
     pub id: String,
@@ -5405,7 +5405,7 @@ pub enum Field {
 /// What a mint's receipt is filed under.
 ///
 /// The two keyings the censused receipts actually use, and a closed enum rather
-/// than a free string for [`crate::rules::SinkKey`]'s reason: a key a config
+/// than a free string for [`crate::sink::SinkKey`]'s reason: a key a config
 /// could spell arbitrarily is a filename a config could point anywhere, and the
 /// store lives under `$GIT_DIR`.
 #[derive(
@@ -5471,7 +5471,7 @@ pub struct MintDeclared {
     /// The receipt namespace — the same token a `receipt` rule's `checks` list
     /// names, so the file this writes is the file that rule reads.
     pub name: String,
-    /// Which tool's result mints it, matched by [`crate::rules::selects_tool_name`].
+    /// Which tool's result mints it, matched by [`crate::facts::selects_tool_name`].
     ///
     /// **A tool name, never a field shape.** A write response and a read payload
     /// are shape-identical across the fields either carries, so duck-typing lets
@@ -5494,7 +5494,7 @@ pub struct MintDeclared {
     pub key_from_input: Option<String>,
     /// A pattern the subject must match, or the row mints nothing (CLOUD-2294).
     ///
-    /// [`crate::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits
+    /// [`crate::config_check::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits
     /// a space, so free-text arguments ("groom M2 to ready") would file under
     /// themselves. What a row key looks like is the consumer's fact (rule 1), so
     /// it is declared here, read exactly as a `receipt` rule's `key_shape` is:
@@ -5623,7 +5623,7 @@ pub enum Backend {
 /// One provisioned tool.
 ///
 /// The `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived
-/// schema, the same way [`crate::rules::Rule`] mirrors its severity conditional:
+/// schema, the same way [`crate::config_model::Rule`] mirrors its severity conditional:
 /// an author editing `batten.toml` against the published schema gets the refusal
 /// in their editor rather than on the next run. It is a **second expression of
 /// one rule, never a second authority** — the loader's check is what decides, and
@@ -5928,9 +5928,9 @@ pub struct RecorderDeclared {
     /// write whatever tool made it, so the rows that write it differ in their
     /// selector and their columns while naming one destination.
     pub record: String,
-    /// Which tool's result records, matched by [`crate::rules::selects_tool_name`].
+    /// Which tool's result records, matched by [`crate::facts::selects_tool_name`].
     ///
-    /// A tool name, never a field shape, for [`crate::mint::Declared::tool`]'s
+    /// A tool name, never a field shape, for [`crate::config_model::MintDeclared::tool`]'s
     /// measured reason: a connector is exposed under more than one name over its
     /// lifetime (CLOUD-178), and a write response and a read payload are
     /// shape-identical across the fields either carries.
@@ -6068,7 +6068,7 @@ pub struct Column {
 
 /// An expression over the tool envelope and the programs this repository owns.
 ///
-/// **Closed, for [`crate::mint::Piece`]'s reason**: an unrecognised form is a
+/// **Closed, for [`crate::config_check::mint::Piece`]'s reason**: an unrecognised form is a
 /// load error, never a value that silently renders as itself and writes a record
 /// nobody can read.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -6198,7 +6198,7 @@ pub enum Value {
 ///
 /// **Closed, and a name rather than a path**, which is what keeps rule 1 intact:
 /// this enum's one variant says *the Definition-of-Ready grammar* and nothing
-/// here names a tracker, a tool or a board. [`crate::mint::Authority`] is its
+/// here names a tracker, a tool or a board. [`crate::config_check::mint::Authority`] is its
 /// twin on the template side and the two resolve the same names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -6277,7 +6277,7 @@ pub struct Program {
 /// same reasoning `[budget.instructions]` is built on): a ceiling written into
 /// `crates/batten` is this repository's judgement compiled into every consumer's
 /// engine, and a consumer whose harness renders differently could not move it
-/// without a release. [`crate::budget::BudgetSet`] is the landed shape this
+/// without a release. [`crate::config_model::BudgetSet`] is the landed shape this
 /// copies — a ceiling and nothing else, absent meaning unenforced, because a
 /// threshold nobody declared is not a threshold of zero.
 ///
@@ -6332,7 +6332,7 @@ pub struct Ceiling {
 pub struct Startup {
     /// The stable token a report names.
     ///
-    /// Separate from the command for [`crate::markers::Marker`]'s reason: the
+    /// Separate from the command for [`crate::config_model::Marker`]'s reason: the
     /// argv is free to change without the thing it is called in reports changing
     /// with it.
     pub id: String,
@@ -6592,7 +6592,7 @@ pub struct DeclaredVerdict {
     /// historical token, which is the whole thing a tombstone exists for.
     ///
     /// **It owes a reason and names no target**, exactly as
-    /// [`crate::rules::Conserves::withdrawn`] does one registry over (CLOUD-1080,
+    /// [`crate::config_model::Conserves::withdrawn`] does one registry over (CLOUD-1080,
     /// the precedent for this arm's shape): a column demanding a target here
     /// would be the invented successor again. An empty reason is refused, so the
     /// arm cannot be spent as a bare "gone".
@@ -6604,7 +6604,7 @@ pub struct DeclaredVerdict {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Waiver {
-    /// The [`crate::rules::Rule::id`] this waiver suppresses findings of.
+    /// The [`crate::config_model::Rule::id`] this waiver suppresses findings of.
     pub rule: String,
     /// Why the finding is being waived. Required, and required to be non-empty:
     /// an unjustified waiver is the undesigned hatch this table replaces, and a
@@ -6618,7 +6618,7 @@ pub struct Waiver {
     /// Absent means the whole rule, which is the widest a waiver can be and
     /// therefore the one that must be typed deliberately rather than reached by
     /// omitting a field nobody noticed. Matched with
-    /// [`crate::rules::glob_match`], so a waiver's path vocabulary is the one the
+    /// [`crate::selector::glob_match`], so a waiver's path vocabulary is the one the
     /// rules use and not a second dialect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -6681,7 +6681,7 @@ pub struct Handler {
     /// The stable identifier a verdict, a violation and a timing are reported
     /// under.
     ///
-    /// Separate from the command for [`crate::action::Action`]'s reason: the
+    /// Separate from the command for [`crate::config_model::Action`]'s reason: the
     /// argv is free to change without the thing it is called in reports changing
     /// with it. Here it carries a second load — it is the key a per-handler
     /// timing series is recorded against, so a renamed handler starts a new
@@ -6729,7 +6729,7 @@ pub struct Handler {
     ///
     /// # A regex here, where a rule row gets `tool`
     ///
-    /// [`crate::rules::Rule::tool`] is a SUFFIX selector, deliberately: a rule
+    /// [`crate::config_model::Rule::tool`] is a SUFFIX selector, deliberately: a rule
     /// naming a literal server is the CLOUD-178 trap, where a host rotates the
     /// exposed name and the row silently matches nothing. This column is a regex
     /// instead, because the predicate a dispatched program needs is not always a
@@ -6886,7 +6886,7 @@ pub struct PlanQuery {
 /// The lifecycle events the core normalizes, whatever a host spells them.
 ///
 /// A vocabulary enum with a `const ALL`, the shape [`Harness`],
-/// [`crate::capture::Stream`] and [`crate::rules::RuleKind`] already use, so
+/// [`crate::capture::Stream`] and [`crate::config_model::RuleKind`] already use, so
 /// anything ranging over events is derived rather than re-typed — the golden
 /// census in `tests/cli.rs` reads this, which is what stops a new variant from
 /// landing with no fixture.
@@ -7150,7 +7150,7 @@ pub(crate) fn comparable(value: &str) -> String {
 /// The wrapper programs [`effective_program`] looks through **unconditionally**.
 ///
 /// Declared once because two surfaces read it: the matcher, to step past a
-/// wrapper and judge what it wraps, and [`crate::rules::validate`], to refuse a
+/// wrapper and judge what it wraps, and [`crate::config_check::rules::validate`], to refuse a
 /// `pattern` naming one — by the time a pattern is compared the wrapper has
 /// already been stepped past, so `pattern = "nohup rm"` is a row that can never
 /// fire (CLOUD-401). A second copy of this list in the validator would drift,

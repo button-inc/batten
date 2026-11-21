@@ -96,7 +96,7 @@ use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
 /// finding must not re-mint it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
-    /// The [`crate::rules::Rule::id`] that produced this finding.
+    /// The [`crate::config_model::Rule::id`] that produced this finding.
     pub rule: String,
     /// The ROW this finding belongs to, where that is not [`Finding::rule`]
     /// (CLOUD-1087).
@@ -126,7 +126,7 @@ pub struct Finding {
     /// new decision here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
-    /// The producing rule's [`crate::rules::Rule::severity`], for the exit-contract decision.
+    /// The producing rule's [`crate::config_model::Rule::severity`], for the exit-contract decision.
     pub severity: RuleSeverity,
     /// Where the violation is. A file-scoped kind reports the repo-relative
     /// path (`/`-separated); a rule-scoped kind — a command whose exit code
@@ -152,7 +152,7 @@ pub struct Finding {
     /// store never has to reach back into a config it cannot see.
     pub check: Check,
     /// The fix, or the stated reason there is none. `None` only for a rule
-    /// [`crate::rules::Rule::validate`] would have refused; [`crate::findings::record`]
+    /// [`crate::config_model::Rule::validate`] would have refused; [`crate::findings::record`]
     /// refuses to store one.
     pub remediation: Option<Remediation>,
     /// Which of the producing kind's answers this finding is, where the kind

@@ -34,7 +34,8 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// `pin add unsafe` as `batten.toml` declares it.
 fn no_source_built_tool() -> Rule {

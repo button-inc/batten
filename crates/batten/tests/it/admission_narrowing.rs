@@ -41,8 +41,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batten::config_model::Rule;
 use batten::policy::{self, Bundle};
-use batten::rules::Rule;
 
 /// A module publishing one predicate whose id is not its enabling row's — the
 /// shape that defeated the `declared.id == rule` filter in the first place.
@@ -198,7 +198,7 @@ fn the_committed_bundles_publish_no_engine_side_rule_name() {
     let policy_rows: Vec<_> = config
         .rules
         .iter()
-        .filter(|declared| declared.kind == batten::rules::RuleKind::Policy)
+        .filter(|declared| declared.kind == batten::config_model::RuleKind::Policy)
         .cloned()
         .collect();
     let bundles = policy::load(

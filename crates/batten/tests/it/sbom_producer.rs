@@ -67,7 +67,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 use serde_json::Value;
 
 const PIN: &str = "3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -325,7 +326,7 @@ impl Fixture {
             .env("FIXTURE", &self.dir)
             .env("CARGO_HOME", self.dir.join("cargo-home"))
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::exec::Keep {
+            .streamed_output_keeping(batten::capture::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,

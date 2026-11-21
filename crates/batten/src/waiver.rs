@@ -61,7 +61,7 @@
 //! it (CLOUD-293), so the filter and the diagnostic cannot come to disagree
 //! about which kinds a waiver covers.
 //!
-//! It is down to **one** kind: `judge`, which mints no [`crate::rules::Finding`]
+//! It is down to **one** kind: `judge`, which mints no [`crate::findings::Finding`]
 //! and renders no [`crate::hook::Decision`] — it is refused the `severity` column
 //! and `run_rule` skips it as configured off, so a waiver over it suppresses
 //! nothing however either channel behaves. The mediated kinds left this set with
@@ -128,9 +128,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
-pub use crate::config_check::waiver::validate;
+#[cfg(test)]
+use crate::config_check::waiver::validate;
 use crate::config_model::RuleKind;
-pub use crate::config_model::Waiver;
+use crate::config_model::Waiver;
 use crate::error::UsageError;
 use crate::findings::Finding;
 
@@ -343,7 +344,7 @@ impl Applied {
     /// every waiver.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
+        let head = crate::grammar::head(crate::grammar::Severity::Note, &self.rule);
         match self.line {
             Some(line) => format!(
                 "{head} at {}:{line} waived until {}",
@@ -435,7 +436,7 @@ impl Suppressed {
     /// this too — one phrase across both channels.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
+        let head = crate::grammar::head(crate::grammar::Severity::Note, &self.rule);
         format!("{head} at this call waived until {}", self.expires)
     }
 }
@@ -452,12 +453,12 @@ impl Suppressed {
 /// over a `shape` row genuinely suppressed nothing, so this answered `false` for
 /// every mediated kind and `waiver-unreachable-kind` said so truthfully. That
 /// channel now honours a waiver, and the three kinds [`RuleKind::scopes`] pairs
-/// with [`crate::rules::RuleScope::MediatedCall`] — `shape`, `receipt`,
+/// with [`crate::preset_catalog::RuleScope::MediatedCall`] — `shape`, `receipt`,
 /// `pipeline` — move across **with** the consumption rather than before it.
 ///
 /// What remains outside is **the advisory kind**, and for a reason no
 /// implementation can retire: `judge` is tree-scoped and still cannot mint a
-/// finding. [`crate::rules::Rule::severity`] is `Allow` for a row carrying no
+/// finding. [`crate::config_model::Rule::severity`] is `Allow` for a row carrying no
 /// `severity` column, and a judge row is refused that column — so `run_rule`
 /// skips it as configured off. [`RuleKind::Judge`]'s own docs put it as
 /// "blocking is not forbidden here, it is unrepresentable", and a waiver over
@@ -897,7 +898,7 @@ mod tests {
         // suppresses something. Derived rather than listed, so a kind that
         // changes scope moves this assertion with it.
         for &kind in RuleKind::ALL {
-            if kind.scopes() == [crate::rules::RuleScope::MediatedCall] {
+            if kind.scopes() == [crate::preset_catalog::RuleScope::MediatedCall] {
                 assert!(
                     reaches(kind),
                     "{}: the hook consults `live` on every deny, so a waiver reaches this",
@@ -918,7 +919,10 @@ mod tests {
         // it is tree-scoped, and still cannot mint a finding because it is
         // refused the `severity` column and `run_rule` skips an `allow` row.
         // Asserted separately so the case survives a scope change to either side.
-        assert_eq!(RuleKind::Judge.scopes(), [crate::rules::RuleScope::Tree]);
+        assert_eq!(
+            RuleKind::Judge.scopes(),
+            [crate::preset_catalog::RuleScope::Tree]
+        );
         assert!(!reaches(RuleKind::Judge));
     }
 

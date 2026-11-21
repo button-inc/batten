@@ -52,7 +52,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 

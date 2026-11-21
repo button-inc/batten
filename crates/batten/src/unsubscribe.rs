@@ -109,9 +109,9 @@ pub fn session(host: &Host) -> Option<String> {
 }
 
 /// `value` as a session id, or `None` where it is not one path component —
-/// [`crate::record::safe_component`]'s reading, and no inner whitespace.
+/// [`crate::config_check::record::safe_component`]'s reading, and no inner whitespace.
 fn safe_id(value: &str) -> Option<String> {
-    crate::record::safe_component("session id", value)
+    crate::config_check::record::safe_component("session id", value)
         .ok()
         .filter(|id| !id.chars().any(char::is_whitespace))
 }

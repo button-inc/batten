@@ -33,7 +33,7 @@ use batten::hk;
 /// The row `batten.toml` declares, deserialized rather than struct-literalled:
 /// `Rule` carries `deny_unknown_fields`, so this goes through the same column
 /// census a consumer's config does.
-fn row() -> batten::rules::Rule {
+fn row() -> batten::config_model::Rule {
     serde_json::from_value(serde_json::json!({
         "id": "plan require missing",
         "kind": "policy",
@@ -55,11 +55,11 @@ fn row() -> batten::rules::Rule {
 fn the_row_declares_the_plan_fact() {
     let row = row();
     assert!(
-        batten::rules::COLUMN_CENSUS.iter().any(|column| {
+        batten::config_check::rules::COLUMN_CENSUS.iter().any(|column| {
             column.field == "plan"
                 && matches!(
                     column.declares,
-                    batten::rules::Declares::Fact(batten::facts::Fact::Plan, declared)
+                    batten::config_check::rules::Declares::Fact(batten::facts::Fact::Plan, declared)
                         if declared(&row)
                 )
         }),
@@ -91,7 +91,7 @@ fn the_plan_is_never_resolvable_on_the_mediated_path() {
 #[test]
 fn the_boundary_acquires_a_plan_the_module_can_read() {
     let root = common::at_root(".");
-    let query: hk::PlanQuery = serde_json::from_value(
+    let query: batten::config_model::PlanQuery = serde_json::from_value(
         serde_json::json!({"id": "gate", "hook": "check", "required": ["batten-check"]}),
     )
     .expect("the query a row declares");
@@ -278,10 +278,10 @@ fn an_untracked_file_moves_the_fingerprint() {
 /// than resolving to could-not-look forever.
 #[test]
 fn a_row_naming_an_unplannable_surface_is_refused() {
-    let known: hk::PlanQuery =
+    let known: batten::config_model::PlanQuery =
         serde_json::from_value(serde_json::json!({"id": "gate", "hook": "check"}))
             .expect("a query naming a planned surface");
-    let unknown: hk::PlanQuery =
+    let unknown: batten::config_model::PlanQuery =
         serde_json::from_value(serde_json::json!({"id": "gate", "hook": "post-merge"}))
             .expect("a query naming an unplannable surface");
     assert!(!known.unknown_hook());

@@ -32,7 +32,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::config::Config;
+use batten::config_model::Config;
 use batten::severity::RuleSeverity;
 
 /// Items in the pinned source blob `ceba3afd`.

@@ -69,7 +69,8 @@ use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Serialize, Serializer};
 
-use crate::config::{self, Strictness};
+use crate::config;
+use crate::config_model::Strictness;
 use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
 
@@ -475,7 +476,7 @@ pub struct Resolved {
     /// a key of the configuration. Putting it in the document would attribute it
     /// to a layer, and no layer set it.
     #[serde(skip)]
-    pub unresolvable: Vec<config::Unresolvable>,
+    pub unresolvable: Vec<crate::config_model::Unresolvable>,
     /// The schema version of the committed authority.
     pub version: u32,
     /// The minimum Batten version the authority permits (enforcement: CLOUD-33).
@@ -530,12 +531,12 @@ pub struct Resolved {
     /// The unlanded path set, layered exactly as [`Resolved::protected`] is.
     pub unlanded: Vec<String>,
     /// The governing config surface hashed into `config epoch` (CLOUD-32).
-    pub epoch: Option<config::Epoch>,
+    pub epoch: Option<crate::config_model::Epoch>,
     /// The contract surface a running session is told about when it moves
     /// (CLOUD-461). Authority-only, like [`Resolved::epoch`]: what a session
     /// must re-read is the committed authority's claim, and a local file that
     /// could narrow it would be a way to switch the reminder off quietly.
-    pub contract: Option<config::Contract>,
+    pub contract: Option<crate::config_model::Contract>,
     /// The mutating-verb table, consumer data the authority supplies.
     #[serde(rename = "verb")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
@@ -561,7 +562,7 @@ pub struct Resolved {
     /// what it MEANS changes. House style §8 admits raise-only overrides, and
     /// redefining a refusal is not one.
     #[serde(rename = "verdict")]
-    pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    pub verdicts: Vec<crate::config_model::DeclaredVerdict>,
     /// The `[vocabulary]` word lists (CLOUD-1638), carried for
     /// [`Resolved::verdicts`]' reason and layered the same way.
     ///
@@ -569,13 +570,13 @@ pub struct Resolved {
     /// actually loads modules — `check` and `enforce` resolve before they load,
     /// so a gate reading only `Config` would be one no real run reaches.
     #[serde(default)]
-    pub vocabulary: crate::verdict::Vocabulary,
+    pub vocabulary: crate::config_model::Vocabulary,
     /// The per-path-class redirect table (CLOUD-280), authority rows plus any a
     /// local file **added**. Local rows append after committed ones, and the
     /// lookup takes the first match, so an uncommitted file can add a class the
     /// authority never named and can never change what a committed row says.
     #[serde(rename = "redirect")]
-    pub redirects: Vec<crate::redirect::Redirect>,
+    pub redirects: Vec<crate::config_model::Redirect>,
     /// The agent-sourced facts the authority declares (CLOUD-776).
     ///
     /// **Authority-only**, and that is a security property rather than a
@@ -597,7 +598,7 @@ pub struct Resolved {
     /// through [`Tables`], which is what makes the restriction structural rather
     /// than a rule someone has to remember.
     #[serde(rename = "mint")]
-    pub mints: Vec<crate::mint::Declared>,
+    pub mints: Vec<crate::config_model::MintDeclared>,
     /// The records the authority writes from a tool result (CLOUD-1051).
     ///
     /// **Authority-only, on the strongest form of the reason `mints` above is.**
@@ -624,46 +625,46 @@ pub struct Resolved {
     /// here changes what every column reading it records while the recorder rows
     /// stay byte-identical.
     #[serde(rename = "program")]
-    pub programs: std::collections::BTreeMap<String, crate::recorder::Program>,
+    pub programs: std::collections::BTreeMap<String, crate::config_model::Program>,
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
-    pub markers: Vec<crate::markers::Marker>,
+    pub markers: Vec<crate::config_model::Marker>,
     /// The `exec` output predicates (CLOUD-117), authority rows plus any a local
     /// file **added**. Raise-only by construction: a local file can only append,
     /// and a row reusing a committed id is refused rather than merged.
     #[serde(rename = "exec_pattern")]
-    pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    pub exec_patterns: Vec<crate::config_model::OutputPattern>,
     /// The waiver table (CLOUD-208), authority rows plus any a local file
     /// **added for a rule the authority does not declare**. A local waiver over a
     /// committed rule is refused rather than merged — see [`merge_local_waivers`].
     #[serde(rename = "waiver")]
-    pub waivers: Vec<crate::waiver::Waiver>,
+    pub waivers: Vec<crate::config_model::Waiver>,
     /// How `batten exec` owns what it dispatched (CLOUD-427), as the authority
     /// states it. Not layered: an uncommitted file may not change the shape of a
     /// process tree an orchestrator two levels up is built against.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exec: Option<crate::exec::ExecConfig>,
+    pub exec: Option<crate::config_model::ExecConfig>,
     /// The declared thresholds (CLOUD-50), as the authority states them. Not
     /// layered: a budget is a bar this repository sets for itself, and there is
     /// no raise-only reading of "tighten a threshold" that a local file could
     /// be trusted with — lowering it is the weakening, and `trust.rs` compares
     /// the committed bytes for that.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub budget: Option<crate::budget::Budget>,
+    pub budget: Option<crate::config_model::Budget>,
     /// What one emission of the advisory channel may cost (CLOUD-896), as the
     /// authority states it. Not layered, for `budget`'s reason exactly: a
     /// ceiling is a bar this repository sets for itself, and `trust.rs` compares
     /// the committed bytes for the direction.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub advisory: Option<crate::advisory::Channel>,
+    pub advisory: Option<crate::config_model::Channel>,
     /// What ONE emitted mediated refusal line may cost, as the authority states
     /// it. Not layered, for `budget`'s reason exactly.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refusal: Option<crate::refusal::Ceiling>,
+    pub refusal: Option<crate::config_model::Ceiling>,
     /// What this repository's hooks may cost one session (CLOUD-417), as the
     /// authority states it. Not layered, for the two ceilings above's reason.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hook_output: Option<crate::hookcost::Ceiling>,
+    pub hook_output: Option<crate::config_model::HookCeiling>,
     /// The ref work must land on (CLOUD-51), as the authority states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
@@ -675,14 +676,14 @@ pub struct Resolved {
     /// consistency one: an action is a command, so a local file able to add one
     /// could run anything under the agent's own hook.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hook: Option<crate::action::HookConfig>,
+    pub hook: Option<crate::config_model::HookConfig>,
     /// The container preconditions (CLOUD-1324), as the authority states them.
     /// Not layered, and for `hook`'s reason rather than a consistency one: a
     /// startup row is a command, and a repair row is a command run WITHOUT a
     /// flag at session start, so a local file able to add one could run anything
     /// under the agent's own session start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub startup: Vec<crate::startup::Startup>,
+    pub startup: Vec<crate::config_model::Startup>,
     /// The launcher-provisioned scripts to disarm (CLOUD-1704), as the authority
     /// states them. **Not layered**, and for `hook`'s and `startup`'s security
     /// reason rather than a consistency one: every row names a file the engine
@@ -691,13 +692,13 @@ pub struct Resolved {
     /// ssh config, a credential helper. The committed authority is the only
     /// place a disarm target may be declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wiring: Option<crate::wiring::Wiring>,
+    pub wiring: Option<crate::config_model::Wiring>,
     /// The judge payload boundary (CLOUD-135), as the authority states it. Not
     /// layered: every field is refusing by default and widening it is the
     /// weakening, so there is no raise-only reading a local file could be
     /// trusted with — `trust.rs` compares the committed bytes instead.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge: Option<crate::judge::Judge>,
+    pub judge: Option<crate::config_model::Judge>,
     /// The design-evidence audit's per-capture ceiling (CLOUD-53), as the
     /// authority states it. Not layered: for a budget, smaller is stricter, so a
     /// local file could only ever *raise* the ceiling through the ordinary
@@ -705,7 +706,7 @@ pub struct Resolved {
     /// effective_cap`] is the tighten-only clamp waiting for a layer that
     /// tightens; until one exists the authority's value stands alone.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub design: Option<crate::design::Design>,
+    pub design: Option<crate::config_model::Design>,
     /// The derived merge contract (CLOUD-54), as the authority states it. Not
     /// layered: a local file cannot change what the host requires, and a copy
     /// that disagreed with the committed one would be a third answer to a
@@ -725,7 +726,7 @@ pub struct Resolved {
     /// numbers are measurements of this repository's own build, carrying the date
     /// they were taken, so there is one place to re-measure and no second answer.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prune: Option<crate::prune::Prune>,
+    pub prune: Option<crate::config_model::Prune>,
     /// The `[task]` table (CLOUD-2370), from the committed authority alone, for
     /// `prune`'s reason: a local layer lowering the floor or naming a task to
     /// relaunch would decide a Stop refusal the committed file never stated.
@@ -741,23 +742,23 @@ pub struct Resolved {
     /// widen a reduction back to the payload. Neither has a raise-only reading:
     /// both are the weakening `trust.rs` compares committed bytes for.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<crate::mcp::McpConfig>,
+    pub mcp: Option<crate::config_model::McpConfig>,
     /// The defect ledger's declaration (CLOUD-52), as the authority states it.
     /// Not layered: where the ledger lives and what may be in it is a property
     /// of the repository, and a local file that could redirect it would be able
     /// to point the append-only gate at a different file than the one committed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub defects: Option<crate::defects::Defects>,
+    pub defects: Option<crate::config_model::Defects>,
     /// The provisioning manifest (CLOUD-90), as the authority states it.
     #[serde(rename = "provision", skip_serializing_if = "Vec::is_empty")]
-    pub provisions: Vec<crate::provision::Provision>,
+    pub provisions: Vec<crate::config_model::Provision>,
     /// The transcript the optional `check` input reads (CLOUD-95), as the
     /// authority states it. Not layered: pointing the capability at a different
     /// file changes which evidence the run judges, and there is no raise-only
     /// reading of that — a local file redirecting it would be choosing the
     /// evidence, which is the weakening `trust.rs` compares committed bytes for.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcript: Option<crate::transcript::TranscriptConfig>,
+    pub transcript: Option<crate::config_model::TranscriptConfig>,
     /// The advisory drain's pacing (CLOUD-79), as the authority states it. Not
     /// layered, and for a reason unlike its neighbours': theirs is that lowering
     /// a bar is the weakening, where **an interval has no direction at all** — a
@@ -765,7 +766,7 @@ pub struct Resolved {
     /// weakening of anything the raise-only clamp could measure. A key with no
     /// monotone reading does not belong in a monotone layer.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub drain: Option<crate::drain::DrainConfig>,
+    pub drain: Option<crate::config_model::DrainConfig>,
     /// The attribution policy (CLOUD-274), as the authority states it. Not
     /// layered, for the same reason `transcript` is not: every value in it is a
     /// deny pattern or the identity commits are accountable to, and a local file
@@ -773,26 +774,26 @@ pub struct Resolved {
     /// `trust.rs` compares committed bytes for. There is no raise-only reading of
     /// "match fewer things".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attribution: Option<crate::attribution::Attribution>,
+    pub attribution: Option<crate::config_model::Attribution>,
     /// The commit-subject convention (CLOUD-701), as the authority states it.
     /// Not layered, for the reason the neighbours above are not: the value is the
     /// predicate itself, and a local file editing it would be *loosening* the
     /// convention — there is no raise-only reading of "match more things".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit: Option<crate::commit::Commit>,
+    pub commit: Option<crate::config_model::Commit>,
     /// The bot lane (CLOUD-1295), as the authority states it. Not layered, for
     /// the reason the neighbours above are not: a local file able to reach this
     /// table could add a login to `bots` or a path to `owned_manifests`, and
     /// either one turns a refusal into a filed row — a weakening dressed as an
     /// addition, which house style §8's raise-only rule does not admit.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_lane: Option<crate::bot::BotLane>,
+    pub bot_lane: Option<crate::config_model::BotLane>,
     /// The census declarations (CLOUD-843), as the authority states them. Not
     /// layered, for the reason the neighbours above are not: a local file able to
     /// add an exempt glob or drop a manifest would make the count SMALLER, and a
     /// census reading lower is exactly the claim a retirement wave has to earn.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub census: Option<crate::census::Census>,
+    pub census: Option<crate::config_model::Census>,
     /// Which layers set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -1008,7 +1009,7 @@ pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Er
         crate::verdict::artifact(&format!("{} key(s)", violations.len())),
     ];
     let refusal = crate::refusal::Refusal::engine(
-        crate::verdict::Native::LayerCarryRefused,
+        crate::error::Native::LayerCarryRefused,
         &subjects,
         crate::refusal::Fix::None,
     );
@@ -1176,7 +1177,7 @@ fn authority(
     config_from: Option<&str>,
     config_in: Option<&str>,
 ) -> Result<(
-    config::Config,
+    crate::config_model::Config,
     config::Authority,
     Option<crate::trust::Loaded>,
 )> {
@@ -1221,7 +1222,7 @@ fn authority(
         ))),
         crate::trust::Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
             "{} is absent at {reference}",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))),
     }
 }
@@ -1240,7 +1241,7 @@ fn authority(
 /// # Errors
 ///
 /// As [`resolve`], for the authority layer.
-pub(crate) fn committed(dir: &Path, overrides: &Overrides) -> Result<config::Config> {
+pub(crate) fn committed(dir: &Path, overrides: &Overrides) -> Result<crate::config_model::Config> {
     authority(
         dir,
         overrides.config_from.as_deref(),
@@ -1437,10 +1438,10 @@ fn declared_by(present: config::Authority, declared: bool, origin: Origin) -> Co
 struct Tables {
     rules: Vec<Rule>,
     rules_source: Contributors,
-    exec_patterns: Vec<crate::outputs::OutputPattern>,
-    redirects: Vec<crate::redirect::Redirect>,
+    exec_patterns: Vec<crate::config_model::OutputPattern>,
+    redirects: Vec<crate::config_model::Redirect>,
     facts: Vec<crate::facts::Declared>,
-    waivers: Vec<crate::waiver::Waiver>,
+    waivers: Vec<crate::config_model::Waiver>,
 }
 
 /// Apply the git-ignored local file over the authority's values, raise-only.
@@ -1457,7 +1458,7 @@ struct Tables {
 /// writes a `scope` entry that would widen rather than narrow.
 fn apply_local(
     local: config::OverrideConfig,
-    repo: &config::Config,
+    repo: &crate::config_model::Config,
     strictness: &mut Layered<Strictness>,
     fail_on_warning: &mut Layered<bool>,
     tables: &mut Tables,
@@ -1467,14 +1468,14 @@ fn apply_local(
         return Err(UsageError::raise(format!(
             "{LOCAL_CONFIG_FILE}: `engine` is set by the committed authority ({}) \
              only; an override may not restate it",
-            config::CONFIG_FILE,
+            crate::config_model::CONFIG_FILE,
         )));
     }
     if local.min_batten_version.is_some() {
         return Err(UsageError::raise(format!(
             "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \
              only; an override may not restate it",
-            config::CONFIG_FILE,
+            crate::config_model::CONFIG_FILE,
         )));
     }
     if let Some(value) = local.strictness {
@@ -1506,7 +1507,7 @@ fn apply_local(
                 "rule {}: a `native` row grades one of the engine's own gates, which {} \
                  does alone; {LOCAL_CONFIG_FILE} may not carry one",
                 rule.id,
-                config::CONFIG_FILE,
+                crate::config_model::CONFIG_FILE,
             )));
         }
         if tables.rules.iter().any(|committed| committed.id == rule.id) {
@@ -1518,7 +1519,7 @@ fn apply_local(
                 "rule {}: {LOCAL_CONFIG_FILE} may not redefine a rule from {}; an override may \
                  only add rules, never weaken a committed gate (§8)",
                 rule.id,
-                config::CONFIG_FILE,
+                crate::config_model::CONFIG_FILE,
             )));
         }
         tables.rules.push(rule);
@@ -1572,7 +1573,11 @@ impl Paths {
     /// Attribution follows the same present-means-`repo-config` rule every
     /// authority key gets, so a set the local layer never touches reads exactly
     /// as it did before these keys became layerable.
-    fn from_authority(repo: &config::Config, present: config::Authority, origin: Origin) -> Self {
+    fn from_authority(
+        repo: &crate::config_model::Config,
+        present: config::Authority,
+        origin: Origin,
+    ) -> Self {
         let authority_set = |declared: bool| declared_by(present, declared, origin);
         Paths {
             scope_source: authority_set(!repo.scope.is_empty()),
@@ -1636,8 +1641,8 @@ fn merge_local_scope(scope: &mut Vec<String>, local: Vec<String>) -> Result<bool
 ///
 /// Returns a [`UsageError`] when a local pattern reuses a committed id.
 fn merge_local_patterns(
-    committed: &mut Vec<crate::outputs::OutputPattern>,
-    local: Vec<crate::outputs::OutputPattern>,
+    committed: &mut Vec<crate::config_model::OutputPattern>,
+    local: Vec<crate::config_model::OutputPattern>,
 ) -> Result<()> {
     for pattern in local {
         if committed.iter().any(|row| row.id == pattern.id) {
@@ -1645,7 +1650,7 @@ fn merge_local_patterns(
                 "exec_pattern {}: {LOCAL_CONFIG_FILE} may not redefine a pattern from {}; an \
                  override may only add patterns, never weaken a committed gate (§8)",
                 pattern.id,
-                config::CONFIG_FILE,
+                crate::config_model::CONFIG_FILE,
             )));
         }
         committed.push(pattern);
@@ -1666,8 +1671,8 @@ fn merge_local_patterns(
 /// **first** matching row, so a local row can only ever answer for a class the
 /// authority left unclaimed.
 fn merge_local_redirects(
-    committed: &mut Vec<crate::redirect::Redirect>,
-    local: Vec<crate::redirect::Redirect>,
+    committed: &mut Vec<crate::config_model::Redirect>,
+    local: Vec<crate::config_model::Redirect>,
 ) -> Result<()> {
     for entry in local {
         if committed.iter().any(|row| row.glob == entry.glob) {
@@ -1675,7 +1680,7 @@ fn merge_local_redirects(
                 "redirect {}: {LOCAL_CONFIG_FILE} may not redefine a redirect from {}; an \
                  override may only add path classes the authority does not claim (§8)",
                 entry.glob,
-                config::CONFIG_FILE,
+                crate::config_model::CONFIG_FILE,
             )));
         }
         committed.push(entry);
@@ -1703,8 +1708,8 @@ fn merge_local_redirects(
 /// Returns a [`UsageError`] when a local waiver names a committed rule, or when
 /// two waivers end up sharing an identity.
 fn merge_local_waivers(
-    committed: &mut Vec<crate::waiver::Waiver>,
-    local: Vec<crate::waiver::Waiver>,
+    committed: &mut Vec<crate::config_model::Waiver>,
+    local: Vec<crate::config_model::Waiver>,
     rules: &[Rule],
 ) -> Result<()> {
     for waiver in local {
@@ -1713,7 +1718,7 @@ fn merge_local_waivers(
                 "waiver {}: {LOCAL_CONFIG_FILE} may not waive a rule declared in {}; a waiver \
                  lowers the bar, so the durable tier is the committed authority alone (§8)",
                 waiver.rule,
-                config::CONFIG_FILE,
+                crate::config_model::CONFIG_FILE,
             )));
         }
         committed.push(waiver);
@@ -1721,7 +1726,7 @@ fn merge_local_waivers(
     // Re-validate the merged table: two layers can each be well formed and still
     // duplicate an identity between them, and a duplicate that only exists after
     // layering would otherwise never be refused.
-    crate::waiver::validate(committed)
+    crate::config_check::waiver::validate(committed)
 }
 
 /// Build the resolved configuration from the authority plus the layered values.
@@ -1729,7 +1734,7 @@ fn merge_local_waivers(
 /// Split out so the layering above reads as the §8 chain it is, rather than
 /// ending in a field-by-field copy of every key the authority carries.
 fn assemble(
-    repo: &config::Config,
+    repo: &crate::config_model::Config,
     present: config::Authority,
     strictness: Layered<Strictness>,
     fail_on_warning: Layered<bool>,
@@ -1838,7 +1843,7 @@ fn assemble(
 /// a key can never be contested: there is exactly one layer able to speak to it,
 /// which is why `declared_by` answers with a set of at most one.
 fn attribution(
-    repo: &config::Config,
+    repo: &crate::config_model::Config,
     present: config::Authority,
     strictness: Contributors,
     fail_on_warning: Contributors,
@@ -2007,7 +2012,7 @@ mod tests {
         // test takes its scratch space from the system temp dir instead.
         let dir = std::env::temp_dir().join("batten-resolve-tests").join(name);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(config::CONFIG_FILE), repo_toml).unwrap();
+        fs::write(dir.join(crate::config_model::CONFIG_FILE), repo_toml).unwrap();
         let local = dir.join(LOCAL_CONFIG_FILE);
         match local_toml {
             Some(contents) => fs::write(&local, contents).unwrap(),
@@ -2894,10 +2899,10 @@ mod tests {
     fn an_unconfigured_repository_resolves_to_the_default_layer() {
         // CLOUD-70: absence of the authority IS layer 0, never an error.
         let dir = repo("resolve-zero-config", "version = 1\n", None);
-        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(dir.join(crate::config_model::CONFIG_FILE)).unwrap();
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.authority, config::Authority::Absent);
-        assert_eq!(resolved.version, config::SUPPORTED_VERSION);
+        assert_eq!(resolved.version, crate::config_model::SUPPORTED_VERSION);
         assert_eq!(resolved.strictness, Strictness::Standard);
         assert!(!resolved.fail_on_warning);
     }
@@ -2909,7 +2914,7 @@ mod tests {
         // which used to be hard-coded `repo-config` because the file was
         // required — is the one this would most easily get wrong.
         let dir = repo("resolve-zero-config-sources", "version = 1\n", None);
-        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(dir.join(crate::config_model::CONFIG_FILE)).unwrap();
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         let document = resolved
             .attributed()
@@ -2930,7 +2935,7 @@ mod tests {
         // The defaults are only worth having if they reach the runner: a rule
         // that loads and is dropped by the layering gates nothing.
         let dir = repo("resolve-zero-config-rules", "version = 1\n", None);
-        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(dir.join(crate::config_model::CONFIG_FILE)).unwrap();
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.rules, config::defaults().rules);
         assert!(!resolved.rules.is_empty());
@@ -2959,7 +2964,7 @@ mod tests {
             "version = 1\n",
             Some("version = 1\nstrictness = \"strict\"\n"),
         );
-        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(dir.join(crate::config_model::CONFIG_FILE)).unwrap();
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Strict);
         assert_eq!(resolved.sources["strictness"].winner(), Source::LocalFile);
@@ -2974,7 +2979,7 @@ mod tests {
                  glob = \"nothing/**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             ),
         );
-        fs::remove_file(redefining.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(redefining.join(crate::config_model::CONFIG_FILE)).unwrap();
         let err = resolve_with_env(&redefining, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(err.to_string().contains("may not redefine"), "got: {err}");
@@ -3001,7 +3006,7 @@ mod tests {
         // §6, over the layer CLOUD-70 adds: the defaults are a compiled-in
         // constant, so two runs must not differ.
         let dir = repo("resolve-zero-config-stable", "version = 1\n", None);
-        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        fs::remove_file(dir.join(crate::config_model::CONFIG_FILE)).unwrap();
         let first = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         let second = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(

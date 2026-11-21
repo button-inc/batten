@@ -20,9 +20,9 @@ use std::path::PathBuf;
 
 use crate::common;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy;
-use batten::rules::Rule;
 
 /// The provider a preset's modules read at `scope`, spelled as a row's own
 /// `provider` value — or `None` where they read none (CLOUD-1625).
@@ -32,12 +32,12 @@ use batten::rules::Rule;
 /// manifest is what keeps these cases honest as presets change: a provider added
 /// to a module later is covered here without editing a test, where a literal
 /// would have to be found and updated.
-fn provider_at(preset: &str, scope: batten::rules::RuleScope) -> Option<&'static str> {
+fn provider_at(preset: &str, scope: batten::preset_catalog::RuleScope) -> Option<&'static str> {
     // `None` for a preset that does not ship, rather than a panic: one case here
     // names an unknown preset ON PURPOSE and asserts the LOADER refuses it. A
     // helper that failed first would move that refusal into the harness and stop
     // the case testing the mechanism it was written for.
-    batten::preset::find(preset)?
+    batten::preset_catalog::find(preset)?
         .providers_at(scope)
         .into_iter()
         .find(|reads| *reads != "no provider")
@@ -50,7 +50,7 @@ fn preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "mediated_call",
         "preset": preset,
-        "provider": provider_at(preset, batten::rules::RuleScope::MediatedCall),
+        "provider": provider_at(preset, batten::preset_catalog::RuleScope::MediatedCall),
         "severity": "deny",
     }))
     .expect("a preset row the loader accepts")
@@ -449,7 +449,7 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
 #[test]
 fn every_advertised_preset_name_actually_loads() {
     let root = scratch("names");
-    let names = policy::preset_names();
+    let names = batten::config_model::preset_names();
     assert!(!names.is_empty(), "the binary ships at least one preset");
     for name in names {
         policy::load(
@@ -542,7 +542,7 @@ fn presets_are_inside_the_rule_one_glob() {
 #[test]
 fn every_shipped_preset_publishes_its_ids() {
     let root = scratch("published");
-    for name in policy::preset_names() {
+    for name in batten::config_model::preset_names() {
         let bundles = policy::load(
             &root,
             &[row_at_real_scope("row", name)],
@@ -575,7 +575,7 @@ fn every_shipped_preset_publishes_its_ids() {
 #[test]
 fn every_shipped_preset_passes_its_own_suite() {
     let root = scratch("suites");
-    for name in policy::preset_names() {
+    for name in batten::config_model::preset_names() {
         let bundles = policy::load(
             &root,
             &[row_at_real_scope("row", name)],
@@ -635,7 +635,7 @@ fn tree_preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "tree",
         "preset": preset,
-        "provider": provider_at(preset, batten::rules::RuleScope::Tree),
+        "provider": provider_at(preset, batten::preset_catalog::RuleScope::Tree),
         "severity": "deny",
     }))
     .expect("a tree preset row the loader accepts")
@@ -924,7 +924,7 @@ fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
 /// fabricated `mediated_call`, so neither half could fire.
 #[test]
 fn every_preset_loads_at_the_scope_it_is_enabled_with() {
-    for name in policy::preset_names() {
+    for name in batten::config_model::preset_names() {
         let root = scratch(&format!("real-scope-{name}"));
         policy::load(
             &root,
@@ -1420,7 +1420,7 @@ const PLAN_MODE_EDIT: &str = r#"{"call":{"event":"pre-tool","permission-mode":"p
 /// `except` the same two rows collide, which is what makes the case discriminate.
 #[test]
 fn an_excepted_module_lets_a_local_copy_load_without_collision() {
-    let manifest = batten::preset::find("claude-code-cloud").expect("the preset ships");
+    let manifest = batten::preset_catalog::find("claude-code-cloud").expect("the preset ships");
     let dispatch = manifest
         .module("dispatch-is-preapproved")
         .expect("the module ships");
@@ -1654,7 +1654,7 @@ fn an_ejected_module_behind_the_manifest_version_is_reported() {
     assert!(!said.contains("module pin stale"), "fresh copies: {said}");
 
     let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
-    let shipped = batten::preset::find("claude-code-cloud")
+    let shipped = batten::preset_catalog::find("claude-code-cloud")
         .expect("the preset ships")
         .version;
     let text = fs::read_to_string(dir.join(path)).expect("the copy");

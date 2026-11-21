@@ -34,9 +34,9 @@ mod common;
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Violation};
-use batten::rules::Rule;
 use batten::severity::RuleSeverity;
 
 /// A policy row registering `module`, built the way a real config builds one.
@@ -94,7 +94,7 @@ fn attributed(rule: &str, verdict: &str) -> Violation {
 /// naming a `Vec` at every one of this file's twenty load sites. A test binary
 /// is a short-lived process and the table is tens of entries.
 fn fixtures(root: &Path) -> policy::Vocabulary<'static> {
-    let table: &'static [batten::verdict::DeclaredVerdict] =
+    let table: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     policy::Vocabulary {
         patterns: &[],

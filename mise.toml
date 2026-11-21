@@ -3783,8 +3783,11 @@ run = "{{vars.batten}} modules impls --root crates/batten/src --max 193"
 description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"
 # A `pub use crate::…` outside `lib.rs` keeps an old spelling alive and draws a
 # graph edge that exists only because of spelling. The unit is the leaf.
-# Baseline when this gate landed: 499 (12 aliased); CLOUD-2793 lowers it to 0.
-run = "{{vars.batten}} modules shims --root crates/batten/src --max 499"
+# Baseline when this gate landed: 499 (12 aliased). CLOUD-2793's
+# `respell-through-shims` recipe took it to 36 (0 aliased): each one left is
+# still reached by a path the recipe does not respell (a `super::` path, a
+# glob, a `use` holding a glob or an underscore import). It lowers to 0.
+run = "{{vars.batten}} modules shims --root crates/batten/src --max 36"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"

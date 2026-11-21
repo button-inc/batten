@@ -147,7 +147,7 @@ const PROVISION_TARGETS: &[&str] = &[
 /// The stand-in digest the fixture release publishes for another platform's
 /// archive, which no case downloads.
 fn platform_digest(target: &str) -> String {
-    batten::provision::digest(target.as_bytes())
+    batten::digest::sha256_hex(target.as_bytes())
 }
 
 /// The digest the fixture release `tag` served from `home` publishes for
@@ -242,7 +242,7 @@ pub(crate) fn release_host(
     // one's digest from this manifest.
     // THIS BUILD'S OWN PLATFORM IS SERVED ONCE, as the real archive: a second
     // line under a stand-in digest is a manifest naming one asset two ways.
-    let mut sums = format!("{}  {asset}\n", batten::provision::digest(&bytes));
+    let mut sums = format!("{}  {asset}\n", batten::digest::sha256_hex(&bytes));
     let running = batten::engine::running_target();
     for &target in PROVISION_TARGETS
         .iter()
@@ -1452,7 +1452,7 @@ mod repair {
     // the case measures the update's wiring and not a compile.
 
     use crate::common;
-    use batten::exec::StreamedChild as _;
+    use batten::capture::StreamedChild as _;
 
     use std::path::{Path, PathBuf};
     use std::process::Output;

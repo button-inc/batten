@@ -9,7 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::common;
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, through the same column census.
 fn row() -> Rule {
