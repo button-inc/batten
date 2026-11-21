@@ -16,7 +16,7 @@ use batten::output::{self, Mode};
 /// mimalloc, not the platform allocator (CLOUD-2315): see the workspace
 /// manifest's `mimalloc` row for the measurement. Linux only, as the crate
 /// manifest says why. `tests/it/allocator.rs` asks the built binary which
-/// allocator it runs on; cargo-mutants owns this file's mutation (CLOUD-2253).
+/// allocator it runs on.
 #[cfg(target_os = "linux")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
