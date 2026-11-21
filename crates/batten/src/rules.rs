@@ -13325,6 +13325,26 @@ pub(crate) fn is_not_an_executable_image(err: &std::io::Error) -> bool {
     matches!(err.raw_os_error(), Some(193 | 8))
 }
 
+/// `pr watch --progress`'s recorder, run as a program the CALLER names
+/// (CLOUD-2789): resolved through [`spawn_resolving`], the engine's one way to
+/// find a program, and handed to `pr_watch` as its `spawn`, so that module names
+/// nothing above it. Every failure is ignored: progress is a signal, never a
+/// verdict.
+pub fn record_progress(program: &str, args: &[String]) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
+    )]
+    let _ = spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    });
+}
+
 /// Spawn `program`, resolving the two ways Windows refuses a program a shell
 /// would have run.
 ///
