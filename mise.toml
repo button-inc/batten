@@ -2798,6 +2798,14 @@ run = "{{vars.batten}} perf measure"
 # `git notes append`; `git::append_note` writes the blob, the tree and the commit
 # through gix, so a notes ref is not a reason for the engine to hold a child
 # process it otherwise does not need.
+# Where an arm's time goes, in one call (`skills/profile`, CLOUD-2813): build
+# the symbolized `profiling` binary, sample the arm with the pinned samply
+# behind a guard that restores `perf_event_paranoid`, and print ranked rows.
+# A diagnostic, never a gate: `perf-gate` and `perf-assert` decide.
+[tasks."profile"]
+description = "Diagnose: sample one perf arm (noop, check, hook, passthrough, posttool, stop) and print where its time goes"
+run = "mise exec -- cargo run --release -q --manifest-path tools/batten-profile/Cargo.toml --target-dir target/profile-tool -- record"
+
 [tasks."perf-record"]
 description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
 run = "{{vars.batten}} perf record"
