@@ -1640,10 +1640,6 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
-    #[cfg(test)]
-    use crate::sbom::DeclaredExt as _;
 
     /// The binary reaches syft absolute and never verbatim (CLOUD-2563): a
     /// `\\?\` prefix is what `canonicalize` returns on Windows, and syft scanned

@@ -414,8 +414,6 @@ pub fn unmediated_session() -> crate::refusal::Refusal {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     fn manifest(rows: &[(&str, &str)]) -> Manifest {
         rows.iter()

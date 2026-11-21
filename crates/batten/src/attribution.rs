@@ -55,6 +55,7 @@
 //! this gate reads is by definition content someone wanted suppressed, so echoing
 //! it back would make the gate republish exactly what it exists to catch.
 
+use crate::hook::HarnessExt as _;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -768,10 +769,6 @@ fn short(sha: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
-    #[cfg(test)]
-    use crate::attribution::IdentityExt as _;
 
     fn policy() -> Attribution {
         Attribution {

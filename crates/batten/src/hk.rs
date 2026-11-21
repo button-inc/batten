@@ -1485,8 +1485,6 @@ impl Evidence {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::hk::PlanQueryExt as _;
 
     fn step(name: &str, status: &str, order: u64, group: &str) -> Step {
         Step {

@@ -223,8 +223,6 @@ fn flag_table(out: &mut String, node: &CommandSpec) {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::spec;
     use crate::surface;
     use crate::surface_table::SURFACE;

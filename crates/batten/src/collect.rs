@@ -23,6 +23,7 @@
 //! Without it a unit read all morning keeps the atime of its first read for a
 //! day and can rank older than a tree touched once an hour ago.
 
+use crate::prune::PruneExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
@@ -529,10 +530,6 @@ const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + 
 #[cfg(any(windows, test))]
 mod windows_table {
     use super::Process;
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-    #[cfg(test)]
-    use crate::verdict::VocabularyExt as _;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
@@ -1596,8 +1593,6 @@ fn await_locks(
 mod tests {
     use super::{Kept, Process, darwin, earliest_build_start, proc_stat};
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 

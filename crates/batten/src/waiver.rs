@@ -548,9 +548,9 @@ pub fn apply(
 mod tests {
     use super::*;
     #[cfg(test)]
-    use crate::severity::RuleSeverity;
+    use crate::rules::RuleKindExt as _;
     #[cfg(test)]
-    use crate::waiver::WaiverExt as _;
+    use crate::severity::RuleSeverity;
 
     fn waiver(rule: &str, expires: &str) -> Waiver {
         Waiver {

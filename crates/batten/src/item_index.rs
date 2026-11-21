@@ -1120,8 +1120,6 @@ fn downgrade_shims(
 #[cfg(test)]
 mod tests {
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use std::collections::BTreeMap;
 
     use super::*;

@@ -648,12 +648,6 @@ fn short(sha: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
-    #[cfg(test)]
-    use crate::commit::ClaimsExt as _;
-    #[cfg(test)]
-    use crate::commit::CommitExt as _;
 
     fn policy() -> Commit {
         Commit {

@@ -183,8 +183,6 @@ pub fn counts(markers: &[Marker], hits: &[Hit]) -> BTreeMap<String, u64> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
     use std::fs;
 

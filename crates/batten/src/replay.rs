@@ -2386,8 +2386,6 @@ mod tests {
 mod dependency_key_tests {
     use super::{compare, dependency_keys};
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::mutate::schema;
     use std::collections::{BTreeMap, BTreeSet};
 

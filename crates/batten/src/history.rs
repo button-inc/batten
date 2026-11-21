@@ -444,8 +444,6 @@ impl<'a> Assembler<'a> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     const CONFIG: &str = "\
 version = 1

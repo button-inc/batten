@@ -118,6 +118,8 @@
 use crate::common;
 use batten::capture::Streamed as _;
 use batten::capture::StreamedChild as _;
+use batten::hook::EventExt as _;
+use batten::hook::HarnessExt as _;
 
 use std::path::{Path, PathBuf};
 

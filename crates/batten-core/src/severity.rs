@@ -284,12 +284,15 @@ pub enum AdvisoryTier {
     Warning,
 }
 
-// Here rather than in `grammar`, which names nothing (CLOUD-2789): the line's
-// severity for a tier is this module's mapping, like `finding_severity`.
-impl crate::grammar::Severity {
+/// `Severity` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait SeverityExt: Sized {
     /// The severity an advisory of `tier` is printed under.
     #[must_use]
-    pub const fn of_tier(tier: AdvisoryTier) -> Self {
+    fn of_tier(tier: AdvisoryTier) -> Self;
+}
+
+impl SeverityExt for crate::grammar::Severity {
+    fn of_tier(tier: AdvisoryTier) -> Self {
         match tier {
             AdvisoryTier::Warning | AdvisoryTier::Caution => Self::Warn,
             AdvisoryTier::Advisory => Self::Note,

@@ -1041,8 +1041,6 @@ pub fn run(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::preset::PresetModuleExt as _;
 
     fn reading(body: &str) -> Answer {
         Answer {

@@ -321,9 +321,6 @@ fn attempt_start(log_name: &str) -> Option<i64> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn a_log_name_is_the_attempts_utc_start() {
         assert_eq!(

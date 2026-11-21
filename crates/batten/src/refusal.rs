@@ -1379,10 +1379,6 @@ fn sentence(text: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-    #[cfg(test)]
-    use crate::refusal::CeilingExt as _;
 
     /// AN ENGINE FINDING NAMES ITS CLASS, NEVER A RULE NOTHING RESOLVES
     /// (CLOUD-2078), and its first sighting names no raising row: it has none.

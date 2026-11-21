@@ -2086,10 +2086,6 @@ fn frame(text: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-    #[cfg(test)]
-    use crate::mcp::CredentialExt as _;
 
     /// A remote answering the handshake with `session` and the notification
     /// with `acknowledged`, recording the session header each call carried.

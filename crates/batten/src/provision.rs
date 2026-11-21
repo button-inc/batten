@@ -2466,8 +2466,6 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::provision::ProvisionExt as _;
     use std::collections::BTreeMap;
 
     /// CLOUD-2124: the measured case, a scratch clone's debug build provisioning

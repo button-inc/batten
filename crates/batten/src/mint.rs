@@ -357,8 +357,6 @@ pub fn render(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::mint::PieceExt as _;
 
     /// A row declaring a selector mints only for the value it names.
     ///
