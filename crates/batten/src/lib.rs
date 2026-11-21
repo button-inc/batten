@@ -129,12 +129,14 @@ pub mod pattern;
 pub mod perf;
 pub mod pinned;
 pub mod pipeline;
+pub mod plan;
 pub mod policy;
 pub mod pr_watch;
 pub mod preflight;
 pub mod preset;
 pub mod probe;
 pub mod probe_verdict;
+pub mod prompt_cache;
 pub mod propose;
 pub mod provision;
 pub mod prune;
@@ -471,6 +473,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the payload the caller supplies — or, under `--issue`, the one the
         // engine already captured, which is the whole point of the row.
         Some(Command::Ready { command }) => run_ready(command, mode, &overrides, out, err),
+        Some(Command::Plan { command }) => run_plan_verb(&command, mode, &overrides, out, err),
         // The board sweep (CLOUD-186, CLOUD-1127). Judges a payload rather than
         // a tree, so it takes no config chain and no root: the evidence is what
         // the caller supplies, and the verdict is the predicate's alone.
@@ -2746,31 +2749,17 @@ fn run_startup(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
     let here = Path::new(".");
+    if !here.join(config::CONFIG_FILE).is_file() && git::repo_root(here).is_err() {
+        return run_startup_unanchored(repair, json, out, err);
+    }
+    let config = resolve::resolve(here, overrides)?;
     let outcomes = if repair {
         startup::repair(here, &config.startup)
     } else {
         startup::evaluate(here, &config.startup)
     };
-    let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
-
-    if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&outcomes)?)?;
-    } else {
-        // EVERY ROW, not only the failing ones, and deliberately unlike
-        // `provision status`. A reader running this is asking whether the
-        // container is right, and a silent pass over a row whose check never ran
-        // is indistinguishable from a row that was never declared — which is the
-        // could-not-look-as-clean failure the whole table exists to refuse.
-        output::lines(out, &outcomes)?;
-        writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
-        let findings: Vec<refusal::Refusal> = outcomes
-            .iter()
-            .filter_map(startup::Outcome::finding)
-            .collect();
-        print_labelled(err, &findings)?;
-    }
+    let failed = report_startup(&outcomes, json, out, err)?;
     // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
     // harness reads `2` as a policy denial, and "this container is not what the
     // repository declares" is not one (§7).
@@ -2779,6 +2768,135 @@ fn run_startup(
     } else {
         ExitCode::Usage
     })
+}
+
+/// `startup` where `.` holds no `batten.toml` and is inside no repository: the
+/// directory a cloud container's Setup script runs in, above the checkouts
+/// (CLOUD-2752).
+///
+/// **THE ONLY DETERMINISTIC RECOVERY IS A FILE ALREADY IN THE SESSION ROOT.** A
+/// restart is a reboot with the disk kept, the Setup script does not run again,
+/// and the harness loads hooks only from files — so a registration nobody wrote
+/// at build can never repair itself. Running `startup --repair` here is the
+/// owner's consent to write it (ruling 1, 2026-11-14), so neither
+/// `wiring register`'s above-a-repository test nor its disposable test applies.
+/// The home directory and every ancestor of it stay refused: the surface there is
+/// the user-level one, which would fire batten twice in a session rooted at a
+/// repository.
+///
+/// **ORDER IS THE GUARANTEE.** The registration is written first, the authority
+/// set recorded second, each member's own rows run third — so a row that fails
+/// cannot undo either, and the exit code is then what `startup --repair` gives
+/// today. Bare `startup` writes nothing and exits `1` when a registration is
+/// owed. The registration and authority lines go to standard error so `--json`
+/// keeps the outcomes array alone on standard output.
+//MUTANT-SUITE crates/batten/tests/it/startup_unanchored.rs
+//MUTANT unanchored-inside-a-repository|s@^    if !here.join(config::CONFIG_FILE).is_file() \&\& git::repo_root(here).is_err() {$@    if !here.join(config::CONFIG_FILE).is_file() {@|startup_inside_a_repository_without_a_config_is_unchanged
+//MUTANT unanchored-admits-home|s@^    if home.as_deref().is_none_or(\x7chome\x7c home.starts_with(\&root)) {$@    if home.as_deref().is_none() {@|repair_at_home_writes_nothing
+//MUTANT unanchored-rows-run-first|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    if root_authorities(\&root).iter().any(\x7cmember\x7c !startup::delegate(member, repair).ok) { return Ok(ExitCode::Usage); } let (events, written) = wiring::register_root(\&root, !repair)?;@|a_failing_row_leaves_the_registration_and_the_record
+//MUTANT unanchored-bare-writes|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, false)?;@|bare_startup_above_a_checkout_writes_nothing
+//MUTANT unanchored-repair-writes-nothing|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, true)?;@|repair_above_one_checkout_registers_the_root_and_records_its_authority
+//MUTANT unanchored-lines-on-stdout|s@^        writeln!(err, "{registered}")?;$@        writeln!(out, "{registered}")?;@|json_keeps_the_outcomes_on_standard_output
+//MUTANT unanchored-rows-run-at-the-root|s@^        .map(\x7cmember\x7c startup::delegate(member, repair))$@        .map(\x7c_\x7c startup::delegate(\&root, repair))@|each_members_rows_run_in_that_member
+fn run_startup_unanchored(
+    repair: bool,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::canonical(&std::env::current_dir()?);
+    // No resolvable home is refused too: a write whose bound cannot be checked
+    // is the one this arm must never make.
+    let home = std::env::var_os("HOME").map(|home| git::canonical(Path::new(&home)));
+    if home.as_deref().is_none_or(|home| home.starts_with(&root)) {
+        writeln!(
+            err,
+            "startup: {} is the home directory or above it, so nothing is registered there",
+            root.display()
+        )?;
+        report_startup(&[], json, out, err)?;
+        return Ok(ExitCode::Success);
+    }
+    let (events, written) = wiring::register_root(&root, !repair)?;
+    let verb = if written { "registered" } else { "owed" };
+    for event in &events {
+        let registered = format!("startup: claude-code:{event} {verb} at {}", root.display());
+        writeln!(err, "{registered}")?;
+    }
+    let members = root_authorities(&root);
+    if repair && !members.is_empty() {
+        state::record_root_authorities(&root, &members)?;
+    }
+    writeln!(
+        err,
+        "startup: {} authority(ies) {} for {}",
+        members.len(),
+        if repair { "recorded" } else { "found" },
+        root.display()
+    )?;
+    let outcomes: Vec<startup::Outcome> = members
+        .iter()
+        .map(|member| startup::delegate(member, repair))
+        .collect();
+    let failed = report_startup(&outcomes, json, out, err)?;
+    Ok(if failed == 0 && (repair || events.is_empty()) {
+        ExitCode::Success
+    } else {
+        ExitCode::Usage
+    })
+}
+
+/// The authorities around the session root `root`, in the one fixed order: its
+/// immediate children holding a `batten.toml`, sorted by name, then its
+/// ancestors holding one, nearest first (CLOUD-2752).
+///
+/// Each is one known path read once. No subtree is searched: the one-level look
+/// is this verb's alone, by the owner's ruling, and a hook never searches.
+//MUTANT unanchored-picks-one-of-several|s@^    children.sort();$@    children.sort(); children.truncate(1);@|two_checkouts_are_both_recorded
+//MUTANT unanchored-skips-ancestors|s@^    children.extend(ancestors);$@    drop(ancestors);@|a_config_above_the_root_is_recorded
+fn root_authorities(root: &Path) -> Vec<PathBuf> {
+    let mut children: Vec<PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join(config::CONFIG_FILE).is_file())
+        .collect();
+    children.sort();
+    let ancestors = root
+        .ancestors()
+        .skip(1)
+        .filter(|ancestor| ancestor.join(config::CONFIG_FILE).is_file())
+        .map(Path::to_path_buf);
+    children.extend(ancestors);
+    children
+}
+
+/// Render `startup`'s outcomes and return how many failed.
+fn report_startup(
+    outcomes: &[startup::Outcome],
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<usize> {
+    let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&outcomes)?)?;
+    } else {
+        // EVERY ROW, not only the failing ones, and deliberately unlike
+        // `provision status`. A reader running this is asking whether the
+        // container is right, and a silent pass over a row whose check never ran
+        // is indistinguishable from a row that was never declared — which is the
+        // could-not-look-as-clean failure the whole table exists to refuse.
+        output::lines(out, outcomes)?;
+        writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
+        let findings: Vec<refusal::Refusal> = outcomes
+            .iter()
+            .filter_map(startup::Outcome::finding)
+            .collect();
+        print_labelled(err, &findings)?;
+    }
+    Ok(failed)
 }
 
 fn run_provision_status(
@@ -4185,6 +4303,9 @@ fn run_mcp(
             err,
         );
     }
+    if let cli::McpCommand::Wait { .. } = command {
+        return run_mcp_wait(command, overrides, out, err);
+    }
     let cli::McpCommand::Call {
         server,
         method,
@@ -4263,6 +4384,171 @@ fn run_mcp(
         out,
         err,
     )
+}
+
+/// Seconds as the caller wrote them — `30` or `30s` — or a usage error.
+fn wait_seconds(flag: &str, given: Option<&str>, default: u64) -> Result<std::time::Duration> {
+    let Some(raw) = given else {
+        return Ok(std::time::Duration::from_secs(default));
+    };
+    raw.strip_suffix('s')
+        .unwrap_or(raw)
+        .parse::<u64>()
+        .map(std::time::Duration::from_secs)
+        .map_err(|_| {
+            UsageError::raise(format!(
+                "mcp wait: --{flag} takes a whole number of seconds, such as 30 or 30s"
+            ))
+        })
+}
+
+/// What `mcp wait` reads each poll: the argument objects as given, or one per
+/// receipt of a mint. Exactly one of the two forms; malformed JSON is a usage
+/// error before any poll.
+///
+/// # Errors
+///
+/// A usage error for both forms, neither, or an unreadable argument object.
+fn wait_subjects(
+    git_dir: &Path,
+    params: &[String],
+    each_receipt: Option<&String>,
+    arg: Option<&String>,
+) -> Result<mcp::Subjects> {
+    match (each_receipt, arg) {
+        (Some(mint), Some(arg)) if params.is_empty() => Ok(mcp::Subjects::Receipts {
+            store: git_dir.join("batten-receipts"),
+            mint: mint.clone(),
+            arg: arg.clone(),
+        }),
+        (None, None) if !params.is_empty() => Ok(mcp::Subjects::Fixed(
+            params
+                .iter()
+                .map(|raw| {
+                    serde_json::from_str(raw).map_err(|failure| {
+                        UsageError::raise(format!(
+                            "mcp wait: an argument object is not readable JSON: {failure}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        _ => Err(UsageError::raise(
+            "mcp wait: give one or more argument objects, or --each-receipt with --arg, \
+             and not both"
+                .to_owned(),
+        )),
+    }
+}
+
+/// `batten mcp wait` (CLOUD-2759): the client `mcp call` uses, polled by
+/// [`mcp::wait_with`] with the crate's one sleep.
+///
+/// # Errors
+///
+/// A usage error for malformed arguments or an undeclared server, before any
+/// poll; a failure to write the line.
+//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
+fn run_mcp_wait(
+    command: &cli::McpCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::McpCommand::Wait {
+        server,
+        method,
+        params,
+        interval,
+        evict_after,
+        buffer,
+        singleton,
+        each_receipt,
+        arg,
+    } = command
+    else {
+        return Err(UsageError::raise(
+            "mcp: no sub-verb resolved from this invocation".to_owned(),
+        ));
+    };
+    let repo = git::repo_root(Path::new("."))?;
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let config = resolved.mcp.clone().unwrap_or_default();
+    let optional = |flag: &str, given: Option<&str>| -> Result<Option<u64>> {
+        given
+            .map(|raw| wait_seconds(flag, Some(raw), 0).map(|it| it.as_secs()))
+            .transpose()
+    };
+    let interval = wait_seconds("interval", interval.as_deref(), 30)?.as_secs();
+    let buffer = optional("buffer", buffer.as_deref())?;
+    let evict_after = optional("evict-after", evict_after.as_deref())?;
+    let git_dir = git::git_dir(&repo)?;
+    // THE LIMIT IN FORCE AND THE WARM COUNT (CLOUD-2763): the Stop path's
+    // receipt, and the limit exits already spent on this branch.
+    let store = git_dir.join(RECEIPT_DIR);
+    let in_force = prompt_cache::InForce::read(&store);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let branch = git::current_branch(&repo)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let count = recorder::record_path(&git_dir, "cache-warm-wakes", &branch, None);
+    let wakes = in_force.map_or(0, |it| mcp::warm_wakes(&count, now, it.lifetime_secs));
+    let Some((pacing, said)) = mcp::pacing_for(interval, evict_after, buffer, in_force, wakes)
+    else {
+        return Err(UsageError::raise(
+            "mcp wait: --interval must be at least one second".to_owned(),
+        ));
+    };
+    if let Some(said) = said {
+        writeln!(err, "{said}")?;
+    }
+    let subjects = wait_subjects(&git_dir, params, each_receipt.as_ref(), arg.as_ref())?;
+    // REFUSED BEFORE THE SERVER IS RESOLVED, so a method with no row costs
+    // nothing: `wait_with` answers it before any read.
+    let wiring = match mcp::wiring(&config, &repo, server) {
+        Ok(wiring) => Some(wiring),
+        Err(_) if mcp::row_for(&config, method).is_none() => None,
+        Err(mcp::Unresolved::Undeclared) => {
+            return Err(UsageError::raise(format!(
+                "mcp wait: {server} cannot be dispatched — {}",
+                mcp::Unresolved::Undeclared.pointer()
+            )));
+        }
+        Err(unresolved) => {
+            return Err(anyhow::anyhow!(
+                "mcp wait: {server} cannot be dispatched — {}",
+                unresolved.pointer()
+            ));
+        }
+    };
+    let mut read = |params: &serde_json::Value| match &wiring {
+        Some(wiring) => mcp::dispatch(wiring, method, params),
+        None => Err(anyhow::anyhow!("mcp wait: {server} is not wired")),
+    };
+    let waited = mcp::wait_with(
+        &config,
+        method,
+        &subjects,
+        pacing,
+        singleton.as_deref().map(|name| (git_dir.as_path(), name)),
+        &mut read,
+        &mut pr_watch::pause,
+    );
+    // Only a limit taken from the receipt spends a warm wake.
+    if mcp::spends_warm(evict_after, in_force.is_some()) {
+        mcp::settle_warm(&count, &waited, now);
+    }
+    // The change and the no-change line are the product, on stdout; a refusal
+    // is Batten's record about the call, on stderr.
+    if waited.exit == ExitCode::Success {
+        writeln!(out, "{}", waited.line)?;
+    } else {
+        writeln!(err, "batten: {}", waited.line)?;
+    }
+    Ok(waited.exit)
 }
 
 /// What `mcp grant` was asked, as the surface parsed it.
@@ -4418,6 +4704,8 @@ struct McpAnswer<'a> {
 /// Only for a failure to write the answer out. The store and the call log are
 /// **reported and never raised**: the exchange has already happened by the time
 /// this runs, and refusing here would turn a completed dispatch into an error.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT enveloped-wait-only|s@^    let payload = mcp::payload_for(result, mcp::row_for(config, method));$@    let payload = mcp::payload(result);@|mcp_call_reduces_an_enveloped_answer
 fn file_and_report(
     repo: &Path,
     answer: &McpAnswer<'_>,
@@ -4441,7 +4729,9 @@ fn file_and_report(
     // top level. Filing the JSON-RPC envelope here instead would put `id` two
     // levels down, every one of those lookups would silently resolve nothing, and
     // the gates would report could-not-look over a store that was full.
-    let payload = mcp::payload(result);
+    // THE DECLARED ROW'S FRAMING TOO (CLOUD-2759): an `enveloped` row's answer
+    // is unframed here, so `mcp call` and `mcp wait` reduce it alike.
+    let payload = mcp::payload_for(result, mcp::row_for(config, method));
     let whole = serde_json::to_vec(&payload.value)?;
     let stored = capture::store(repo, capture::Stream::Response, &whole)?;
     // The call log, so a later reader can resolve this response by the key it
@@ -8004,6 +8294,59 @@ fn run_claim(
     }
 }
 
+/// `batten plan lint` and `batten plan path` (CLOUD-2766).
+///
+/// `lint` prints each finding in the grammar `ready lint` uses — `plan grade
+/// refused at <plan>:<line> <clause>` — and nothing the plan says (rule 4). It
+/// exits 2 on findings and writes nothing; 0 when it appended the receipt; 1
+/// with no `[plan]` table or on a detached HEAD.
+///
+/// # Errors
+///
+/// [`UsageError`] when no `[plan]` table is declared, outside a repository or on
+/// a detached HEAD.
+//MUTANT-SUITE crates/batten/tests/it/plan_lint.rs
+fn run_plan_verb(
+    command: &cli::PlanCommand,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    match command {
+        cli::PlanCommand::Path => {
+            let (git_dir, branch) = plan::keyed(root)?;
+            let git_dir = git::canonical(&git_dir);
+            writeln!(out, "{}", plan::path(&git_dir, &branch).display())?;
+            Ok(ExitCode::Success)
+        }
+        cli::PlanCommand::Lint => {
+            let config = resolve::resolve(root, overrides)?;
+            let ran = plan::run_lint(root, config.plan.as_ref())?;
+            for finding in &ran.findings {
+                let refused = refusal::Refusal::engine(
+                    verdict::Native::PlanGradeRefused,
+                    &[verdict::artifact(&format!(
+                        "{}:{} {}",
+                        ran.plan.display(),
+                        finding.line,
+                        finding.clause
+                    ))],
+                    refusal::Fix::None,
+                );
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    &refused.render_finding(refusal::Arm::Full),
+                )?;
+            }
+            Ok(ExitCode::verdict(!ran.findings.is_empty()))
+        }
+    }
+}
+
 /// `batten ready lint`: does this issue's Ready block satisfy the checkable
 /// clauses?
 ///
@@ -8831,29 +9174,21 @@ fn run_wiring(
 /// Whatever [`wiring::register`] could not write.
 fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     let repo = git::canonical(hook_authority_root());
-    let roots = match std::env::var("CLAUDE_PID")
-        .ok()
-        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
-    {
-        Some(root) => vec![root],
-        // Only where the environment says the home is disposable: that is the
-        // container a setup script provisions, and the only place a write would
-        // be allowed anyway. A developer machine or a CI runner outside a
-        // session owes nothing, as before — reporting a registration nobody may
-        // write would turn every `startup` there red over a non-defect.
-        None if crate::environment::disposable() => {
-            candidate_session_roots(&repo, std::env::var_os("HOME").map(PathBuf::from))
-        }
-        None => {
-            output::message(
-                mode,
-                output::Verbosity::Normal,
-                err,
-                "wiring register: no session root resolves, so no registration is owed",
-            )?;
-            return Ok(ExitCode::Success);
-        }
-    };
+    let roots = register_roots(
+        wiring::harness_root(),
+        crate::environment::disposable(),
+        &repo,
+        std::env::var_os("HOME").map(PathBuf::from),
+    );
+    if roots.is_empty() {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "wiring register: no session root resolves, so no registration is owed",
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let mut owed = false;
     for root in &roots {
         let done = wiring::register(root, &repo, check)?;
@@ -8885,6 +9220,39 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
+}
+
+/// Every root `wiring register` registers: the live root, and — in a
+/// disposable environment, with or without a live session — every root a
+/// session could later be rooted at above `repo` (CLOUD-2751).
+///
+/// **THE UNION, BECAUSE THE ROOT MOVES.** A one-repository session is rooted IN
+/// the clone, so its live root owes nothing; it then attaches a second
+/// repository, and after the next restart the platform roots it at the parent,
+/// where no `SessionStart` runs again before every hook is gone. Measured
+/// 2026-11-14: five hours unmediated. The one `SessionStart` that does run, the
+/// first, is therefore where the parent's registration has to be written. A
+/// machine not declared disposable gets the live root alone, as before: nothing
+/// above it may be written there, so nothing above it is owed.
+//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+//MUTANT register-live-root-only|s@^    if !disposable {$@    if !disposable \x7c\x7c !roots.is_empty() {@|a_session_rooted_at_the_clone_still_registers_the_roots_above_it
+//MUTANT register-roots-undeclared|s@^    if !disposable {$@    if false {@|a_real_machine_inside_a_session_writes_nothing_above_its_root
+fn register_roots(
+    live: Option<PathBuf>,
+    disposable: bool,
+    repo: &Path,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = live.into_iter().collect();
+    if !disposable {
+        return roots;
+    }
+    for root in candidate_session_roots(repo, home) {
+        if !roots.iter().any(|held| git::canonical(held) == root) {
+            roots.push(root);
+        }
+    }
+    roots
 }
 
 /// Every directory a session could be rooted at above `repo` without loading
@@ -12182,9 +12550,9 @@ fn run_land_singleton(
 /// The pause between the two sightings a singleton reclaim requires.
 ///
 /// A constant here rather than in `task`, because it is this caller's tolerance
-/// for a holder that took the lock between two reads, and the only other caller
-/// is a test that needs a wider margin than production.
-const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+/// for a holder that took the lock between two reads. Crate-visible since
+/// `mcp wait` takes its lock the way `land` does (CLOUD-2759).
+pub(crate) const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn run_land_lap(
     root: &Path,
@@ -19462,6 +19830,9 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
+    // THE LIMIT IN FORCE, written where a background task can read it
+    // (CLOUD-2763): at the end of a turn, which is when a wait begins.
+    note_cache_limit(harness, &envelope);
     let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
     if refused_stop(harness, block, &mut advice, err)? {
@@ -19488,7 +19859,7 @@ fn run_hook(
     // in that same commit: before it, `encode_advice` answered `None` here and
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
-    let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
+    let decision = admitted(handled, &policy, &mut envelope, &facts, out, err)?;
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -19577,20 +19948,31 @@ fn push_repair_record(
 /// decision. A rewrite rides the grant and nothing else, and it is resolved at
 /// the boundary for `settle_repair`'s reason: the policy is still in hand there,
 /// and `render` cannot see it.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT corrected-drops-the-timeout|s@^    let rewritten = hook::policy_rewrite(policy, envelope, facts);$@    let rewritten = None::<serde_json::Value>;@|a_module_timeout_still_applies_to_a_corrected_call
 fn grant_rewrite(
     decision: &hook::Decision,
     policy: &hook::Policy,
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
 ) -> Option<serde_json::Value> {
-    matches!(decision, hook::Decision::Preapproved(_))
-        .then(|| hook::policy_rewrite(policy, envelope, facts))
-        .flatten()
+    if !matches!(decision, hook::Decision::Preapproved(_)) {
+        return None;
+    }
+    // A CORRECTED CALL ALWAYS CARRIES ITS INPUT (CLOUD-1939): the command is the
+    // rewrite, and a module's `timeout` is applied on top of it.
+    let rewritten = hook::policy_rewrite(policy, envelope, facts);
+    if CORRECTED.get().is_some() {
+        return rewritten.or_else(|| Some(envelope.input.clone()));
+    }
+    rewritten
 }
 
 /// The advice a pre-approval carries in its own document (CLOUD-1949), taken
 /// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
 /// when the decision is not a pre-approval or there is nothing to carry.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() \&\& matches!(decision, hook::Decision::Preapproved(_)) {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
 fn preapproval_context(
     harness: hook::Harness,
     decision: &hook::Decision,
@@ -19598,6 +19980,21 @@ fn preapproval_context(
     advice: &mut Vec<advisory::Advice>,
     ceiling: Option<&advisory::Channel>,
 ) -> Option<String> {
+    // THE CORRECTION IS ANNOUNCED IN THIS ONE DOCUMENT (CLOUD-1939): which class
+    // refused and that the filter went, never the command (rule 4).
+    if CORRECTED.get().is_some() && matches!(decision, hook::Decision::Preapproved(_)) {
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Advisory,
+            refusal::Refusal::engine(
+                verdict::Native::CallFixSilent,
+                &[verdict::artifact(
+                    "verdict read dropped: the output filter was removed and the command ran without it",
+                )],
+                refusal::Fix::None,
+            ),
+        );
+    }
     if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
         return None;
     }
@@ -20670,13 +21067,71 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 fn admitted(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
-    envelope: &hook::Envelope,
+    envelope: &mut hook::Envelope,
     facts: &hook::Facts<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<hook::Decision> {
     let decision = compose(handled, policy, envelope, facts);
+    let decision = correct_piped_verdict(decision, policy, envelope, facts);
     pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
+}
+
+/// The command a correction replaced, for the rewrite and the announcement
+/// (CLOUD-1939). One call per process, so set at most once.
+static CORRECTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Run a pre-approved verdict command without the output filter that refused it
+/// (CLOUD-1939).
+///
+/// Only where the ONE refusal is `verdict read dropped`, the host can honour a
+/// rewritten input, and the call without its filters is one the policy already
+/// PRE-APPROVES when judged again through [`compose`]. Any other answer, an
+/// allow included, keeps the original deny: rewriting an allowed call would
+/// suppress a host prompt nothing granted. `adjudicate` therefore runs at most
+/// twice, and the second only on this path. On success the envelope becomes the
+/// corrected call, so the rewrite and the render read it.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT strip-filter-not-applied|s@^    let Some(command) = hook::filter_free_command(policy, envelope) else {$@    let Some(command) = None::<String> else {@|a_piped_preapproved_verdict_runs_without_the_filter
+//MUTANT sequence-rewritten|s@^    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {$@    if false {@|a_sequenced_tail_keeps_its_deny
+//MUTANT rewrite-ignores-reachability|s@^        .preapprove_reachable(\&envelope.raw_event)$@        .preapprove_reachable(\&envelope.raw_event) \x7c\x7c true@|the_exit_code_harness_still_refuses
+//MUTANT rewrite-without-preapproval|s@^    let granted = matches!(regraded, hook::Decision::Preapproved(_));$@    let granted = matches!(regraded, hook::Decision::Preapproved(_) \x7c hook::Decision::Allow);@|a_piped_verdict_that_is_only_allowed_keeps_its_deny
+//MUTANT rewrite-skips-readjudication|s@^    let regraded = compose(None, policy, \&corrected, facts);$@    let regraded = hook::Decision::Preapproved(refusal.clone());@|a_corrected_call_another_rule_refuses_keeps_its_deny
+fn correct_piped_verdict(
+    decision: hook::Decision,
+    policy: &hook::Policy,
+    envelope: &mut hook::Envelope,
+    facts: &hook::Facts<'_>,
+) -> hook::Decision {
+    let hook::Decision::Deny(refusal) = &decision else {
+        return decision;
+    };
+    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {
+        return decision;
+    }
+    if !policy
+        .harness()
+        .capabilities()
+        .preapprove_reachable(&envelope.raw_event)
+    {
+        return decision;
+    }
+    let Some(command) = hook::filter_free_command(policy, envelope) else {
+        return decision;
+    };
+    let mut corrected = envelope.clone();
+    corrected.command.clone_from(&command);
+    if let Some(input) = corrected.input.as_object_mut() {
+        input.insert("command".to_owned(), serde_json::Value::String(command));
+    }
+    let regraded = compose(None, policy, &corrected, facts);
+    let granted = matches!(regraded, hook::Decision::Preapproved(_));
+    if !granted {
+        return decision;
+    }
+    *envelope = corrected;
+    let _ = CORRECTED.set(());
+    regraded
 }
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
@@ -22933,6 +23388,10 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// end-of-turn check on the path that must stay free — committing and pushing to
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT bypass-ignored|s@^    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {$@    if false {@|the_bypass_and_plan_mode_silence_it
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT two-refusals-on-one-stop|s@^    if block.as_ref().is_none() {$@    if true {@|the_unlanded_refusal_goes_first
 fn stop_nudges(
     overrides: &Overrides,
     envelope: &hook::Envelope,
@@ -22950,11 +23409,19 @@ fn stop_nudges(
     // declared handler was never spawned and whatever it does was dropped. The
     // run is unconditional; only WHICH ONE THING IS SAID stays the ladder's call.
     let handler_said = stop_handler_advice(overrides, raw);
-    if envelope.stop_active == Some(true) {
-        return Vec::new();
-    }
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
         return Vec::new();
+    }
+    // A CONTINUED STOP RETURNS BEFORE EVERY RUNG BUT THE HOLD (CLOUD-2761). The
+    // hold does not lapse after one refusal; its own appended count bounds it,
+    // so a session cannot be held by something it cannot fix.
+    if envelope.stop_active == Some(true) {
+        if !envelope.writes_available() {
+            return Vec::new();
+        }
+        let (refused, advised) = hold_stop(hook_authority_root());
+        *block = refused;
+        return advised.into_iter().collect();
     }
     // NO ADVISORY WHOSE REMEDY THIS TURN MAY NOT PERFORM (CLOUD-895).
     //
@@ -23053,6 +23520,13 @@ fn stop_nudges(
     // nothing: one refusal per Stop, and asking it spends its receipt.
     if block.is_none() {
         let (refused, advised) = watchdog_stop(root, landing);
+        *block = refused;
+        rungs.extend(advised);
+    }
+    // THE HOLD (CLOUD-2761), after the unlanded refusal and the watchdog and
+    // yielding to both: one Stop carries at most one refusal.
+    if block.as_ref().is_none() {
+        let (refused, advised) = hold_stop(root);
         *block = refused;
         rungs.extend(advised);
     }
@@ -23484,6 +23958,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 fn rearm_unlanded(envelope: &hook::Envelope) {
     if envelope.event == hook::Event::PostTool {
         note_land_dispatch(envelope);
+        note_hold_dispatch(envelope);
         return;
     }
     if envelope.event != hook::Event::UserPromptSubmit {
@@ -23512,6 +23987,8 @@ const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 /// Claude Code's `2` and the reason on stderr, which resumes the model with it.
 /// Other hosts read a Stop's exit differently, so there the refusal joins the
 /// advisory instead: every producer's block reaches a reader on every host.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT hold-blocks-every-host|s@^    if harness != hook::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
 fn refused_stop(
     harness: hook::Harness,
     block: Option<refusal::Refusal>,
@@ -23575,6 +24052,190 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
         }
         let _ = crate::durable::append(&path, LAND_TASK);
     }
+}
+
+/// Write the session's prompt-cache limit in force to the authority's receipt
+/// store (CLOUD-2763). See [`record_cache_limit`].
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+fn note_cache_limit(harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::Stop {
+        return;
+    }
+    if let Ok(git_dir) = git::git_dir(hook_authority_root()) {
+        record_cache_limit(&git_dir.join(RECEIPT_DIR), harness, envelope);
+    }
+}
+
+/// The limit in force for a Stop, written to `store`'s
+/// [`prompt_cache::RECEIPT`], replacing the previous value (CLOUD-2763).
+///
+/// Read from the session's last cache write, which names its bucket, and never
+/// inferred from billing, which the engine does not see. A subagent's Stop
+/// writes nothing: its bucket is not the main conversation's. No usage, a host
+/// with no published table, or a model with no read price REMOVES a stale
+/// file. Two main sessions in one clone overwrite each other: last writer wins.
+//MUTANT-SUITE crates/batten/src/prompt_cache.rs
+//MUTANT limit-written-per-call|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.agent.is_some() {@|the_limit_in_force_follows_the_last_write
+//MUTANT subagent-overwrites-limit|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.event != hook::Event::Stop {@|the_limit_in_force_follows_the_last_write
+//MUTANT stale-limit-kept|s@^            let _ = std::fs::remove_file(\&receipt);$@@|the_limit_in_force_follows_the_last_write
+fn record_cache_limit(store: &Path, harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::Stop || envelope.agent.is_some() {
+        return;
+    }
+    let receipt = store.join(prompt_cache::RECEIPT);
+    let in_force = harness.capabilities().cache_eviction.and_then(|eviction| {
+        let text = std::fs::read_to_string(envelope.transcript.as_deref()?).ok()?;
+        prompt_cache::in_force(eviction, &text)
+    });
+    match in_force {
+        Some(in_force) => {
+            let _ = std::fs::create_dir_all(store);
+            let _ = crate::durable::replace(&receipt, in_force.line());
+        }
+        None => {
+            let _ = std::fs::remove_file(&receipt);
+        }
+    }
+}
+
+/// The appended count of consecutive refusals of one hold row (CLOUD-2761).
+const HOLD_REFUSED: &str = "stop-hold-refused";
+
+/// The note that a backgrounded call started a hold row's task (CLOUD-2761).
+const HOLD_DISPATCHED: &str = "stop-hold-dispatched";
+
+/// How many consecutive refusals a hold may make before it only advises.
+///
+/// Three, because the remedy is one command and an agent told three times is
+/// not going to be told into it.
+const HOLD_REFUSALS: usize = 3;
+
+/// The `[[stop.hold]]` rows the authority at `root` declares.
+fn hold_rows(root: &Path) -> Vec<crate::stop::Hold> {
+    resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.stop)
+        .map(|table| table.hold)
+        .unwrap_or_default()
+}
+
+/// Record a backgrounded call whose argv is a hold row's `start`, so the Stop
+/// that follows it is not refused before the task takes its lock (CLOUD-2761).
+///
+/// `note_land_dispatch`'s shape, generalised: written post-tool, once the host
+/// accepted the call; keyed by the row's id rather than a branch, because a hold
+/// is not about a branch; and under the AUTHORITY ROOT's git directory, where
+/// the receipts it is about live.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT foreground-start-excuses|s@^    if !backgrounded {$@    if false {@|starting_the_task_excuses_one_stop
+fn note_hold_dispatch(envelope: &hook::Envelope) {
+    let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+    if !backgrounded {
+        return;
+    }
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let words: Vec<&str> = envelope.command.split_whitespace().collect();
+    let rows = hold_rows(root);
+    for row in rows {
+        if row
+            .start
+            .iter()
+            .map(String::as_str)
+            .eq(words.iter().copied())
+        {
+            let note = git_dir
+                .join(RECEIPT_DIR)
+                .join(format!("{HOLD_DISPATCHED}-{}", row.id));
+            if let Some(parent) = note.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = crate::durable::append(&note, &row.id);
+        }
+    }
+}
+
+/// The hold rung (CLOUD-2761): for the first `[[stop.hold]]` row whose receipt
+/// exists while its singleton lock has no live holder, a refusal naming the
+/// row, the lock, how many receipts hold it, and the command that takes it.
+///
+/// Returns `(refusal, advice)`. A row's consecutive refusals are an appended
+/// count, removed on any Stop where its predicate is false; at
+/// [`HOLD_REFUSALS`] it advises instead. A dispatch note excuses one Stop and is
+/// used up. Fails open wherever a path it needs will not read, as every Stop
+/// rung does.
+//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
+//MUTANT hold-never-checked|s@^    for row in hold_rows(root) {$@    for row in Vec::<crate::stop::Hold>::new() {@|a_receipt_with_no_holder_refuses_the_stop
+//MUTANT holder-unread|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = false;@|a_live_holder_lets_the_stop_through
+//MUTANT corpse-counts-as-held|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = git_dir.join("batten-singleton").join(\&row.unless_singleton).exists();@|a_dead_holder_is_no_holder
+//MUTANT hold-without-receipt|s@^        if count == 0 \x7c\x7c held {$@        if held {@|no_receipt_no_hold
+//MUTANT count-never-resets|s@^            let _ = std::fs::remove_file(\&refused);$@@|a_false_predicate_resets_the_count
+//MUTANT dispatch-never-excuses|s@^        if std::fs::remove_file(\&dispatched).is_ok() {$@        if false {@|starting_the_task_excuses_one_stop
+//MUTANT hold-never-yields|s@^        if spoken >= HOLD_REFUSALS {$@        if false {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
+//MUTANT hold-lapses-after-one|s@^        if spoken >= HOLD_REFUSALS {$@        if spoken >= 1 {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
+//MUTANT subjects-printed|s@^                "hold {} needs lock {} while {count} {} receipt(s) exist",$@                "hold {} needs lock {} while {count} {} receipt(s) exist {names:?}",@|the_refusal_counts_and_does_not_name
+//MUTANT hold-reads-process-directory|s@^    let authority = git::git_dir(root);$@    let authority = git::git_dir(Path::new("."));@|the_hold_reads_the_authority_root
+fn hold_stop(root: &Path) -> (Option<refusal::Refusal>, Option<refusal::Refusal>) {
+    let authority = git::git_dir(root);
+    let Ok(git_dir) = authority else {
+        return (None, None);
+    };
+    let store = git_dir.join(RECEIPT_DIR);
+    let names: Vec<String> = match std::fs::read_dir(&store) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect(),
+        // A missing store holds no receipt, and an unreadable one fails open: a
+        // gate that cannot look decides nothing. Either way no row holds.
+        Err(_) => return (None, None),
+    };
+    for row in hold_rows(root) {
+        let prefix = format!("{}.", row.while_receipt);
+        let count = names
+            .iter()
+            .filter(|name| name.starts_with(&prefix))
+            .count();
+        let held = task::singleton_holder(&git_dir, &row.unless_singleton).is_some();
+        let refused = store.join(format!("{HOLD_REFUSED}-{}", row.id));
+        let dispatched = store.join(format!("{HOLD_DISPATCHED}-{}", row.id));
+        if count == 0 || held {
+            let _ = std::fs::remove_file(&refused);
+            if held {
+                let _ = std::fs::remove_file(&dispatched);
+            }
+            continue;
+        }
+        if std::fs::remove_file(&dispatched).is_ok() {
+            return (None, None);
+        }
+        let spoken = std::fs::read_to_string(&refused).map_or(0, |text| text.lines().count());
+        // A COUNT AND NAMES THE CONSUMER WROTE, never a receipt's suffix (rule 4).
+        let said = refusal::Refusal::engine(
+            verdict::Native::StopConditionUnmet,
+            &[verdict::artifact(&format!(
+                "hold {} needs lock {} while {count} {} receipt(s) exist",
+                row.id, row.unless_singleton, row.while_receipt
+            ))],
+            refusal::Fix::Run(format!(
+                "run `{}` in {}, backgrounded",
+                row.start.join(" "),
+                root.display()
+            )),
+        );
+        if spoken >= HOLD_REFUSALS {
+            return (None, Some(said));
+        }
+        if crate::durable::append(&refused, &row.id).is_err() {
+            // A count that cannot record itself does not refuse: unbounded, it
+            // would refuse every Stop.
+            return (None, Some(said));
+        }
+        return (Some(said), None);
+    }
+    (None, None)
 }
 
 /// The completion claim this branch holds unlanded, as the store recorded it.
@@ -25077,24 +25738,85 @@ static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::
 /// call whose cwd resolves none is judged by the one its session last stood in.
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
+///
+/// **AT A REGISTERED ROOT THE SET `startup` RECORDED DECIDES TOO** (CLOUD-2752),
+/// so a session rooted above its checkouts is judged from its FIRST call, with or
+/// without a session id. One authority is still pinned per call, first match
+/// wins: the directory's own; the member containing the call's raw absolute
+/// `file_path` or `notebook_path`, read before [`settle_envelope`] relativises
+/// it; the authority the session last stood in; the first member. And a call
+/// standing in an authority directly under a registered root that the set does
+/// not yet name adds it — a repository cloned after Setup.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
+//MUTANT session-authority-ignored|s@^    let last_stood = last_stood_in(session);$@    let last_stood = None::<PathBuf>;@|a_call_outside_the_repository_is_judged_by_the_session_authority
+//MUTANT root-set-never-grows|s@^            let _ = state::grow_root_authorities(\&canonical);$@            let _ = \&canonical;@|an_authority_cloned_after_setup_joins_the_set
+//MUTANT root-set-needs-a-session|s@^    let members = state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE)$@    let members = session.and_then(\x7c_\x7c state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE))@|a_call_with_no_session_id_at_a_registered_root_is_judged_and_grows_nothing
+//MUTANT root-key-not-canonical|s@^    let members = state::recorded_root_authorities(\&git::canonical(\&here), config::CONFIG_FILE)$@    let members = state::recorded_root_authorities(\&here, config::CONFIG_FILE)@|the_record_is_keyed_by_the_canonical_root
+//MUTANT root-authority-ignored|s@^        .filter(\x7cmembers\x7c !members.is_empty());$@        .filter(\x7c_\x7c false);@|a_first_call_at_a_registered_root_is_judged_by_the_recorded_authority
+//MUTANT root-set-ignores-path|s@^    if let Some(member) = member_containing(\&members, envelope) {$@    if let Some(member) = None::<PathBuf> {@|a_call_naming_a_path_in_one_checkout_is_judged_by_that_one
+//MUTANT root-set-unsorted|s@^    if let Some(first) = members.first() {$@    if let Some(first) = members.last() {@|with_two_authorities_the_first_by_name_judges_a_call_with_no_path
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
-    let Some(session) = envelope.session.as_deref() else {
-        return hook_authority_root();
-    };
+    let session = envelope.session.as_deref();
     let here = anchor();
     if here.join(config::CONFIG_FILE).is_file() {
-        let _ = state::record_session_authority(session, &git::canonical(&here));
+        if let Some(session) = session {
+            let canonical = git::canonical(&here);
+            let _ = state::record_session_authority(session, &canonical);
+            let _ = state::grow_root_authorities(&canonical);
+        }
         // Pinned here too, so the readers below do not resolve `anchor` again:
         // a second git spawn on the hottest path for an answer already in hand.
         let _ = HOOK_AUTHORITY_ROOT.set(here);
         return hook_authority_root();
     }
-    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
+    let members = state::recorded_root_authorities(&git::canonical(&here), config::CONFIG_FILE)
+        .filter(|members| !members.is_empty());
+    let last_stood = last_stood_in(session);
+    let Some(members) = members else {
+        if let Some(root) = last_stood {
+            let _ = HOOK_AUTHORITY_ROOT.set(root);
+        }
+        return hook_authority_root();
+    };
+    if let Some(member) = member_containing(&members, envelope) {
+        let _ = HOOK_AUTHORITY_ROOT.set(member);
+        return hook_authority_root();
+    }
+    if let Some(root) = last_stood {
         let _ = HOOK_AUTHORITY_ROOT.set(root);
+        return hook_authority_root();
+    }
+    if let Some(first) = members.first() {
+        let _ = HOOK_AUTHORITY_ROOT.set(first.clone());
     }
     hook_authority_root()
+}
+
+/// The authority the session last stood in, still carrying its config.
+fn last_stood_in(session: Option<&str>) -> Option<PathBuf> {
+    session.and_then(|session| state::recorded_session_authority(session, config::CONFIG_FILE))
+}
+
+/// The member of a registered root's set that contains the call's raw target.
+fn member_containing(members: &[PathBuf], envelope: &hook::Envelope) -> Option<PathBuf> {
+    let target = raw_target(envelope)?;
+    members
+        .iter()
+        .find(|member| target.starts_with(member))
+        .cloned()
+}
+
+/// The call's write target as the host sent it — `file_path`, else
+/// `notebook_path` — when it is absolute, before [`settle_envelope`] makes it
+/// relative (CLOUD-2752).
+fn raw_target(envelope: &hook::Envelope) -> Option<PathBuf> {
+    let raw = envelope
+        .input
+        .get("file_path")
+        .or_else(|| envelope.input.get("notebook_path"))?
+        .as_str()?;
+    let path = Path::new(raw);
+    path.is_absolute().then(|| git::canonical(path))
 }
 
 fn load_policy(
@@ -29635,6 +30357,19 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             gap.rule, gap.fact
         )?;
     }
+    // THE SESSION'S OWN USAGE, ON EVERY PATH (CLOUD-415): integers only (rule
+    // 4), and `-` for a reading that could not be taken, never `0`.
+    let reading = |value: Option<usize>| value.map_or_else(|| "-".to_owned(), |n| n.to_string());
+    writeln!(
+        out,
+        "doctor session: turns={} context={} cache_read={} cache_write={} input={} output={}",
+        reading(report.turns),
+        reading(report.context),
+        reading(report.cache_read),
+        reading(report.cache_write),
+        reading(report.input),
+        reading(report.output),
+    )?;
     match (report.open, report.total) {
         (Some(open), Some(total)) if open > 0 => {
             writeln!(
@@ -30108,6 +30843,39 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wait_duration_is_whole_seconds_with_or_without_its_unit() {
+        let secs = std::time::Duration::from_secs;
+        assert_eq!(wait_seconds("interval", None, 30).unwrap(), secs(30));
+        assert_eq!(wait_seconds("interval", Some("45"), 30).unwrap(), secs(45));
+        assert_eq!(wait_seconds("interval", Some("45s"), 30).unwrap(), secs(45));
+        assert!(wait_seconds("interval", Some("1m"), 30).is_err());
+    }
+
+    #[test]
+    fn a_wait_takes_argument_objects_or_receipts_and_not_both() {
+        let git_dir = Path::new("/nowhere/.git");
+        let (mint, arg) = ("child".to_owned(), "key".to_owned());
+        let objects = vec!["{\"n\": 1}".to_owned()];
+        assert!(matches!(
+            wait_subjects(git_dir, &[], Some(&mint), Some(&arg)),
+            Ok(mcp::Subjects::Receipts { .. })
+        ));
+        assert!(matches!(
+            wait_subjects(git_dir, &objects, None, None),
+            Ok(mcp::Subjects::Fixed(ref given)) if given.len() == 1
+        ));
+        assert!(
+            wait_subjects(git_dir, &objects, Some(&mint), Some(&arg)).is_err(),
+            "both forms"
+        );
+        assert!(wait_subjects(git_dir, &[], None, None).is_err(), "neither");
+        assert!(
+            wait_subjects(git_dir, &["{".to_owned()], None, None).is_err(),
+            "unreadable JSON"
+        );
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

@@ -397,6 +397,26 @@
           "description": "Plan presentations this session, the in-flight one included\n(CLOUD-2383). A count over `Event::ToolCall` names, which the transcript\nalready types; no argument is read.",
           "type": "string",
           "const": "plan-exits"
+        },
+        {
+          "description": "The context the session's last message was sent with: its input plus\ncache read plus cache write (CLOUD-415). Exact, from the host's own\nusage record, never an estimate over bytes.",
+          "type": "string",
+          "const": "context-tokens"
+        },
+        {
+          "description": "Cumulative cache-read tokens, each message counted once (CLOUD-415).",
+          "type": "string",
+          "const": "cache-read-tokens"
+        },
+        {
+          "description": "Cumulative cache-write tokens, each message counted once (CLOUD-415).",
+          "type": "string",
+          "const": "cache-write-tokens"
+        },
+        {
+          "description": "Cumulative output tokens, each message counted once (CLOUD-415).",
+          "type": "string",
+          "const": "output-tokens"
         }
       ]
     },

@@ -4242,6 +4242,8 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         ("cursor", "cursor-write"),
         ("copilot-cli", "copilot-cli-write"),
         ("gemini-cli", "gemini-cli-write"),
+        // The documented `replace` tool, with its documented keys (CLOUD-2744).
+        ("gemini-cli", "gemini-cli-replace"),
         ("codex-cli", "codex-cli-write"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));

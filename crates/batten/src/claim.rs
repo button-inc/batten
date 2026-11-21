@@ -577,7 +577,7 @@ fn is_ready(
 /// filename mean the gate reports a missing receipt for one that exists.
 #[must_use]
 pub fn receipt_name(branch: &str) -> String {
-    format!("claim.{}", branch.replace('/', "-"))
+    crate::receipt::branch_receipt_name("claim", branch)
 }
 
 /// The ids an existing receipt for this branch still speaks for.
@@ -669,6 +669,52 @@ pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
     Some(keys.join("-").replace(['/', '\\', '.'], "-"))
 }
 
+/// Void the branch's `plan-check` receipt when this claim adds an issue the
+/// receipt on disk did not list (CLOUD-2766).
+///
+/// **A NEW CLAIM OWES A NEW PLAN.** A later ticket's shape depends on what the
+/// earlier one lands, so the plan is checked one ticket at a time; the plan
+/// record follows that because its key carries the claim, but a branch-keyed
+/// receipt rule reads `plan-check.<branch>` and nothing else. So the claim
+/// appends `base -`, which that reader treats as void, and the hold applies again
+/// until the new ticket's plan is linted.
+///
+/// The comparison is with the first line of the claim receipt AS IT STANDS ON
+/// DISK, whatever base it records — so a re-claim of an issue already listed
+/// voids nothing even after trunk moved and the carried list was dropped. A
+/// repository that never lints has no such file, and nothing is written.
+//MUTANT-SUITE crates/batten/src/claim.rs
+//MUTANT plan-survives-a-new-claim|s@^    if !grew {$@    if true {@|a_new_issue_voids_the_plan_receipt
+//MUTANT plan-voided-by-a-re-claim|s@^    let grew = ids.iter().any(\x7cid\x7c !held.contains(\&id.as_str()));$@    let grew = !ids.is_empty();@|a_re_claim_voids_nothing
+//MUTANT plan-receipt-created-by-a-claim|s@^    if !plan.is_file() {$@    if false {@|no_plan_receipt_means_nothing_is_written
+fn void_plan_on_a_new_issue(
+    receipts: &Path,
+    branch: &str,
+    dest: &Path,
+    ids: &[String],
+) -> Result<()> {
+    let on_disk = std::fs::read_to_string(dest).unwrap_or_default();
+    let held: Vec<&str> = on_disk
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect();
+    let grew = ids.iter().any(|id| !held.contains(&id.as_str()));
+    if !grew {
+        return Ok(());
+    }
+    let plan = receipts.join(crate::receipt::branch_receipt_name(
+        crate::plan::RECEIPT,
+        branch,
+    ));
+    if !plan.is_file() {
+        return Ok(());
+    }
+    crate::durable::append(&plan, "base -")?;
+    Ok(())
+}
+
 /// Write the claim receipt.
 ///
 /// **Only on the pullable path**, which is what makes it a claim rather than a
@@ -726,6 +772,7 @@ pub fn mint(
             ids.push(issue.id.clone());
         }
     }
+    void_plan_on_a_new_issue(receipts, branch, &dest, &ids)?;
 
     let mut body = String::new();
     body.push_str(&ids.join(" "));
@@ -1025,6 +1072,57 @@ mod tests {
             "CLOUD-1 CLOUD-2",
             "the branch speaks for both rows:\n{body}"
         );
+    }
+
+    /// The branch's `plan-check` receipt, written as a passing lint would.
+    fn plan_receipt(receipts: &Path) -> std::path::PathBuf {
+        let plan = receipts.join(crate::receipt::branch_receipt_name(
+            crate::plan::RECEIPT,
+            "user/branch",
+        ));
+        std::fs::write(&plan, "base abc123\nplan 00\n").unwrap();
+        plan
+    }
+
+    /// A NEW CLAIM OWES A NEW PLAN (CLOUD-2766).
+    #[test]
+    fn a_new_issue_voids_the_plan_receipt() {
+        let receipts = scratch("plan-void-new");
+        mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        let plan = plan_receipt(&receipts);
+        mint_one(&receipts, "CLOUD-2", Some("abc123"));
+        let body = std::fs::read_to_string(&plan).unwrap();
+        assert_eq!(body.lines().last(), Some("base -"), "{body}");
+    }
+
+    /// A re-claim voids nothing, including after trunk moved and the carried
+    /// list was dropped: the comparison is with the receipt on disk.
+    #[test]
+    fn a_re_claim_voids_nothing() {
+        for (name, base) in [
+            ("plan-reclaim-same", "abc123"),
+            ("plan-reclaim-moved", "def456"),
+        ] {
+            let receipts = scratch(name);
+            mint_one(&receipts, "CLOUD-1", Some("abc123"));
+            let plan = plan_receipt(&receipts);
+            mint_one(&receipts, "CLOUD-1", Some(base));
+            let body = std::fs::read_to_string(&plan).unwrap();
+            assert!(!body.contains("base -"), "{name}: {body}");
+        }
+    }
+
+    /// A repository that never lints has no receipt, and a claim creates none.
+    #[test]
+    fn no_plan_receipt_means_nothing_is_written() {
+        let receipts = scratch("plan-void-absent");
+        mint_one(&receipts, "CLOUD-1", Some("abc123"));
+        mint_one(&receipts, "CLOUD-2", Some("abc123"));
+        let plan = receipts.join(crate::receipt::branch_receipt_name(
+            crate::plan::RECEIPT,
+            "user/branch",
+        ));
+        assert!(!plan.exists());
     }
 
     /// ANTI-VACUITY: the union must not turn a re-claim into a duplicate, or the

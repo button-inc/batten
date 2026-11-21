@@ -349,6 +349,27 @@ owner = "CLOUD-2390"
 expires = "2027-03-31"
 "#;
 
+/// CLOUD-2756: the COMMITTED row declares the shape [`TREE_CONFIG`] tests, read
+/// through the engine's own loader so an unknown key would fail here too.
+#[test]
+fn the_committed_filed_row_handler_is_tree_only() {
+    let committed =
+        batten::config::load(&common::at_root("batten.toml")).expect("the committed config loads");
+    let handler = committed
+        .hook
+        .as_ref()
+        .and_then(|hook| {
+            hook.handlers
+                .iter()
+                .find(|row| row.id == "filed-row-settled")
+        })
+        .expect("the committed config declares filed-row-settled");
+    assert!(
+        handler.tree_only,
+        "a write outside the repository is no edit of the tree"
+    );
+}
+
 /// The host's plan file lies outside the repository, so it reaches the selector
 /// as the absolute path the host sent.
 #[test]

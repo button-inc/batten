@@ -13,6 +13,7 @@ row here, so a new module lands with its line.
 - `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
 - `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
 - `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
+- `plan.rs` — `batten plan lint` and `plan path` (CLOUD-2766): judges the branch's plan file against the `[plan]` table — sections, the steps `record plan` holds, requirement coverage, live pointers, the verdict line — and on zero findings appends `base`/`plan` to the `plan-check` receipt.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by CLOUD-1121).
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an exhaustive `match` rather than a lookup on strings.
 - `output.rs` — house-style §3/§4 (CLOUD-42): the `Verbosity` ladder (`silent…trace`, a derived `Ord`, so `admits` is a comparison), and the §4 attended/unattended resolution.
@@ -135,6 +136,7 @@ row here, so a new module lands with its line.
 - `cache.rs` — the ONE cross-process cache mechanism (CLOUD-2315): content keys through `identity::cache_key`, the running binary named by its linker build ID, self-validating entries written unsynced, and a `cache/` directory tagged `CACHEDIR.TAG` and partitioned per binary so two binaries never evict each other. The policy bytecode, the config parse, the transcript tally and the epoch all store through it.
 - `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
 - `probe_verdict.rs` — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
+- `prompt_cache.rs` — a model host's prompt-cache eviction limits and prices, the limit in force read from a session's last cache write, and the break-even rule for waking a waiting session before eviction (CLOUD-2763). Not `cache.rs`, the cross-process cache.
 - `prune.rs` — the `[prune]` table (root, keep, the `min_free_mb`/`max_free_mb` band), the superseded pass, the build-lock claim and the free-space sampler (CLOUD-766/1030); the floor model retired under CLOUD-2198.
 - `disk_watch.rs` — the watcher a long-running batten process hosts (CLOUD-2197): `land` around every lap and `mutate sweep` around its builds; samples each tick and runs `collect` on its own thread below `min_free_mb`.
 - `collect.rs` — the disk collector (CLOUD-2197): below `[prune] min_free_mb`, superseded then least-recently-used cargo units across `target/` and linked worktrees until `max_free_mb` is free, never a held tree or the running engine. Its `/proc` parsers also answer `group_orphaned`, `land`'s reap guard (CLOUD-2366): `lib.rs` reads it there, so `exec`'s closure grows no edge.

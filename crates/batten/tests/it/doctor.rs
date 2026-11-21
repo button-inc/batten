@@ -1480,3 +1480,127 @@ fn the_gap_record_holds_no_argument_text() {
     assert!(!stored.contains("tools/x.py"), "nor any operand: {stored}");
     assert!(!gaps(&dir).contains(secret));
 }
+
+/// A live process standing in for the harness `CLAUDE_PID` names, with `dir` as
+/// its working directory: a hook blocked reading a payload it has not been sent.
+fn harness_in(dir: &std::path::Path) -> std::process::Child {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command.spawn().expect("a stand-in harness process")
+}
+
+#[test]
+fn a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_it() {
+    // CLOUD-2751, measured 2026-11-14: from inside the clone this verb read the
+    // clone's own surface and passed while the session, rooted at the parent,
+    // had no hook loaded at all. The root the host loads is the one to read.
+    let root = common::scratch_outside_tree("batten-doctor-e2e", "root-unregistered");
+    let clone = root.join("clone");
+    std::fs::create_dir_all(&clone).expect("the clone");
+    common::init_repo(&clone);
+    common::write(&clone, "batten.toml", "version = 1\n");
+    let mut harness = harness_in(&root);
+    let output = batten()
+        .current_dir(&clone)
+        .args(["doctor", "hooks", "-J"])
+        .env("CLAUDE_PID", harness.id().to_string())
+        .output()
+        .expect("run batten doctor hooks");
+    drop(harness.stdin.take());
+    let _ = harness.wait();
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("the report is JSON");
+    let named_on: Vec<&str> = document["harnesses"]
+        .as_array()
+        .expect("harnesses is a list")
+        .iter()
+        .filter(|row| {
+            row["findings"].as_array().is_some_and(|findings| {
+                findings
+                    .iter()
+                    .any(|finding| finding["reason"] == "hook-wiring-root-unregistered")
+            })
+        })
+        .filter_map(|row| row["harness"].as_str())
+        .collect();
+    assert_eq!(
+        named_on,
+        vec!["claude-code"],
+        "the unregistered root is named on the harness that loads it: {document}"
+    );
+}
+
+#[test]
+fn no_harness_root_is_no_root_finding() {
+    // The premise half: with no `CLAUDE_PID` there is no root to read, and the
+    // clone's own unregistered surface is not mistaken for one.
+    let root = common::scratch_outside_tree("batten-doctor-e2e", "root-absent");
+    let clone = root.join("clone");
+    std::fs::create_dir_all(&clone).expect("the clone");
+    common::init_repo(&clone);
+    common::write(&clone, "batten.toml", "version = 1\n");
+    let output = batten()
+        .current_dir(&clone)
+        .args(["doctor", "hooks", "-J"])
+        .env_remove("CLAUDE_PID")
+        .output()
+        .expect("run batten doctor hooks");
+    assert!(
+        !stdout(&output).contains("hook-wiring-root-unregistered"),
+        "no harness root owes nothing: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_registered_harness_root_clears_doctor_hooks_of_the_root_finding() {
+    // The other side: the surface read is the ROOT's, so registering the root
+    // clears the finding even though the clone's own surface stays empty.
+    use common::StateHome as _;
+
+    let root = common::scratch_outside_tree("batten-doctor-e2e", "root-registered");
+    let home = common::scratch_outside_tree("batten-doctor-e2e", "root-registered-home");
+    let clone = root.join("clone");
+    std::fs::create_dir_all(&clone).expect("the clone");
+    common::init_repo(&clone);
+    common::write(&clone, "batten.toml", "version = 1\n");
+    let mut harness = harness_in(&root);
+    let registered = batten()
+        .current_dir(&clone)
+        .args(["wiring", "register"])
+        .at_home(&home)
+        .env("BATTEN_ENVIRONMENT", "disposable")
+        .env("CLAUDE_PID", harness.id().to_string())
+        .output()
+        .expect("run batten wiring register");
+    let output = batten()
+        .current_dir(&clone)
+        .args(["doctor", "hooks", "-J"])
+        .at_home(&home)
+        .env("CLAUDE_PID", harness.id().to_string())
+        .output()
+        .expect("run batten doctor hooks");
+    drop(harness.stdin.take());
+    let _ = harness.wait();
+    assert_eq!(
+        registered.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&registered)
+    );
+    assert!(
+        root.join(".claude/settings.json").is_file(),
+        "the root is registered"
+    );
+    assert!(
+        !stdout(&output).contains("hook-wiring-root-unregistered"),
+        "a registered root owes nothing: {}",
+        stdout(&output)
+    );
+}

@@ -496,6 +496,13 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// The branch's plan, checked before the first edit (CLOUD-2766).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Plan {
+        /// The sub-verb selected.
+        command: PlanCommand,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -1109,6 +1116,16 @@ pub enum ReadyCommand {
     },
 }
 
+/// Subcommands of `plan` (CLOUD-2766).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlanCommand {
+    /// Judge the branch's plan and, on a pass, write its receipt.
+    Lint,
+    /// Print where the branch's plan file is.
+    Path,
+}
+
 /// Subcommands of `claim`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1704,6 +1721,28 @@ pub enum McpCommand {
         method: String,
         /// The method's arguments as a JSON object. `None` is an empty object.
         params: Option<String>,
+    },
+    /// Poll one declared method until its declared reduction changes
+    /// (CLOUD-2759).
+    Wait {
+        /// The server to dispatch to, as a `[[mcp.source]]` names it.
+        server: String,
+        /// The method to poll.
+        method: String,
+        /// One argument object per subject, in order.
+        params: Vec<String>,
+        /// Seconds between polls.
+        interval: Option<String>,
+        /// The host's cache-eviction limit; absent is no time limit.
+        evict_after: Option<String>,
+        /// What is subtracted from the eviction limit.
+        buffer: Option<String>,
+        /// The clone's singleton lock to hold while waiting.
+        singleton: Option<String>,
+        /// Read subjects from this mint's receipts on every poll.
+        each_receipt: Option<String>,
+        /// The argument key a receipt's suffix is passed as.
+        arg: Option<String>,
     },
     /// Record that a client spawned this server, then exec the launch line.
     Spawn {
@@ -3237,6 +3276,14 @@ fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
     }
 }
 
+fn plan_of(matches: &ArgMatches) -> Option<PlanCommand> {
+    match matches.subcommand()? {
+        ("lint", _) => Some(PlanCommand::Lint),
+        ("path", _) => Some(PlanCommand::Path),
+        _ => None,
+    }
+}
+
 fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(ClaimCommand::Check {
@@ -3551,6 +3598,20 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
             server: matches.get_one::<String>("server").cloned()?,
             method: matches.get_one::<String>("method").cloned()?,
             params: matches.get_one::<String>("params").cloned(),
+        }),
+        ("wait", matches) => Some(McpCommand::Wait {
+            server: matches.get_one::<String>("server").cloned()?,
+            method: matches.get_one::<String>("method").cloned()?,
+            params: matches
+                .get_many::<String>("params")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            interval: matches.get_one::<String>("interval").cloned(),
+            evict_after: matches.get_one::<String>("evict_after").cloned(),
+            buffer: matches.get_one::<String>("buffer").cloned(),
+            singleton: matches.get_one::<String>("singleton").cloned(),
+            each_receipt: matches.get_one::<String>("each_receipt").cloned(),
+            arg: matches.get_one::<String>("arg").cloned(),
         }),
         // The trailing argv is `num_args(1..)` in the surface, so clap has
         // already refused an empty launch line: a spawn verb with nothing to
@@ -3957,6 +4018,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "mutate" => mutate_of(matches).map(|command| Command::Mutate { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
+        "plan" => plan_of(matches).map(|command| Command::Plan { command }),
         "landed" => landed_of(matches).map(|command| Command::Landed { command }),
         "hk" => hk_of(matches).map(|command| Command::Hk { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),

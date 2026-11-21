@@ -2083,6 +2083,9 @@ const MATCHER_NARROWS: &str = "hook-wiring-matcher-narrows";
 const COMMAND_DRIFT: &str = "hook-wiring-command-drift";
 /// The harness declares a wiring file and the checkout has none.
 const FILE_MISSING: &str = "hook-wiring-file-missing";
+/// The live session is rooted above this checkout, and its root's project
+/// surface does not register batten (CLOUD-2751).
+const ROOT_UNREGISTERED: &str = "hook-wiring-root-unregistered";
 /// A batten registration sits on a MERGED surface as well as the committed one
 /// (CLOUD-525).
 ///
@@ -2619,10 +2622,23 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
     let declared = resolved.and_then(|resolved| resolved.wiring);
-    let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
+    let mut harnesses: Vec<HarnessWiring> = hook::Harness::ALL
         .iter()
         .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
         .collect();
+    let unregistered = root_unregistered(wiring::harness_root(), dir);
+    if let Some(claude) = harnesses
+        .iter_mut()
+        .find(|harness| harness.harness == hook::Harness::ClaudeCode.as_str())
+    {
+        for event in unregistered {
+            claude.findings.push(WiringFinding {
+                event,
+                reason: ROOT_UNREGISTERED,
+            });
+            claude.ok = false;
+        }
+    }
     WiringReport {
         version: config::VERSION,
         ok: harnesses.iter().all(|harness| harness.ok),
@@ -2654,10 +2670,33 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     }
 }
 
+/// The events the live harness's root lacks batten on, when that root is a
+/// strict ancestor of `dir` (CLOUD-2751).
+///
+/// **THE ROOT THE HOST ACTUALLY LOADS, NOT THE DIRECTORY ASKED FROM.** Measured
+/// 2026-11-14: from inside the clone this verb printed five `ok` lines and exited
+/// 0 while the session, rooted at the parent, had no hook loaded at all. A
+/// session rooted above a checkout reads only its root's project surface, so that
+/// is the file the diagnosis has to read. Empty when no harness root resolves,
+/// when the root is the directory itself or below it (the committed surface
+/// answers then), or when the root registers every event.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT root-surface-unread|s@^    if !(root != dir \&\& dir.starts_with(\&root)) {$@    if true {@|a_harness_rooted_above_an_unregistered_clone_fails_doctor_hooks_from_inside_it
+fn root_unregistered(root: Option<PathBuf>, dir: &Path) -> Vec<String> {
+    let Some(root) = root.map(|root| crate::git::canonical(&root)) else {
+        return Vec::new();
+    };
+    let dir = crate::git::canonical(dir);
+    if !(root != dir && dir.starts_with(&root)) {
+        return Vec::new();
+    }
+    wiring::register_root(&root, true).map_or_else(|_| Vec::new(), |(events, _)| events)
+}
+
 /// One session's own declared-open work, as `doctor session` renders it.
 ///
 /// `#[non_exhaustive]` for [`WiringReport`]'s reason.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 #[non_exhaustive]
 pub struct SessionReport {
     /// The running binary's version.
@@ -2695,6 +2734,70 @@ pub struct SessionReport {
     /// to the row that went silent and the token names what it wanted, and neither
     /// carries a program name, a task body or a path out of the store.
     pub unminted: Vec<Unminted>,
+    /// Turns in the session's transcript, or `None` for could-not-look
+    /// (CLOUD-415).
+    pub turns: Option<usize>,
+    /// The context the last message was sent with, in tokens, or `None` for
+    /// could-not-look: no transcript declared, or none of its records carries
+    /// usage (CLOUD-415).
+    pub context: Option<usize>,
+    /// Cumulative cache-read tokens, each message counted once.
+    pub cache_read: Option<usize>,
+    /// Cumulative cache-write tokens, each message counted once.
+    pub cache_write: Option<usize>,
+    /// Cumulative uncached input tokens, each message counted once.
+    pub input: Option<usize>,
+    /// Cumulative output tokens, each message counted once.
+    pub output: Option<usize>,
+}
+
+/// The session's own usage, read from the declared transcript (CLOUD-415).
+///
+/// Read BEFORE the task store, for `unminted`'s reason: it answers a different
+/// question and must survive every could-not-look the store can produce.
+#[derive(Clone, Copy, Default)]
+struct UsageReading {
+    turns: Option<usize>,
+    usage: Option<crate::transcript::SessionUsage>,
+}
+
+//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
+//MUTANT usage-absent-reads-zero|s@^            .then(\x7c\x7c tally.usage()),$@            .then(\x7c\x7c tally.usage()).or(Some(crate::transcript::SessionUsage::default())),@|a_transcript_with_no_usage_is_could_not_look_not_zero
+//MUTANT usage-line-behind-the-store|s@^    diagnose_store(dir, resolved.as_ref(), unminted).with_usage(reading)$@    diagnose_store(dir, resolved.as_ref(), unminted)@|doctor_session_prints_usage_with_no_task_store_declared
+fn usage_reading(dir: &Path, resolved: Option<&resolve::Resolved>) -> UsageReading {
+    let Some(transcript) = resolved.and_then(|resolved| resolved.transcript.as_ref()) else {
+        return UsageReading::default();
+    };
+    let (Some(path), Some(harness)) = (transcript.path.as_deref(), transcript.harness) else {
+        return UsageReading::default();
+    };
+    let hook::TranscriptShape::Surveyed(shape) = harness.transcript_shape() else {
+        return UsageReading::default();
+    };
+    let Some(tally) = crate::transcript::tally_appended(&dir.join(path), shape) else {
+        return UsageReading::default();
+    };
+    let records = tally.records();
+    UsageReading {
+        turns: records
+            .contains(&crate::transcript::Kind::Turns)
+            .then(|| tally.counts().turns),
+        usage: records
+            .contains(&crate::transcript::Kind::Usage)
+            .then(|| tally.usage()),
+    }
+}
+
+impl SessionReport {
+    fn with_usage(mut self, reading: UsageReading) -> SessionReport {
+        self.turns = reading.turns;
+        self.context = reading.usage.map(|usage| usage.context);
+        self.cache_read = reading.usage.map(|usage| usage.cache_read);
+        self.cache_write = reading.usage.map(|usage| usage.cache_write);
+        self.input = reading.usage.map(|usage| usage.input);
+        self.output = reading.usage.map(|usage| usage.output);
+        self
+    }
 }
 
 /// One registered rule, and one session-start fact it reads that nothing minted.
@@ -3009,6 +3112,18 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // container it exists to report.
     let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
     let unminted = unminted_facts(dir, resolved.as_ref());
+    // The usage line prints on EVERY return path below (CLOUD-415), so it is
+    // read here, beside `unminted`, and attached once at the end.
+    let reading = usage_reading(dir, resolved.as_ref());
+    diagnose_store(dir, resolved.as_ref(), unminted).with_usage(reading)
+}
+
+/// [`diagnose_session`]'s task-store half.
+fn diagnose_store(
+    dir: &Path,
+    resolved: Option<&resolve::Resolved>,
+    unminted: Vec<Unminted>,
+) -> SessionReport {
     let unreadable = SessionReport {
         version: config::VERSION,
         open: None,
@@ -3016,8 +3131,9 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ids: Vec::new(),
         ok: false,
         unminted: unminted.clone(),
+        ..SessionReport::default()
     };
-    let Some((transcript, link)) = resolved.as_ref().and_then(|resolved| {
+    let Some((transcript, link)) = resolved.and_then(|resolved| {
         let transcript = resolved.transcript.as_ref()?;
         // The template's ABSENCE is could-not-look rather than clean: a
         // consumer that never declared a store has not told us it has no
@@ -3056,6 +3172,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
                 ids: Vec::new(),
                 ok: unminted.is_empty(),
                 unminted,
+                ..SessionReport::default()
             };
         }
         Err(_) => return unreadable,
@@ -3100,6 +3217,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ok: ids.is_empty() && unminted.is_empty(),
         ids,
         unminted,
+        ..SessionReport::default()
     }
 }
 
@@ -3252,6 +3370,21 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// Only a STRICT ancestor's surface is read: the directory itself, or a root
+    /// beside it, owes nothing however bare its surface is.
+    #[test]
+    fn only_a_root_strictly_above_the_directory_is_read() {
+        let base = crate::scratch::scratch("doctor-root-unregistered");
+        let dir = base.join("clone");
+        let beside = base.join("beside");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&beside).unwrap();
+        assert!(!root_unregistered(Some(base.clone()), &dir).is_empty());
+        assert!(root_unregistered(Some(dir.clone()), &dir).is_empty());
+        assert!(root_unregistered(Some(beside), &dir).is_empty());
+        assert!(root_unregistered(None, &dir).is_empty());
+    }
 
     /// CLOUD-1728. `COMMIT_HOOKS` stays the runtime authority for which git
     /// hooks batten links; the declared git vocabulary must register exactly

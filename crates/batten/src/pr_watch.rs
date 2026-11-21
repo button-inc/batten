@@ -895,11 +895,12 @@ pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
     sliced(seconds, stop, &|slice| {
         #[expect(
             clippy::disallowed_methods,
-            reason = "the interval between conditional requests, and the interval is the SERVER'S: \
-                      `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
-                      lowers it. The loop exits on the required set reaching a verdict — \
-                      `Verdict::Green`, `Verdict::Red` and `Verdict::DeadEnd` all return — never \
-                      on a clock (CLOUD-1177, CLOUD-497)"
+            reason = "the interval between polls of the crate's two waiters, each exiting on an \
+                      event and never on a clock. `pr watch`'s interval is the SERVER'S: \
+                      `interval_for` raises it to whatever `X-Poll-Interval` asked for, and the \
+                      loop returns on a verdict (CLOUD-1177, CLOUD-497). `mcp wait` returns on a \
+                      declared reduction changing, its pauses counted against a caller-given \
+                      limit (CLOUD-2759)"
         )]
         std::thread::sleep(std::time::Duration::from_secs_f64(slice));
     });
