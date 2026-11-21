@@ -869,7 +869,7 @@ fn intake_one(
         spilled: &[],
         ran: None,
     };
-    let harness = hook::Harness::ExitCode;
+    let harness = crate::config_model::Harness::ExitCode;
     let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;
     // Appended only AFTER dispatch returns, so a crash replays the event.
     if forge_event::remember(ring, &key).is_err() {
@@ -1350,7 +1350,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             path.display()
         ))
     })?;
-    let current = match engine::declared(&text).map(engine::Pin::kind) {
+    let current = match engine::declared(&text).map(crate::config_model::Pin::kind) {
         Some(engine::PinKind::Release(tag)) => tag,
         Some(engine::PinKind::Source(_)) => {
             return Err(UsageError::raise(format!(
@@ -1416,7 +1416,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let want = install_want(
         named_env("BATTEN_VERSION").as_deref(),
         None,
-        Some(engine::Pin {
+        Some(crate::config_model::Pin {
             release: Some(target),
             source: None,
         }),
@@ -1707,7 +1707,7 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
 
 /// The worktree's root, its config's text and its engine pin, for both halves
 /// of `engine outdated`; it only reads.
-fn declared_release() -> Result<(std::path::PathBuf, String, Option<engine::Pin>)> {
+fn declared_release() -> Result<(std::path::PathBuf, String, Option<crate::config_model::Pin>)> {
     let root = git::worktree_root(Path::new("."))?;
     let text = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
     let pin = engine::declared(&text);
@@ -1721,7 +1721,7 @@ fn declared_release() -> Result<(std::path::PathBuf, String, Option<engine::Pin>
 /// looks at nothing. Fallible here; its caller makes it best-effort.
 fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
     let (root, text, pin) = declared_release()?;
-    let Some(engine::PinKind::Release(tag)) = pin.map(engine::Pin::kind) else {
+    let Some(engine::PinKind::Release(tag)) = pin.map(crate::config_model::Pin::kind) else {
         return clear_outdated(ask);
     };
     let now = now_unix();
@@ -1791,7 +1791,7 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         return Ok(ExitCode::Success);
     }
     let (root, _, pin) = declared_release()?;
-    let kind = pin.map(engine::Pin::kind);
+    let kind = pin.map(crate::config_model::Pin::kind);
     let tag = match kind {
         Some(engine::PinKind::Release(tag)) => tag,
         // A SOURCE PIN names a build, not a release: no release distance to
@@ -1969,7 +1969,7 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             }
         }
     }
-    let pin = engine::Pin {
+    let pin = crate::config_model::Pin {
         release: Some(format!("v{bare}")),
         source: None,
     };
@@ -1996,7 +1996,7 @@ enum Want {
 }
 
 /// The `engine` pin of the worktree at `root`, when there is one.
-fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
+fn worktree_pin(root: Option<&Path>) -> Option<crate::config_model::Pin> {
     let text = crate::fsio::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
     engine::declared(&text)
 }
@@ -2012,7 +2012,7 @@ fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
 fn install_want(
     named: Option<&str>,
     by_ref: Option<String>,
-    pin: Option<engine::Pin>,
+    pin: Option<crate::config_model::Pin>,
 ) -> Result<Want> {
     let scope = if by_ref.is_some() {
         "BATTEN_VERSION_FROM_REF"
@@ -2043,8 +2043,8 @@ fn install_want(
 }
 
 /// [`Want`] for a declared pin.
-fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
-    Ok(match pin.map(engine::Pin::kind) {
+fn pinned_by(pin: Option<crate::config_model::Pin>) -> Result<Option<Want>> {
+    Ok(match pin.map(crate::config_model::Pin::kind) {
         None => None,
         Some(engine::PinKind::Release(tag)) => Some(Want::Release(tag)),
         Some(engine::PinKind::Source(digest)) => Some(Want::Source(digest)),
@@ -2446,18 +2446,18 @@ fn engine_pin(
 ) -> Result<ExitCode> {
     let path = root.join(config::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&path)?;
-    let source = || -> Result<engine::Pin> {
-        Ok(engine::Pin {
+    let source = || -> Result<crate::config_model::Pin> {
+        Ok(crate::config_model::Pin {
             release: None,
             source: Some(engine::digest(root)?),
         })
     };
-    let release = |tag: String| engine::Pin {
+    let release = |tag: String| crate::config_model::Pin {
         release: Some(tag),
         source: None,
     };
     let pin = match value {
-        None => match engine::declared(&text).map(engine::Pin::kind) {
+        None => match engine::declared(&text).map(crate::config_model::Pin::kind) {
             Some(engine::PinKind::Source(_)) => source()?,
             _ => return Ok(ExitCode::Success),
         },
@@ -2498,7 +2498,7 @@ fn engine_pin(
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&config_path)?;
-    let tag = match engine::declared(&text).map(engine::Pin::kind) {
+    let tag = match engine::declared(&text).map(crate::config_model::Pin::kind) {
         None => return Ok(ExitCode::Success),
         Some(engine::PinKind::Release(tag)) => tag,
         Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),
@@ -3179,7 +3179,8 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         output::lines(out, &problems)?;
     }
 
-    let findings: Vec<rules::Finding> = problems.iter().map(design::Problem::finding).collect();
+    let findings: Vec<crate::findings::Finding> =
+        problems.iter().map(design::Problem::finding).collect();
     Ok(ExitCode::verdict(design::blocks(
         &findings,
         config.strictness,
@@ -4822,7 +4823,10 @@ fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
     if let Some(given) = given {
         return PathBuf::from(given);
     }
-    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
+    match crate::config_model::Harness::ClaudeCode
+        .wiring()
+        .map(|wiring| wiring.file)
+    {
         Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
         None => repo.to_path_buf(),
     }
@@ -4913,7 +4917,7 @@ fn run_mcp_posture(
 /// every separator written as `-`, which is the host's layout rather than a
 /// consumer's.
 fn mcp_log_root() -> Option<PathBuf> {
-    let tree = hook::Harness::ClaudeCode.mcp_logs()?;
+    let tree = crate::config_model::Harness::ClaudeCode.mcp_logs()?;
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
     let project = std::env::current_dir().ok()?;
     let key = project.to_string_lossy().replace('/', "-");
@@ -9794,7 +9798,7 @@ fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let names: std::collections::BTreeSet<&str> = config
         .rules
         .iter()
-        .filter(|rule| rule.scope == rules::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == crate::config_model::RuleScope::MediatedCall)
         .filter_map(|rule| rule.tool.as_deref())
         .collect();
     if json {
@@ -10122,7 +10126,11 @@ fn explain_redirects(
 /// the record is then verified against, which is what closes the loop and what a
 /// second wording of it would break. That command left the emitted line with
 /// everything else, so it has to arrive here or the loop does not close.
-fn explain_rule(name: &str, rule: &rules::Rule, facts: &[facts::Declared]) -> Explained {
+fn explain_rule(
+    name: &str,
+    rule: &crate::config_model::Rule,
+    facts: &[facts::Declared],
+) -> Explained {
     use std::fmt::Write as _;
     let commands: Vec<&str> = rule
         .checks
@@ -10215,7 +10223,10 @@ fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
 /// Read off the module SOURCE for [`policy::finding_ids`]' reasons — the
 /// compiled set is not a clean list of finding ids, and this verb must answer
 /// without standing up an engine.
-fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::Rule> {
+fn owning_row<'a>(
+    config: &'a resolve::Resolved,
+    id: &str,
+) -> Option<&'a crate::config_model::Rule> {
     config.rules.iter().find(|rule| {
         rule.module.as_deref().is_some_and(|module| {
             crate::fsio::read_to_string(module)
@@ -10602,7 +10613,7 @@ fn admission_anchor(
         let policy_rows: Vec<_> = config
             .rules
             .iter()
-            .filter(|declared| declared.kind == rules::RuleKind::Policy)
+            .filter(|declared| declared.kind == crate::config_model::RuleKind::Policy)
             .cloned()
             .collect();
         // COULD-NOT-LOOK FALLS BACK rather than refusing, which is the posture
@@ -10685,7 +10696,7 @@ fn admission_anchor(
 /// Which one of `findings` a `(rule, subject)` pair addresses, and the subject
 /// that binds it — [`admission_anchor`]'s decision over the scan it ran.
 fn anchor_among(
-    findings: &[rules::Finding],
+    findings: &[crate::findings::Finding],
     rule: &str,
     class: &str,
     subject: &str,
@@ -11037,9 +11048,9 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     let tracked = if config
         .rules
         .iter()
-        .any(|rule| rule.kind == rules::RuleKind::Policy)
+        .any(|rule| rule.kind == crate::config_model::RuleKind::Policy)
     {
-        rules::tree_files(root)?
+        crate::git::tree_files(root)?
     } else {
         Vec::new()
     };
@@ -11052,7 +11063,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     for rule in config
         .rules
         .iter()
-        .filter(|rule| rule.kind == rules::RuleKind::Policy)
+        .filter(|rule| rule.kind == crate::config_model::RuleKind::Policy)
     {
         let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
             // A row whose bundle never loaded. Not a pass: this verb has nothing
@@ -11082,7 +11093,11 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // asked whether a test ever passed a compound one; `policy.rs` would
         // otherwise have to guess a module's surface from its literals, which is
         // the kind of inference `rules-drift` exists to make unnecessary.
-        match policy::test(bundle, &input, rule.scope == rules::RuleScope::MediatedCall)? {
+        match policy::test(
+            bundle,
+            &input,
+            rule.scope == crate::config_model::RuleScope::MediatedCall,
+        )? {
             facts::Look::Is(suite) => reports.push(SuiteReport {
                 bundle: rule.id.clone(),
                 looked: true,
@@ -19119,7 +19134,7 @@ fn run_attribution_check(
     json: bool,
     range: Option<&str>,
     message: Option<&str>,
-    harness: Option<hook::Harness>,
+    harness: Option<crate::config_model::Harness>,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -19256,8 +19271,8 @@ const UNDECODABLE_PAYLOAD: &str =
 ///
 /// Exit is always `Success`: this renders no verdict, so it has none to signal.
 fn run_hook_field(
-    harness: hook::Harness,
-    field: hook::Field,
+    harness: crate::config_model::Harness,
+    field: crate::config_model::Field,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let mut raw = String::new();
@@ -19358,9 +19373,9 @@ fn receipt_evidence(
 fn receipt_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
-    sourced: &[(&String, &rules::ReceiptKey)],
+    sourced: &[(&String, &crate::config_model::ReceiptKey)],
     store: Option<&receipt::SourcedStore>,
-    receipted: &std::collections::BTreeMap<String, rules::ReceiptKey>,
+    receipted: &std::collections::BTreeMap<String, crate::config_model::ReceiptKey>,
     recency: &Recency<'_>,
     judgeable: bool,
 ) -> hook::ReceiptFacts {
@@ -19499,9 +19514,9 @@ fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
 /// happened is the whole content — an absent capability is a statement about the
 /// host, never a refusal.
 fn unsupported_event_note(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     capabilities: &hook::Capabilities,
-    event: hook::Event,
+    event: crate::config_model::Event,
 ) -> String {
     match capabilities.degrade(event) {
         Some(fallback) => format!(
@@ -19546,7 +19561,7 @@ fn red_head_for(
 ) -> facts::Look<serde_json::Value> {
     // A PUSH OR NOTHING: the fact decides only `git push`, so every other call
     // opens no repository for it (the common call does no I/O here at all).
-    if envelope.event == hook::Event::PreTool
+    if envelope.event == crate::config_model::Event::PreTool
         && policy.reads_pinned(envelope)
         && hook::pushes_git(envelope)
     {
@@ -19563,7 +19578,7 @@ fn red_head_for(
 fn land_live_for(policy: &hook::Policy, envelope: &hook::Envelope) -> Option<String> {
     // NO MODULE ON THIS CALL, NO READ: the common call opens no repository for
     // it, as `red_head_for` keeps the hook's hot path.
-    if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
+    if envelope.event != crate::config_model::Event::PreTool || !policy.reads_pinned(envelope) {
         return None;
     }
     let ours = std::env::var(land::LAP_PID).ok();
@@ -19623,7 +19638,7 @@ fn pathspec_status_for(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
 ) -> facts::Look<serde_json::Value> {
-    if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
+    if envelope.event != crate::config_model::Event::PreTool || !policy.reads_pinned(envelope) {
         return facts::Look::CouldNotLook;
     }
     let base = envelope.cwd.clone().or_else(current_process_dir);
@@ -19688,7 +19703,7 @@ fn placed_pathspecs(call: &hook::PathspecCall) -> Option<Vec<serde_json::Value>>
 /// opens nothing. The parse is [`hook::commit_message`]'s; this half reads a
 /// `-F` file, bounded to its first line within 64 KiB.
 fn commit_subject_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<String> {
-    if policy.commit.is_none() || envelope.event != hook::Event::PreTool {
+    if policy.commit.is_none() || envelope.event != crate::config_model::Event::PreTool {
         return facts::Look::CouldNotLook;
     }
     match hook::commit_message(envelope) {
@@ -19803,7 +19818,7 @@ fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
 }
 
 fn run_hook(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
     instant: std::time::SystemTime,
     mode: Mode,
@@ -19892,7 +19907,7 @@ impl HookDispatch {
 /// exactly the Facts, config load, handlers, actions and `adjudicate` a
 /// harness hook gets. Nothing is rebuilt; there is no second dispatcher.
 fn dispatch_envelope(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
@@ -20304,7 +20319,7 @@ fn dispatch_envelope(
 /// the advisory channel, then the rendering. Split from [`dispatch_envelope`]
 /// to keep that function inside the line budget; the order is its own.
 fn answer_decision(
-    (harness, envelope, raw): (hook::Harness, &hook::Envelope, &str),
+    (harness, envelope, raw): (crate::config_model::Harness, &hook::Envelope, &str),
     decision: hook::Decision,
     (policy, facts): (&hook::Policy, &hook::Facts<'_>),
     mut advice: Vec<advisory::Advice>,
@@ -20395,7 +20410,7 @@ fn grant_rewrite(
 /// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
 /// when the decision is not a pre-approval or there is nothing to carry.
 fn preapproval_context(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     decision: &hook::Decision,
     envelope: &hook::Envelope,
     advice: &mut Vec<advisory::Advice>,
@@ -20426,11 +20441,11 @@ fn preapproval_context(
 /// call beside the condition that earns it — a caller that tested one and
 /// rendered the other could report an event the table actually declares.
 fn undeclared_event_note(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     capabilities: &hook::Capabilities,
-    event: hook::Event,
+    event: crate::config_model::Event,
 ) -> Option<String> {
-    (!capabilities.emits(event) && event != hook::Event::Unrecognized)
+    (!capabilities.emits(event) && event != crate::config_model::Event::Unrecognized)
         .then(|| unsupported_event_note(harness, capabilities, event))
 }
 
@@ -20457,10 +20472,10 @@ fn undeclared_event_note(
 fn is_adjudicable(envelope: &hook::Envelope) -> bool {
     !envelope.command.is_empty()
         || envelope.writes.is_some()
-        || envelope.event == hook::Event::Stop
-        || envelope.event == hook::Event::SessionStart
-        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
-        || envelope.event == hook::Event::Forge
+        || envelope.event == crate::config_model::Event::Stop
+        || envelope.event == crate::config_model::Event::SessionStart
+        || (envelope.event == crate::config_model::Event::PreTool && !envelope.raw_tool.is_empty())
+        || envelope.event == crate::config_model::Event::Forge
 }
 
 /// The mediated call's bytes off stdin, or `None` where the call must simply
@@ -20553,7 +20568,7 @@ struct Payload {
 /// not an option — the stream is consumed — and re-serializing the envelope would
 /// hand a handler a document the host never sent.
 fn decode_payload(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     payload: Payload,
     mode: Mode,
     err: &mut dyn Write,
@@ -20818,7 +20833,7 @@ type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
 /// handlers either.
 fn hook_config_or_floor(
     overrides: &Overrides,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     handoff: Handoff<'_>,
     mode: Mode,
@@ -20860,7 +20875,7 @@ fn hook_config_or_floor(
 
 /// The config a call nothing could judge runs under: no rules, no waivers, no
 /// collector. Not the floor — nothing faulted, there was simply nothing to load.
-fn nothing_to_judge(harness: hook::Harness) -> HookConfig {
+fn nothing_to_judge(harness: crate::config_model::Harness) -> HookConfig {
     (hook::Policy::declaring_nothing(harness), Vec::new(), None)
 }
 
@@ -20870,7 +20885,7 @@ fn nothing_to_judge(harness: hook::Harness) -> HookConfig {
 /// floored call has no loaded config a next text could be judged against.
 fn handle_unless_floored(
     floored: bool,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     raw: &str,
     overrides: &Overrides,
@@ -20903,7 +20918,7 @@ const CONFIG_WRITE_UNLOADABLE: &str = "config-write-unloadable";
 fn config_write_breaks(
     envelope: &hook::Envelope,
     overrides: &Overrides,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
 ) -> Option<hook::Decision> {
     if envelope.writes.as_deref() != Some(config::CONFIG_FILE)
         || overrides.config_from.is_some()
@@ -21287,7 +21302,7 @@ fn already_ran(ran: Option<&Path>, build: &Path) -> bool {
 /// answers `engine-cannot-adjudicate` from the engine's own table with no config
 /// (CLOUD-2142).
 fn deny_unadjudicable(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     unreadable: &dyn std::fmt::Display,
     mode: Mode,
@@ -21609,7 +21624,7 @@ fn protected_snapshot_path(root: &Path, call: &str) -> Option<PathBuf> {
 /// failure to write is silent and costs only the comparison — the pre-call
 /// gate has already judged every path the command names.
 fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision: &hook::Decision) {
-    if envelope.event != hook::Event::PreTool
+    if envelope.event != crate::config_model::Event::PreTool
         || envelope.operation != hook::Operation::Execute
         || matches!(decision, hook::Decision::Deny(_))
     {
@@ -21647,12 +21662,14 @@ fn snapshot_protected(policy: &hook::Policy, envelope: &hook::Envelope, decision
 /// channel and names the override route, which is how a deliberate protected
 /// write is recorded rather than laundered through a script.
 fn protected_escape(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<HookDispatch>> {
-    if envelope.event != hook::Event::PostTool || envelope.operation != hook::Operation::Execute {
+    if envelope.event != crate::config_model::Event::PostTool
+        || envelope.operation != hook::Operation::Execute
+    {
         return Ok(None);
     }
     let Some(call) = envelope.call_id.as_deref() else {
@@ -21716,7 +21733,7 @@ fn protected_escape(
         paths = unnamed.join(" "),
         first = first,
     );
-    if harness == hook::Harness::ClaudeCode {
+    if harness == crate::config_model::Harness::ClaudeCode {
         writeln!(
             out,
             "{}",
@@ -21864,7 +21881,7 @@ fn fill_turn_advice(
     *found = hook::nonblocking_findings(policy, envelope, facts);
     // At Stop the ladder above already spoke (`stop_advice`), so these are only
     // recorded there.
-    let speaks = envelope.event != hook::Event::Stop;
+    let speaks = envelope.event != crate::config_model::Event::Stop;
     for (severity, refusal) in found.iter() {
         if speaks && *severity == severity::RuleSeverity::Advise {
             push_finding(
@@ -21990,7 +22007,7 @@ struct HookSighter<'a> {
 }
 
 impl<'a> HookSighter<'a> {
-    fn new(harness: hook::Harness, envelope: &'a hook::Envelope) -> HookSighter<'a> {
+    fn new(harness: crate::config_model::Harness, envelope: &'a hook::Envelope) -> HookSighter<'a> {
         let capabilities = harness.capabilities();
         let reached = capabilities.advisory_reachable(&envelope.raw_event);
         HookSighter {
@@ -22154,7 +22171,7 @@ fn show_policy_input(envelope: &hook::Envelope, facts: &hook::Facts<'_>) {
 /// what keeps the rule in one place. A second `||` here would be a copy of that
 /// table that could disagree with it.
 fn collect_batch_advice(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     overrides: &Overrides,
     mode: Mode,
@@ -22164,7 +22181,11 @@ fn collect_batch_advice(
     // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
     // session, so it is written before any declared handler provisions anything.
     stamp_session(envelope);
-    if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
+    if Some(envelope.event)
+        == harness
+            .capabilities()
+            .degrade(crate::config_model::Event::PostToolBatch)
+    {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
     report_contract_drift(envelope, overrides, advice);
@@ -22198,7 +22219,7 @@ fn collect_batch_advice(
 /// session start is not a call being adjudicated, and a clone with no readable
 /// git directory is one where `claim check` reports the missing stamp itself.
 fn stamp_session(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let Ok(git_dir) = git::git_dir(hook_session_home()) else {
@@ -22229,7 +22250,7 @@ fn stamp_session(envelope: &hook::Envelope) {
 /// session whose pin cannot be reached is a session where this fact answers
 /// could-not-look, which is exactly what an absent record already says.
 fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let here = hook_authority_root();
@@ -22244,7 +22265,7 @@ fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
     if !resolved
         .rules
         .iter()
-        .any(|rule| rule.kind == rules::RuleKind::Policy)
+        .any(|rule| rule.kind == crate::config_model::RuleKind::Policy)
     {
         return;
     }
@@ -22284,7 +22305,7 @@ fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
 /// here can refuse a session, because a session refused over its own environment
 /// is one that cannot run the repair the report names.
 fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let here = hook_authority_root();
@@ -22311,7 +22332,7 @@ fn adopt_engine_pin(
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let here = hook_authority_root();
@@ -22420,7 +22441,7 @@ fn report_container_health(
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let here = hook_session_home();
@@ -22475,7 +22496,7 @@ fn report_container_health(
 /// object; a record that outlives its session costs one extra red run of the
 /// consumer's gate, which names the remedy anyway.
 fn expire_wiring_record(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     let _ = wiring::clear_at_load(hook_session_home());
@@ -22491,7 +22512,7 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
 /// and `fork` keep**: the host replays the transcript, so what it delivered is
 /// still in the window. Other contexts in the clone are never touched.
 fn expire_sightings(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+    if envelope.event != crate::config_model::Event::SessionStart {
         return;
     }
     forget_drain_result(envelope);
@@ -22513,7 +22534,7 @@ fn expire_sightings(envelope: &hook::Envelope) {
 /// the reads.
 fn expire_history_reads(envelope: &hook::Envelope) {
     let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));
-    if envelope.event != hook::Event::SessionStart || carried {
+    if envelope.event != crate::config_model::Event::SessionStart || carried {
         return;
     }
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_session_home()))
@@ -22551,7 +22572,7 @@ fn runs_engine(command: &str) -> bool {
 /// What the model reads of a post-tool result: the seen-finding collapse and
 /// the result bound (CLOUD-2223), emitted as ONE document.
 fn rewrite_post_tool(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     spilled: &[stream_input::Spilled],
     out: &mut dyn Write,
@@ -22605,7 +22626,7 @@ fn rewrite_post_tool(
 /// still points the model at it.
 fn post_tool(
     (harness, envelope, spilled, overrides): (
-        hook::Harness,
+        crate::config_model::Harness,
         &hook::Envelope,
         &[stream_input::Spilled],
         &Overrides,
@@ -22613,7 +22634,7 @@ fn post_tool(
     (out, err): (&mut dyn Write, &mut dyn Write),
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<Option<HookDispatch>> {
-    if envelope.event != hook::Event::PostTool {
+    if envelope.event != crate::config_model::Event::PostTool {
         return Ok(None);
     }
     // A PROTECTED PATH THE CALL CHANGED WITHOUT NAMING IT (step 14) answers
@@ -22641,7 +22662,7 @@ fn post_tool(
 /// streamed read never held. `None` with no repository to store into, which
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
 fn point_at_spills(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     result: &serde_json::Value,
     spilled: &[stream_input::Spilled],
@@ -22837,7 +22858,7 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 /// CHEAP WHEN SMALL: the size is read before config, and only a result over the
 /// inline threshold pays for reading the declared bound.
 fn bound_result(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     result: &serde_json::Value,
 ) -> Option<(serde_json::Value, refusal::Refusal)> {
@@ -22957,7 +22978,7 @@ fn dispatch_handlers(
     // the buffer `fill_turn_advice` reads as "already told", which would silence
     // the completion rung above it AND skip the seam writes that ride that
     // routine — CLOUD-1372's defect, reached through a different door.
-    if envelope.event == hook::Event::Stop {
+    if envelope.event == crate::config_model::Event::Stop {
         return None;
     }
     let hook_config = hook_table(overrides)?;
@@ -23102,7 +23123,7 @@ fn dispatch_handlers(
 /// required check is agent-sourced, so a repository declaring none pays nothing
 /// and the answer is `None` rather than an empty map.
 fn agent_records(
-    checks: &[(&String, &rules::ReceiptKey)],
+    checks: &[(&String, &crate::config_model::ReceiptKey)],
     store: Option<&receipt::SourcedStore>,
 ) -> hook::AgentFacts {
     if checks.is_empty() {
@@ -23195,7 +23216,7 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 /// refuses an action on `pre-tool`, so this returns before touching config for
 /// the one event that runs on every mediated tool call.
 fn fire_actions(envelope: &hook::Envelope, overrides: &Overrides, err: &mut dyn Write) {
-    if envelope.event == hook::Event::PreTool {
+    if envelope.event == crate::config_model::Event::PreTool {
         return;
     }
     // The REPOSITORY's authority, not the cwd's (CLOUD-824). Same reading as
@@ -23271,7 +23292,7 @@ fn fire_actions(envelope: &hook::Envelope, overrides: &Overrides, err: &mut dyn 
 /// path is untouched — advice is the only document there, which is the behaviour
 /// CLOUD-1131 measured and shipped.
 fn emit_channel(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -23308,7 +23329,7 @@ fn emit_channel(
 /// trunk does not carry survives a remove, as does every branch when no trunk
 /// resolves: fail closed on a delete.
 fn worktree_answer(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     raw: &str,
     decision: &hook::Decision,
@@ -23317,8 +23338,8 @@ fn worktree_answer(
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     let create = match envelope.event {
-        hook::Event::WorktreeCreate => true,
-        hook::Event::WorktreeRemove => false,
+        crate::config_model::Event::WorktreeCreate => true,
+        crate::config_model::Event::WorktreeRemove => false,
         _ => return Ok(None),
     };
     if matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
@@ -23391,7 +23412,7 @@ fn remove_worktree(worktree_path: &str) -> Result<()> {
 }
 
 fn emit_advisory(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -23440,7 +23461,7 @@ fn report_contract_drift(
     // this structurally unable to become part of adjudication.
     if !matches!(
         envelope.event,
-        hook::Event::PostToolBatch | hook::Event::SessionStart
+        crate::config_model::Event::PostToolBatch | crate::config_model::Event::SessionStart
     ) {
         return;
     }
@@ -23486,7 +23507,7 @@ fn report_contract_drift(
     // toward an unbounded repeat of the same one.
     let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
         drop(contract::record(&git_dir, session, &current));
-        if !matches!(envelope.event, hook::Event::SessionStart) {
+        if !matches!(envelope.event, crate::config_model::Event::SessionStart) {
             // WARNING: the engine is not mediating this session at all, which is
             // the one advisory whose subject is the gate rather than the work.
             push_finding(
@@ -23649,7 +23670,7 @@ fn task_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
 ) -> (taskset::TaskFacts, taskset::TaskBodies) {
-    if envelope.event == hook::Event::SessionStart {
+    if envelope.event == crate::config_model::Event::SessionStart {
         // Returned rather than discarded: the session that mints it may as well
         // have it, and a caller that ignores it is not paying for the read twice.
         let tasks = taskset::refresh(hook_authority_root(), &policy.declared_tasks());
@@ -23815,8 +23836,8 @@ fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Pr
 /// row's `fix` or `no_fix_reason`.
 fn print_rule_remedies(
     err: &mut dyn Write,
-    found: &[rules::Finding],
-    declared: &[rules::Rule],
+    found: &[crate::findings::Finding],
+    declared: &[crate::config_model::Rule],
     registry: &[verdict::DeclaredVerdict],
 ) -> Result<()> {
     let rules: std::collections::BTreeSet<&str> = found
@@ -23827,7 +23848,7 @@ fn print_rule_remedies(
         let remediation = declared
             .iter()
             .find(|row| row.id == rule)
-            .and_then(rules::Rule::remediation);
+            .and_then(crate::config_model::Rule::remediation);
         if let Some(remedy) = refusal::of_rule(rule, registry, remediation.as_ref()) {
             output::verdict(err, &remedy.render_finding(refusal::Arm::Full))?;
         }
@@ -24106,7 +24127,7 @@ fn drain_advisories(
 /// reason work stops: the next attempt denies again with the same `Fix::Run`,
 /// which is the safe direction and one the agent can see.
 fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
         return;
     };
     // EVERY MATCHING ROW, not the first (CLOUD-690). `find` was correct while a
@@ -24217,7 +24238,7 @@ fn record_one_agent_fact(
 /// every other call pays nothing. The store is found from the repository's
 /// anchor, never the cwd, for `record_mints`' measured reason.
 fn dispatch_facts(envelope: &hook::Envelope) -> facts::Look<()> {
-    if envelope.event != hook::Event::PreTool {
+    if envelope.event != crate::config_model::Event::PreTool {
         return facts::Look::IsNot;
     }
     let Some(prompt) = dispatch::prompt_of(&envelope.raw_tool, &envelope.input) else {
@@ -24246,7 +24267,7 @@ fn dispatch_facts(envelope: &hook::Envelope) -> facts::Look<()> {
 fn record_post_tool(
     overrides: &Overrides,
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
     // GATED ONLY ON THE RESPONSE MEMBER, never on the command. The
@@ -24330,7 +24351,7 @@ fn record_post_tool(
 /// call mints nothing, and neither does one that named a row this config does
 /// not declare.
 fn record_history_reads(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::PostTool || envelope.result.is_null() {
+    if envelope.event != crate::config_model::Event::PostTool || envelope.result.is_null() {
         return;
     }
     let Some(ids) = hook::history_read_ids(&envelope.command) else {
@@ -24401,7 +24422,7 @@ fn stop_nudges(
     raw: &str,
     block: &mut Option<refusal::Refusal>,
 ) -> Vec<refusal::Refusal> {
-    if envelope.event != hook::Event::Stop {
+    if envelope.event != crate::config_model::Event::Stop {
         return Vec::new();
     }
     // EVERY DECLARED STOP ROW RUNS ON EVERY STOP, BEFORE ANY RULE CAN RETURN
@@ -24941,11 +24962,11 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 /// Stop-path write: a marker that will not clear costs one pointer, never the
 /// prompt.
 fn rearm_unlanded(envelope: &hook::Envelope) {
-    if envelope.event == hook::Event::PostTool {
+    if envelope.event == crate::config_model::Event::PostTool {
         note_land_dispatch(envelope);
         return;
     }
-    if envelope.event != hook::Event::UserPromptSubmit {
+    if envelope.event != crate::config_model::Event::UserPromptSubmit {
         return;
     }
     let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
@@ -24972,7 +24993,7 @@ const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 /// Other hosts read a Stop's exit differently, so there the refusal joins the
 /// advisory instead: every producer's block reaches a reader on every host.
 fn refused_stop(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     block: Option<refusal::Refusal>,
     advice: &mut Vec<advisory::Advice>,
     err: &mut dyn Write,
@@ -24980,7 +25001,7 @@ fn refused_stop(
     let Some(block) = block else {
         return Ok(false);
     };
-    if harness != hook::Harness::ClaudeCode {
+    if harness != crate::config_model::Harness::ClaudeCode {
         push_finding(advice, severity::AdvisoryTier::Caution, block);
         return Ok(false);
     }
@@ -25013,7 +25034,10 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 fn note_land_dispatch(envelope: &hook::Envelope) {
     // BACKGROUNDED ONLY: a foreground land's post-tool fires after it exited,
     // so it is no land waiting for its lock.
-    let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+    let backgrounded = crate::config_model::Field::RunInBackground
+        .read(envelope)
+        .as_deref()
+        == Some("true");
     if !backgrounded || hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
         return;
     }
@@ -25366,10 +25390,10 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     // `select_rules` refused it, `.ok()?` read that as could-not-look, and this
     // rung said nothing on every Stop. The predicate is the stable name; the
     // same lookup the admission mint uses (CLOUD-1571).
-    let policy_rows: Vec<rules::Rule> = config
+    let policy_rows: Vec<crate::config_model::Rule> = config
         .rules
         .iter()
-        .filter(|declared| declared.kind == rules::RuleKind::Policy)
+        .filter(|declared| declared.kind == crate::config_model::RuleKind::Policy)
         .cloned()
         .collect();
     let bundles = policy::load(
@@ -25381,7 +25405,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     )
     .ok()?;
     let publishers = policy::publishers_of(&bundles, FILED_OVER_OWN_DIFF);
-    let selected: Vec<rules::Rule> = policy_rows
+    let selected: Vec<crate::config_model::Rule> = policy_rows
         .into_iter()
         .filter(|declared| publishers.contains(declared.id.as_str()))
         .collect();
@@ -25532,7 +25556,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
     let dispatched = handler::dispatch(
         hook_session_home(),
         &table.handlers,
-        hook::Event::Stop,
+        crate::config_model::Event::Stop,
         "",
         None,
         &handler::Payload::from(raw),
@@ -25616,7 +25640,7 @@ fn write_records_for(
     let Some(result) = facts::payload_in(raw) else {
         return;
     };
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
         return;
     };
     let recorders = policy.declared_recorders();
@@ -25683,7 +25707,7 @@ fn write_records_for(
 /// it; a call no row is about leaves nothing behind.
 fn defer_backgrounded(
     policy: &hook::Policy,
-    recorders: &[crate::recorder::Declared],
+    recorders: &[crate::config_model::RecorderDeclared],
     raw_tool: &str,
     input: &serde_json::Value,
     result: &serde_json::Value,
@@ -26008,7 +26032,7 @@ fn clear_minted(path: &Path) -> std::io::Result<()> {
 /// the RESULT — the host's report of what was shown and chosen — and never off
 /// the input, which the agent wrote. Silent on every failure, as every recorder
 /// on this boundary is: the admission that reads the ledger refuses again.
-fn record_asked(envelope: &hook::Envelope, harness: hook::Harness) {
+fn record_asked(envelope: &hook::Envelope, harness: crate::config_model::Harness) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs());
@@ -26024,7 +26048,7 @@ fn record_asked(envelope: &hook::Envelope, harness: hook::Harness) {
 /// The one selector-and-write both [`record_asked`] and the integration tier
 /// reach, so the tier proves the boundary rather than a copy of it.
 fn record_asked_at(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     raw_tool: &str,
     result: &serde_json::Value,
     root: &Path,
@@ -26050,7 +26074,7 @@ fn record_asked_at(
 #[doc(hidden)]
 #[must_use]
 pub fn record_asked_for_test(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     raw_tool: &str,
     result: &serde_json::Value,
     root: &Path,
@@ -26102,7 +26126,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     let result = facts::payload_in(&envelope.result)
         .or_else(|| recover_spilled(&envelope.result))
         .unwrap_or(serde_json::Value::Null);
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
         return;
     };
     // A BACKGROUNDED CALL HAS NOT RUN YET (CLOUD-2677). Its result names a task,
@@ -26198,7 +26222,7 @@ fn replay_mints(overrides: &Overrides, pending: &background::Pending, raw: &serd
         return;
     }
     let result = facts::payload_in(raw).unwrap_or(serde_json::Value::Null);
-    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+    let Ok((policy, _)) = load_policy(overrides, crate::config_model::Harness::ExitCode) else {
         return;
     };
     mint_with_policy(&policy, &pending.tool, &pending.input, &result);
@@ -26233,7 +26257,7 @@ fn replay_mints(overrides: &Overrides, pending: &background::Pending, raw: &serd
 /// and they differ in which keys exist rather than in a count.
 fn capture_response(
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
     // Pointer-only: the reason id, never a path and never a byte count that
@@ -26304,7 +26328,7 @@ fn capture_response(
 /// (CLOUD-2397): a capture no row names cannot be selected, and goes first.
 fn stored_row(
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     source: &str,
     fidelity: capture::Fidelity,
     digest: String,
@@ -26349,7 +26373,7 @@ fn stored_row(
 fn record_stored(
     root: &Path,
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     source: &str,
     stored: &capture::Capture,
 ) {
@@ -26373,7 +26397,7 @@ fn record_stored(
 /// cwd would mint a state root wherever the agent happens to be standing.
 fn record_absent_response(
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
     let Ok(root) = git::repo_root(hook_session_home()) else {
@@ -26393,7 +26417,7 @@ fn record_absent_response(
 fn record_absence(
     root: &Path,
     envelope: &hook::Envelope,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     reason: &'static str,
     advice: &mut Vec<advisory::Advice>,
 ) {
@@ -26409,7 +26433,7 @@ fn record_absence(
         source: capture::POST_TOOL_MEMBER.to_owned(),
         host: harness.as_str().to_owned(),
         tool: envelope.raw_tool.clone(),
-        event: hook::Event::PostTool.as_str().to_owned(),
+        event: crate::config_model::Event::PostTool.as_str().to_owned(),
         fidelity: capture::Fidelity::Unavailable.as_str().to_owned(),
         seen_at: None,
         class: None,
@@ -26462,7 +26486,7 @@ fn collect_before_admitting(
             .map(|dir| dir.join(root))
             .filter(|tree| tree.is_dir())
     };
-    if envelope.event == hook::Event::SessionStart {
+    if envelope.event == crate::config_model::Event::SessionStart {
         if band.is_some() {
             for tree in trees() {
                 collect::rearm(&tree);
@@ -26470,7 +26494,7 @@ fn collect_before_admitting(
         }
         return;
     }
-    if envelope.event != hook::Event::PreTool {
+    if envelope.event != crate::config_model::Event::PreTool {
         return;
     }
     let trace = std::env::var_os("BATTEN_DISK_TRACE").is_some_and(|value| value == "1");
@@ -26739,7 +26763,7 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
 
 fn load_policy(
     overrides: &Overrides,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
 ) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
     load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
 }
@@ -26747,7 +26771,10 @@ fn load_policy(
 /// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
 /// collector's band costs the pre-tool path nothing beyond the load it already
 /// pays (CLOUD-2197).
-fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<HookConfig> {
+fn load_hook_config(
+    overrides: &Overrides,
+    harness: crate::config_model::Harness,
+) -> Result<HookConfig> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
@@ -26810,7 +26837,10 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
 /// allocated (dhat, CLOUD-2315).
 struct HookLoads {
     resolved: Vec<((PathBuf, Overrides), std::rc::Rc<resolve::Resolved>)>,
-    loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
+    loaded: Vec<(
+        (PathBuf, Overrides, crate::config_model::Harness),
+        HookConfig,
+    )>,
 }
 
 thread_local! {
@@ -26839,7 +26869,11 @@ impl HookLoads {
         HookLoadScope
     }
 
-    fn recall(here: &Path, overrides: &Overrides, harness: hook::Harness) -> Option<HookConfig> {
+    fn recall(
+        here: &Path,
+        overrides: &Overrides,
+        harness: crate::config_model::Harness,
+    ) -> Option<HookConfig> {
         HOOK_LOADS.with(|cell| {
             cell.borrow().as_ref().and_then(|loads| {
                 loads
@@ -26880,7 +26914,12 @@ impl HookLoads {
         Ok(resolved)
     }
 
-    fn keep(here: &Path, overrides: &Overrides, harness: hook::Harness, loaded: &HookConfig) {
+    fn keep(
+        here: &Path,
+        overrides: &Overrides,
+        harness: crate::config_model::Harness,
+        loaded: &HookConfig,
+    ) {
         HOOK_LOADS.with(|cell| {
             if let Some(loads) = cell.borrow_mut().as_mut() {
                 loads.loaded.push((
@@ -27196,7 +27235,7 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
 const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
 
 fn render(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     decision: hook::Decision,
     rendering: &Rendering<'_>,
@@ -27590,10 +27629,10 @@ fn run_judges(
     config: &resolve::Resolved,
     root: &Path,
 ) -> Result<Vec<findings::Advisory>> {
-    let rows: Vec<&rules::Rule> = config
+    let rows: Vec<&crate::config_model::Rule> = config
         .rules
         .iter()
-        .filter(|rule| rule.kind == rules::RuleKind::Judge)
+        .filter(|rule| rule.kind == crate::config_model::RuleKind::Judge)
         .collect();
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -27604,7 +27643,7 @@ fn run_judges(
         config.judge.as_ref().and_then(|j| j.max_payload_bytes),
         None,
     );
-    let files = rules::tree_files(root)?;
+    let files = crate::git::tree_files(root)?;
 
     let mut raised = Vec::new();
     for rule in rows {
@@ -28835,7 +28874,7 @@ fn anchor() -> PathBuf {
 /// A [`error::UsageError`] (exit `1`) without `--half tree`; an I/O failure
 /// resolving the store as an internal error (exit `3`).
 fn run_inputs_digest(flags: &cli::EnforceFlags, out: &mut dyn Write) -> Result<ExitCode> {
-    if flags.half != Some(rules::Half::Tree) {
+    if flags.half != Some(crate::surface_table::Half::Tree) {
         return Err(error::UsageError::raise(
             "`--inputs-digest` keys the tree half's receipt and takes `--half tree`",
         ));
@@ -28846,14 +28885,14 @@ fn run_inputs_digest(flags: &cli::EnforceFlags, out: &mut dyn Write) -> Result<E
 }
 
 fn apply_baseline(
-    findings: Vec<rules::Finding>,
+    findings: Vec<crate::findings::Finding>,
     scan: &rules::Scan,
     root: &Path,
     // The tree half's judged rows (step 13a): only their entries apply there.
     judged: Option<&std::collections::BTreeSet<&str>>,
     mode: Mode,
     err: &mut dyn Write,
-) -> Result<Vec<rules::Finding>> {
+) -> Result<Vec<crate::findings::Finding>> {
     let Some(mut recorded) = baseline::load(root)? else {
         return Ok(findings);
     };
@@ -28919,13 +28958,13 @@ fn apply_baseline(
 /// unresolvable HEAD or epoch admits nothing. An unreadable store admits
 /// nothing. A store this cannot read must not be able to suppress.
 fn apply_admissions(
-    findings: Vec<rules::Finding>,
+    findings: Vec<crate::findings::Finding>,
     scan: &rules::Scan,
     root: &Path,
     config_from: Option<&str>,
     mode: Mode,
     err: &mut dyn Write,
-) -> Result<Vec<rules::Finding>> {
+) -> Result<Vec<crate::findings::Finding>> {
     // Nothing to admit against: skip the two resolutions rather than paying for
     // them on every clean run.
     if scan.classes.is_empty() || findings.is_empty() {
@@ -29581,7 +29620,7 @@ fn supplied_instant(raw: Option<&str>) -> Result<std::time::SystemTime> {
 }
 
 type RuleRunner = fn(
-    &[rules::Rule],
+    &[crate::config_model::Rule],
     &[provision::Provision],
     policy::Vocabulary<'_>,
     &Path,
@@ -29647,7 +29686,7 @@ struct RunRequest<'a> {
     /// they are selected against.
     scope: CheckScope<'a>,
     /// Which half of a split `enforce` to judge (step 13a); `None` is every row.
-    half: Option<rules::Half>,
+    half: Option<crate::surface_table::Half>,
     /// The refs the tree half's receipt keys the merge base of (`--keyed-base`).
     keyed_bases: &'a [String],
 }
@@ -29701,7 +29740,11 @@ impl<'a> RunRequest<'a> {
     }
 
     /// This request narrowed to one half of a split `enforce` (step 13a).
-    const fn split(self, half: Option<rules::Half>, keyed_bases: &'a [String]) -> RunRequest<'a> {
+    const fn split(
+        self,
+        half: Option<crate::surface_table::Half>,
+        keyed_bases: &'a [String],
+    ) -> RunRequest<'a> {
         RunRequest {
             half,
             keyed_bases,
@@ -29743,9 +29786,9 @@ impl<'a> RunRequest<'a> {
 /// misspelled. That is the vacuous pass this function exists to refuse, arriving
 /// through the door the arity opened, so every named id must match on its own.
 fn select_rules(
-    declared: &[rules::Rule],
+    declared: &[crate::config_model::Rule],
     only: &[String],
-) -> Result<(Vec<rules::Rule>, policy::ModuleChecks)> {
+) -> Result<(Vec<crate::config_model::Rule>, policy::ModuleChecks)> {
     if only.is_empty() {
         return Ok((declared.to_vec(), policy::ModuleChecks::Run));
     }
@@ -29800,7 +29843,7 @@ fn select_rules(
     // the `(path, line, rule)` pointer tuple downstream, and a selection that
     // reordered the table would make a caller's argv order visible in bytes §6
     // holds stable.
-    let selected: Vec<rules::Rule> = declared
+    let selected: Vec<crate::config_model::Rule> = declared
         .iter()
         .filter(|rule| only.contains(&rule.id))
         .cloned()
@@ -29829,9 +29872,12 @@ fn select_rules(
 /// # Errors
 ///
 /// Returns an error when a declared budget entry or the ledger cannot be read.
-fn engine_side_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<rules::Finding>> {
+fn engine_side_findings(
+    root: &Path,
+    config: &resolve::Resolved,
+) -> Result<Vec<crate::findings::Finding>> {
     let reports = budget::measure_all(root, config.budget.as_ref())?;
-    let mut found: Vec<rules::Finding> =
+    let mut found: Vec<crate::findings::Finding> =
         reports.iter().filter_map(budget::Report::finding).collect();
     found.extend(reports.iter().flat_map(budget::Report::file_findings));
     found.extend(ledger_findings(root, config)?);
@@ -29851,7 +29897,10 @@ fn engine_side_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<r
 /// # Errors
 ///
 /// Returns an error when the declared ledger cannot be read.
-fn ledger_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<rules::Finding>> {
+fn ledger_findings(
+    root: &Path,
+    config: &resolve::Resolved,
+) -> Result<Vec<crate::findings::Finding>> {
     match config.defects.as_ref() {
         Some(declared) => defects::gate(root, declared),
         None => Ok(Vec::new()),
@@ -29991,7 +30040,7 @@ fn run_rules(
     // keyed. A global override reshapes the authority or the verdict from
     // outside the index, and `--config-from` reads a ref — refused rather than
     // silently judged and then cached.
-    if half == Some(rules::Half::Tree) && *overrides != Overrides::default() {
+    if half == Some(crate::surface_table::Half::Tree) && *overrides != Overrides::default() {
         return Err(error::UsageError::raise(
             "`enforce --half tree` takes no global override (`--strictness`, `--fail-on-warning`, \
              `--config-from`, `--config-in`): its verdict is receipted on the tree alone; run the \
@@ -30027,7 +30076,7 @@ fn run_rules(
     // tree, so they run where the receipt does not reach (CLOUD-1186). The
     // baseline and admissions run in BOTH halves: the tree half's receipt keys
     // them through `enforce --half tree --inputs-digest` (step 13a).
-    let live = half != Some(rules::Half::Tree);
+    let live = half != Some(crate::surface_table::Half::Tree);
     let scope = scope.resolve(&root)?;
     let opts = rules::RunOptions {
         half,
@@ -30298,10 +30347,10 @@ fn run_rules(
 /// nothing would make the function's output depend on which members happen to be
 /// inert today.
 fn run_dispositions(
-    findings: &[rules::Finding],
+    findings: &[crate::findings::Finding],
     scan: &rules::Scan,
     fail_on_warning: bool,
-    rules: &[rules::Rule],
+    rules: &[crate::config_model::Rule],
     custody_orphaned: bool,
 ) -> Vec<decision::Outcome> {
     let mut dispositions = Vec::with_capacity(scan.not_evaluated.len() + 2);
@@ -30433,7 +30482,7 @@ fn report_clean_run(
     json: bool,
     mode: Mode,
     err: &mut dyn Write,
-    findings: &[rules::Finding],
+    findings: &[crate::findings::Finding],
     config: &resolve::Resolved,
     scan: &rules::Scan,
 ) -> Result<()> {
@@ -31936,7 +31985,7 @@ pub fn land_ready_owes(
     if !root.join(config::CONFIG_FILE).is_file() {
         return Ok(None);
     }
-    let harness = hook::Harness::ClaudeCode;
+    let harness = crate::config_model::Harness::ClaudeCode;
     let mut resolved = resolve::resolve(root, &Overrides::default())?;
     // "Agent-sourced" is a name in the `[[fact]]` table, as `Policy::agent_fact`
     // reads it. PER CHECK, NOT PER ROW: a row's ordinary receipts are still asked
@@ -31947,7 +31996,7 @@ pub fn land_ready_owes(
     let sourced = |check: &String| resolved.facts.iter().any(|fact| &fact.name == check);
     let mut kept = Vec::new();
     for mut rule in std::mem::take(&mut resolved.rules) {
-        if rule.kind != rules::RuleKind::Receipt {
+        if rule.kind != crate::config_model::RuleKind::Receipt {
             continue;
         }
         if let Some(checks) = rule.checks.as_mut() {

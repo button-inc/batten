@@ -50,8 +50,8 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 use crate::transcript::{Event, Stream};
 

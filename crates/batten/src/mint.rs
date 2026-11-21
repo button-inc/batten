@@ -200,7 +200,7 @@ pub fn subject(
     {
         return None;
     }
-    crate::receipt::safe_subject(&subject).then_some(subject)
+    crate::config_check::receipt::safe_subject(&subject).then_some(subject)
 }
 
 /// The git blob id of `text`, byte-identical to `git hash-object --stdin`.
