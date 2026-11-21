@@ -320,6 +320,9 @@ fn attempt_start(log_name: &str) -> Option<i64> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     #[test]
     fn a_log_name_is_the_attempts_utc_start() {

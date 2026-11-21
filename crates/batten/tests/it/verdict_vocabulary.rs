@@ -9,6 +9,7 @@
 //! the commit, and the table is a fixed committed artifact, so its token counts
 //! are a property of the commit rather than of the world.
 
+use batten::verdict::DeclaredVerdictExt as _;
 /// Every word `batten.toml`'s `[vocabulary]` declares, held to one token each.
 ///
 /// **Why a mirrored list rather than a read of the table.** The other five arms

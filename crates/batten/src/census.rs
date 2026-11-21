@@ -62,7 +62,8 @@ use crate::selector::Selector;
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_model::{Manifest, ShellCensus};
 
-impl ShellCensus {
+/// `ShellCensus` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ShellCensusExt: Sized {
     /// Refuse a declaration that would count nothing while reading as covered.
     ///
     /// # Errors
@@ -71,7 +72,11 @@ impl ShellCensus {
     /// key that is empty or carries whitespace, an empty unit header, a glob
     /// `globset` cannot parse, or a glob spelling an operator the ban cannot read
     /// (`BAN_UNREAD_OPERATORS`).
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+}
+
+impl ShellCensusExt for ShellCensus {
+    fn validate(&self) -> Result<()> {
         for manifest in &self.manifests {
             if manifest.path.trim().is_empty() {
                 return Err(UsageError::raise(
@@ -633,6 +638,11 @@ pub fn run_shell(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::census::ShellCensusExt as _;
 
     fn keys(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()

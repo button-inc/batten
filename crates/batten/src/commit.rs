@@ -61,7 +61,8 @@ pub struct Claimant {
     pub claims: bool,
 }
 
-impl Claims {
+/// `Claims` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ClaimsExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
@@ -70,7 +71,11 @@ impl Claims {
     /// does not compile — refused here, where the error names the row, rather
     /// than at the gate, where it would be an exemption that silently matches
     /// nothing and so refuses a class of commit it was written to admit.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+}
+
+impl ClaimsExt for Claims {
+    fn validate(&self) -> Result<()> {
         for row in &self.unclaimed {
             if row.id.is_empty() {
                 return Err(UsageError::raise(
@@ -83,8 +88,18 @@ impl Claims {
     }
 }
 
-impl Unclaimed {
+/// `Unclaimed` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait UnclaimedExt: Sized {
     /// The two compiled expressions, the author's where declared.
+    fn matchers(&self) -> Result<(Regex, Option<Regex>)>;
+
+    /// Whether this row exempts `commit`.
+    ///
+    /// Both conjuncts, cheapest first: the author is one string, the paths a walk.
+    fn exempts(paths: &Regex, author: Option<&Regex>, commit: &Claimant) -> bool;
+}
+
+impl UnclaimedExt for Unclaimed {
     fn matchers(&self) -> Result<(Regex, Option<Regex>)> {
         let compile = |column: &str, expression: &str| {
             Regex::new(expression).map_err(|error| {
@@ -102,9 +117,6 @@ impl Unclaimed {
         Ok((paths, author))
     }
 
-    /// Whether this row exempts `commit`.
-    ///
-    /// Both conjuncts, cheapest first: the author is one string, the paths a walk.
     fn exempts(paths: &Regex, author: Option<&Regex>, commit: &Claimant) -> bool {
         let address = address_of(commit.author.as_str());
         let authored = match author {
@@ -269,7 +281,8 @@ impl Finding {
     }
 }
 
-impl Commit {
+/// `Commit` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait CommitExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
@@ -278,7 +291,23 @@ impl Commit {
     /// does not compile. Refused here, where the error names the key, rather than
     /// at the gate, where an uncompilable pattern would surface as a rule that
     /// silently matches nothing.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+
+    /// The compiled pattern.
+    fn matcher(&self) -> Result<Regex>;
+
+    /// Judge subjects, returning every refusal as a pointer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if the configured pattern does not
+    /// compile. Validated at load too, so this is the belt to that suspenders and
+    /// keeps the function total.
+    fn judge(&self, subjects: &[Subject]) -> Result<Vec<Finding>>;
+}
+
+impl CommitExt for Commit {
+    fn validate(&self) -> Result<()> {
         if self.subject_pattern.is_empty() {
             return Err(UsageError::raise(
                 "commit.subject_pattern: is empty; a convention matching nothing is not a \
@@ -292,7 +321,6 @@ impl Commit {
         self.matcher().map(|_| ())
     }
 
-    /// The compiled pattern.
     fn matcher(&self) -> Result<Regex> {
         Regex::new(&self.subject_pattern).map_err(|error| {
             // The pattern is the consumer's own config, not commit content, so
@@ -304,14 +332,7 @@ impl Commit {
         })
     }
 
-    /// Judge subjects, returning every refusal as a pointer.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) if the configured pattern does not
-    /// compile. Validated at load too, so this is the belt to that suspenders and
-    /// keeps the function total.
-    pub fn judge(&self, subjects: &[Subject]) -> Result<Vec<Finding>> {
+    fn judge(&self, subjects: &[Subject]) -> Result<Vec<Finding>> {
         let matcher = self.matcher()?;
         Ok(subjects
             .iter()
@@ -626,6 +647,13 @@ fn short(sha: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::commit::ClaimsExt as _;
+    #[cfg(test)]
+    use crate::commit::CommitExt as _;
 
     fn policy() -> Commit {
         Commit {

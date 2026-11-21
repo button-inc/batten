@@ -162,7 +162,7 @@ pub fn exercise_config_parse(data: &[u8]) {
         // signature, which is a promise it can only keep if it terminates on
         // every `Config` the parser accepts — including the degenerate ones a
         // human would never write.
-        let base = batten::config_model::Config::declaring_nothing();
+        let base = <batten::config_model::Config as batten::config::ConfigExt>::declaring_nothing();
         let against_empty = batten::trust::weakenings(&base, &config);
         let against_self = batten::trust::weakenings(&config, &config);
 

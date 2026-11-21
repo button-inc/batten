@@ -207,6 +207,9 @@ pub fn reduce(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::facts::{Format, Look, Node, Reduction, TOKEN_MAX};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::hook::FieldExt as _;
 
     fn node(text: &str) -> Node {
         match Format::Json.read(text) {

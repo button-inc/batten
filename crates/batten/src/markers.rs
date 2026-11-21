@@ -44,8 +44,13 @@ use serde::Serialize;
 use crate::config_check::markers::validate;
 use crate::config_model::Marker;
 
-impl Marker {
+/// `Marker` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait MarkerExt: Sized {
     /// Whether this marker looks at `path`.
+    fn selects(&self, path: &str) -> bool;
+}
+
+impl MarkerExt for Marker {
     fn selects(&self, path: &str) -> bool {
         self.glob
             .as_ref()
@@ -177,6 +182,9 @@ pub fn counts(markers: &[Marker], hits: &[Hit]) -> BTreeMap<String, u64> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
     use std::fs;
 

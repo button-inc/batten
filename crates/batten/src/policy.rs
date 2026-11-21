@@ -93,6 +93,11 @@
 //! agreement — CLOUD-251's vacuous pass, which is exactly the failure this
 //! surface could rebuild.
 
+use crate::preset::ManifestExt as _;
+use crate::preset::PresetModuleExt as _;
+use crate::rules::RuleExt as _;
+use crate::verdict::DeclaredVerdictExt as _;
+use crate::verdict::VocabularyExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5318,6 +5323,9 @@ pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// One module publishing `a`, refusing a write, with one test that does.
     const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\

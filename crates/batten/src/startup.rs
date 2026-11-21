@@ -330,6 +330,7 @@ pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     fn row(id: &str, check: &[&str], repair: Option<&[&str]>) -> Startup {
         Startup {

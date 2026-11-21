@@ -58,7 +58,8 @@ pub enum PinKind {
 pub const MALFORMED_PIN: &str =
     "`engine` names exactly one of `release` (a release tag, `v0.0.217`) or `source`";
 
-impl Pin {
+/// `Pin` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PinExt: Sized {
     /// What this pin names.
     ///
     /// **A RELEASE IS A RELEASE TAG OR IT IS MALFORMED (CLOUD-2644).** The tag is
@@ -66,7 +67,11 @@ impl Pin {
     /// without a re-check, so `"../../x"` must never reach the join: it is
     /// refused here, by the one reader every caller asks.
     #[must_use]
-    pub fn kind(self) -> PinKind {
+    fn kind(self) -> PinKind;
+}
+
+impl PinExt for Pin {
+    fn kind(self) -> PinKind {
         match (self.release, self.source) {
             (Some(tag), None) if release_version(&tag).is_ok() => PinKind::Release(tag),
             (None, Some(digest)) => PinKind::Source(digest),
@@ -1626,6 +1631,9 @@ pub(crate) fn make_executable(path: &Path) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     #[test]
     fn a_pin_is_rewritten_in_place_or_inserted_above_every_table() {

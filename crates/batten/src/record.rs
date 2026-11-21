@@ -2186,6 +2186,9 @@ pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<Ex
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// A committed repository carrying `files`, entered as this case's working
     /// directory. nextest runs each case in its own process, so the move is

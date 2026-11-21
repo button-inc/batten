@@ -71,10 +71,15 @@ use crate::git;
 use crate::hook::Capability;
 use crate::verdict::Subject as Pointer;
 
-impl Identity {
+/// `Identity` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait IdentityExt: Sized {
     /// The identity as git renders it in `%an <%ae>` form.
     #[must_use]
-    pub fn rendered(&self) -> String {
+    fn rendered(&self) -> String;
+}
+
+impl IdentityExt for Identity {
+    fn rendered(&self) -> String {
         format!("{} <{}>", self.name, self.email)
     }
 }
@@ -159,7 +164,31 @@ impl Finding {
     }
 }
 
-impl Attribution {
+/// Whether a rendered tagger identity is the one this repository is
+/// accountable to.
+///
+/// AN ALLOW-FORM, AND THAT IS THE POINT. A deny list would catch only the
+/// identity somebody thought to name; this refuses every identity that is not
+/// the declared one, so a release cut by an unexpected credential is refused
+/// whether or not anyone predicted that credential. It is also why no vendor
+/// literal appears in this crate for the tag surface at all — non-negotiable
+/// rule 1 is satisfied by not needing the name rather than by relocating it.
+///
+/// `identity_deny` is still consulted, so an identity that is both permitted
+/// and denied is refused. Config that contradicts itself is a finding, not a
+/// pass, and the deny list is the half that wins.
+///
+/// A FREE FUNCTION, deliberately: the two lists are passed in already
+/// compiled, so this is a pure predicate over them, and the policy they came
+/// from is not a second input it could disagree with. It was an associated
+/// function only by placement, and on the `pub` extension trait it would have
+/// exposed the private `Matchers` (CLOUD-2793).
+fn tagger_is_accountable(rendered: &str, permitted: &Matchers, denied: &Matchers) -> bool {
+    permitted.matches(rendered) && !denied.matches(rendered)
+}
+
+/// `Attribution` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait AttributionExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
@@ -169,7 +198,32 @@ impl Attribution {
     /// declaring no patterns is the half-change rule 2 exists to catch: it reads
     /// as though a policy is recorded when nothing is. `trailer_allow` may be
     /// empty — there, emptiness is a meaningful posture.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+
+    /// Judge one commit's metadata, returning every refusal as a pointer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if a configured pattern does not
+    /// compile. Validated at load too, so this is the belt to that suspenders and
+    /// keeps the function total.
+    fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>>;
+
+    /// Judge who cut a tag, returning every refusal as a pointer.
+    ///
+    /// `label` is the tag name, which is safe to print. The tagger identity never
+    /// reaches a finding — the same rule-4 discipline [`Attribution::judge`] keeps
+    /// over commit metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if `tag_identity_allow` is empty, or
+    /// if it or `identity_deny` does not compile.
+    fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>>;
+}
+
+impl AttributionExt for Attribution {
+    fn validate(&self) -> Result<()> {
         for (key, patterns) in [
             ("identity_deny", &self.identity_deny),
             ("trailer_deny", &self.trailer_deny),
@@ -210,14 +264,7 @@ impl Attribution {
         Ok(())
     }
 
-    /// Judge one commit's metadata, returning every refusal as a pointer.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) if a configured pattern does not
-    /// compile. Validated at load too, so this is the belt to that suspenders and
-    /// keeps the function total.
-    pub fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>> {
+    fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>> {
         let identity = Matchers::compile("identity_deny", &self.identity_deny)?;
         let trailer = Matchers::compile("trailer_deny", &self.trailer_deny)?;
         let body = Matchers::compile("body_deny", &self.body_deny)?;
@@ -256,37 +303,7 @@ impl Attribution {
         Ok(findings)
     }
 
-    /// Whether a rendered tagger identity is the one this repository is
-    /// accountable to.
-    ///
-    /// AN ALLOW-FORM, AND THAT IS THE POINT. A deny list would catch only the
-    /// identity somebody thought to name; this refuses every identity that is not
-    /// the declared one, so a release cut by an unexpected credential is refused
-    /// whether or not anyone predicted that credential. It is also why no vendor
-    /// literal appears in this crate for the tag surface at all — non-negotiable
-    /// rule 1 is satisfied by not needing the name rather than by relocating it.
-    ///
-    /// `identity_deny` is still consulted, so an identity that is both permitted
-    /// and denied is refused. Config that contradicts itself is a finding, not a
-    /// pass, and the deny list is the half that wins.
-    /// Free of `self` deliberately: the two lists are passed in already compiled,
-    /// so this is a pure predicate over them and the policy it came from is not a
-    /// second input it could disagree with.
-    fn tagger_is_accountable(rendered: &str, permitted: &Matchers, denied: &Matchers) -> bool {
-        permitted.matches(rendered) && !denied.matches(rendered)
-    }
-
-    /// Judge who cut a tag, returning every refusal as a pointer.
-    ///
-    /// `label` is the tag name, which is safe to print. The tagger identity never
-    /// reaches a finding — the same rule-4 discipline [`Attribution::judge`] keeps
-    /// over commit metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) if `tag_identity_allow` is empty, or
-    /// if it or `identity_deny` does not compile.
-    pub fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>> {
+    fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>> {
         // COULD NOT LOOK, NEVER CLEAN, and this is where `validate`'s "an empty
         // allow list is not a policy" lives now that the key is optional
         // (CLOUD-1789). An empty list permits nothing, so deciding over it would
@@ -324,7 +341,7 @@ impl Attribution {
         // over them can split them again and will own the escape that costs.
         Ok(match tagger {
             git::Tagger::Signed(rendered) => {
-                if Self::tagger_is_accountable(rendered, &permitted, &denied) {
+                if tagger_is_accountable(rendered, &permitted, &denied) {
                     Vec::new()
                 } else {
                     vec![point("tagger", Native::TaggerUnaccountable)]
@@ -751,6 +768,10 @@ fn short(sha: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::attribution::IdentityExt as _;
 
     fn policy() -> Attribution {
         Attribution {

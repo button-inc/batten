@@ -52,7 +52,8 @@ use crate::severity::RuleSeverity;
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_model::Defects;
 
-impl Defects {
+/// `Defects` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait DefectsExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
@@ -60,7 +61,11 @@ impl Defects {
     /// Returns a [`UsageError`] (→ exit `1`) for an empty path or an empty or
     /// duplicated taxonomy. An empty `classes` would refuse every record, which
     /// is a table that cannot be used rather than one that permits nothing.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+}
+
+impl DefectsExt for Defects {
+    fn validate(&self) -> Result<()> {
         if self.path.trim().is_empty() {
             return Err(UsageError::raise(
                 "defects.path: names no file; a ledger with no path is not a ledger".to_owned(),
@@ -485,6 +490,11 @@ pub fn plan(existing: &[Record], incoming: &[Record]) -> Result<(Added, Vec<Reco
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
+    #[cfg(test)]
+    use crate::defects::DefectsExt as _;
 
     fn record(id: &str, class: &str) -> Record {
         Record {

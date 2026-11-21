@@ -4174,6 +4174,7 @@ fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::surface_table::{SURFACE, ValueDecl};
 
     /// Parse an argv the way the binary does, through the built tree.

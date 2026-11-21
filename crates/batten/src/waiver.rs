@@ -244,7 +244,8 @@ pub fn today() -> Result<Date> {
     Ok(Date::from_unix_seconds(since.as_secs()))
 }
 
-impl Waiver {
+/// `Waiver` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait WaiverExt: Sized {
     /// The parsed expiry.
     ///
     /// # Errors
@@ -252,11 +253,7 @@ impl Waiver {
     /// Returns a [`UsageError`] when [`Waiver::expires`] is not a calendar date.
     /// Callers past load do not have to handle it — [`validate`] runs at parse
     /// time, so a resolved config's waivers all carry parseable dates.
-    pub fn expiry(&self) -> Result<Date> {
-        Date::parse(&self.expires).map_err(|err| {
-            UsageError::raise(format!("waiver {}: {}", self.rule, root_message(&err)))
-        })
-    }
+    fn expiry(&self) -> Result<Date>;
 
     /// Whether this waiver has lapsed on `today`.
     ///
@@ -271,7 +268,31 @@ impl Waiver {
     /// the file. [`validate`] makes the case unreachable through the loader; this
     /// is the belt.
     #[must_use]
-    pub fn lapsed(&self, today: Date) -> bool {
+    fn lapsed(&self, today: Date) -> bool;
+
+    /// Whether this waiver covers `finding` on `today`.
+    #[must_use]
+    fn covers(&self, finding: &Finding, today: Date) -> bool;
+
+    /// The identity two waivers may not share: the rule and the path it narrows
+    /// to.
+    ///
+    /// One rendering, so a load refusal, a [`crate::lint`] pointer and a
+    /// [`crate::trust`] weakening all name a waiver the same way — the property
+    /// `rule[{id}]` already holds for rules, and the reason CLOUD-233's dedup bug
+    /// cannot return is that two waivers of one rule differ here by their path.
+    #[must_use]
+    fn key(&self) -> String;
+}
+
+impl WaiverExt for Waiver {
+    fn expiry(&self) -> Result<Date> {
+        Date::parse(&self.expires).map_err(|err| {
+            UsageError::raise(format!("waiver {}: {}", self.rule, root_message(&err)))
+        })
+    }
+
+    fn lapsed(&self, today: Date) -> bool {
         let Ok(expiry) = self.expiry() else {
             return true;
         };
@@ -281,9 +302,7 @@ impl Waiver {
         expiry < today
     }
 
-    /// Whether this waiver covers `finding` on `today`.
-    #[must_use]
-    pub fn covers(&self, finding: &Finding, today: Date) -> bool {
+    fn covers(&self, finding: &Finding, today: Date) -> bool {
         if self.rule != finding.rule {
             return false;
         }
@@ -296,15 +315,7 @@ impl Waiver {
         }
     }
 
-    /// The identity two waivers may not share: the rule and the path it narrows
-    /// to.
-    ///
-    /// One rendering, so a load refusal, a [`crate::lint`] pointer and a
-    /// [`crate::trust`] weakening all name a waiver the same way — the property
-    /// `rule[{id}]` already holds for rules, and the reason CLOUD-233's dedup bug
-    /// cannot return is that two waivers of one rule differ here by their path.
-    #[must_use]
-    pub fn key(&self) -> String {
+    fn key(&self) -> String {
         match &self.path {
             None => format!("waiver[{}]", self.rule),
             Some(path) => format!("waiver[{}][{path}]", self.rule),
@@ -536,7 +547,10 @@ pub fn apply(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::severity::RuleSeverity;
+    #[cfg(test)]
+    use crate::waiver::WaiverExt as _;
 
     fn waiver(rule: &str, expires: &str) -> Waiver {
         Waiver {

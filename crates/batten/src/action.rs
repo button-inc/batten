@@ -63,10 +63,15 @@ use crate::config_check::action::validate;
 use crate::config_model::Action;
 use crate::config_model::Event;
 
-impl Action {
+/// `Action` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ActionExt: Sized {
     /// The event this action fires on, when `on` names one.
     #[must_use]
-    pub fn event(&self) -> Option<Event> {
+    fn event(&self) -> Option<Event>;
+}
+
+impl ActionExt for Action {
+    fn event(&self) -> Option<Event> {
         event_of(&self.on)
     }
 }
@@ -189,6 +194,7 @@ pub fn fire(actions: &[Action], event: Event, facts: Facts<'_>, err: &mut dyn Wr
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::error::UsageError;
 
     fn action(id: &str, on: &str, run: &[&str]) -> Action {

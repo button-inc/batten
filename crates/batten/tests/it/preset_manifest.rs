@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::preset::ManifestExt as _;
 
 use common::Fixture;
 

@@ -789,6 +789,9 @@ pub fn reconcile(compared: &Compared, commits: &[Commit]) -> Verdict {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// CLOUD-2099: the dependency build survives; the tree and the last
     /// document, which belong to the previous run, do not.

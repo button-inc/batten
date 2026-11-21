@@ -904,6 +904,9 @@ pub fn run_nonverdict(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::rest::Answer;
     use std::cell::RefCell;
     use std::collections::BTreeMap;

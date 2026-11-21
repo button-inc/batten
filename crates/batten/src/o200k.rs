@@ -254,6 +254,7 @@ pub fn tokens(text: &str) -> u64 {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    #[cfg(test)]
     /// A rank is the token's own id, read from the rank column at the found
     /// entry, and a byte string that is no token has none.
     ///
