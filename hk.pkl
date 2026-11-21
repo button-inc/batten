@@ -1152,6 +1152,12 @@ hooks {
       ["commit-subjects"] {
         check = "batten commit check origin/main..HEAD"
       }
+      // No merge commit leaves this checkout (CLOUD-2813). The branch lands by
+      // fast-forward into a linear history; `commit place wrong` refuses
+      // `git merge` at the call, and this refuses one made any other way.
+      ["branch-linear"] {
+        check = "test -z \"$(git rev-list --merges origin/main..HEAD)\""
+      }
     }
   }
   // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
