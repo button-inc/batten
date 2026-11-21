@@ -38,8 +38,9 @@ fn main() -> std::io::Result<()> {
         }
         return Ok(());
     }
-    // `fix [cargo args…]`: apply rustc's machine-applicable suggestions to a
-    // fixpoint, imports decided per build (`batten_codemods::fix`).
+    // `fix <package>…`: apply rustc's machine-applicable suggestions to a
+    // fixpoint, imports decided per build and per package
+    // (`batten_codemods::fix`).
     if asked == "fix" {
         let scope: Vec<String> = args.collect();
         return run_fix(&mut out, &scope);
@@ -200,7 +201,7 @@ const FIX_PASSES: usize = 8;
 
 /// `cargo check` over `units` (`--lib --bins` or `--tests --examples
 /// --benches`) plus the caller's `scope`, as cargo's JSON stream.
-fn check_stream(units: &[&str], scope: &[String]) -> std::io::Result<String> {
+fn check_stream(verb: &[&str], units: &[&str], scope: &[String]) -> std::io::Result<String> {
     use batten::capture::Streamed as _;
     #[expect(
         clippy::disallowed_types,
@@ -208,7 +209,8 @@ fn check_stream(units: &[&str], scope: &[String]) -> std::io::Result<String> {
     )]
     let mut command = std::process::Command::new("cargo");
     let output = command
-        .args(["check", "--message-format", "json"])
+        .args(verb)
+        .args(["--message-format", "json"])
         .args(units)
         .args(scope)
         .streamed_output()?;
@@ -219,14 +221,47 @@ fn check_stream(units: &[&str], scope: &[String]) -> std::io::Result<String> {
 fn run_fix(out: &mut impl std::io::Write, scope: &[String]) -> std::io::Result<()> {
     let read = |path: &str| batten::fsio::read_to_string(path).ok();
     for pass in 1..=FIX_PASSES {
-        let non_test = check_stream(&["--lib", "--bins"], scope)?;
-        let unit_test = check_stream(&["--lib", "--bins", "--profile", "test"], scope)?;
-        let other = check_stream(&["--tests", "--examples", "--benches"], scope)?;
+        // PER PACKAGE, EACH STREAM FILTERED TO THAT PACKAGE'S OWN MESSAGES.
+        // `check --profile test` does not set `cfg(test)`; `test --no-run
+        // --bins` and any `--workspace` build compile a library non-test as a
+        // dependency, so its warnings repeat in the test stream. Measured on
+        // the third real run: unit-test held 8 `unused_imports` to non-test's
+        // 5, and `VerdictProgram` and `Applicability` were deleted again. In
+        // `test --no-run --lib -p P` filtered to `P`, the only unit of `P` is
+        // its library test unit.
+        let (mut non_test, mut unit_test, mut other) =
+            (String::new(), String::new(), String::new());
+        for package in scope {
+            let only = ["-p".to_owned(), package.clone()];
+            let pick = |stream: String| recipe::fix::only_package(&stream, package);
+            non_test.push_str(&pick(check_stream(&["check"], &["--lib"], &only)?));
+            unit_test.push_str(&pick(check_stream(
+                &["test", "--no-run"],
+                &["--lib"],
+                &only,
+            )?));
+            other.push_str(&pick(check_stream(
+                &["check"],
+                &["--bins", "--tests", "--examples", "--benches"],
+                &only,
+            )?));
+        }
         let streams = recipe::fix::Streams {
             non_test: &non_test,
             unit_test: &unit_test,
             other: &other,
         };
+        // Each stream's `unused_imports` count, so a stream that is empty or
+        // carries another unit's warnings shows in the output, not in a
+        // deleted import.
+        let unused = |stream: &str| stream.matches("\"unused_imports\"").count();
+        writeln!(
+            out,
+            "fix pass {pass} streams: non-test {}, unit-test {}, other {}",
+            unused(&non_test),
+            unused(&unit_test),
+            unused(&other)
+        )?;
         let plan = recipe::fix::plan(streams, &read);
         let (mut applied, mut refused) = (0_usize, 0_usize);
         for (path, suggestions) in &plan.edits {

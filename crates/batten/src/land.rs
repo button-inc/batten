@@ -40,7 +40,6 @@
 //! green over a module that performs every write CLOUD-1148 §D recorded as
 //! unreachable.
 
-use crate::exec::ExecConfigExt as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};

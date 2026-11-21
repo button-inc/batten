@@ -40,9 +40,6 @@
 //! this walk without changing the rule model.
 
 use crate::config_check::rules::RuleExt as _;
-#[cfg(test)]
-use crate::config_check::rules::VerdictProgramExt as _;
-use crate::verdict::RouteKindExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -76,6 +73,7 @@ use crate::config_model::RequireVia;
 use crate::config_model::Rewrite;
 use crate::config_model::Rule;
 use crate::config_model::RuleKind;
+#[cfg(test)]
 use crate::config_model::VerdictProgram;
 #[cfg(test)]
 use crate::config_model::preset_name_schema;
@@ -1048,27 +1046,6 @@ impl RuleKindExt for RuleKind {
     }
 }
 
-/// `RuleScope` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait RuleScopeExt: Sized {
-    /// Every scope the engine knows, so vocabulary tests stay total.
-    const ALL: &'static [RuleScope];
-
-    /// The stable lowercase token used in config and machine output (§6).
-    #[must_use]
-    fn as_str(self) -> &'static str;
-}
-
-impl RuleScopeExt for RuleScope {
-    const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
-
-    fn as_str(self) -> &'static str {
-        match self {
-            RuleScope::Tree => "tree",
-            RuleScope::MediatedCall => "mediated_call",
-        }
-    }
-}
-
 use crate::sink::Sink;
 #[cfg(test)]
 use crate::sink::SinkKey;
@@ -1084,80 +1061,6 @@ fn declared_sinks(rules: &[Rule]) -> impl Iterator<Item = (&str, &Sink)> {
 // Housed in `crate::facts` (CLOUD-2789), which reads it too; the path here is
 // unchanged.
 use crate::facts::selects_tool_name;
-
-/// `VerdictProgram` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait VerdictProgramExt: Sized {
-    /// Whether `program` and `words` — the effective program and the non-flag
-    /// words after it — make this invocation verdict-bearing.
-    ///
-    /// The program is compared FIRST and exactly. Leaving it out was a real
-    /// defect for the length of one differential run: an `except` row is a
-    /// deny-list over subcommands, so with no program test it matched every
-    /// command carrying any argument, and `git log … | head` — a read-only query,
-    /// the exact false positive this kind must not produce — was refused.
-    #[must_use]
-    fn matches(&self, program: &str, words: &[&str]) -> bool;
-}
-
-impl VerdictProgramExt for VerdictProgram {
-    fn matches(&self, program: &str, words: &[&str]) -> bool {
-        if self.program != program {
-            return false;
-        }
-        let first = words.first().copied();
-        if let Some(allowed) = self.subcommands.as_deref() {
-            let Some(first) = first else { return false };
-            if !allowed.iter().any(|candidate| candidate == first) {
-                return false;
-            }
-            let Some(nested) = self.nested.as_deref() else {
-                return true;
-            };
-            return words
-                .get(1)
-                .is_some_and(|second| nested.iter().any(|candidate| candidate == second));
-        }
-        if let Some(queries) = self.except.as_deref() {
-            return first.is_some_and(|first| !queries.iter().any(|query| query == first));
-        }
-        self.any_argument.unwrap_or_default() && first.is_some()
-    }
-}
-
-/// `Direction` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait DirectionExt: Sized {
-    /// Every direction, so a census is derived rather than hand-maintained.
-    const ALL: &'static [Direction];
-
-    /// The stable config token.
-    #[must_use]
-    fn as_str(self) -> &'static str;
-
-    /// Whether moving from `base` to `working` broke the promise.
-    ///
-    /// Equality is never a violation in either direction — a ratchet bans
-    /// movement, not stasis.
-    #[must_use]
-    fn violated(self, base: usize, working: usize) -> bool;
-}
-
-impl DirectionExt for Direction {
-    const ALL: &'static [Direction] = &[Direction::NonDecreasing, Direction::NonIncreasing];
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Direction::NonDecreasing => "non_decreasing",
-            Direction::NonIncreasing => "non_increasing",
-        }
-    }
-
-    fn violated(self, base: usize, working: usize) -> bool {
-        match self {
-            Direction::NonDecreasing => working < base,
-            Direction::NonIncreasing => working > base,
-        }
-    }
-}
 
 /// `Rule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait RuleExt: Sized {
@@ -1969,22 +1872,6 @@ pub struct RunOptions<'a> {
     /// The refs a tree-half receipt keys the merge base of (`--keyed-base`), which
     /// is what admits a `ratchet` row to [`Half::Tree`].
     pub keyed_bases: &'a [String],
-}
-
-/// `Half` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait HalfExt: Sized {
-    /// The stable lowercase token (§6), the `--half` spelling.
-    #[must_use]
-    fn as_str(self) -> &'static str;
-}
-
-impl HalfExt for Half {
-    fn as_str(self) -> &'static str {
-        match self {
-            Half::Tree => "tree",
-            Half::Live => "live",
-        }
-    }
 }
 
 /// The one `input.tree` key no fact carries: the could-not-look causes of the
@@ -9911,16 +9798,10 @@ impl Sets {
 mod tests {
     use super::PathSet;
     #[cfg(test)]
-    use crate::rules::DirectionExt as _;
-    #[cfg(test)]
     #[cfg(test)]
     use crate::rules::RuleExt as _;
     #[cfg(test)]
     use crate::rules::RuleKindExt as _;
-    #[cfg(test)]
-    use crate::rules::RuleScopeExt as _;
-    #[cfg(test)]
-    use crate::rules::VerdictProgramExt as _;
 
     /// CLOUD-2075 §7 case 21: a `check` finding labels its rule.
     #[test]
@@ -17794,8 +17675,6 @@ mod half_tests {
     #[cfg(test)]
     use crate::facts::{Fact, Subject};
     use crate::preset_catalog::RuleScope;
-    #[cfg(test)]
-    use crate::rules::HalfExt as _;
     #[cfg(test)]
     use crate::rules::RuleExt as _;
     #[cfg(test)]

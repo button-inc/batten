@@ -48,15 +48,12 @@
 use crate::attribution::AttributionExt as _;
 use crate::census::ShellCensusExt as _;
 use crate::commit::CommitExt as _;
-use crate::defects::DefectsExt as _;
 use crate::prune::PruneExt as _;
 #[cfg(test)]
 use crate::rules::RuleExt as _;
 #[cfg(test)]
 use crate::rules::RuleKindExt as _;
 use crate::sbom::DeclaredExt as _;
-use crate::wiring::WiringExt as _;
-use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -1960,35 +1957,6 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
     ))
 }
 
-/// `Unresolvable` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait UnresolvableExt: Sized {
-    /// The pointer line a report carries.
-    #[must_use]
-    fn line(&self) -> String;
-
-    /// The row ordinal this drop removed, for a caller pairing rows by
-    /// position. `None` for a key drop, which removes no row.
-    #[must_use]
-    fn row_index(&self) -> Option<usize>;
-}
-
-impl UnresolvableExt for Unresolvable {
-    fn line(&self) -> String {
-        match &self.unit {
-            Unit::Row { id: Some(id), .. } => format!("{} {id}", self.section),
-            Unit::Row { id: None, index } => format!("{} #{index}", self.section),
-            Unit::Key(key) => format!("{}.{key}", self.section),
-        }
-    }
-
-    fn row_index(&self) -> Option<usize> {
-        match self.unit {
-            Unit::Row { index, .. } => Some(index),
-            Unit::Key(_) => None,
-        }
-    }
-}
-
 /// How many rows may be dropped before the file is refused outright.
 ///
 /// A bound rather than a loop to exhaustion: a config whose every row this build
@@ -3696,168 +3664,6 @@ static CONFIG_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 #[must_use]
 pub fn config_parses() -> usize {
     CONFIG_PARSES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// `Config` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait ConfigExt: Sized {
-    /// A config that declares no policy at all.
-    ///
-    /// Deliberately not a [`Default`] impl. `version` has exactly one accepted
-    /// value ([`SUPPORTED_VERSION`]), so a derived default would produce a
-    /// `Config` carrying `0` that no loader would accept — a value that looks
-    /// like a config and is not one. Written as a literal rather than parsed from
-    /// a string constant so it needs no fallible path and no `expect`, and so
-    /// that a field added to [`Config`] fails to compile here until someone
-    /// decides what "declares nothing" means for it.
-    ///
-    /// Used where an **absent or unreadable** authority still has to be compared
-    /// against a trusted one (CLOUD-243): granting nothing is exactly what an
-    /// authority that cannot be read grants, so this is the honest comparand —
-    /// every key the trusted side declares then reports as removed.
-    #[must_use]
-    fn declaring_nothing() -> Self;
-}
-
-impl ConfigExt for Config {
-    fn declaring_nothing() -> Self {
-        Config {
-            credential: None,
-            forge: None,
-            unresolvable: Vec::new(),
-            records: Vec::new(),
-            version: SUPPORTED_VERSION,
-            deferrals: Vec::new(),
-            host: None,
-            min_batten_version: None,
-            engine: None,
-            // Declaring nothing declares no landing path set, which the reader
-            // takes as could-not-look — the same direction every other absent
-            // table here takes.
-            lease: None,
-            receipt: None,
-            strictness: None,
-            fail_on_warning: None,
-            update_notice: None,
-            rules: Vec::new(),
-            patterns: Vec::new(),
-            traversals: Vec::new(),
-            registers: Vec::new(),
-            verdicts: Vec::new(),
-            vocabulary: crate::config_model::Vocabulary::default(),
-            scope: Vec::new(),
-            protected: Vec::new(),
-            // Declaring nothing means declaring no threshold either, which the
-            // reader takes as could-not-look and exempts everything — the same
-            // direction every other field here grants.
-            ready: None,
-            board: None,
-            // Declaring nothing accepts no regression, which is also the safe
-            // reading: an authority that cannot be read must not exempt a path.
-            perf: None,
-            // Declaring nothing enforces no gate. `batten mutate` then reads the
-            // environment alone and refuses when that is empty too, so an
-            // unreadable authority cannot become a sweep over nothing.
-            mutate: None,
-            // No protected paths means the unknown-program clause has nothing to
-            // guard, so an empty reader set costs nothing here and is the honest
-            // value: a config declaring nothing declares no readers either.
-            protected_readers: Vec::new(),
-            unlanded: Vec::new(),
-            contract: None,
-            epoch: None,
-            verbs: Vec::new(),
-            redirects: Vec::new(),
-            facts: Vec::new(),
-            mints: Vec::new(),
-            recorders: Vec::new(),
-            programs: BTreeMap::new(),
-            markers: Vec::new(),
-            exec: None,
-            mcp: None,
-            capture: None,
-            exec_patterns: Vec::new(),
-            // No declared classifier means every gate refusal reads as being
-            // about the tree, which is the advice that was always given and is
-            // right in the common case — the safe direction for an authority
-            // that could not be read.
-            verify_environment_patterns: Vec::new(),
-            waivers: Vec::new(),
-            // An authority that declares no budget grants no exemption from one
-            // either — there is simply no threshold, which is what `None` says.
-            budget: None,
-            refusal: None,
-            advisory: None,
-            outcome: Vec::new(),
-            hook_output: None,
-            must_land_on: None,
-            landed_by: None,
-            // An authority that cannot be read attaches no side effects. The
-            // safe direction is unambiguous here: firing a command an
-            // unreadable config might have declared is the one outcome nobody
-            // could justify.
-            hook: None,
-            judge: None,
-            // Declaring no ceiling is not declaring a ceiling of zero: the audit
-            // falls back to the engine default, so an unreadable authority
-            // withholds no gate here — it only fails to tighten one.
-            design: None,
-            ci: None,
-            // No `[prune]` is no build tree named and no floor declared, which is
-            // exactly what an unreadable authority grants: the verb reports that
-            // nothing was asked for rather than inventing a number about somebody
-            // else's target directory.
-            prune: None,
-            task: None,
-            defects: None,
-            provisions: Vec::new(),
-            // Declaring no container preconditions is the ordinary case: a
-            // project that states none has nothing for `batten startup` to
-            // decide, which is a different thing from one whose checks all pass.
-            startup: Vec::new(),
-            // Declaring no transcript is the ordinary case, and it is not the
-            // same as pointing at one that is missing: the first says the
-            // capability was never claimed, the second that it was claimed and
-            // is unavailable. Only the second is worth reporting.
-            transcript: None,
-            // Declaring no drain pacing is "no opinion", which resolves to the
-            // engine's defaults — NOT "do not drain". The asymmetry with the
-            // keys above is deliberate: those are policy this authority grants,
-            // and an authority granting nothing must grant nothing, where this
-            // is pacing for a surface that runs regardless. An authority that
-            // cannot be read still has a drain; it simply has no view on how
-            // often it speaks.
-            drain: None,
-
-            // An authority that declares no attribution policy grants no
-            // exemption from one: there is simply nothing to judge by, and the
-            // gate says so (exit 1) rather than passing over commits it never
-            // read.
-            attribution: None,
-            // And no commit convention: absent is "no rule was declared", which
-            // the gate answers 1 to rather than waving commits through.
-            commit: None,
-            bot_lane: None,
-            // An authority that cannot be read grants no permission to answer
-            // from a pin either. The default is the strict one, and an absent
-            // authority must not be the way to reach the lenient one.
-            trust: None,
-            // An authority declaring no scripts disarms none. Absent is the
-            // honest empty here rather than a conservative default with teeth:
-            // the engine cannot know what a launcher on this host writes, and
-            // guessing a path would be exactly the consumer identifier rule 1
-            // keeps out.
-            wiring: None,
-            // An authority declaring no census declares nowhere shell lives; the
-            // verb says so rather than counting a tree it was told nothing about.
-            census: None,
-            // No subject declared, so `batten sbom` has nothing to name.
-            sbom: None,
-            // An authority declaring no steps keys no receipt: every `batten step`
-            // call is a miss that runs the step and records nothing, which is the
-            // cache off rather than a cache answering for anything.
-            steps: Vec::new(),
-        }
-    }
 }
 
 /// Whether the committed authority was there to read (CLOUD-70).

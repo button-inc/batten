@@ -32,36 +32,3 @@ pub fn validate(table: &[Marker]) -> Result<()> {
     }
     Ok(())
 }
-
-/// `Marker` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait MarkerExt: Sized {
-    /// Reject a marker that cannot honestly be counted.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty `id`, an empty
-    /// `token` — which would match every line of every file — or an empty
-    /// `glob`, which reads as "everywhere" but selects nothing.
-    fn validate(&self) -> Result<()>;
-}
-
-impl MarkerExt for Marker {
-    fn validate(&self) -> Result<()> {
-        if self.id.is_empty() {
-            return Err(UsageError::raise("marker: `id` must not be empty"));
-        }
-        if self.token.is_empty() {
-            return Err(UsageError::raise(format!(
-                "marker {}: `token` must not be empty; an empty token matches every line",
-                self.id
-            )));
-        }
-        if self.glob.as_deref() == Some("") {
-            return Err(UsageError::raise(format!(
-                "marker {}: `glob` must not be empty; omit the key to scan the whole tree",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-}
