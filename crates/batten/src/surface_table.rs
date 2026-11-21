@@ -3192,9 +3192,6 @@ const OFFBOX_INSTALL_URL: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-
-
-
 /// The pathspecs `step base` prints a content id for, after the mandatory `--`.
 pub(crate) const STEP_BASE_PATHS: FlagDecl = FlagDecl::trailing(
     "paths",
@@ -8220,6 +8217,34 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
+    },
+    // Off-box session state (CLOUD-2717). The noun is `unclassified` for
+    // `capture`'s reason: the verbs that follow `status` push to a remote, and a
+    // consumer reading an allowlist entry as a prefix must not be handed them.
+    // unreached: "offbox" CLOUD-2721 a noun; the daemon row wires its verbs.
+    CommandDecl {
+        path: "offbox",
+        id: "offbox",
+        about: "Keep this session's state in a repository off this machine",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`: one discovery request, nothing written and no directory created
+    // (CLOUD-2718). `EXITS_STANDARD`, never a verdict — an unreachable state
+    // repository is a fact about the machine and denies nothing (ruling 12).
+    // unreached: "offbox status" CLOUD-2721 an agent runs it to read whether the
+    // state repository is attached; the daemon row reports the same from its
+    // status file, and nothing in the tree should probe a remote unasked.
+    CommandDecl {
+        path: "offbox status",
+        id: "offbox.status",
+        about: "Whether the state repository the environment names can be written from here",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
     },
     CommandDecl {
         path: "artifacts",

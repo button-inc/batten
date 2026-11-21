@@ -1284,9 +1284,8 @@ fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> 
 /// ONLY AT ZERO REMAINING is the reset returned. The reset instant rides every
 /// response, so reading it unconditionally would report a throttle after each
 /// successful call.
-pub(crate) fn throttle_headers(
-    header: impl Fn(&str) -> Option<String>,
-) -> (Option<u64>, Option<u64>) {
+#[must_use]
+pub fn throttle_headers(header: impl Fn(&str) -> Option<String>) -> (Option<u64>, Option<u64>) {
     let number = |name: &str| header(name).and_then(|raw| raw.trim().parse::<u64>().ok());
     let retry_after = number("retry-after");
     let reset_at = (number("x-ratelimit-remaining") == Some(0))
@@ -1296,7 +1295,8 @@ pub(crate) fn throttle_headers(
 }
 
 /// Whether a response states zero remaining rate limit, whatever its reset.
-pub(crate) fn exhausted(header: impl Fn(&str) -> Option<String>) -> bool {
+#[must_use]
+pub fn exhausted(header: impl Fn(&str) -> Option<String>) -> bool {
     header("x-ratelimit-remaining").and_then(|raw| raw.trim().parse::<u64>().ok()) == Some(0)
 }
 

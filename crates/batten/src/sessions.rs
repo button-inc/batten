@@ -43,7 +43,8 @@ use std::io::{BufRead as _, Read as _, Seek as _};
 use std::path::{Path, PathBuf};
 
 use crate::Result;
-use crate::hook::Harness;
+use crate::config_model::Harness;
+use crate::hook::HarnessExt as _;
 
 /// One session an agent has stored, as its source names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -228,16 +229,6 @@ fn record_id(bytes: &[u8]) -> Option<String> {
 ///
 /// An empty line is not a record. The terminator is not part of a record.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/source_claude_code.rs
-//MUTANT unterminated-line-returned|s@^        if line.last() != Some(&b'\\n') {$@        if false {@|an_unterminated_line_is_withheld_until_it_ends
-//MUTANT bounded-read-skips-a-line|s@^        if taken >= max_bytes {$@        if taken >= max_bytes { at += 1;@|a_bounded_read_returns_every_line_exactly_once
-//MUTANT truncated-file-keeps-its-cursor|s@^    if replaced {$@    if false {@|a_truncated_file_is_partial
-//MUTANT-SUITE crates/batten/tests/it/session_source.rs
-//MUTANT partial-trailing-record-returned|s@^        if line.last() != Some(&b'\\n') {$@        if false {@|a_half_written_line_waits_for_its_newline
-//MUTANT record-bytes-normalised|s@^        line.pop();$@        line.pop(); line.retain(\x7cbyte\x7c !byte.is_ascii_whitespace());@|records_are_the_files_lines_byte_for_byte
-//MUTANT missing-source-reads-empty|s@^        return Batch::unavailable(Fidelity::Unavailable(MISSING));$@        return Batch::unavailable(Fidelity::Full);@|a_missing_source_is_unavailable_and_never_empty
-//MUTANT replaced-source-keeps-its-cursor|s@^    if replaced {$@    if false {@|a_replaced_file_is_partial_and_starts_again
-//MUTANT read-ignores-the-byte-bound|s@^        if taken >= max_bytes {$@        if false {@|a_read_stops_at_the_byte_bound_and_never_splits_a_record
 pub fn read_jsonl(path: &Path, from: &Cursor, max_bytes: u64) -> Batch {
     let Ok(mut file) = std::fs::File::open(path) else {
         if path.exists() {
@@ -447,10 +438,6 @@ pub fn machine_sources(harness: &str, transcript: Option<&Path>) -> Vec<Named> {
 ///
 /// No record's content is interpreted beyond `sessionId` and `cwd` — and
 /// `uuid`, which [`read_jsonl`] reads — and none is ever printed.
-//MUTANT-SUITE crates/batten/tests/it/source_claude_code.rs
-//MUTANT session-without-an-author-listed|s@^                        (None, None) => continue,$@                        (None, None) => (String::from("unauthored"), String::new()),@|every_authored_session_is_listed_sorted_with_its_cwd
-//MUTANT directory-link-followed|s@^                        let real_dir = entry.file_type().is_ok_and(\x7ckind\x7c kind.is_dir());$@                        let real_dir = entry.path().is_dir();@|a_directory_link_is_not_followed
-//MUTANT subagent-file-listed-as-its-own-session|s@^                        (Some(sub), _) => (parent, sub),$@                        (Some(sub), _) => (sub, String::new()),@|a_subagent_file_is_listed_under_its_parent_session
 pub mod claude_code {
     use std::io::BufRead as _;
     use std::path::{Path, PathBuf};

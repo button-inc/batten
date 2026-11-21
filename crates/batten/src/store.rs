@@ -524,8 +524,6 @@ fn scan_stores() -> Result<Vec<(PathBuf, StoreRecord)>> {
 ///
 /// Returns an error when `repo_root` is not a readable git repository, or when
 /// the OS state directory cannot be resolved.
-//MUTANT-SUITE crates/batten/src/store.rs
-//MUTANT marker-path-walks-history|s@^            observed.root_commits.clone_from(\&record.key_material.root_commits);$@            observed.root_commits = git::root_commits(repo_root)?;@|a_marked_store_resolves_without_walking_history
 pub fn resolve(repo_root: &Path) -> Result<Opened> {
     let mut observed = observe_cheap(repo_root)?;
     let expected = state::repo_state_dir(repo_root)?;

@@ -13,9 +13,6 @@ Keep this session\*(Aqs state in a repository off this machine
 Print help
 .SH SUBCOMMANDS
 .TP
-batten\-offbox\-status(1)
-Whether the state repository the environment names can be written from here
-.TP
 batten\-offbox\-push(1)
 Snapshot one session and make it the value of its ref on the state repository
 .TP
@@ -27,6 +24,9 @@ Rotate the state repository\*(Aqs finished sessions into its archive and remove 
 .TP
 batten\-offbox\-run(1)
 Run this session\*(Aqs off\-box daemon until it is killed: push when there is something new, wait when the forge says to
+.TP
+batten\-offbox\-status(1)
+Whether the state repository the environment names can be written from here
 .TP
 batten\-offbox\-help(1)
 Print this message or the help of the given subcommand(s)

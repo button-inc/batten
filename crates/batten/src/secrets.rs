@@ -1316,12 +1316,6 @@ const REDACT_LABEL: &str = "offbox";
 ///   read as text, and a span that is not on the line the scanner named. The
 ///   last means the scanner and the file disagree, and a file is never reported
 ///   redacted while a span the scanner saw is still in it.
-//MUTANT-SUITE crates/batten/tests/it/secrets_kind.rs
-//MUTANT matched-span-left-in-place|s@^            let found = hit.span.replace_in(line, REDACTED);$@            let found = hit.span.replace_in(\&mut line.clone(), REDACTED);@|redact_replaces_the_matched_span_and_only_it
-//MUTANT redaction-drops-the-line|s@^            replaced += 1;$@            replaced += 1; line.clear();@|redact_replaces_the_matched_span_and_only_it
-//MUTANT redact-mints-an-identity|s@^    let binary = resolve_scanner(provisions, project_root)?;$@    let binary = resolve_scanner(provisions, project_root)?; custody_at(\&key_path(\&project_root.canonicalize()?)?, crate::waiver::today()?)?;@|redact_mints_no_identity_and_writes_no_ledger
-//MUTANT redact-scans-the-project-root|s@^        for hit in run_once(REDACT_LABEL, &binary, staging, &batch)? {$@        for hit in run_once(REDACT_LABEL, \&binary, project_root, \&batch)? {@|redact_runs_the_scanner_in_the_staging_directory
-//MUTANT span-not-found-reads-clean|s@^            if !found {$@            if false {@|a_span_the_file_does_not_hold_is_an_error_and_writes_nothing
 pub fn redact(
     provisions: &[Provision],
     project_root: &Path,

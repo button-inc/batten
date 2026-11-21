@@ -9148,7 +9148,7 @@ test_b_fires if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation
         let sources = sources_of(&[("policy/r.rego", &module)]);
         let data = serde_json::json!({});
         let path = crate::scratch::scratch("policy-interpreted-reads").join("row.rvm");
-        let key = cache_key("row", &sources, &[0; 32]);
+        let key = cache_key("row", &sources, &[0; 32], Origin::Tree);
         let first = compile("row", &sources, &data).expect("the fixture compiles");
         remember_reads(&path, &key, &first);
         assert_eq!(first.tree_reads(), known(&["lines"]));

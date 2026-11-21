@@ -51,7 +51,7 @@ rustix.workspace = true
 [features]
 # Test fixtures a `batten` case stands up through these modules: `batten`
 # enables it from its dev-dependencies only, so no shipped build carries it.
-seam = []
+seam = ["batten-base/seam"]
 # The lease cases that write to a real remote, as `batten`'s feature of the same
 # name declares them (CLOUD-2059); `batten` forwards it.
 live-remote = []

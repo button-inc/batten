@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batten::digest::sha256_hex as digest;
 use batten::gitwrite::{self, Content};
 use batten::offbox::{self, Feed, Meta, Refusal, Snapshot};
-use batten::provision::digest;
 use batten::sessions::{Batch, Cursor, JsonlFile, SessionRef, SessionSource};
 
 use crate::common::{self, Fixture, batten, git_in, scratch};
@@ -117,7 +117,7 @@ impl Rig {
         );
     }
 
-    fn provisions(&self) -> Vec<batten::provision::Provision> {
+    fn provisions(&self) -> Vec<batten::config_model::Provision> {
         let config = self.repo.join("batten.toml");
         if !config.is_file() {
             return Vec::new();

@@ -165,7 +165,7 @@ fn a_missing_source_is_unavailable_and_never_empty() {
 /// no sessions.
 #[test]
 fn a_harness_without_a_source_names_the_row_that_owes_one() {
-    use batten::hook::Harness;
+    use batten::config_model::Harness;
     use batten::sessions::{Sourced, source_for};
 
     let path = file_in("session-source-neutral", "{\"uuid\":\"u\"}\n");

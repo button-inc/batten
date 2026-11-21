@@ -241,6 +241,14 @@ pub trait HarnessExt: Sized {
     #[must_use]
     fn transcript_shape(self) -> TranscriptShape;
 
+    /// Whether this host has an agent-managed background facility.
+    ///
+    /// Claude Code's `Bash` tool takes `run_in_background`, reports the task's
+    /// exit to the agent, and lets the agent kill it. Every other host, the
+    /// neutral contract included, is owed by CLOUD-2732.
+    #[must_use]
+    fn background_facility(self) -> BackgroundFacility;
+
     /// This host's capability row.
     ///
     /// Every field is a survey finding (CLOUD-209), not a guess. The neutral
@@ -520,6 +528,17 @@ impl HarnessExt for Harness {
     }
 
     #[allow(clippy::match_same_arms)]
+    fn background_facility(self) -> BackgroundFacility {
+        match self {
+            Harness::ClaudeCode => BackgroundFacility::Surveyed(true),
+            Harness::CodexCli
+            | Harness::Cursor
+            | Harness::GeminiCli
+            | Harness::CopilotCli
+            | Harness::ExitCode => BackgroundFacility::Unsurveyed("CLOUD-2732"),
+        }
+    }
+
     fn transcript_shape(self) -> TranscriptShape {
         match self {
             Harness::ClaudeCode => TranscriptShape::Surveyed(RecordShape::Jsonl),
@@ -979,25 +998,6 @@ pub enum BackgroundFacility {
     Surveyed(bool),
     /// Nobody has looked, carrying the row that OWES the survey.
     Unsurveyed(&'static str),
-}
-
-impl Harness {
-    /// Whether this host has an agent-managed background facility.
-    ///
-    /// Claude Code's `Bash` tool takes `run_in_background`, reports the task's
-    /// exit to the agent, and lets the agent kill it. Every other host, the
-    /// neutral contract included, is owed by CLOUD-2732.
-    #[must_use]
-    pub const fn background_facility(self) -> BackgroundFacility {
-        match self {
-            Harness::ClaudeCode => BackgroundFacility::Surveyed(true),
-            Harness::CodexCli
-            | Harness::Cursor
-            | Harness::GeminiCli
-            | Harness::CopilotCli
-            | Harness::ExitCode => BackgroundFacility::Unsurveyed("CLOUD-2732"),
-        }
-    }
 }
 
 /// A transcript record grammar, named so a parser cannot be handed a host.
