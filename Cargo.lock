@@ -156,6 +156,7 @@ version = "0.0.220"
 dependencies = [
  "anyhow",
  "batten-base",
+ "batten-core",
  "batten-facts",
  "batten-fsio",
  "batten-stream",
@@ -263,6 +264,36 @@ name = "batten-codemods"
 version = "0.0.220"
 dependencies = [
  "batten",
+]
+
+[[package]]
+name = "batten-core"
+version = "0.0.220"
+dependencies = [
+ "anyhow",
+ "batten-base",
+ "batten-facts",
+ "batten-fsio",
+ "batten-stream",
+ "compio",
+ "etcetera",
+ "flate2",
+ "getrandom 0.4.3",
+ "gix",
+ "gix-diff",
+ "gix-packetline",
+ "globset",
+ "ignore",
+ "ra_ap_syntax",
+ "rable",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "struson",
+ "syn 3.0.10",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

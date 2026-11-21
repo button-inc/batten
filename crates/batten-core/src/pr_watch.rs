@@ -107,7 +107,7 @@ const MAX_PAGES: u32 = 10;
 /// is a poll that was never going to be answered — a credential the endpoint
 /// refuses, a repository this token cannot see — which is a fact about the
 /// invocation and does not become truer by asking again.
-pub(crate) const UNANSWERED_BEFORE_REFUSING: u64 = 30;
+pub const UNANSWERED_BEFORE_REFUSING: u64 = 30;
 
 /// What the poll needs that is not the roster.
 #[derive(Debug, Clone)]
@@ -233,7 +233,7 @@ fn string_at(row: &serde_json::Value, key: &str) -> String {
 /// is longer: a backoff is a lower bound on the wait exactly as a floor is, and
 /// satisfying only one of them satisfies neither.
 #[must_use]
-pub(crate) fn wait_for(configured: u64, floor: Option<f64>, backoff: Option<u64>) -> f64 {
+pub fn wait_for(configured: u64, floor: Option<f64>, backoff: Option<u64>) -> f64 {
     let paced = interval_for(configured, floor);
     // Narrowed the way `interval_for` narrows its own argument, and for the same
     // reason: the conversion is exact for every value that survives it.
@@ -528,15 +528,25 @@ pub fn watch(
 /// the pause, and a case that could only observe it as elapsed wall time had to
 /// assert a lower bound on a clock. Replayed answers and a recorded pause decide
 /// it exactly, and in no time. Production passes [`read`] and the one real sleep.
-pub(crate) struct Pacing<'a> {
+pub struct Pacing<'a> {
     /// Ask the forge once, conditionally on the validator held.
-    pub(crate) read: &'a dyn Fn(&Config, Option<&str>) -> Option<crate::rest::Answer>,
+    pub read: &'a dyn Fn(&Config, Option<&str>) -> Option<crate::rest::Answer>,
     /// Wait this many seconds before asking again.
-    pub(crate) pause: &'a dyn Fn(f64),
+    pub pause: &'a dyn Fn(f64),
+}
+
+impl std::fmt::Debug for Pacing<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pacing").finish_non_exhaustive()
+    }
 }
 
 /// [`watch`] over an explicit [`Pacing`].
-pub(crate) fn watch_with(
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn watch_with(
     config: &Config,
     roster: &Roster,
     pacing: &Pacing<'_>,

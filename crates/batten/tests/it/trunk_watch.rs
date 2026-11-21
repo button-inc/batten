@@ -35,8 +35,8 @@
 //! raced without becoming a second authority over when to stop asking. The
 //! disposition rows below record that against the case it changes.
 
-// carried: mise-tasks/main-watch.sh crates/batten/src/main_watch.rs kind:mechanism crates/batten/tests/it/trunk_watch.rs
-// carried: tests/main-watch.bats crates/batten/src/main_watch.rs kind:mechanism crates/batten/tests/it/trunk_watch.rs
+// carried: mise-tasks/main-watch.sh crates/batten-core/src/main_watch.rs kind:mechanism crates/batten/tests/it/trunk_watch.rs
+// carried: tests/main-watch.bats crates/batten-core/src/main_watch.rs kind:mechanism crates/batten/tests/it/trunk_watch.rs
 //
 // The eight cases, one row each, keyed by the TITLE rather than by the suite —
 // a row whose first field were the path would be indexed as a ninth arm for it
@@ -44,14 +44,14 @@
 // difference rather than hiding it; a title with no row here is a behavioural
 // claim nobody decided on.
 //
-// carried: "main having moved exits 0 and points at both ends" crates/batten/src/main_watch.rs kind:mechanism
+// carried: "main having moved exits 0 and points at both ends" crates/batten-core/src/main_watch.rs kind:mechanism
 // changed: "main standing still blocks, because losing the race is the normal case" crates/batten/src/land.rs kind:mechanism
-// carried: "the second request is conditional on the first response's ETag" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "a 304 is not read as a change, however many arrive" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "movement after a run of 304s is still caught" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "a server-sent poll interval is honoured as a floor" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "a transient gh failure costs one poll, not the landing" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "no base to compare against is a refusal, not a silent block" crates/batten/src/main_watch.rs kind:mechanism
+// carried: "the second request is conditional on the first response's ETag" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "a 304 is not read as a change, however many arrive" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "movement after a run of 304s is still caught" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "a server-sent poll interval is honoured as a floor" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "a transient gh failure costs one poll, not the landing" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "no base to compare against is a refusal, not a silent block" crates/batten-core/src/main_watch.rs kind:mechanism
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

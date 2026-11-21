@@ -39,7 +39,7 @@ pub fn contain_state(data_dir: &Path) {
 /// `MUTANT-SUITE` above it (CLOUD-2193), and a Rust suite selects the runner, not
 /// a target — each row's case filter runs over the whole `it` binary, wherever
 /// the case lives.
-pub(crate) fn contained_data_dir() -> Option<&'static Path> {
+pub fn contained_data_dir() -> Option<&'static Path> {
     CONTAINED.get().map(PathBuf::as_path)
 }
 
