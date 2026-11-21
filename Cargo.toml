@@ -1044,6 +1044,16 @@ lto = false
 incremental = true
 codegen-units = 256
 
+# The profile a CPU profiler reads (`skills/profile`). `release` strips, so
+# callgrind on `target/release/batten` attributes every instruction to a bare
+# address and the run names nothing; `program measure unread` refuses that call.
+# This keeps `release`'s code generation (thin LTO, what `perf-assert` measures)
+# and adds only line tables and symbols, so the profile is of the shipped code.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"
+
 # The profile `darwin-link` cross-builds under (CLOUD-1891). The gate proves the
 # macOS targets LINK with no Apple SDK, and optimisation does not change what a
 # binary links against — so the dev profile's `opt-level = 2` over every
