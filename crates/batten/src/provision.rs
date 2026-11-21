@@ -64,7 +64,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
 use crate::secret::Secret;
@@ -76,6 +75,7 @@ pub(crate) use crate::config_check::provision::{
 pub use crate::config_check::provision::{platform_key, validate};
 pub use crate::config_model::CredentialProbe;
 pub use crate::config_model::{Artifact, Backend, Provision, ProvisionEnv, Unpack};
+pub use crate::digest::sha256_hex as digest;
 
 /// The subdirectory of the repository's out-of-tree state that holds provisioned
 /// tools.
@@ -291,20 +291,6 @@ pub fn entry_dir(cache_root: &Path, entry: &Provision) -> PathBuf {
 /// Propagates [`crate::state::repo_state_dir`]'s failures.
 pub fn cache_root(repo_root: &Path) -> Result<PathBuf> {
     crate::state::repo_state_dir(repo_root)
-}
-
-/// The SHA-256 of `bytes`, lowercase hex.
-#[must_use]
-pub fn digest(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let out = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for byte in out {
-        hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        hex.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    hex
 }
 
 /// Judge every entry against the cache under `cache_root`.

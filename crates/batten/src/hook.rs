@@ -4525,7 +4525,7 @@ impl Policy {
                     && rule
                         .glob
                         .as_deref()
-                        .is_some_and(|glob| crate::rules::glob_match(glob, target))
+                        .is_some_and(|glob| crate::selector::glob_match(glob, target))
             })
             .collect()
     }
@@ -4546,7 +4546,7 @@ impl Policy {
             .filter(|(_, set)| {
                 set.files
                     .iter()
-                    .any(|entry| crate::rules::glob_match(entry, target))
+                    .any(|entry| crate::selector::glob_match(entry, target))
             })
             .map(|(name, _)| name.as_str())
             .collect()

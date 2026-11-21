@@ -66,6 +66,7 @@ pub mod defects;
 pub use batten_base::deferral;
 pub mod design;
 pub mod disk_watch;
+pub use batten_facts::digest;
 pub use batten_facts::dispatch;
 pub mod dist;
 pub use batten_base::doc;
@@ -27623,7 +27624,7 @@ fn run_judges(
         let criteria = rule.criteria.clone().unwrap_or_default();
         let matched: Vec<&String> = files
             .iter()
-            .filter(|path| rules::glob_match(glob, path))
+            .filter(|path| crate::selector::glob_match(glob, path))
             .collect();
         // No match is no question: a judge asked about nothing would spend a
         // metered model call to be told so. The glob is a gate before it is a

@@ -77,6 +77,8 @@ impl Selector {
     }
 }
 
+/// Two selectors are the same selector when they came from the same pattern.
+///
 /// Hand-written because a compiled matcher has no equality of its own, and
 /// stated over the pattern rather than derived so the compiled form stays an
 /// implementation detail: a `rules::PathSet` comparison is a comparison of the
@@ -88,3 +90,20 @@ impl PartialEq for Selector {
 }
 
 impl Eq for Selector {}
+
+/// Match a `/`-separated glob against a `/`-separated path, compiling the
+/// pattern for this one call.
+///
+/// The convenience form, for a caller holding a single pattern and a single
+/// path. A caller testing many paths against one pattern must build a
+/// [`Selector`] instead — compiling per call is the cost this type exists to
+/// avoid.
+///
+/// A pattern that does not compile matches **nothing**, which is the safe
+/// direction: it can only ever produce fewer findings than the consumer asked
+/// for, never more. It is also unreachable for a rule, because the rule loader
+/// refuses a malformed `glob` at load, where the diagnostic names the row.
+#[must_use]
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    Selector::new(pattern).is_ok_and(|selector| selector.matches(path))
+}

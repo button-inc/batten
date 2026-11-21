@@ -65,6 +65,7 @@ use crate::error::UsageError;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
 use crate::refusal::{Fix, Refusal};
+pub use crate::selector::glob_match;
 use crate::severity::{self, ReportLevel, RuleSeverity};
 pub use crate::surface_table::Half;
 
@@ -2855,7 +2856,7 @@ fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
                 digest: if sink.kind == crate::facts::Production::Marker {
                     String::new()
                 } else {
-                    crate::receipt::hex_sha256(subject.as_bytes())
+                    crate::digest::sha256_hex(subject.as_bytes())
                 },
                 count,
             })
@@ -9804,25 +9805,6 @@ impl Sets {
             unlanded: PathSet::includes("unlanded", &config.unlanded)?,
         })
     }
-}
-
-/// Two selectors are the same selector when they came from the same pattern.
-///
-/// Match a `/`-separated glob against a `/`-separated path, compiling the
-/// pattern for this one call.
-///
-/// The convenience form, for a caller holding a single pattern and a single
-/// path. A caller testing many paths against one pattern must build a
-/// [`Selector`] instead — compiling per call is the cost this type exists to
-/// avoid.
-///
-/// A pattern that does not compile matches **nothing**, which is the safe
-/// direction: it can only ever produce fewer findings than the consumer asked
-/// for, never more. It is also unreachable for a rule, because [`Rule::validate`]
-/// refuses a malformed `glob` at load, where the diagnostic names the row.
-#[must_use]
-pub fn glob_match(pattern: &str, path: &str) -> bool {
-    Selector::new(pattern).is_ok_and(|selector| selector.matches(path))
 }
 
 #[cfg(test)]
