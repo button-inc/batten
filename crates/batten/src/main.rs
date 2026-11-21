@@ -160,7 +160,7 @@ fn report_usage(rendered: &str, mode: Mode, err: &mut dyn Write) {
         .to_owned();
     let subjects = [batten::verdict::artifact(&head)];
     let refusal = batten::refusal::Refusal::engine(
-        batten::verdict::Native::UsageRefused,
+        batten::error::Native::UsageRefused,
         &subjects,
         batten::refusal::Fix::None,
     );

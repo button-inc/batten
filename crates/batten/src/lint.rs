@@ -60,9 +60,9 @@ use anyhow::Result;
 use serde::Deserialize;
 use toml::Spanned;
 
-use crate::config::{self, Config};
-#[allow(unused_imports)]
-pub(crate) use crate::findings::line_of;
+use crate::config;
+use crate::config_model::Config;
+use crate::findings::line_of;
 use crate::severity::RuleSeverity;
 use crate::trust;
 
@@ -123,7 +123,12 @@ impl Smell {
     /// so one weakening has one pointer whichever verb reports it.
     #[must_use]
     pub fn line_text(&self) -> String {
-        format!("{}:{} {}", config::CONFIG_FILE, self.at, self.id)
+        format!(
+            "{}:{} {}",
+            crate::config_model::CONFIG_FILE,
+            self.at,
+            self.id
+        )
     }
 }
 
@@ -190,7 +195,7 @@ pub enum SmellId {
     /// green is what this row was opened about, and without this smell the two
     /// above pass on a gate that analysed nothing.
     PolicyModuleUnswept,
-    /// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
+    /// A waiver over a rule whose `kind` mints no [`crate::findings::Finding`], so
     /// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The
     /// third dead-suppression shape, and the one that survives both the others:
     /// the rule exists, so `waiver-names-no-rule` is satisfied, and the expiry
@@ -420,7 +425,7 @@ impl serde::Serialize for SmellId {
 ///
 /// The located view and the parsed config must describe the same rows in the
 /// same order, because the pairing below is positional.
-/// [`config::Unresolvable::row_index`] is the row's ordinal in the source, which
+/// [`crate::config_model::Unresolvable::row_index`] is the row's ordinal in the source, which
 /// is precisely the index to remove.
 ///
 /// **A KEY DROP REMOVES NO ROW, and `row_index` is what says so.** The two
@@ -431,7 +436,7 @@ impl serde::Serialize for SmellId {
 fn without_unresolvable<T>(
     rows: Vec<T>,
     section: &str,
-    dropped: &[config::Unresolvable],
+    dropped: &[crate::config_model::Unresolvable],
 ) -> Vec<T> {
     rows.into_iter()
         .enumerate()
@@ -468,7 +473,7 @@ struct Located {
 /// A rule's span, located by its `id`, plus the one column a smell reads.
 ///
 /// `severity` is **optional here** and must stay so: a `judge` row is refused
-/// that column outright ([`crate::rules::RuleKind::permits`]), so a required
+/// that column outright ([`crate::config_model::RuleKind::permits`]), so a required
 /// field made this whole view unparseable for any config carrying one — `config
 /// lint` answered exit 1 with serde's "missing field severity" on a config the
 /// real loader accepts. This mirror exists only to recover spans `config::parse`
@@ -825,7 +830,7 @@ pub fn smells(
 /// Returns a [`crate::UsageError`] (→ exit `1`) when the working config or the
 /// base-ref config cannot be read or parsed.
 pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Result<Vec<Smell>> {
-    let path = dir.join(config::CONFIG_FILE);
+    let path = dir.join(crate::config_model::CONFIG_FILE);
     // THE BASE REF IS LOADED FIRST, and the order is the contract rather than a
     // style choice (CLOUD-719). A ref this binary cannot read stays exit `1`
     // whatever the working tree looks like, so it must be asked before the
@@ -860,7 +865,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
                 )));
             };
             let mut found: Vec<Smell> =
-                trust::weakenings(base, &config::Config::declaring_nothing())
+                trust::weakenings(base, &crate::config_model::Config::declaring_nothing())
                     .into_iter()
                     .map(|w| Smell {
                         at: Where::Key(w.key),
@@ -939,8 +944,8 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
 ///   one did not is still reported: this equates, it never ranks.
 fn explained_by_moves(
     smell: &Smell,
-    base: &config::Config,
-    working: &config::Config,
+    base: &crate::config_model::Config,
+    working: &crate::config_model::Config,
     moves: &std::collections::BTreeMap<String, String>,
     tracked: &std::collections::BTreeSet<String>,
 ) -> bool {
@@ -963,26 +968,27 @@ fn explained_by_moves(
             if !(column == "glob" || column == "sources" || column.ends_with("_sources")) {
                 return false;
             }
-            let selectors = |config: &config::Config| -> Option<Vec<crate::rules::Selector>> {
-                let rule = config.rules.iter().find(|rule| rule.id == id)?;
-                let value = serde_json::to_value(rule).ok()?.get(column)?.clone();
-                let globs: Vec<String> = match value {
-                    serde_json::Value::String(glob) => vec![glob],
-                    serde_json::Value::Array(items) => items
-                        .into_iter()
-                        .map(|item| item.as_str().map(str::to_owned))
-                        .collect::<Option<_>>()?,
-                    _ => return None,
+            let selectors =
+                |config: &crate::config_model::Config| -> Option<Vec<crate::selector::Selector>> {
+                    let rule = config.rules.iter().find(|rule| rule.id == id)?;
+                    let value = serde_json::to_value(rule).ok()?.get(column)?.clone();
+                    let globs: Vec<String> = match value {
+                        serde_json::Value::String(glob) => vec![glob],
+                        serde_json::Value::Array(items) => items
+                            .into_iter()
+                            .map(|item| item.as_str().map(str::to_owned))
+                            .collect::<Option<_>>()?,
+                        _ => return None,
+                    };
+                    globs
+                        .iter()
+                        .map(|glob| crate::selector::Selector::new(glob).ok())
+                        .collect()
                 };
-                globs
-                    .iter()
-                    .map(|glob| crate::rules::Selector::new(glob).ok())
-                    .collect()
-            };
             let (Some(was), Some(now)) = (selectors(base), selectors(working)) else {
                 return false;
             };
-            let any = |selectors: &[crate::rules::Selector], path: &str| {
+            let any = |selectors: &[crate::selector::Selector], path: &str| {
                 selectors.iter().any(|selector| selector.matches(path))
             };
             tracked
@@ -1048,7 +1054,7 @@ pub fn host_drift(
         let Some(committed) = resolved.host.as_ref() else {
             return Err(crate::UsageError::raise(format!(
                 "--host-rules was handed a repository object, but {} declares no [host] table",
-                config::CONFIG_FILE
+                crate::config_model::CONFIG_FILE
             )));
         };
         return Ok(crate::ci::host_drift(committed, &host)
@@ -1064,7 +1070,7 @@ pub fn host_drift(
     let Some(committed) = resolved.ci.as_ref() else {
         return Err(crate::UsageError::raise(format!(
             "--host-rules asked for a comparison, but {} declares no [ci] table",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         )));
     };
 
@@ -1548,7 +1554,7 @@ mod tests {
         let dir = crate::scratch::scratch("lint-run").join("tree");
         std::fs::create_dir_all(&dir).expect("the fixture directory");
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\nprotected = []\n",
         )
         .expect("the fixture config");
@@ -1559,7 +1565,8 @@ mod tests {
 
         // Anti-vacuity: a config with nothing to say reports nothing, so the
         // assertion above is not "anything non-empty".
-        std::fs::write(dir.join(config::CONFIG_FILE), "version = 1\n").expect("a clean config");
+        std::fs::write(dir.join(crate::config_model::CONFIG_FILE), "version = 1\n")
+            .expect("a clean config");
         assert!(run(&dir, None, today()).expect("still readable").is_empty());
     }
 
@@ -1579,7 +1586,7 @@ mod tests {
         std::fs::write(&payload, RULES).expect("the fixture payload");
         // A projection claiming a check the host's ruleset does not require.
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\n\n[ci]\nrequired_checks = [\"a-check-the-host-never-heard-of\"]\n",
         )
         .expect("the fixture config");
@@ -1593,7 +1600,7 @@ mod tests {
         // Anti-vacuity: a projection naming exactly what the ruleset requires
         // reports nothing, so the assertion above is about the comparison.
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\n\n[ci]\nrequired_checks = [\"final\"]\n",
         )
         .expect("the agreeing config");
@@ -2124,16 +2131,16 @@ mod tests {
     /// index removing a row here, so the positional pairing slips.
     #[test]
     fn only_this_sections_dropped_rows_leave_the_located_view() {
-        let row = |section: &str, index: usize| config::Unresolvable {
+        let row = |section: &str, index: usize| crate::config_model::Unresolvable {
             section: section.to_owned(),
-            unit: config::Unit::Row { id: None, index },
+            unit: crate::config_model::Unit::Row { id: None, index },
         };
         let dropped = [
             row("rule", 1),
             row("waiver", 0),
-            config::Unresolvable {
+            crate::config_model::Unresolvable {
                 section: "rule".to_owned(),
-                unit: config::Unit::Key("x".to_owned()),
+                unit: crate::config_model::Unit::Key("x".to_owned()),
             },
         ];
         assert_eq!(
@@ -2170,7 +2177,7 @@ mod tests {
     fn run_lints_the_working_file_and_tells_absence_from_a_failed_read() {
         let dir = crate::scratch::scratch("lint-run");
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\nprotected = []\n",
         )
         .unwrap();
@@ -2183,7 +2190,7 @@ mod tests {
         let err = run(&absent, None, today()).unwrap_err();
         assert!(format!("{err:#}").contains("no config found"), "{err:#}");
         let unreadable = crate::scratch::scratch("lint-run-unreadable");
-        std::fs::create_dir_all(unreadable.join(config::CONFIG_FILE)).unwrap();
+        std::fs::create_dir_all(unreadable.join(crate::config_model::CONFIG_FILE)).unwrap();
         let err = run(&unreadable, None, today()).unwrap_err();
         assert!(!format!("{err:#}").contains("no config found"), "{err:#}");
     }
@@ -2196,13 +2203,13 @@ mod tests {
             "[workspace]\nmembers = []\n\n[workspace.package]\nrust-version = \"1.80\"\n",
         )
         .unwrap();
-        let source = dir.join(config::CONFIG_FILE);
+        let source = dir.join(crate::config_model::CONFIG_FILE);
         assert_eq!(
             workspace_rust_version(&source.to_string_lossy()).as_deref(),
             Some("1.80")
         );
         let elsewhere = crate::scratch::scratch("lint-rust-version-absent");
-        let source = elsewhere.join(config::CONFIG_FILE);
+        let source = elsewhere.join(crate::config_model::CONFIG_FILE);
         assert_eq!(workspace_rust_version(&source.to_string_lossy()), None);
     }
 
@@ -2286,7 +2293,7 @@ mod tests {
         .unwrap();
         let text = "version = 1\n\n[[deferral]]\nissue = \"TEST-1\"\nfact = \"rust-version\"\n\
                     reaches = \"1.80\"\nreason = \"waits on the pin\"\n";
-        let source = dir.join(config::CONFIG_FILE);
+        let source = dir.join(crate::config_model::CONFIG_FILE);
         let found = smells(text, &source.to_string_lossy(), None, today(), &[]).unwrap();
         assert_eq!(
             found.iter().map(|smell| smell.id).collect::<Vec<_>>(),

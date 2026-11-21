@@ -65,11 +65,11 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::UsageError;
-use crate::config::{self, Config, Strictness};
+use crate::config;
+use crate::config_model::{Config, Strictness};
 use crate::config_model::{Rule, RuleKind};
 use crate::git;
 use crate::severity::RuleSeverity;
-use crate::waiver;
 
 /// Load the committed authority from a git ref instead of the working tree.
 ///
@@ -91,7 +91,7 @@ pub fn load_base(dir: &Path, reference: &str) -> Result<Config> {
         ))),
         Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
             "{} is absent at {reference}",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))),
     }
 }
@@ -227,13 +227,15 @@ pub enum OfflineFallback {
 /// exists for this ref and cannot be honoured — see [`Pin::verify`] for why an
 /// unreadable *pin* is loud where an unreadable cache is silent.
 pub fn load(dir: &Path, reference: &str, fallback: OfflineFallback) -> Result<Load> {
-    match git::read_at(dir, reference, config::CONFIG_FILE)? {
+    match git::read_at(dir, reference, crate::config_model::CONFIG_FILE)? {
         git::BaseBlob::Found { text, commit } => {
             // `parse_base`, never `parse`: a ref carries the config the engine
             // of its day accepted, and a key THIS build has retired must not
             // make the whole comparison unreadable (`config::RETIRED_KEYS`).
-            let config =
-                config::parse_base(&text, &format!("{reference}:{}", config::CONFIG_FILE))?;
+            let config = config::parse_base(
+                &text,
+                &format!("{reference}:{}", crate::config_model::CONFIG_FILE),
+            )?;
             Ok(Load::Loaded(Box::new(Loaded {
                 config,
                 provenance: Provenance::Ref {
@@ -408,7 +410,7 @@ impl Pin {
 /// an epoch.
 fn pin_digest(config: &str) -> String {
     crate::identity::surface_fingerprint(&[(
-        config::CONFIG_FILE.to_owned(),
+        crate::config_model::CONFIG_FILE.to_owned(),
         config.as_bytes().to_vec(),
     )])
     .to_hex()
@@ -511,7 +513,7 @@ pub enum WeakeningKind {
     /// A waiver's expiry moved later, extending a suppression the base ref had
     /// bounded (CLOUD-721).
     ///
-    /// The identity in [`crate::waiver::Waiver::key`] deliberately omits
+    /// The identity in [`crate::config_model::Waiver::key`] deliberately omits
     /// `expires`, so a base waiver lapsed in 2020 and a working one live until
     /// 2099 are the *same* key and [`added_entries`] sees nothing — while the
     /// second suppresses every finding of its rule and the first suppresses
@@ -1110,7 +1112,7 @@ pub enum WeakeningKind {
 impl WeakeningKind {
     /// Every kind, so anything ranging over the vocabulary is derived rather
     /// than re-typed — the idiom [`crate::effect::Effect::ALL`] and
-    /// [`crate::outputs::Watched::ALL`] already use.
+    /// [`crate::config_model::Watched::ALL`] already use.
     ///
     /// [`CENSUS`] reads this: a kind added here without a field claiming it, or
     /// claimed by two fields, fails the census rather than sitting unattributed.
@@ -2093,7 +2095,7 @@ impl Weakening {
     pub fn line(&self) -> String {
         format!(
             "{}:{} {}→{}",
-            config::CONFIG_FILE,
+            crate::config_model::CONFIG_FILE,
             self.key,
             self.base,
             self.working
@@ -2229,19 +2231,19 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // The added direction (CLOUD-208). A waiver the base does not carry is a
     // suppression the branch introduced, which is the one shape where "the
     // working tree has more" means "the bar is lower". Keyed by
-    // `crate::waiver::Waiver::key`, so a whole-rule waiver and a path-narrowed
+    // `crate::config_model::Waiver::key`, so a whole-rule waiver and a path-narrowed
     // one are distinct entries rather than one that swallows the other.
     found.extend(added_entries(
         WeakeningKind::WaiverAdded,
         &base
             .waivers
             .iter()
-            .map(waiver::Waiver::key)
+            .map(crate::config_model::Waiver::key)
             .collect::<Vec<_>>(),
         &working
             .waivers
             .iter()
-            .map(waiver::Waiver::key)
+            .map(crate::config_model::Waiver::key)
             .collect::<Vec<_>>(),
     ));
 
@@ -2473,8 +2475,8 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // never, changed never — and a branch could disarm a refusal unseen. And its
     // direction is the writer's inverted: removing a marker a deny row reads is
     // exactly what lowers that bar, so the exemption above cannot apply to it.
-    let key = |mint: &crate::mint::Declared| {
-        if mint.mode == crate::mint::MintMode::Clear {
+    let key = |mint: &crate::config_model::MintDeclared| {
+        if mint.mode == crate::config_model::MintMode::Clear {
             format!("mint[{}:clear]", mint.name)
         } else {
             format!("mint[{}]", mint.name)
@@ -2486,7 +2488,9 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &ids(working
             .mints
             .iter()
-            .filter(|mint| mint.mode == crate::mint::MintMode::Clear || !arms_only(&mint.name))
+            .filter(|mint| {
+                mint.mode == crate::config_model::MintMode::Clear || !arms_only(&mint.name)
+            })
             .map(key)),
     ));
     for base_mint in &base.mints {
@@ -2595,7 +2599,7 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             .as_ref()
             .and_then(|census| census.shell.clone())
     };
-    let keys = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let keys = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .manifests
             .iter()
@@ -2607,7 +2611,7 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             })
             .collect()
     };
-    let units = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let units = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .manifests
             .iter()
@@ -2619,7 +2623,7 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             })
             .collect()
     };
-    let exempt = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let exempt = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .exempt
             .iter()
@@ -3159,7 +3163,7 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// Each server `config` governs under any exposed name, with the addresses that
 /// select it: a `permission_aliases` entry some `endpoint_contains` row declares.
 fn governed_aliases(
-    config: Option<&crate::mcp::McpConfig>,
+    config: Option<&crate::config_model::McpConfig>,
 ) -> std::collections::BTreeMap<String, BTreeSet<String>> {
     let mut governed = std::collections::BTreeMap::new();
     let Some(config) = config else {
@@ -3185,8 +3189,8 @@ fn governed_aliases(
 /// alias, deleting its selector and deleting `[mcp]` report the same key: each
 /// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
 fn mcp_weakenings(
-    base: Option<&crate::mcp::McpConfig>,
-    working: Option<&crate::mcp::McpConfig>,
+    base: Option<&crate::config_model::McpConfig>,
+    working: Option<&crate::config_model::McpConfig>,
 ) -> Vec<Weakening> {
     let now = governed_aliases(working);
     let mut found = Vec::new();
@@ -3402,7 +3406,7 @@ fn verdict_override_conditions(config: &Config) -> Vec<(String, String)> {
             entry
                 .routes
                 .iter()
-                .filter(|route| route.kind == crate::verdict::RouteKind::Override)
+                .filter(|route| route.kind == crate::preset_catalog::RouteKind::Override)
                 .map(move |route| {
                     (
                         entry.id.clone(),
@@ -3632,7 +3636,7 @@ fn min_version_weakening(base: &Config, working: &Config) -> Option<Weakening> {
 
 /// Waivers whose expiry the working tree pushed further out.
 ///
-/// Paired by [`crate::waiver::Waiver::key`], which is the identity two waivers
+/// Paired by [`crate::config_model::Waiver::key`], which is the identity two waivers
 /// may not share — and which deliberately omits `expires`, so this comparison is
 /// exactly the blind spot that identity leaves: same rule, same path, a date
 /// moved from lapsed to live suppresses everything the base ref reported and
@@ -3642,7 +3646,10 @@ fn min_version_weakening(base: &Config, working: &Config) -> Option<Weakening> {
 /// never against today. A malformed expiry is refused at load, so a pair that
 /// cannot both be parsed is unreachable through the loader and is skipped rather
 /// than guessed at.
-fn waiver_expiry_weakenings(base: &[waiver::Waiver], working: &[waiver::Waiver]) -> Vec<Weakening> {
+fn waiver_expiry_weakenings(
+    base: &[crate::config_model::Waiver],
+    working: &[crate::config_model::Waiver],
+) -> Vec<Weakening> {
     base.iter()
         .filter_map(|row| {
             let other = working.iter().find(|other| other.key() == row.key())?;
@@ -3678,8 +3685,8 @@ fn waiver_expiry_weakenings(base: &[waiver::Waiver], working: &[waiver::Waiver])
 /// `too_many_lines` refused — and the shape [`budget_weakenings`] below already
 /// sets for a table whose weakenings are more than one comparison.
 fn refusal_weakenings(
-    base: Option<&crate::refusal::Ceiling>,
-    working: Option<&crate::refusal::Ceiling>,
+    base: Option<&crate::config_model::Ceiling>,
+    working: Option<&crate::config_model::Ceiling>,
 ) -> Vec<Weakening> {
     let mut found: Vec<Weakening> = Vec::new();
     found.extend(ceiling_raised(
@@ -3699,8 +3706,8 @@ fn refusal_weakenings(
 
 /// Budget sets removed, files or embedded declarations dropped, ceilings raised.
 fn budget_weakenings(
-    base: Option<&crate::budget::Budget>,
-    working: Option<&crate::budget::Budget>,
+    base: Option<&crate::config_model::Budget>,
+    working: Option<&crate::config_model::Budget>,
 ) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -3754,7 +3761,7 @@ fn budget_weakenings(
 }
 
 /// Each embedded declaration as one entry: the document, then the key in it.
-fn embedded_entries(set: &crate::budget::BudgetSet) -> Vec<String> {
+fn embedded_entries(set: &crate::config_model::BudgetSet) -> Vec<String> {
     set.embedded
         .iter()
         .map(|decl| format!("{}#{}", decl.path, decl.key))
@@ -3898,8 +3905,8 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// the person making it, never from a committed name, so the table is no longer
 /// a repository's decision and its absence ranks below nothing.
 fn attribution_weakenings(
-    base: Option<&crate::attribution::Attribution>,
-    working: Option<&crate::attribution::Attribution>,
+    base: Option<&crate::config_model::Attribution>,
+    working: Option<&crate::config_model::Attribution>,
 ) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -3925,7 +3932,7 @@ fn attribution_weakenings(
 }
 
 /// The three deny lists, keyed as `batten.toml` spells them.
-fn deny_lists(attribution: &crate::attribution::Attribution) -> [(&'static str, &Vec<String>); 3] {
+fn deny_lists(attribution: &crate::config_model::Attribution) -> [(&'static str, &Vec<String>); 3] {
     [
         ("attribution.identity_deny", &attribution.identity_deny),
         ("attribution.trailer_deny", &attribution.trailer_deny),
@@ -3940,8 +3947,8 @@ fn deny_lists(attribution: &crate::attribution::Attribution) -> [(&'static str, 
 /// deleting the table is a silent deactivation rather than a loud refusal. A
 /// class *added* admits a record the ledger used to refuse.
 fn defects_weakenings(
-    base: Option<&crate::defects::Defects>,
-    working: Option<&crate::defects::Defects>,
+    base: Option<&crate::config_model::Defects>,
+    working: Option<&crate::config_model::Defects>,
 ) -> Vec<Weakening> {
     let Some(base) = base else {
         return Vec::new();
@@ -4106,18 +4113,20 @@ fn native_weakenings<'a>(
     base: &'a [Rule],
     working: &'a [Rule],
 ) -> impl Iterator<Item = Weakening> + 'a {
-    crate::rules::NativeGate::ALL.iter().filter_map(|gate| {
-        let was = crate::rules::native_grade(base, *gate);
-        let now = crate::rules::native_grade(working, *gate);
-        (now < was).then(|| {
-            Weakening::new(
-                WeakeningKind::SeverityLowered,
-                format!("native[{}]", gate.as_str()),
-                severity_token(was),
-                severity_token(now),
-            )
+    crate::config_model::NativeGate::ALL
+        .iter()
+        .filter_map(|gate| {
+            let was = crate::rules::native_grade(base, *gate);
+            let now = crate::rules::native_grade(working, *gate);
+            (now < was).then(|| {
+                Weakening::new(
+                    WeakeningKind::SeverityLowered,
+                    format!("native[{}]", gate.as_str()),
+                    severity_token(was),
+                    severity_token(now),
+                )
+            })
         })
-    })
 }
 
 /// Rule columns that are not the rule's predicate, each with why not.
@@ -6173,7 +6182,7 @@ mod tests {
         let weakening = Weakening::new(WeakeningKind::ReadyCutoverRelaxed, "k", "a", "b");
         assert_eq!(
             crate::output::Line::line(&weakening),
-            format!("{}:k a→b", config::CONFIG_FILE)
+            format!("{}:k a→b", crate::config_model::CONFIG_FILE)
         );
     }
 
@@ -6890,13 +6899,13 @@ mod tests {
         // tightening the token ceiling while raising the repeat allowance is
         // still a weakening, and a single comparison would let it through.
         let mut base = Config::declaring_nothing();
-        base.hook_output = Some(crate::hookcost::Ceiling {
+        base.hook_output = Some(crate::config_model::HookCeiling {
             max_tokens: 4_000,
             max_repeats: 1,
         });
 
         let mut mixed = Config::declaring_nothing();
-        mixed.hook_output = Some(crate::hookcost::Ceiling {
+        mixed.hook_output = Some(crate::config_model::HookCeiling {
             max_tokens: 100,
             max_repeats: 9,
         });
@@ -6941,10 +6950,10 @@ mod tests {
     fn raising_or_dropping_the_advisory_ceiling_is_a_weakening() {
         // The channel budget's own ratchet, and the kind's exercising case.
         let mut base = Config::declaring_nothing();
-        base.advisory = Some(crate::advisory::Channel { max_tokens: 400 });
+        base.advisory = Some(crate::config_model::Channel { max_tokens: 400 });
 
         let mut raised = Config::declaring_nothing();
-        raised.advisory = Some(crate::advisory::Channel { max_tokens: 4000 });
+        raised.advisory = Some(crate::config_model::Channel { max_tokens: 4000 });
         assert_eq!(
             only(&base, &raised),
             Weakening::new(
@@ -6973,13 +6982,13 @@ mod tests {
         // table. Both are one kind, because `ceiling_raised` already treats an
         // absent working value as the widest raise there is.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling {
+        base.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 24,
             first_sighting_max_tokens: None,
         });
 
         let mut raised = Config::declaring_nothing();
-        raised.refusal = Some(crate::refusal::Ceiling {
+        raised.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 200,
             first_sighting_max_tokens: None,
         });
@@ -7010,12 +7019,12 @@ mod tests {
         // it exists to protect: tightening a ceiling is the ratchet turning the
         // way it is supposed to.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling {
+        base.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 24,
             first_sighting_max_tokens: None,
         });
         let mut working = Config::declaring_nothing();
-        working.refusal = Some(crate::refusal::Ceiling {
+        working.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 12,
             first_sighting_max_tokens: None,
         });
@@ -7036,16 +7045,16 @@ mod tests {
         // stop deciding anything and every class name goes back to free text,
         // with the config still loading clean. Nothing else in this comparison
         // would see that.
-        let word = |w: &str| crate::verdict::VocabularyWord {
+        let word = |w: &str| crate::config_model::VocabularyWord {
             word: w.to_owned(),
             gloss: "a word".to_owned(),
         };
         let mut base = Config::declaring_nothing();
-        base.vocabulary = crate::verdict::Vocabulary {
+        base.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
         let working = Config::declaring_nothing();
 
@@ -7065,23 +7074,23 @@ mod tests {
         // still spends it fails the load on its own, loudly, naming the word. So
         // the whole table going away is the only silent case, and it is the only
         // one reported.
-        let word = |w: &str| crate::verdict::VocabularyWord {
+        let word = |w: &str| crate::config_model::VocabularyWord {
             word: w.to_owned(),
             gloss: "a word".to_owned(),
         };
         let mut base = Config::declaring_nothing();
-        base.vocabulary = crate::verdict::Vocabulary {
+        base.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task"), word("shell")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
         let mut working = Config::declaring_nothing();
-        working.vocabulary = crate::verdict::Vocabulary {
+        working.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
 
         let found = weakenings(&base, &working);
@@ -7397,11 +7406,11 @@ mod tests {
     }
 
     /// One `[[mint]]` row, for the three cases below.
-    fn mint(name: &str, requires: &[&str]) -> crate::mint::Declared {
-        crate::mint::Declared {
+    fn mint(name: &str, requires: &[&str]) -> crate::config_model::MintDeclared {
+        crate::config_model::MintDeclared {
             name: name.to_owned(),
             tool: "get_issue".to_owned(),
-            key: crate::mint::MintKey::Named,
+            key: crate::config_model::MintKey::Named,
             key_from: Some("id".to_owned()),
             key_from_input: None,
             key_shape: None,
@@ -7411,29 +7420,29 @@ mod tests {
             requires: requires.iter().map(|path| (*path).to_owned()).collect(),
             after: None,
             after_mode: None,
-            mode: crate::mint::MintMode::Replace,
+            mode: crate::config_model::MintMode::Replace,
             body: "{id} {now}".to_owned(),
         }
     }
 
     /// A recorder naming one program, for the cases below.
-    fn recorder(name: &str, tool: &str, program: &str) -> crate::recorder::Declared {
-        crate::recorder::Declared {
+    fn recorder(name: &str, tool: &str, program: &str) -> crate::config_model::RecorderDeclared {
+        crate::config_model::RecorderDeclared {
             name: name.to_owned(),
             record: name.to_owned(),
             tool: tool.to_owned(),
             requires_recorded: None,
-            key: crate::recorder::RecordKey::Branch,
+            key: crate::config_model::RecordKey::Branch,
             requires: vec!["id".to_owned()],
             refused_when_input: Vec::new(),
             refused_when_result: Vec::new(),
             requires_input_matching: std::collections::BTreeMap::new(),
-            columns: vec![crate::recorder::Column {
+            columns: vec![crate::config_model::Column {
                 name: "verdict".to_owned(),
-                value: crate::recorder::Value::Program {
+                value: crate::config_model::Value::Program {
                     run: program.to_owned(),
-                    stdin: Box::new(crate::recorder::Value::Result("description".to_owned())),
-                    read: crate::recorder::Read::Status(
+                    stdin: Box::new(crate::config_model::Value::Result("description".to_owned())),
+                    read: crate::config_model::Read::Status(
                         [(String::from("0"), String::from("pass"))]
                             .into_iter()
                             .collect(),
@@ -7539,7 +7548,7 @@ mod tests {
         base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
         base.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/ready-lint.sh"),
                 args: Vec::new(),
             },
@@ -7549,7 +7558,7 @@ mod tests {
         let mut working = base.clone();
         working.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/always-passes.sh"),
                 args: Vec::new(),
             },
@@ -7577,7 +7586,7 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/ready-lint.sh"),
                 args: Vec::new(),
             },

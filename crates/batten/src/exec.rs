@@ -9,7 +9,7 @@
 //!
 //! Three things pass through untouched, and each is load-bearing for a consumer:
 //!
-//! * **The child's argv.** Declared as [`crate::surface::ValueDecl::Trailing`],
+//! * **The child's argv.** Declared as [`crate::surface_table::ValueDecl::Trailing`],
 //!   which sets `trailing_var_arg(true)` and `allow_hyphen_values(true)`. The
 //!   second is not defensive tidying: without
 //!   it a wrapped command's own `-v` is parsed as Batten's §3 verbosity rung, so
@@ -205,9 +205,11 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::capture::{self, Stream};
+use crate::config_model::OutputPattern;
 use crate::error::{Passthrough, UsageError};
 use crate::exit::ExitCode;
-use crate::outputs::{self, Hit, OutputPattern};
+use crate::outputs;
+use crate::outputs::Hit;
 use crate::task;
 
 /// The exit code a POSIX shell reports for a process killed by a signal.
@@ -2906,7 +2908,7 @@ fn report_bundle(
 // recorded worst closure. Re-exported so `exec::Streamed` keeps resolving.
 pub use crate::capture::{Keep, Streamed, StreamedChild};
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{ExecConfig, ExecProgress as Progress, OutputFormat, OutputStyle};
+use crate::config_model::{ExecConfig, ExecProgress as Progress, OutputFormat, OutputStyle};
 
 // THE ONE SPAWN of the adapter stays in `exec`, the placed module: the traits
 // live in `capture` so a caller names them without an edge onto `exec`, and the

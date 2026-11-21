@@ -38,7 +38,7 @@ pub fn exercise_hook_decode(data: &[u8]) {
         return;
     };
 
-    for &harness in batten::hook::Harness::ALL {
+    for &harness in batten::config_model::Harness::ALL {
         let first = batten::hook::decode(harness, raw);
 
         // DETERMINISM. Mediation happens once per tool call and its verdict is
@@ -162,7 +162,7 @@ pub fn exercise_config_parse(data: &[u8]) {
         // signature, which is a promise it can only keep if it terminates on
         // every `Config` the parser accepts — including the degenerate ones a
         // human would never write.
-        let base = batten::config::Config::declaring_nothing();
+        let base = batten::config_model::Config::declaring_nothing();
         let against_empty = batten::trust::weakenings(&base, &config);
         let against_self = batten::trust::weakenings(&config, &config);
 

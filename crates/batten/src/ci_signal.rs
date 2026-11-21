@@ -765,7 +765,7 @@ fn day_before(now: u64) -> Option<(String, i64)> {
     }
     let at = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(DAY);
     Some((
-        crate::receipt::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
+        crate::clock::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
         at,
     ))
 }

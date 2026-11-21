@@ -1,7 +1,7 @@
 //! Which item a path names, across a tree's crates (CLOUD-2790).
 //!
 //! `test replay` asks whether a base test still holds at HEAD. A move that
-//! respells a path — `crate::rules::Rule` becoming `crate::config_model::Rule`
+//! respells a path — `crate::config_model::Rule` becoming `crate::config_model::Rule`
 //! once `Rule` lives in the model — changes no assertion, yet compares as a
 //! modified body. This index resolves each path that starts at `crate::` or at
 //! one of the tree's own crates to the file and name that DEFINE it, following
@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _, HasVisibility as _};
+use ra_ap_syntax::ast::{
+    self, HasAttrs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
+};
 use ra_ap_syntax::{AstNode as _, Edition, SourceFile};
 
 /// A defining site: the file an item is declared in, and its name there.
@@ -110,17 +112,10 @@ fn shape(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// A path's resolution: the defining site, the crate and module declaring it,
-/// how many of the path's segments it consumed, and whether it passed through
-/// a SHIM — a `use crate::…` alias in a module other than its crate's root.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Found {
-    key: Key,
-    krate: String,
-    module: Vec<String>,
-    used: usize,
-    through_shim: bool,
-}
+/// A SHIM: a `use crate::…` or `use self::…` alias in a module other than
+/// its crate's root (a root alias is the crate's stated surface). It is named
+/// by the crate and module holding it and the name it makes visible there.
+type Shim = (String, Vec<String>, String);
 
 impl Index {
     /// Index the library sources in `files` (path to text) of the crates
@@ -214,9 +209,10 @@ impl Index {
             .map(|(path, _)| path.clone())
     }
 
-    /// The resolution of an absolute path (`[crate, module.., Name, ..]`), or
-    /// `None` when it does not resolve within `depth` alias hops.
-    fn resolve_from(&self, segments: &[String], depth: u8) -> Option<Found> {
+    /// The defining site of an absolute path (`[crate, module.., Name, ..]`),
+    /// and how many of its segments that consumed; or `None` when it does not
+    /// resolve within `depth` alias hops.
+    fn resolve_from(&self, segments: &[String], depth: u8) -> Option<(Key, usize)> {
         if depth == 0 {
             return None;
         }
@@ -232,19 +228,9 @@ impl Index {
             }
             if here.declared.contains_key(segment) {
                 let file = self.file_of(krate, &module)?;
-                return Some(Found {
-                    key: (file, segment.clone()),
-                    krate: krate.clone(),
-                    module,
-                    used: at + 2,
-                    through_shim: false,
-                });
+                return Some(((file, segment.clone()), at + 2));
             }
             let target = here.aliases.get(segment)?;
-            // A `crate::`/`self::` alias outside the crate root is a shim; one
-            // at the root is the crate's stated surface.
-            let shim = matches!(target.first().map(String::as_str), Some("crate" | "self"))
-                && !module.is_empty();
             let mut absolute: Vec<String> = match target.first().map(String::as_str) {
                 Some("crate") => std::iter::once(krate.clone())
                     .chain(target[1..].iter().cloned())
@@ -258,54 +244,98 @@ impl Index {
             };
             let alias_len = absolute.len();
             absolute.extend(rest[at + 1..].iter().cloned());
-            let mut found = self.resolve_from(&absolute, depth - 1)?;
+            let (key, used) = self.resolve_from(&absolute, depth - 1)?;
             // The original path consumed everything through this segment,
             // plus whatever of its remainder the alias's resolution used.
-            found.used = at + 2 + found.used.saturating_sub(alias_len);
-            found.through_shim |= shim;
-            return Some(found);
+            return Some((key, at + 2 + used.saturating_sub(alias_len)));
         }
         None
     }
 
-    /// The resolution of `path` read from inside `krate`. Only a path starting
-    /// at `crate` or at one of the tree's crates is resolved.
-    fn resolve_found(&self, krate: &str, path: &[String]) -> Option<Found> {
+    /// `path` as an absolute path (`[crate, ..]`) read from inside `krate`:
+    /// one starting at `crate` or at one of the tree's crates, or — in a
+    /// crate root file (`at_root`) — at one of the root's child modules.
+    fn absolute(&self, krate: &str, at_root: bool, path: &[String]) -> Option<Vec<String>> {
         let first = path.first()?;
-        let absolute: Vec<String> = if first == "crate" {
-            std::iter::once(krate.to_owned())
-                .chain(path[1..].iter().cloned())
-                .collect()
-        } else if self.modules.contains_key(&(first.clone(), Vec::new())) {
-            path.to_vec()
-        } else {
-            return None;
-        };
-        self.resolve_from(&absolute, 8)
+        if first == "crate" {
+            return Some(
+                std::iter::once(krate.to_owned())
+                    .chain(path[1..].iter().cloned())
+                    .collect(),
+            );
+        }
+        if at_root
+            && self
+                .modules
+                .contains_key(&(krate.to_owned(), vec![first.clone()]))
+        {
+            return Some(
+                std::iter::once(krate.to_owned())
+                    .chain(path.iter().cloned())
+                    .collect(),
+            );
+        }
+        self.modules
+            .contains_key(&(first.clone(), Vec::new()))
+            .then(|| path.to_vec())
     }
 
     /// The defining site of `path` read from inside `krate`, and how many of
     /// its segments that consumed.
     #[must_use]
     pub fn resolve(&self, krate: &str, path: &[String]) -> Option<(Key, usize)> {
-        self.resolve_found(krate, path)
-            .map(|found| (found.key, found.used))
+        self.resolve_from(&self.absolute(krate, false, path)?, 8)
     }
 
-    /// How a reader in crate `from` spells a resolved item at its home:
-    /// `crate::m::Name` inside its own crate, `<crate>::m::Name` elsewhere
-    /// (`from` is empty for a file no crate's library holds).
-    fn home(found: &Found, from: &str) -> String {
-        let head = if found.krate == from {
-            "crate"
-        } else {
-            found.krate.as_str()
-        };
-        std::iter::once(head)
-            .chain(found.module.iter().map(String::as_str))
-            .chain(std::iter::once(found.key.1.as_str()))
-            .collect::<Vec<_>>()
-            .join("::")
+    /// The shim an absolute path's FIRST alias hop is, and the absolute path
+    /// it stands for there (the shim's target, then the path's remaining
+    /// segments); `None` when the path reaches an item or a root alias first,
+    /// or does not resolve that far.
+    fn first_shim(&self, segments: &[String]) -> Option<(Shim, Vec<String>)> {
+        let (krate, rest) = segments.split_first()?;
+        let mut module: Vec<String> = Vec::new();
+        for (at, segment) in rest.iter().enumerate() {
+            let here = self.modules.get(&(krate.clone(), module.clone()))?;
+            let mut deeper = module.clone();
+            deeper.push(segment.clone());
+            if self.modules.contains_key(&(krate.clone(), deeper.clone())) {
+                module = deeper;
+                continue;
+            }
+            if module.is_empty() {
+                return None;
+            }
+            let target = here.aliases.get(segment)?;
+            let mut absolute: Vec<String> = match target.first().map(String::as_str) {
+                Some("crate") => std::iter::once(krate.clone())
+                    .chain(target[1..].iter().cloned())
+                    .collect(),
+                Some("self") => std::iter::once(krate.clone())
+                    .chain(module.iter().cloned())
+                    .chain(target[1..].iter().cloned())
+                    .collect(),
+                _ => return None,
+            };
+            absolute.extend(rest[at + 1..].iter().cloned());
+            return Some(((krate.clone(), module, segment.clone()), absolute));
+        }
+        None
+    }
+
+    /// What an absolute path respells to when its first alias hop is a shim:
+    /// that shim's target, followed through further shims while each next
+    /// hop is one. The target is code that compiled, so the respelling is
+    /// valid whether or not the index can follow it to the item (a glob
+    /// re-export, an external crate).
+    fn unshim(&self, segments: &[String]) -> Option<Vec<String>> {
+        let (_, mut path) = self.first_shim(segments)?;
+        for _ in 0..8 {
+            match self.first_shim(&path) {
+                Some((_, next)) => path = next,
+                None => break,
+            }
+        }
+        Some(path)
     }
 
     /// Every defining site of `name`: the file and declaration text of each.
@@ -479,52 +509,205 @@ fn path_at(text: &str) -> Option<(Vec<String>, usize)> {
     (segments.len() >= 2).then_some((segments, at))
 }
 
+/// Where a file's paths are read from: its crate and module, and whether it
+/// is a crate root (whose root-relative paths name the root's modules). A file
+/// no crate's library holds (a test, an example) has neither. Its `aliases`
+/// are the file's own top-level `use` leaves, read from its text whether or
+/// not a crate's library holds it: a test's `use batten::verdict;` is what
+/// makes its `verdict::Native` a path through a shim.
+#[derive(Debug, Default)]
+struct Reader {
+    krate: String,
+    module: Vec<String>,
+    at_root: bool,
+    aliases: BTreeMap<String, Vec<String>>,
+}
+
+impl Index {
+    /// [`Index::absolute`] for a path read by `reader`, which also reads a
+    /// head the reading file imported by name (`use crate::config;`, then
+    /// `config::X`).
+    fn absolute_in(&self, reader: &Reader, path: &[String]) -> Option<Vec<String>> {
+        if let Some(absolute) = self.absolute(&reader.krate, reader.at_root, path) {
+            return Some(absolute);
+        }
+        let (first, rest) = path.split_first()?;
+        let target = reader.aliases.get(first)?;
+        let head: Vec<String> = match target.first().map(String::as_str) {
+            Some("crate") if !reader.krate.is_empty() => std::iter::once(reader.krate.clone())
+                .chain(target[1..].iter().cloned())
+                .collect(),
+            Some("self") if !reader.krate.is_empty() => std::iter::once(reader.krate.clone())
+                .chain(reader.module.iter().cloned())
+                .chain(target[1..].iter().cloned())
+                .collect(),
+            Some(krate) if self.modules.contains_key(&(krate.to_owned(), Vec::new())) => {
+                target.clone()
+            }
+            _ => return None,
+        };
+        // Only a MODULE imported by name: a path through an imported item
+        // (`Rule::new` after `use crate::config_model::Rule;`) is respelled at its
+        // `use`, and expanding it here would spell out every call.
+        let (krate, module) = head.split_first()?;
+        if !self.modules.contains_key(&(krate.clone(), module.to_vec())) {
+            return None;
+        }
+        Some(head.into_iter().chain(rest.iter().cloned()).collect())
+    }
+
+    fn reader(&self, path: &str, text: &str) -> Reader {
+        let mut reader = self
+            .files
+            .get(path)
+            .map_or_else(Reader::default, |(krate, module)| Reader {
+                krate: krate.clone(),
+                module: module.clone(),
+                at_root: module.is_empty(),
+                aliases: BTreeMap::new(),
+            });
+        for item in SourceFile::parse(text, Edition::Edition2024).tree().items() {
+            if let ast::Item::Use(declaration) = item
+                && let Some(tree) = declaration.use_tree()
+            {
+                reader.aliases.extend(
+                    crate::module_graph::use_leaves(&tree)
+                        .into_iter()
+                        .map(|leaf| (leaf.name, leaf.path)),
+                );
+            }
+        }
+        reader
+    }
+
+    /// The shim `path`, read by `reader`, reaches first. `self::` and
+    /// `super::` are read from the file's module, and `super::` also as the
+    /// module itself, since inside an inline module it is the file's: an
+    /// over-read only keeps a shim public.
+    fn reached_shim(&self, reader: &Reader, path: &[String]) -> Vec<Shim> {
+        let rooted = |module: &[String]| -> Vec<String> {
+            std::iter::once(reader.krate.clone())
+                .chain(module.iter().cloned())
+                .chain(path[1..].iter().cloned())
+                .collect()
+        };
+        let candidates: Vec<Vec<String>> = match path.first().map(String::as_str) {
+            Some("self") => vec![rooted(&reader.module)],
+            Some("super") => {
+                let parent = &reader.module[..reader.module.len().saturating_sub(1)];
+                vec![rooted(parent), rooted(&reader.module)]
+            }
+            _ => self.absolute_in(reader, path).into_iter().collect(),
+        };
+        candidates
+            .iter()
+            .filter_map(|absolute| self.first_shim(absolute).map(|(shim, _)| shim))
+            .collect()
+    }
+
+    /// Every shim a module holds.
+    fn shims_of(&self, krate: &str, module: &[String]) -> Vec<Shim> {
+        if module.is_empty() {
+            return Vec::new();
+        }
+        self.modules
+            .get(&(krate.to_owned(), module.to_vec()))
+            .map(|held| {
+                held.aliases
+                    .iter()
+                    .filter(|(_, target)| {
+                        matches!(target.first().map(String::as_str), Some("crate" | "self"))
+                    })
+                    .map(|(name, _)| (krate.to_owned(), module.to_vec(), name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// `path` (`[crate, ..]`) as `from` spells it: `crate::…` inside that crate.
+fn spell(path: &[String], from: &str) -> String {
+    let mut segments: Vec<&str> = path.iter().map(String::as_str).collect();
+    if segments.first() == Some(&from) {
+        segments[0] = "crate";
+    }
+    segments.join("::")
+}
+
 /// Every file of `files` whose text changes when each path through a shim is
-/// respelled at its item's home and each shim becomes a private `use`
-/// (CLOUD-2793's `respell-through-shims`). `manifests` declares the crates.
+/// respelled at the shim's target, and each shim nothing reaches any more
+/// becomes a private `use` (CLOUD-2793's `respell-through-shims`).
+/// `manifests` declares the crates.
 ///
-/// THREE PASSES PER FILE, in this order:
-/// 1. A grouped `use` (`use crate::rules::{Rule, Kind};`) with a leaf reaching
-///    through a shim is regenerated from the syntax tree, one `use` per home
-///    module, keeping its attributes and visibility: pass 2's scan cannot see
-///    inside a group.
-/// 2. Every other path resolving through a shim — in code, a `use`, a doc link
-///    or a macro — is respelled at its item's home, keeping the segments after
-///    the item. String and char literals are never touched.
-/// 3. In a library file below its crate's root, a `pub` or `pub(crate)`
-///    `use crate::…` loses its visibility: it may still serve its own module's
-///    bare names, and `cargo fix` removes the ones nothing uses.
+/// A SHIM is a `use crate::…`/`use self::…` alias below its crate's root; a
+/// root alias is the crate's stated surface and is never respelled through.
+/// A path is respelled at its first shim's TARGET, followed through further
+/// shims, not resolved to the item: the target is code that compiled, so the
+/// respelling is valid even where the index cannot follow it (a glob
+/// re-export, another crate's item).
 ///
-/// A path the index cannot resolve is left as written, so what this misses is
-/// a compile error naming the site, never a silent change.
+/// THREE PASSES:
+/// 1. A `use` with a leaf through a shim is regenerated from the syntax tree,
+///    one `use` per prefix, keeping its attributes, its visibility and every
+///    name it binds: a shim may rename (`pub use crate::digest::sha256_hex as
+///    digest;`), and a text respelling of the path would drop the `as`. A
+///    `use` holding a glob is left whole: its leaves cannot all be named.
+/// 2. Every other path through a shim — in code, a `use`, a doc link or a
+///    macro (`$crate::…`) — is respelled. String and char literals are data.
+/// 3. Over the respelled tree, every shim some path still reaches (a
+///    `super::` path, a glob, a group left whole) is kept; each other `pub` or
+///    `pub(crate)` shim at a file's top level goes private, still serving its
+///    module's bare names, and `cargo fix` drops the ones nothing uses.
+///
+/// What this cannot read is left as written, so a miss is a compile error
+/// naming the site, never a silent change.
 #[must_use]
 pub fn respell_through_shims(
     files: &BTreeMap<String, String>,
     manifests: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let index = Index::new(files, manifests);
-    files
+    let mut respelled: BTreeMap<String, String> = files
         .iter()
-        .filter_map(|(path, text)| {
-            let from = index.crate_of(path).unwrap_or_default();
-            let grouped = regroup_uses(text, &from, &index);
-            let respelled = respell_paths(&grouped, &from, &index);
-            let below_root = index
-                .files
-                .get(path)
-                .is_some_and(|(_, module)| !module.is_empty());
-            let out = if below_root {
-                downgrade_shims(&respelled)
-            } else {
-                respelled
-            };
-            (out != *text).then(|| (path.clone(), out))
+        .map(|(path, text)| {
+            let reader = index.reader(path, text);
+            let grouped = regroup_uses(text, &reader, &index);
+            (path.clone(), respell_paths(&grouped, &reader, &index))
         })
+        .collect();
+    let reached: std::collections::BTreeSet<Shim> = respelled
+        .iter()
+        .flat_map(|(path, text)| reached_shims(text, &index.reader(path, text), &index))
+        .collect();
+    for (path, text) in &mut respelled {
+        let reader = index.reader(path, text);
+        if !reader.krate.is_empty() {
+            let shims = !reader.module.is_empty();
+            *text = downgrade_shims(text, &reader, &reached, shims);
+        }
+    }
+    respelled
+        .into_iter()
+        .filter(|(path, text)| files.get(path) != Some(text))
         .collect()
 }
 
-/// Pass 1: a grouped `use` with a leaf through a shim, regenerated by home.
-fn regroup_uses(text: &str, from: &str, index: &Index) -> String {
+/// Whether a use tree holds a glob or an underscore import (`Trait as _`)
+/// anywhere: either binds no name a leaf can carry, so the tree is left whole.
+fn binds_unnamed(tree: &ast::UseTree) -> bool {
+    tree.syntax()
+        .descendants()
+        .filter_map(ast::UseTree::cast)
+        .any(|nested| nested.star_token().is_some())
+        || tree
+            .syntax()
+            .descendants()
+            .filter_map(ast::Rename::cast)
+            .any(|rename| rename.underscore_token().is_some())
+}
+
+/// Pass 1: a `use` with a leaf through a shim, regenerated by prefix.
+fn regroup_uses(text: &str, reader: &Reader, index: &Index) -> String {
     let parse = SourceFile::parse(text, Edition::Edition2024);
     if !parse.errors().is_empty() {
         return text.to_owned();
@@ -539,20 +722,16 @@ fn regroup_uses(text: &str, from: &str, index: &Index) -> String {
         let Some(tree) = declaration.use_tree() else {
             continue;
         };
-        if !tree
-            .syntax()
-            .descendants()
-            .any(|node| ast::UseTreeList::can_cast(node.kind()))
-        {
+        if binds_unnamed(&tree) {
             continue;
         }
-        let resolved: Vec<(crate::module_graph::UseLeaf, Option<Found>)> =
+        let resolved: Vec<(crate::module_graph::UseLeaf, Option<Vec<String>>)> =
             crate::module_graph::use_leaves(&tree)
                 .into_iter()
                 .map(|leaf| {
                     let hit = index
-                        .resolve_found(from, &leaf.path)
-                        .filter(|found| found.through_shim);
+                        .absolute_in(reader, &leaf.path)
+                        .and_then(|absolute| index.unshim(&absolute));
                     (leaf, hit)
                 })
                 .collect();
@@ -568,12 +747,13 @@ fn regroup_uses(text: &str, from: &str, index: &Index) -> String {
             .collect();
         let mut by_prefix: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (leaf, hit) in resolved {
-            let full = hit.map_or_else(|| leaf.path.join("::"), |found| Index::home(&found, from));
+            let full = hit.map_or_else(|| leaf.path.join("::"), |path| spell(&path, &reader.krate));
             let (prefix, last) = full.rsplit_once("::").unwrap_or(("", full.as_str()));
-            let item = if leaf.renamed && leaf.name != last {
-                format!("{last} as {}", leaf.name)
-            } else {
+            // A shim may rename, so the name this file sees is kept either way.
+            let item = if leaf.name == last {
                 last.to_owned()
+            } else {
+                format!("{last} as {}", leaf.name)
             };
             by_prefix.entry(prefix.to_owned()).or_default().push(item);
         }
@@ -604,80 +784,264 @@ fn regroup_uses(text: &str, from: &str, index: &Index) -> String {
     out
 }
 
-/// Pass 2: every resolvable path through a shim, respelled at its home.
-fn respell_paths(body: &str, from: &str, index: &Index) -> String {
-    let mut out = String::with_capacity(body.len());
-    let bytes = body.as_bytes();
+/// Every path in `body` outside a literal, with its byte offset and length.
+///
+/// A COMMENT IS SCANNED FOR PATHS BUT NEVER FOR LITERALS: prose quotes
+/// (`"the base declared a key` over two lines, a `"""` triple) would otherwise
+/// open a string that swallows the code after it, and its paths would be
+/// silently left at their shims.
+fn paths_in(body: &str) -> Vec<(usize, Vec<String>, usize)> {
+    let mut found = Vec::new();
     let mut at = 0;
-    while at < bytes.len() {
+    while at < body.len() {
         let rest = &body[at..];
-        if let Some(len) = literal_len(rest) {
-            out.push_str(&rest[..len]);
+        let comment = if rest.starts_with("//") {
+            Some(rest.find('\n').unwrap_or(rest.len()))
+        } else if rest.starts_with("/*") {
+            Some(rest.find("*/").map_or(rest.len(), |end| end + 2))
+        } else {
+            None
+        };
+        if let Some(len) = comment {
+            scan_paths(body, at, at + len, false, &mut found);
             at += len;
             continue;
+        }
+        let next = scan_paths(body, at, body.len(), true, &mut found);
+        at = next;
+    }
+    found
+}
+
+/// Paths in `body[from..to]`, appended to `found`. With `code`, a literal is
+/// skipped and the scan stops at a comment's start, returning where it
+/// stopped; without, everything up to `to` is read as path or prose.
+fn scan_paths(
+    body: &str,
+    from: usize,
+    to: usize,
+    code: bool,
+    found: &mut Vec<(usize, Vec<String>, usize)>,
+) -> usize {
+    let bytes = body.as_bytes();
+    let mut at = from;
+    while at < to {
+        let rest = &body[at..to];
+        if code {
+            if rest.starts_with("//") || rest.starts_with("/*") {
+                return at;
+            }
+            if let Some(len) = literal_len(rest) {
+                at += len;
+                continue;
+            }
         }
         let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
-        if starts_path
-            && let Some((segments, len)) = path_at(rest)
-            && let Some(found) = index.resolve_found(from, &segments)
-            && found.through_shim
-        {
-            out.push_str(&Index::home(&found, from));
-            for segment in &segments[found.used.min(segments.len())..] {
-                out.push_str("::");
-                out.push_str(segment);
-            }
+        if starts_path && let Some((segments, len)) = path_at(rest) {
+            found.push((at, segments, len));
             at += len;
             continue;
         }
-        let next = rest.chars().next().map_or(1, char::len_utf8);
-        out.push_str(&rest[..next]);
-        at += next;
+        at += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    to
+}
+
+/// Pass 2: every path through a shim, respelled at the shim's target.
+fn respell_paths(body: &str, reader: &Reader, index: &Index) -> String {
+    let mut out = body.to_owned();
+    for (at, segments, len) in paths_in(body).into_iter().rev() {
+        if let Some(path) = index
+            .absolute_in(reader, &segments)
+            .and_then(|absolute| index.unshim(&absolute))
+        {
+            out.replace_range(at..at + len, &spell(&path, &reader.krate));
+        }
     }
     out
 }
 
-/// Pass 3: `pub use crate::…` and `pub(crate) use crate::…` become `use crate::…`.
-fn downgrade_shims(text: &str) -> String {
+/// The shims `text` still reaches: by a path, by a `use` leaf (a group's
+/// leaves are not text paths), or by a glob over a shim's module.
+fn reached_shims(text: &str, reader: &Reader, index: &Index) -> Vec<Shim> {
+    let mut reached: Vec<Shim> = paths_in(text)
+        .into_iter()
+        .flat_map(|(_, segments, _)| index.reached_shim(reader, &segments))
+        .collect();
     let parse = SourceFile::parse(text, Edition::Edition2024);
-    if !parse.errors().is_empty() {
-        return text.to_owned();
+    for tree in parse
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::UseTree::cast)
+    {
+        if tree.star_token().is_some() {
+            // A glob from a child of the shim's own file needs no `pub`.
+            let Some(prefix) = tree.path() else { continue };
+            let segments: Vec<String> = prefix
+                .syntax()
+                .text()
+                .to_string()
+                .split("::")
+                .map(|segment| segment.trim().to_owned())
+                .collect();
+            if segments.first().is_some_and(|first| first == "super") {
+                continue;
+            }
+            if let Some(absolute) = index.absolute_in(reader, &segments)
+                && let Some((krate, module)) = absolute.split_first()
+            {
+                reached.extend(index.shims_of(krate, module));
+            }
+        }
     }
-    let mut cuts: Vec<std::ops::Range<usize>> = Vec::new();
     for declaration in parse
         .tree()
         .syntax()
         .descendants()
         .filter_map(ast::Use::cast)
     {
-        let Some(visibility) = declaration.visibility() else {
-            continue;
-        };
-        let spelled: String = visibility
-            .syntax()
-            .text()
-            .to_string()
-            .split_whitespace()
-            .collect();
-        let crate_rooted = declaration
-            .use_tree()
-            .and_then(|tree| tree.path())
-            .is_some_and(|path| path.syntax().text().to_string().starts_with("crate"));
-        if matches!(spelled.as_str(), "pub" | "pub(crate)") && crate_rooted {
-            let range = visibility.syntax().text_range();
-            // The visibility and the one space after it.
-            let end = usize::from(range.end());
-            let end = if text[end..].starts_with(' ') {
-                end + 1
-            } else {
-                end
-            };
-            cuts.push(usize::from(range.start())..end);
+        if let Some(tree) = declaration.use_tree() {
+            for leaf in crate::module_graph::use_leaves(&tree) {
+                reached.extend(index.reached_shim(reader, &leaf.path));
+            }
         }
     }
+    reached
+}
+
+/// Pass 3, over one library file's top-level `use` items: a `pub` or
+/// `pub(crate)` shim nothing reaches goes private (`shims`, false in a crate
+/// root, whose aliases are its surface), and each leaf of a private `use`
+/// that only test code names is gated `#[cfg(test)]`.
+///
+/// THE GATE IS WHAT KEEPS `cargo fix` SAFE. A leaf the respelling left used
+/// only by test code — a shim kept for a test module's `use super::*`, or a
+/// module import (`use crate::config;`) whose library uses moved away — reads
+/// as unused to the library build, `cargo fix` deletes it there first, and
+/// the test build then fails: the cfg split, measured at 167 errors over the
+/// first full run. Gating in place, rather than moving the leaf into a test
+/// module, is right for every shape measured: two test modules, a test
+/// function inside a non-test module, and a glob import alike.
+fn downgrade_shims(
+    text: &str,
+    reader: &Reader,
+    reached: &std::collections::BTreeSet<Shim>,
+    shims: bool,
+) -> String {
+    let parse = SourceFile::parse(text, Edition::Edition2024);
+    if !parse.errors().is_empty() {
+        return text.to_owned();
+    }
+    let root = parse.tree();
+    let idents: Vec<ra_ap_syntax::SyntaxToken> = root
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+        .filter(|token| token.kind() == ra_ap_syntax::SyntaxKind::IDENT)
+        .collect();
+    // Whether `name` is named, outside `skip`, and only under test code.
+    let test_only = |name: &str, skip: ra_ap_syntax::TextRange| -> bool {
+        let mut seen = false;
+        for token in idents.iter().filter(|token| token.text() == name) {
+            if skip.contains_range(token.text_range()) {
+                continue;
+            }
+            if !token
+                .parent_ancestors()
+                .any(|node| crate::module_graph::cfg_test(&node))
+            {
+                return false;
+            }
+            seen = true;
+        }
+        seen
+    };
+    // A leaf as a `use` line.
+    let line = |leaf: &crate::module_graph::UseLeaf| -> String {
+        let joined = leaf.path.join("::");
+        if leaf.path.last() == Some(&leaf.name) {
+            format!("use {joined};")
+        } else {
+            format!("use {joined} as {};", leaf.name)
+        }
+    };
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for item in root.items() {
+        let ast::Item::Use(declaration) = item else {
+            continue;
+        };
+        let Some(tree) = declaration.use_tree() else {
+            continue;
+        };
+        if binds_unnamed(&tree) || crate::module_graph::cfg_test(declaration.syntax()) {
+            continue;
+        }
+        let shim = match declaration.visibility() {
+            None => false,
+            Some(visibility) => {
+                let spelled: String = visibility
+                    .syntax()
+                    .text()
+                    .to_string()
+                    .split_whitespace()
+                    .collect();
+                let rooted = tree.path().is_some_and(|path| {
+                    let text = path.syntax().text().to_string();
+                    text.starts_with("crate") || text.starts_with("self")
+                });
+                let kept = crate::module_graph::use_leaves(&tree).iter().any(|leaf| {
+                    reached.contains(&(
+                        reader.krate.clone(),
+                        reader.module.clone(),
+                        leaf.name.clone(),
+                    ))
+                });
+                if !(shims && matches!(spelled.as_str(), "pub" | "pub(crate)") && rooted && !kept) {
+                    continue;
+                }
+                true
+            }
+        };
+        let whole = declaration.syntax().text_range();
+        let (gated, staying): (Vec<_>, Vec<_>) = crate::module_graph::use_leaves(&tree)
+            .into_iter()
+            .partition(|leaf| test_only(&leaf.name, whole));
+        if gated.is_empty() {
+            if shim && let Some(visibility) = declaration.visibility() {
+                let range = visibility.syntax().text_range();
+                // The visibility and the one space after it.
+                let end = usize::from(range.end());
+                let end = if text[end..].starts_with(' ') {
+                    end + 1
+                } else {
+                    end
+                };
+                edits.push((usize::from(range.start())..end, String::new()));
+            }
+            continue;
+        }
+        let attributes: String = declaration
+            .attrs()
+            .map(|attribute| format!("{attribute}\n"))
+            .collect();
+        let lines: Vec<String> = staying
+            .iter()
+            .map(|leaf| format!("{attributes}{}", line(leaf)))
+            .chain(
+                gated
+                    .iter()
+                    .map(|leaf| format!("{attributes}#[cfg(test)]\n{}", line(leaf))),
+            )
+            .collect();
+        edits.push((
+            usize::from(whole.start())..usize::from(whole.end()),
+            lines.join("\n"),
+        ));
+    }
     let mut out = text.to_owned();
-    for range in cuts.into_iter().rev() {
-        out.replace_range(range, "");
+    for (range, replacement) in edits.into_iter().rev() {
+        out.replace_range(range, &replacement);
     }
     out
 }
@@ -1153,5 +1517,208 @@ mod tests {
             sources.insert(path, text);
         }
         assert!(respell_through_shims(&sources, &manifests).is_empty());
+    }
+
+    /// The measured failure: `crate::error::Native` reached a shim whose
+    /// target sat behind a glob re-export of another crate, so the item never
+    /// resolved and the path was left at a shim pass 3 then made private.
+    /// Fails by: a path whose shim target the index cannot follow left as
+    /// written, or a root-relative path in the crate root not read.
+    #[test]
+    fn a_path_is_respelled_at_its_shims_target_even_past_a_glob() {
+        let changed = respelled(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod error;\npub mod verdict;\npub use verdict::Native;\nfn f(_: verdict::Native) {}\n",
+            ),
+            ("src/error.rs", "pub use other::error::*;\n"),
+            ("src/verdict.rs", "pub use crate::error::Native;\n"),
+        ]);
+        let lib = &changed["src/lib.rs"];
+        assert!(lib.contains("pub use crate::error::Native;"), "{lib}");
+        assert!(lib.contains("fn f(_: crate::error::Native)"), "{lib}");
+        assert_eq!(changed["src/verdict.rs"], "use crate::error::Native;\n");
+    }
+
+    const REACHED: &[(&str, &str)] = &[
+        ROOT,
+        (
+            "src/lib.rs",
+            "pub mod model;\npub mod rules;\npub mod user;\n",
+        ),
+        ("src/model.rs", "pub struct Rule;\npub struct Kind;\n"),
+        (
+            "src/rules.rs",
+            "pub use crate::model::Rule;\npub use crate::model::Kind;\npub mod inner;\n",
+        ),
+        ("src/rules/inner.rs", "fn f(_: super::Rule) {}\n"),
+        ("src/user.rs", "fn g(_: crate::rules::Kind) {}\n"),
+    ];
+
+    /// Fails by: a shim made private while a `super::` path still reaches
+    /// it — a compile error the recipe made — or a shim nothing reaches kept.
+    #[test]
+    fn a_shim_a_path_still_reaches_stays_public() {
+        let changed = respelled(REACHED);
+        assert_eq!(
+            changed["src/rules.rs"],
+            "pub use crate::model::Rule;\nuse crate::model::Kind;\npub mod inner;\n"
+        );
+    }
+
+    /// Fails by: a shim made private while a glob over its module imports
+    /// it elsewhere.
+    #[test]
+    fn a_glob_over_a_shims_module_keeps_every_shim_public() {
+        let mut files = REACHED.to_vec();
+        files.push(("src/glob.rs", "use crate::rules::*;\n"));
+        files[1] = (
+            "src/lib.rs",
+            "pub mod model;\npub mod rules;\npub mod user;\npub mod glob;\n",
+        );
+        let changed = respelled(&files);
+        assert!(
+            !changed.contains_key("src/rules.rs"),
+            "{:?}",
+            changed.get("src/rules.rs")
+        );
+    }
+
+    /// The second measured miss: `use crate::config;` then
+    /// `config::CONFIG_FILE`, through a shim in `config`. Fails by: a path
+    /// headed by a module imported by name left at the shim; or a path
+    /// through an imported ITEM (`Rule::new`) spelled out in full, which
+    /// would rewrite every call instead of the one `use`.
+    #[test]
+    fn a_path_headed_by_an_imported_module_is_respelled_and_an_imported_item_is_not() {
+        let changed = respelled(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod model;\npub mod config;\npub mod user;\n",
+            ),
+            (
+                "src/model.rs",
+                "pub const FILE: &str = \"x\";\npub struct Rule;\n",
+            ),
+            ("src/config.rs", "pub use crate::model::{FILE, Rule};\n"),
+            (
+                "src/user.rs",
+                "use crate::config;\nuse crate::config::Rule;\nfn f() -> &'static str { let _ = Rule::new; config::FILE }\n",
+            ),
+        ]);
+        let user = &changed["src/user.rs"];
+        assert!(user.contains("crate::model::FILE }"), "{user}");
+        assert!(user.contains("use crate::model::Rule;"), "{user}");
+        assert!(user.contains("let _ = Rule::new;"), "{user}");
+    }
+
+    /// The third measured miss: a prose comment's quote (`// "the base`)
+    /// opened a string that swallowed the code below it. Fails by: a path
+    /// after such a comment left at its shim; or a path inside a comment (a
+    /// doc link) not respelled.
+    #[test]
+    fn a_quote_in_a_comment_does_not_hide_the_code_after_it() {
+        let changed = respelled(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod model;\npub mod config;\npub mod user;\n",
+            ),
+            ("src/model.rs", "pub struct Rule;\n"),
+            ("src/config.rs", "pub use crate::model::Rule;\n"),
+            (
+                "src/user.rs",
+                "// and \"the base declared\n/// See [crate::config::Rule].\nfn f() -> crate::config::Rule { crate::config::Rule }\n",
+            ),
+        ]);
+        let user = &changed["src/user.rs"];
+        assert!(
+            user.contains("-> crate::model::Rule { crate::model::Rule }"),
+            "{user}"
+        );
+        assert!(user.contains("[crate::model::Rule]"), "{user}");
+    }
+
+    /// The fourth measured pair. Fails by: a plain `use` through a renaming
+    /// shim respelled as text, dropping the name the file uses (`digest`);
+    /// or an integration test's module imported by name (`use app::verdict;`
+    /// then `verdict::Native`) left unread, its shim then made private.
+    #[test]
+    fn a_renaming_shim_keeps_its_name_and_a_tests_module_import_is_read() {
+        let changed = respelled(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod digest;\npub mod provision;\npub mod verdict;\npub mod error;\n",
+            ),
+            ("src/digest.rs", "pub fn sha256_hex() {}\n"),
+            ("src/error.rs", "pub enum Native {}\n"),
+            (
+                "src/provision.rs",
+                "pub use crate::digest::sha256_hex as digest;\n",
+            ),
+            ("src/verdict.rs", "pub use crate::error::Native;\n"),
+            (
+                "tests/it.rs",
+                "use app::provision::digest;\nuse app::verdict;\nfn t(_: verdict::Native) { digest() }\n",
+            ),
+        ]);
+        let test = &changed["tests/it.rs"];
+        assert!(
+            test.contains("use app::digest::sha256_hex as digest;"),
+            "{test}"
+        );
+        assert!(test.contains("fn t(_: app::error::Native)"), "{test}");
+    }
+
+    /// The cfg split, measured at 167 errors. Fails by: a leaf only test
+    /// code names — a shim's, or a private import's whose library use the
+    /// respelling moved away (`config` below) — left ungated, where
+    /// `cargo fix` deletes it as unused and the test build breaks; or a leaf
+    /// the module's own code names gated away from it.
+    #[test]
+    fn a_leaf_only_test_code_names_is_gated_to_test_builds() {
+        let changed = respelled(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod check;\npub mod config;\npub mod action;\n",
+            ),
+            ("src/check.rs", "pub fn validate() {}\npub fn plan() {}\n"),
+            (
+                "src/config.rs",
+                "pub use crate::check::plan as load;\npub fn other() {}\n",
+            ),
+            (
+                "src/action.rs",
+                "#[allow(unused_imports)]\npub use crate::check::{plan, validate};\nuse crate::config;\nfn run() { plan(); config::load() }\n#[cfg(test)]\nmod tests {\n    use super::*;\n    fn t() { validate(); config::other() }\n}\n#[cfg(test)]\nmod half_tests {\n    use super::*;\n    fn u() { validate() }\n}\n",
+            ),
+        ]);
+        assert_eq!(
+            changed["src/action.rs"],
+            "#[allow(unused_imports)]\nuse crate::check::plan;\n#[allow(unused_imports)]\n#[cfg(test)]\nuse crate::check::validate;\n#[cfg(test)]\nuse crate::config;\nfn run() { plan(); crate::check::plan() }\n#[cfg(test)]\nmod tests {\n    use super::*;\n    fn t() { validate(); config::other() }\n}\n#[cfg(test)]\nmod half_tests {\n    use super::*;\n    fn u() { validate() }\n}\n"
+        );
+    }
+
+    /// The measured `journal.rs` break: `use anyhow::{Context as _, Result};`
+    /// lost its `as _` and was gated, because the test module names an
+    /// unrelated `findings::Context`. Fails by: an underscore import judged
+    /// by a name it never binds, or regenerated without its `as _`.
+    #[test]
+    fn an_underscore_import_is_left_whole() {
+        let action = "use anyhow::{Context as _, Result};\nfn run() -> Result<()> { Ok(()) }\n#[cfg(test)]\nmod tests {\n    use crate::findings::Context;\n}\n";
+        let changed = respelled(&[
+            ROOT,
+            ("src/lib.rs", "pub mod findings;\npub mod action;\n"),
+            ("src/findings.rs", "pub struct Context;\n"),
+            ("src/action.rs", action),
+        ]);
+        assert!(
+            !changed.contains_key("src/action.rs"),
+            "{:?}",
+            changed.get("src/action.rs")
+        );
     }
 }

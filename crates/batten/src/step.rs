@@ -635,7 +635,7 @@ fn record(
     // THE RUN'S WALL TIME RIDES THE RECEIPT (CLOUD-2776), between the stamp and
     // the key, so a hit can say what the run it stands for cost. The key stays
     // the last field, which is all `stored_key` reads.
-    let stamp = crate::receipt::rfc3339_utc(crate::clock::now_unix());
+    let stamp = crate::clock::rfc3339_utc(crate::clock::now_unix());
     let receipt = elapsed.map_or_else(
         || format!("{stamp} {expected}\n"),
         |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
@@ -751,7 +751,7 @@ pub fn run_step(
     // wrong here: a step is a gate whose reader is a log, and on a CI runner the
     // capture store dies with the job. A failing `test:cargo` then said only
     // `ERROR task failed`, with no case named anywhere a person could read it.
-    let mut settings = crate::exec::ExecConfig::DEFAULT;
+    let mut settings = crate::config_model::ExecConfig::DEFAULT;
     settings.tee = true;
     // A MISS KEEPS WHAT IT FINISHES, CASE BY CASE, when the command is a
     // nextest run (CLOUD-2772): a stopped run resumes rather than re-running
@@ -1391,7 +1391,7 @@ pub fn run_graph(group: &str, jobs: Option<&str>, err: &mut dyn Write) -> Result
     }
     let bound = jobs.map_or(usize::MAX, std::num::NonZeroUsize::get);
     let outcome = schedule(&rows, bound, &|row: &Step| {
-        let mut settings = crate::exec::ExecConfig::DEFAULT;
+        let mut settings = crate::config_model::ExecConfig::DEFAULT;
         settings.tee = true;
         let argv = row.run.clone().unwrap_or_default();
         // A NON-ZERO CHILD ARRIVES AS A `Passthrough` carrying its own code,

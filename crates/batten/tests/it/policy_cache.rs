@@ -12,9 +12,9 @@
 
 use crate::common;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy;
-use batten::rules::Rule;
 
 /// A mediated row registering `module`.
 fn row(module: &str) -> Rule {
@@ -77,7 +77,7 @@ fn root_with(name: &str, source: &str) -> std::path::PathBuf {
 /// One load of the fixture row at `checks`.
 fn load(root: &std::path::Path, checks: policy::ModuleChecks) -> policy::Bundle {
     // The module's own tokens, declared, so the checked load accepts them.
-    let verdicts: &'static [batten::verdict::DeclaredVerdict] =
+    let verdicts: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     let vocabulary = policy::Vocabulary {
         verdicts,
@@ -255,7 +255,7 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
     let rows: Vec<Rule> = resolved
         .rules
         .iter()
-        .filter(|rule| rule.scope == batten::rules::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == batten::preset_catalog::RuleScope::MediatedCall)
         .cloned()
         .collect();
     let vocabulary = policy::Vocabulary {

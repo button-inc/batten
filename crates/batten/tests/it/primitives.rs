@@ -15,7 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 use std::cell::Cell;
 use std::fs;
@@ -744,7 +744,7 @@ verb = "clobber"
 effect = "write"
 "#;
 
-fn tables() -> batten::config::Config {
+fn tables() -> batten::config_model::Config {
     batten::config::parse(TABLES, "fixture batten.toml").expect("fixture config parses")
 }
 

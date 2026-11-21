@@ -37,7 +37,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
@@ -95,7 +95,7 @@ fn tarball(dir: &std::path::Path) -> Vec<u8> {
 /// sha256 of `bytes` as lowercase hex, through the same helper the engine uses,
 /// so a fixture cannot pin a digest the script would never compute.
 fn digest(bytes: &[u8]) -> String {
-    batten::provision::digest(bytes)
+    batten::digest::sha256_hex(bytes)
 }
 
 /// The asset name the bootstrap asks for on `target`.

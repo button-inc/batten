@@ -32,8 +32,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::config::Config;
-use batten::rules::RuleKind;
+use batten::config_model::Config;
+use batten::config_model::RuleKind;
 
 /// The committed corpus root.
 ///

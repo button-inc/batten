@@ -38,11 +38,12 @@ use anyhow::Result;
 use regex::Regex;
 use serde::Serialize;
 
+use crate::error::Native;
 use crate::error::UsageError;
 use crate::git;
-use crate::verdict::{Native, Subject as Pointer};
+use crate::verdict::Subject as Pointer;
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Claims, Commit, Unclaimed};
+use crate::config_model::{Claims, Commit, Unclaimed};
 
 /// One commit's claim evidence, gathered by the caller.
 ///
@@ -391,7 +392,7 @@ impl Commit {
 #[must_use]
 pub fn judge_admissions(
     writes: &[crate::git::CommitWrite],
-    redirects: &[crate::redirect::Redirect],
+    redirects: &[crate::config_model::Redirect],
 ) -> Vec<Finding> {
     let mut found = Vec::new();
     for write in writes {
@@ -444,7 +445,7 @@ pub fn judge_admissions(
 pub fn judge_pending(
     message: &str,
     staged: &std::collections::BTreeSet<String>,
-    redirects: &[crate::redirect::Redirect],
+    redirects: &[crate::config_model::Redirect],
 ) -> Vec<Finding> {
     judge_admissions(
         &[crate::git::CommitWrite {
@@ -985,7 +986,7 @@ mod tests {
             fields,
             expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
         );
-        let registry = crate::verdict::vendored();
+        let registry = crate::config_check::verdict::vendored();
         for (finding, (field, class)) in found.iter().zip(expected) {
             assert_eq!(finding.verdict, class, "{field}");
             let line = finding.line();

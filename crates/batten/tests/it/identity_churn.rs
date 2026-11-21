@@ -31,8 +31,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
+use batten::findings::Finding;
 use batten::identity::{self, CountChange, Fingerprint};
-use batten::rules::{self, Finding, Rule};
+use batten::rules;
 use batten::{Config, config};
 
 use common::Fixture;

@@ -55,11 +55,13 @@ use std::path::Path;
 )]
 use std::process::{Command, Stdio};
 
-pub use crate::config_check::action::validate;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::action::{declarable_tokens, event_of};
+#[cfg(test)]
+use crate::config_check::action::declarable_tokens;
+use crate::config_check::action::event_of;
+#[cfg(test)]
+use crate::config_check::action::validate;
+use crate::config_model::Action;
 use crate::config_model::Event;
-pub use crate::config_model::{Action, HookConfig};
 
 impl Action {
     /// The event this action fires on, when `on` names one.

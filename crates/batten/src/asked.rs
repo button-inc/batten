@@ -17,7 +17,7 @@
 //! The owner's decision, recorded on CLOUD-1078: a weakening is admitted only
 //! through a question the host puts to the human, clearly explained, with the
 //! text presented and the option selected recorded. The host's question tool is a
-//! host fact ([`crate::hook::Harness::question_tool`]); at `PostToolUse` on it,
+//! host fact ([`crate::config_model::Harness::question_tool`]); at `PostToolUse` on it,
 //! the hook appends one [`Entry`] per question to [`LEDGER`], in the working tree,
 //! so it is committed with the change it admits and reaches CI with it.
 //!
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn the_ledger_roots_are_the_anchor_or_its_configured_checkouts() {
         let lone = crate::scratch::scratch("asked-roots-lone");
-        std::fs::write(lone.join(crate::config::CONFIG_FILE), "").unwrap();
+        std::fs::write(lone.join(crate::config_model::CONFIG_FILE), "").unwrap();
         assert_eq!(ledger_roots(&lone), vec![lone.clone()], "a config alone");
 
         let parent = crate::scratch::scratch("asked-roots-parent");
@@ -493,9 +493,15 @@ mod tests {
             std::fs::create_dir_all(parent.join(name)).unwrap();
         }
         crate::gitwrite::init_on_main(&parent.join("both")).unwrap();
-        std::fs::write(parent.join("both").join(crate::config::CONFIG_FILE), "").unwrap();
         std::fs::write(
-            parent.join("config-only").join(crate::config::CONFIG_FILE),
+            parent.join("both").join(crate::config_model::CONFIG_FILE),
+            "",
+        )
+        .unwrap();
+        std::fs::write(
+            parent
+                .join("config-only")
+                .join(crate::config_model::CONFIG_FILE),
             "",
         )
         .unwrap();

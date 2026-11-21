@@ -67,9 +67,11 @@ use crate::facts::ToolQuery;
 use crate::resolve::Overrides;
 use crate::{forge, git, resolve, tools};
 // The section's declaration lives with the model (CLOUD-2789).
-pub(crate) use crate::config_check::record::safe_component;
-pub use crate::config_check::record::{VERB_WRITTEN, validate};
-pub use crate::config_model::RecordDeclared as Declared;
+use crate::config_check::record::safe_component;
+#[cfg(test)]
+use crate::config_check::record::validate;
+#[cfg(test)]
+use crate::config_model::RecordDeclared as Declared;
 
 /// Read the verdict lines a producer piped in.
 ///

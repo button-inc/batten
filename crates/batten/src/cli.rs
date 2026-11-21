@@ -7,7 +7,7 @@
 //! `match` over enums rather than a lookup on strings.
 //!
 //! The split is what keeps the tree honest. A verb's path, summary, effect, and
-//! flags exist once, as data; adding one is adding a [`crate::surface::SURFACE`]
+//! flags exist once, as data; adding one is adding a [`crate::surface_table::SURFACE`]
 //! row plus the arm here that gives it a typed shape.
 //! [`tests::every_leaf_verb_dispatches`] fails if a row ever ships without its
 //! arm, so a declared command can never parse into `None` and silently succeed.
@@ -18,7 +18,7 @@ use crate::config_model::ReceiptKey;
 use crate::config_model::Strictness;
 use crate::config_model::{Field as HookFieldName, Harness};
 use crate::surface;
-pub use crate::surface_table::{SchemaSurface, SpecFormat};
+use crate::surface_table::{SchemaSurface, SpecFormat};
 
 /// The parsed invocation: the global flags plus the chosen command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,19 +100,19 @@ pub struct EnforceFlags {
     /// The narrowing `check` has carried since CLOUD-1051, extended to the
     /// spawning verb for the one caller `check` cannot serve: a case whose
     /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
-    /// See `surface::ENFORCE_RULE`.
+    /// See `crate::surface_table::ENFORCE_RULE`.
     pub rule: Vec<String>,
     /// Judge only one half of the rows (step 13a): the tree half, receipted on
     /// the index, or the live half, run every time. `None` judges every row.
-    /// See `surface::ENFORCE_HALF`.
+    /// See `crate::surface_table::ENFORCE_HALF`.
     pub half: Option<crate::surface_table::Half>,
     /// The refs whose merge base the tree half's receipt keys, which admits a
     /// `ratchet` row against one of them to the tree half (repeatable). See
-    /// `surface::ENFORCE_KEYED_BASE`.
+    /// `crate::surface_table::ENFORCE_KEYED_BASE`.
     pub keyed_base: Vec<String>,
     /// Print the digest of the out-of-tree state the tree half reads, and judge
     /// nothing (step 13a). Only under `--half tree`. See
-    /// `surface::ENFORCE_INPUTS_DIGEST`.
+    /// `crate::surface_table::ENFORCE_INPUTS_DIGEST`.
     pub inputs_digest: bool,
 }
 
@@ -271,7 +271,7 @@ pub enum Command {
     Baseline {
         /// Drop entries whose finding no longer exists, and ratchet reduced
         /// counts down. Two verbs' worth of behaviour behind one flag because
-        /// both write the same artifact — see `surface::PRUNE`.
+        /// both write the same artifact — see `crate::surface_table::PRUNE`.
         prune: bool,
         /// Report what would be recorded, writing nothing.
         dry_run: bool,
@@ -1369,9 +1369,9 @@ pub struct ExecRequest {
     /// `None` means the caller did not ask, which is **not** the same as asking
     /// for the default: the `[exec]` table sets the default, and a flag that
     /// always answered would overwrite it on every call.
-    pub format: Option<crate::exec::OutputFormat>,
+    pub format: Option<crate::config_model::OutputFormat>,
     /// How a teed child's bytes are presented — mise's axis. `None` as above.
-    pub style: Option<crate::exec::OutputStyle>,
+    pub style: Option<crate::config_model::OutputStyle>,
     /// How many of a `:::` bundle's commands run at once, as the caller typed
     /// it. Unparsed on purpose: a bad value must reach a `UsageError` naming
     /// what was wrong, and silently reading it as the default would run a bundle
@@ -2648,7 +2648,7 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
 /// Where a committed `[exec]` table sets the default, that difference is the
 /// whole §8 precedence chain — a flag nobody typed must not outrank the file.
 ///
-/// [`FlagDecl::defaulted_enum`]: crate::surface::FlagDecl
+/// [`FlagDecl::defaulted_enum`]: crate::surface_table::FlagDecl
 fn supplied<'a, T>(matches: &'a ArgMatches, id: &str) -> Option<&'a T>
 where
     T: Clone + Send + Sync + 'static,
@@ -4174,7 +4174,7 @@ fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::surface::{SURFACE, ValueDecl};
+    use crate::surface_table::{SURFACE, ValueDecl};
 
     /// Parse an argv the way the binary does, through the built tree.
     fn parse(argv: &[&str]) -> Cli {
@@ -4444,7 +4444,7 @@ mod tests {
             other => panic!("exec parses to its own arm: {other:?}"),
         };
         let typed = exec(&["exec", "--format", "json", "--", "true"]);
-        assert_eq!(typed.format, Some(crate::exec::OutputFormat::Json));
+        assert_eq!(typed.format, Some(crate::config_model::OutputFormat::Json));
         assert_eq!(exec(&["exec", "--", "true"]).format, None);
     }
 

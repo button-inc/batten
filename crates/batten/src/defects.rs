@@ -50,7 +50,7 @@ use crate::identity::{FindingKind, StoredIdentity};
 use crate::severity::RuleSeverity;
 
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::Defects;
+use crate::config_model::Defects;
 
 impl Defects {
     /// Validate the table at load.

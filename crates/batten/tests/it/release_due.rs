@@ -114,7 +114,7 @@ fn ago(seconds: u64) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("the clock reads")
         .as_secs();
-    batten::receipt::rfc3339_utc(now - seconds)
+    batten::clock::rfc3339_utc(now - seconds)
 }
 
 /// A fixture forge answering the two endpoints BY ENDPOINT, never by call order:

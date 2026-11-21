@@ -49,7 +49,10 @@ use std::sync::{Arc, Mutex};
 pub const HOOK_COLLECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 use crate::low_water::observe;
-pub use crate::low_water::{read as low_water, reset as reset_low_water};
+#[cfg(test)]
+use crate::low_water::read as low_water;
+#[cfg(test)]
+use crate::low_water::reset as reset_low_water;
 
 /// Where a watcher hands each collection's lines as it ends (CLOUD-2782).
 pub type RecordSink<'a> = Box<dyn Fn(&[String]) + Send + Sync + 'a>;
@@ -67,7 +70,7 @@ pub struct DiskWatch<'a> {
     /// The repository: its `[prune] root` and each linked worktree's are the trees.
     pub repo: PathBuf,
     /// The committed `[prune]` rules; nothing outside them is touched.
-    pub config: &'a crate::prune::Prune,
+    pub config: &'a crate::config_model::Prune,
     /// Free space on the trees' volume, in MiB.
     pub free_mb: Box<dyn FnMut() -> anyhow::Result<u64> + Send + 'a>,
     /// Files no collection removes ([`crate::collect::kept`]).
@@ -98,7 +101,7 @@ type Sink<'a> = Arc<dyn Fn(&[String]) + Send + Sync + 'a>;
 struct Sampler<'scope, 'env> {
     scope: &'scope std::thread::Scope<'scope, 'env>,
     repo: PathBuf,
-    config: &'scope crate::prune::Prune,
+    config: &'scope crate::config_model::Prune,
     kept: Vec<crate::collect::Kept>,
     min: u64,
     reader: Reader<'scope>,
@@ -565,7 +568,7 @@ mod tests {
     fn a_reading_the_watcher_takes_is_the_windows_low_water_mark() {
         use std::sync::atomic::AtomicUsize;
         let repo = crate::scratch::scratch("disk-watch-low-water");
-        let config = crate::prune::Prune {
+        let config = crate::config_model::Prune {
             root: "target".to_owned(),
             keep: 2,
             warm: None,
@@ -608,7 +611,7 @@ mod tests {
     /// reader rather than naming it.
     #[test]
     fn a_watcher_debugs_its_repository_and_names_its_reader() {
-        let config: crate::prune::Prune = match serde_json::from_str("{}") {
+        let config: crate::config_model::Prune = match serde_json::from_str("{}") {
             Ok(config) => config,
             Err(why) => panic!("an empty table: {why}"),
         };
@@ -684,7 +687,7 @@ mod tests {
         held.lock()
             .expect("hold the tree as another collector would");
         let held = Arc::new(Mutex::new(Some(held)));
-        let config = crate::prune::Prune {
+        let config = crate::config_model::Prune {
             root: "target".to_owned(),
             keep: 2,
             warm: None,
@@ -729,7 +732,7 @@ mod tests {
     /// A band whose floor is 10 MiB, over a scratch repository holding one
     /// stale fixture a collection removes.
     #[allow(clippy::expect_used)]
-    fn stale_repo(name: &str) -> (PathBuf, PathBuf, crate::prune::Prune) {
+    fn stale_repo(name: &str) -> (PathBuf, PathBuf, crate::config_model::Prune) {
         let repo = crate::scratch::scratch(name);
         let stale = repo.join("target").join("tmp").join("old-fixture");
         std::fs::create_dir_all(&stale).expect("create the stale fixture");
@@ -742,7 +745,7 @@ mod tests {
                     .set_modified(then),
             )
             .expect("date the fixture");
-        let config = crate::prune::Prune {
+        let config = crate::config_model::Prune {
             root: "target".to_owned(),
             keep: 2,
             warm: None,
@@ -771,7 +774,7 @@ mod tests {
     /// repeating, and whose collections are handed to `sink` as they end.
     fn series<'a>(
         repo: PathBuf,
-        config: &'a crate::prune::Prune,
+        config: &'a crate::config_model::Prune,
         readings: Vec<u64>,
         sink: Option<RecordSink<'a>>,
     ) -> DiskWatch<'a> {

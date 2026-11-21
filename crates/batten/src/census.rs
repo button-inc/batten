@@ -58,9 +58,9 @@ use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::rules::Selector;
+use crate::selector::Selector;
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Census, Manifest, ShellCensus};
+use crate::config_model::{Manifest, ShellCensus};
 
 impl ShellCensus {
     /// Refuse a declaration that would count nothing while reading as covered.

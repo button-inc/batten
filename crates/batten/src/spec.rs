@@ -1487,12 +1487,14 @@ mod tests {
         // (§6, byte-stable), KDL had no consumer, so it is removed from the
         // document rather than implemented. Committed here so re-adding a
         // format is a deliberate edit to this list and to §2 together.
-        let formats: Vec<String> = <crate::cli::SpecFormat as clap::ValueEnum>::value_variants()
-            .iter()
-            .filter_map(|format| {
-                clap::ValueEnum::to_possible_value(format).map(|value| value.get_name().to_owned())
-            })
-            .collect();
+        let formats: Vec<String> =
+            <crate::surface_table::SpecFormat as clap::ValueEnum>::value_variants()
+                .iter()
+                .filter_map(|format| {
+                    clap::ValueEnum::to_possible_value(format)
+                        .map(|value| value.get_name().to_owned())
+                })
+                .collect();
         assert_eq!(formats, vec!["json".to_owned()]);
     }
 }

@@ -9,7 +9,7 @@
 //!   marker with no tool call after it. Two producers, both exact membership
 //!   over a token set: a turn that ended because the model finished
 //!   ([`crate::transcript::StopReason`]), and a hook run at a Stop-family event
-//!   ([`crate::hook::Event`]).
+//!   ([`crate::config_model::Event`]).
 //! * **`¬landed`** — [`crate::git::landing`] finds no patch-id-equivalent
 //!   commit on the landing target. **Content, never ancestry**, which is the
 //!   whole reason acceptance's rebased-and-landed case needs no code here: it
@@ -23,7 +23,7 @@
 //! is **self-clearing** — the next evaluation over the same session, once the
 //! work has landed, resolves it with no acknowledgement from anybody. That is
 //! also why the finding is registered through the advisory door and never
-//! becomes a [`crate::rules::Finding`]: an advisory surface must be
+//! becomes a [`crate::findings::Finding`]: an advisory surface must be
 //! *structurally* unable to block (house style §0.3), not merely observed not
 //! to.
 //!
@@ -432,12 +432,15 @@ mod tests {
     /// A push nobody could compute refuses like an unpushed one (CLOUD-2656).
     #[test]
     fn a_push_nobody_could_compute_is_never_read_as_pushed() {
-        let step = next_step(crate::config::LandedBy::Person, PushState::NotComputable);
+        let step = next_step(
+            crate::config_model::LandedBy::Person,
+            PushState::NotComputable,
+        );
         assert_eq!(step, Step::PushUnknown);
         assert!(step.refusable());
-        assert!(!next_step(crate::config::LandedBy::Person, PushState::Pushed).refusable());
+        assert!(!next_step(crate::config_model::LandedBy::Person, PushState::Pushed).refusable());
         assert_eq!(
-            next_step(crate::config::LandedBy::Agent, PushState::Pushed),
+            next_step(crate::config_model::LandedBy::Agent, PushState::Pushed),
             Step::Land
         );
     }

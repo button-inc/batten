@@ -54,15 +54,22 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config_model::Rule;
+use crate::error::Native;
 use crate::error::UsageError;
-use crate::verdict::Native;
-use crate::{outputs, waiver};
 
-// The model lives in `config_model` (CLOUD-2789); every name stays readable here.
-pub use crate::config_model::{
-    CONFIG_FILE, Config, Contract, Epoch, LandedBy, Lease, Mutate, Perf, PerfExempt, PerfLatency,
-    Ready, Receipt, SCHEMA_PATH, SUPPORTED_VERSION, Strictness, Trust, Unit, Unresolvable,
-};
+use crate::config_model::CONFIG_FILE;
+use crate::config_model::Config;
+#[cfg(test)]
+use crate::config_model::Perf;
+#[cfg(test)]
+use crate::config_model::PerfExempt;
+#[cfg(test)]
+use crate::config_model::PerfLatency;
+use crate::config_model::SCHEMA_PATH;
+use crate::config_model::SUPPORTED_VERSION;
+use crate::config_model::Strictness;
+use crate::config_model::Unit;
+use crate::config_model::Unresolvable;
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to
 /// `source` (a path or label) in their messages.
@@ -606,7 +613,7 @@ pub struct OverrideConfig {
         rename = "exec_pattern",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub exec_patterns: Vec<outputs::OutputPattern>,
+    pub exec_patterns: Vec<crate::config_model::OutputPattern>,
     /// Redirects this file **adds**. A duplicate glob is refused.
     ///
     /// Needs no raise-only clamp, and that is a decision rather than an
@@ -614,11 +621,11 @@ pub struct OverrideConfig {
     /// fires, so there is no bar here to lower. Refusing a redefinition is
     /// coherence with the other append-only tables.
     #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
-    pub redirects: Vec<crate::redirect::Redirect>,
+    pub redirects: Vec<crate::config_model::Redirect>,
     /// Waivers this file adds, for rules the authority does not declare. A
     /// waiver over a committed rule lowers that bar and is refused.
     #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
-    pub waivers: Vec<waiver::Waiver>,
+    pub waivers: Vec<crate::config_model::Waiver>,
 }
 
 /// Parse an *override* layer, without the [`Config::min_batten_version`] gate.
@@ -725,7 +732,7 @@ pub fn override_schema() -> Result<String> {
 /// through untouched — an internal failure stays internal (exit `3`), and an
 /// error that already names a class keeps it. Rewording the refusals themselves
 /// is outside CLOUD-1313.
-fn under<T>(native: crate::verdict::Native, result: Result<T>) -> Result<T> {
+fn under<T>(native: crate::error::Native, result: Result<T>) -> Result<T> {
     result.map_err(|err| match err.downcast::<UsageError>() {
         Ok(usage) if usage.verdict.is_none() => UsageError::raise_as(native, usage.message),
         Ok(usage) => anyhow::Error::new(usage),
@@ -1926,7 +1933,7 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
         // agent be told to repair the broken part instead of losing the gate
         // surface entirely. `Native::ConfigUnreadable` carries the full argument.
         return UsageError::raise_as(
-            crate::verdict::Native::ConfigUnreadable,
+            crate::error::Native::ConfigUnreadable,
             format!("invalid config {source}: {err}"),
         );
     }
@@ -3713,7 +3720,7 @@ impl Config {
             traversals: Vec::new(),
             registers: Vec::new(),
             verdicts: Vec::new(),
-            vocabulary: crate::verdict::Vocabulary::default(),
+            vocabulary: crate::config_model::Vocabulary::default(),
             scope: Vec::new(),
             protected: Vec::new(),
             // Declaring nothing means declaring no threshold either, which the
@@ -3917,7 +3924,7 @@ fn default_rules() -> Vec<Rule> {
         // has no config file to trip over.
         glob: Some("**/*".to_owned()),
         severity: Some(crate::severity::RuleSeverity::Deny),
-        scope: crate::config_model::RuleScope::Tree,
+        scope: crate::preset_catalog::RuleScope::Tree,
         pattern: Some("<<<<<<< ".to_owned()),
         regex: None,
         exclude: None,
@@ -6324,7 +6331,7 @@ mod tests {
             );
             assert_eq!(
                 rule.scope,
-                crate::rules::RuleScope::Tree,
+                crate::preset_catalog::RuleScope::Tree,
                 "a default rule no tree scan evaluates would gate nothing"
             );
         }
@@ -6400,7 +6407,10 @@ mod tests {
             config.rules[0].severity(),
             crate::severity::RuleSeverity::Advise
         );
-        assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
+        assert_eq!(
+            config.rules[0].scope,
+            crate::preset_catalog::RuleScope::Tree
+        );
     }
 
     #[test]

@@ -63,7 +63,9 @@ use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::resolve::Overrides;
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Conformance, SbomDeclared as Declared};
+#[cfg(test)]
+use crate::config_model::Conformance;
+use crate::config_model::SbomDeclared as Declared;
 
 /// `sbom`'s options, filled by `lib.rs` from `cli::Options`.
 ///
@@ -127,7 +129,7 @@ impl Declared {
     /// A [`UsageError`] for a subject or record name that is not one path
     /// component, a blank directory, or a conformance table asking nothing.
     pub fn validate(&self) -> Result<()> {
-        crate::record::safe_component("[sbom] subject", &self.subject)?;
+        crate::config_check::record::safe_component("[sbom] subject", &self.subject)?;
         for (key, value) in [
             ("out_dir", &self.out_dir),
             ("binary_out_dir", &self.binary_out_dir),
@@ -139,7 +141,10 @@ impl Declared {
             }
         }
         if let Some(conformance) = &self.conformance {
-            crate::record::safe_component("[sbom.conformance] record", &conformance.record)?;
+            crate::config_check::record::safe_component(
+                "[sbom.conformance] record",
+                &conformance.record,
+            )?;
             if conformance.checker.trim().is_empty() {
                 return Err(UsageError::raise(
                     "[sbom.conformance] checker is blank, so nothing could be asked".to_owned(),
