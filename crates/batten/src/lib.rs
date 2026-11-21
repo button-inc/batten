@@ -166,6 +166,7 @@ pub mod release_state;
 pub mod release_verify;
 pub mod released;
 pub use batten_base::remedy;
+pub mod item_index;
 pub mod render;
 pub mod repair;
 pub mod replay;
