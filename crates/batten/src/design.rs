@@ -79,18 +79,8 @@ use crate::severity::RuleSeverity;
 /// stream, so one convention covers both.
 pub const STREAM: &str = "-";
 
-/// The `[design]` table: the one config key this gate reads.
-///
-/// Deliberately a single key. The corpus is stdin's, the predicates are the
-/// engine's, and the only thing a repository gets to say is how large a single
-/// capture may be before it is worth a second look.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Design {
-    /// The per-capture byte ceiling. Absent means [`DEFAULT_MAX_CAPTURE_BYTES`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_capture_bytes: Option<usize>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Design;
 
 /// The engine's per-capture ceiling when a config names none.
 ///

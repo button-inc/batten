@@ -17,9 +17,6 @@
 //! cheaper than rationalising it after — and the third producer has since
 //! arrived, which is the row being right rather than lucky.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
 use crate::refusal::{Arm, Refusal};
 use crate::severity::AdvisoryTier;
 
@@ -99,20 +96,8 @@ impl Advice {
     }
 }
 
-/// The `[advisory]` table: what ONE emission of the whole channel may cost.
-///
-/// **The channel, not the producer**, which is the whole of this row. Absent
-/// means unenforced, on `[budget]`'s reading — a threshold nobody declared is
-/// not a threshold of zero — so a consumer that has not adopted it emits exactly
-/// what it emitted before.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Channel {
-    /// The ceiling on estimated tokens for one emission, across every producer.
-    /// The boundary is `<=`, matching `[budget]` and `[refusal]` so the three
-    /// thresholds in this tree do not disagree about their own edge.
-    pub max_tokens: usize,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Channel;
 
 /// Refuse a ceiling nothing could satisfy.
 ///

@@ -114,7 +114,7 @@ pub struct Config {
     /// (CLOUD-2061). Read from the raw text before the parse by
     /// [`crate::engine::check`]; authority-only, as `min_batten_version` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub engine: Option<crate::engine::Pin>,
+    pub engine: Option<Pin>,
     /// How strictly the gates apply. Absent means "this file does not speak to
     /// strictness", which is what lets [`crate::resolve`] attribute the
     /// effective value to the layer that actually set it. Policy-bearing, so an
@@ -476,7 +476,7 @@ pub struct Config {
     /// a rule through is a property of the repository being gated, never of
     /// Batten; the type and the counting are [`crate::markers`].
     #[serde(default, rename = "marker", skip_serializing_if = "Vec::is_empty")]
-    pub markers: Vec<crate::markers::Marker>,
+    pub markers: Vec<Marker>,
     /// The designed escape hatch (CLOUD-208): per-rule waivers, each carrying a
     /// required justification and a required expiry.
     ///
@@ -512,7 +512,7 @@ pub struct Config {
     /// (CLOUD-896). Absent means unenforced, on `[budget]`'s reading. The type
     /// and the predicate are [`crate::advisory`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub advisory: Option<crate::advisory::Channel>,
+    pub advisory: Option<Channel>,
 
     /// The post-tool outcome signatures this repository recognises (CLOUD-945).
     ///
@@ -528,7 +528,7 @@ pub struct Config {
     /// means unenforced, on `[budget]`'s reading. The type and the predicate are
     /// [`crate::hookcost`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook_output: Option<crate::hookcost::Ceiling>,
+    pub hook_output: Option<HookCeiling>,
     /// The ref work must land on (CLOUD-51) — the target `worktree status`
     /// judges at-risk work against. Consumer-specific by nature: which ref is
     /// the trunk is a property of the repository being gated, never of Batten
@@ -596,7 +596,7 @@ pub struct Config {
     /// nothing still gets the full gate. The type and the gates are
     /// [`crate::design`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub design: Option<crate::design::Design>,
+    pub design: Option<Design>,
     /// The merge contract this repository commits to (CLOUD-54), **derived**
     /// from the host ruleset. Absent means the contract is not projected here;
     /// present, it is what `config lint --host-rules` compares against. The host
@@ -629,7 +629,7 @@ pub struct Config {
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub defects: Option<crate::defects::Defects>,
+    pub defects: Option<Defects>,
     /// Pinned tools this repository provisions (CLOUD-90): version, URL,
     /// checksum, unpack behaviour, binary name. Consumer-specific by nature —
     /// which tools a repository needs is that repository's business, never
@@ -656,7 +656,7 @@ pub struct Config {
     /// about how often, and an absent table means "no opinion", not "do not
     /// drain". The type and the state machine are [`crate::drain`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain: Option<crate::drain::DrainConfig>,
+    pub drain: Option<DrainConfig>,
 
     /// What produced commits may carry about the tooling that made them
     /// (CLOUD-274), enforcing the attribution decision record (CLOUD-268).
@@ -730,7 +730,7 @@ pub struct Config {
     /// carries the matcher and this table carries the answers. The type and the
     /// predicates are [`crate::bot`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bot_lane: Option<crate::bot::BotLane>,
+    pub bot_lane: Option<BotLane>,
     /// How the base-ref authority behaves when the ref cannot be reached
     /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1277,4 +1277,337 @@ pub enum Unit {
     /// of the gate that is off. Neither is content: the VALUE stays behind, and
     /// it is the value that could carry a secret.
     Key(String),
+}
+
+// ---- `[drain]` (CLOUD-2789: moved from `drain`, which re-exports it) ----
+
+/// The coalescing window, in milliseconds, when the config declares none.
+///
+/// A batch of tool calls lands in well under a second on every host surveyed, so
+/// this is sized to span one comfortably while staying far below the interval at
+/// which an agent would notice a finding arriving late. It is a **default, not a
+/// constant**: the §7 obligation is that pacing comes from config, and this is
+/// only what an absent `[drain]` table resolves to.
+pub const DEFAULT_INTERVAL_MS: u64 = 2_000;
+
+/// Consecutive empty drains before wakes stop paying for one, when the config
+/// declares none.
+pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
+
+/// Distinct identities one rule may spend entries on in a single drain, when the
+/// config declares none.
+///
+/// Ten because the cap is a **rule-health** threshold rather than a display
+/// preference: a check that fires on more than ten distinct identities inside
+/// one changed scope is telling the operator something about itself, and the
+/// summary line is the honest way to say it in one line instead of eleven.
+pub const DEFAULT_CARDINALITY_CAP: usize = 10;
+
+/// The rendered payload's token ceiling, when the config declares none.
+///
+/// Sized to a payload an agent reads rather than skims — roughly forty pointer
+/// lines — and small enough that the drain firing on every batch boundary of a
+/// long session stays a rounding error against the context it is protecting.
+pub const DEFAULT_TOKEN_BUDGET: usize = 1_024;
+
+/// How many of a subject's evaluations the flap ratio is computed over, when the
+/// config declares none (CLOUD-165).
+///
+/// Eight because the window has to be long enough that an ordinary raise-then-fix
+/// — one transition — stays far under any useful threshold, and short enough that
+/// an identity which has *stopped* oscillating is believed again within a few
+/// evaluations. Nagios ships twenty-one state slots for a check evaluated on a
+/// timer; a window counted in evaluation boundaries needs fewer, because every
+/// entry in it is a real scan rather than a poll.
+pub const DEFAULT_FLAP_WINDOW: usize = 8;
+
+/// The flap threshold as state changes per hundred adjacent evaluations, when the
+/// config declares none.
+///
+/// Fifty: half the transitions the window could possibly hold. A raise, a fix and
+/// a regression inside eight evaluations scores well under it; a check alternating
+/// on every scan scores one hundred. Nagios's defaults bracket the same region
+/// from either side, and the integer spelling is what keeps the comparison behind
+/// a suppression exact.
+pub const DEFAULT_FLAP_PERCENT: u32 = 50;
+
+/// How many times a **flapping** identity may be emitted inside its window,
+/// before the drain stops repeating it.
+///
+/// Three, and the number matters less than what it bounds: an oscillation says
+/// everything it has to say in the first couple of emissions, and the rest is the
+/// flood this policy exists to stop. A steady identity is never capped by it, so
+/// this is not a rate limit on the drain (see [`crate::emission::Assessment::decide`]).
+pub const DEFAULT_EMIT_CAP: usize = 3;
+
+/// The `[drain]` table: how often the advisory drain may wake, when it stops
+/// asking, and how much it may say when it does.
+///
+/// Every key here bounds **the engine's own output**, which is why none of them
+/// is layered raise-only by [`crate::resolve`]: "raise" has no meaning for an
+/// interval — a longer one is quieter and a shorter one is louder — and a cap on
+/// what Batten prints about itself is not a policy bar a local file could
+/// weaken. The committed authority sets them, and a local file does not move
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DrainConfig {
+    /// The coalescing window in milliseconds. Every wake inside it after a drain
+    /// is masked.
+    ///
+    /// `0` disables coalescing: every wake drains. That is a legitimate setting
+    /// — it is what a host that really does deliver one wake per batch would
+    /// want — and not a disabled feature, which is why it is spelled as the
+    /// bottom of the range rather than as an `enabled` flag.
+    #[serde(default = "default_interval_ms")]
+    pub interval_ms: u64,
+    /// How many consecutive silent drains before wakes stop draining until the
+    /// store moves.
+    ///
+    /// `0` means the give-up applies immediately once a drain says nothing, so a
+    /// quiet session pays a format read per wake and nothing more.
+    #[serde(default = "default_empty_poll_giveup")]
+    pub empty_poll_giveup: u32,
+    /// Distinct identities one rule may spend entries on in a single drain.
+    ///
+    /// A rule over it renders one `rule R: K+ findings` summary line instead,
+    /// and never `K` entries. `0` caps every rule that surfaced anything, which
+    /// is the honest bottom of the range — a drain of nothing but summary lines
+    /// — rather than a disabled feature.
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// The rendered payload's ceiling, in estimated tokens.
+    ///
+    /// Applied after the cap, over the payload as a whole. `0` means the drain
+    /// says nothing at all, which is a legitimate setting for a host that reads
+    /// findings some other way and not a disabled feature.
+    #[serde(default = "default_token_budget")]
+    pub token_budget: usize,
+    /// How many of a subject's evaluations the flap ratio is computed over
+    /// (CLOUD-165), counted in evaluation boundaries and never in wall-clock time.
+    ///
+    /// `0` and `1` both mean no window can hold a transition, so nothing is ever
+    /// annotated flapping and nothing is ever flap-suppressed — the honest bottom
+    /// of the range, and the setting a consumer uses to turn the policy off
+    /// without a second key that could disagree with this one.
+    #[serde(default = "default_flap_window")]
+    pub flap_window: usize,
+    /// The flap threshold, as state changes per hundred adjacent evaluations.
+    ///
+    /// `0` annotates every identity with two evaluations in its window, and `101`
+    /// or above annotates none, both of which are the range's honest ends rather
+    /// than special cases.
+    #[serde(default = "default_flap_percent")]
+    pub flap_percent: u32,
+    /// How many times a flapping identity may be emitted inside its window.
+    ///
+    /// `0` withholds a flapping identity outright. A steady one is unaffected at
+    /// any value, because the cap and the annotation are read as a conjunction.
+    #[serde(default = "default_emit_cap")]
+    pub emit_cap: usize,
+}
+
+fn default_interval_ms() -> u64 {
+    DEFAULT_INTERVAL_MS
+}
+
+fn default_empty_poll_giveup() -> u32 {
+    DEFAULT_EMPTY_POLL_GIVEUP
+}
+
+fn default_cardinality_cap() -> usize {
+    DEFAULT_CARDINALITY_CAP
+}
+
+fn default_token_budget() -> usize {
+    DEFAULT_TOKEN_BUDGET
+}
+
+fn default_flap_window() -> usize {
+    DEFAULT_FLAP_WINDOW
+}
+
+fn default_flap_percent() -> u32 {
+    DEFAULT_FLAP_PERCENT
+}
+
+fn default_emit_cap() -> usize {
+    DEFAULT_EMIT_CAP
+}
+
+impl Default for DrainConfig {
+    fn default() -> Self {
+        DrainConfig {
+            interval_ms: DEFAULT_INTERVAL_MS,
+            empty_poll_giveup: DEFAULT_EMPTY_POLL_GIVEUP,
+            cardinality_cap: DEFAULT_CARDINALITY_CAP,
+            token_budget: DEFAULT_TOKEN_BUDGET,
+            flap_window: DEFAULT_FLAP_WINDOW,
+            flap_percent: DEFAULT_FLAP_PERCENT,
+            emit_cap: DEFAULT_EMIT_CAP,
+        }
+    }
+}
+
+// ---- `design` (CLOUD-2789: moved from `design`, which re-exports it) ----
+
+/// The `[design]` table: the one config key this gate reads.
+///
+/// Deliberately a single key. The corpus is stdin's, the predicates are the
+/// engine's, and the only thing a repository gets to say is how large a single
+/// capture may be before it is worth a second look.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Design {
+    /// The per-capture byte ceiling. Absent means [`DEFAULT_MAX_CAPTURE_BYTES`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_capture_bytes: Option<usize>,
+}
+
+// ---- `defects` (CLOUD-2789: moved from `defects`, which re-exports it) ----
+
+/// The `[defects]` table: where the ledger lives and what may be in it.
+///
+/// Both keys are consumer facts. The crate carries neither a path nor a class
+/// token (non-negotiable rule 1) — a taxonomy is a description of one team's
+/// failure modes, not an engine fact.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Defects {
+    /// The repo-relative path of the one JSONL ledger.
+    pub path: String,
+    /// The allowed `class` tokens. A record outside this set is refused.
+    pub classes: Vec<String>,
+}
+
+// ---- `engine` (CLOUD-2789: moved from `engine`, which re-exports it) ----
+
+/// The engine a config needs: exactly one of a release tag or a source digest.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Pin {
+    /// A published release, spelled as its tag (`v0.0.198`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    /// The digest `batten engine digest` prints for the source tree the engine
+    /// must be built from (64 hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+// ---- `markers` (CLOUD-2789: moved from `markers`, which re-exports it) ----
+
+/// One suppression marker declared in `batten.toml`.
+///
+/// The two fields are deliberately separate axes: `id` is the stable name a
+/// count is reported under and may not change when the spelling does, while
+/// `token` is the literal text scanned for. Collapsing them would make every
+/// re-spelling of a marker look like a brand-new one whose count starts at
+/// zero — the ratchet defeated by a rename.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Marker {
+    /// The stable identifier counts are reported under.
+    pub id: String,
+    /// The literal text that marks a suppression. Matched as a substring, not a
+    /// pattern: a marker is a fixed shape an author types, and admitting a
+    /// regex here would make the count a function of an expression rather than
+    /// of the tree.
+    pub token: String,
+    /// Which files this marker is looked for in, as a `/`-separated glob. Omit
+    /// to scan the whole tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glob: Option<String>,
+}
+
+// ---- `hookcost` (CLOUD-2789: moved from `hookcost`, which re-exports it) ----
+
+/// The `[hook_output]` table: what this repository's hooks may cost one session.
+///
+/// **Absent means unenforced**, on `[budget]`'s reading — a threshold nobody
+/// declared is not a threshold of zero — so a consumer that has not adopted the
+/// table measures exactly as it did before and refuses nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HookCeiling {
+    /// The ceiling on estimated tokens of hook output across the whole session.
+    /// The boundary is `<=`, matching `[budget]`, `[refusal]` and `[advisory]`
+    /// so the four thresholds in this tree do not disagree about their own edge.
+    pub max_tokens: usize,
+    /// How many times one hook may emit byte-identical text in one session.
+    ///
+    /// **The floor is 1, not 0.** Saying a thing once is the report; saying it
+    /// again is the copy. A ceiling of 0 would refuse the first emission, which
+    /// is a hook switched off rather than a hook made quiet — and this row puts
+    /// "removing any hook, or weakening what it detects" explicitly out of scope.
+    pub max_repeats: usize,
+}
+
+// ---- `advisory` (CLOUD-2789: moved from `advisory`, which re-exports it) ----
+
+/// The `[advisory]` table: what ONE emission of the whole channel may cost.
+///
+/// **The channel, not the producer**, which is the whole of this row. Absent
+/// means unenforced, on `[budget]`'s reading — a threshold nobody declared is
+/// not a threshold of zero — so a consumer that has not adopted it emits exactly
+/// what it emitted before.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Channel {
+    /// The ceiling on estimated tokens for one emission, across every producer.
+    /// The boundary is `<=`, matching `[budget]` and `[refusal]` so the three
+    /// thresholds in this tree do not disagree about their own edge.
+    pub max_tokens: usize,
+}
+
+// ---- `bot` (CLOUD-2789: moved from `bot`, which re-exports it) ----
+
+/// The `[bot_lane]` table: which proposals this repository will file a row for.
+///
+/// Absent means the repository runs no bot lane, and the verbs say so rather than
+/// filing against defaults — a lane assembled from engine literals would be a row
+/// asserting a bump nobody configured, which is the CLOUD-198 class with a new
+/// author.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BotLane {
+    /// The forge repository, `owner/name`, that the lane's pull requests live in.
+    pub repo: String,
+    /// The logins whose pull requests earn a row.
+    ///
+    /// A list rather than a pattern: a login is a literal the forge assigns, and
+    /// a regex over it would admit a neighbour nobody meant to trust.
+    pub bots: Vec<String>,
+    /// The manifests this lane owns, as globs. A PR touching none of them is
+    /// refused rather than given an invented row.
+    pub owned_manifests: Vec<String>,
+    /// The hidden marker that ties a mirror issue to the pull request it was
+    /// filed for.
+    ///
+    /// A comment rather than a label or a title convention: it survives an edit,
+    /// it is invisible rendered, and it is what makes `ensure` idempotent across
+    /// the window where the row exists and the PR body does not yet name it.
+    pub marker_prefix: String,
+    /// What the tracker's own sync leaves on the issue once it has mirrored it.
+    /// The key is read from a comment carrying this, never from the issue body —
+    /// that body is this lane's own text, so a key named there would be one we
+    /// wrote rather than one the tracker assigned.
+    pub linkback_marker: String,
+    /// The tracker's key prefix, which a key is this followed by digits.
+    ///
+    /// The consumer's vocabulary, exactly as the Ready grammar's `[[pattern]]`
+    /// rows are: a tracker's key shape in `crates/batten` is non-negotiable rule
+    /// 1's violation.
+    pub key_prefix: String,
+    /// The branch prefix a bot receipt may be keyed to. A branch outside it is
+    /// refused onto the agent claim receipt, which attests something else.
+    pub branch_prefix: String,
+    /// The path of the file whose text is the derived row's body, with
+    /// `{{...}}` placeholders substituted.
+    ///
+    /// A tracked file rather than a string in the config: the body is a page of
+    /// consumer prose carrying a Ready block, and a page of markdown inside a
+    /// TOML value is unreviewable. It is also what keeps `ready-lint`'s grammar
+    /// and the text it judges in one place a human edits.
+    pub body_template: String,
 }
