@@ -1306,6 +1306,13 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
     }
     let mut freed: u64 = 0;
     let mut removed = 0usize;
+    // A KILLED STEP'S TRACE FIRST (CLOUD-2783): it is no build output, so no
+    // tree walk below reaches it, and it can be the largest thing on the disk.
+    if let Ok(git_dir) = crate::git::git_dir(Path::new(".")) {
+        let (traces, bytes) = crate::step::sweep_orphaned_traces(&git_dir);
+        removed += traces;
+        freed += bytes;
+    }
     for (tree, _) in &locks {
         if freed >= request.need_bytes {
             break;
