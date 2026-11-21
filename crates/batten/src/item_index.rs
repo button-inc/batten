@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _};
+use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _, HasVisibility as _};
 use ra_ap_syntax::{AstNode as _, Edition, SourceFile};
 
 /// A defining site: the file an item is declared in, and its name there.
@@ -108,6 +108,18 @@ fn declared_name(item: &ast::Item) -> Option<String> {
 /// Whitespace removed, so a reformat is not a difference.
 fn shape(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// A path's resolution: the defining site, the crate and module declaring it,
+/// how many of the path's segments it consumed, and whether it passed through
+/// a SHIM — a `use crate::…` alias in a module other than its crate's root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Found {
+    key: Key,
+    krate: String,
+    module: Vec<String>,
+    used: usize,
+    through_shim: bool,
 }
 
 impl Index {
@@ -202,10 +214,9 @@ impl Index {
             .map(|(path, _)| path.clone())
     }
 
-    /// The defining site of an absolute path (`[crate, module.., Name, ..]`),
-    /// and how many of its segments that consumed; or `None` when it does not
-    /// resolve within `depth` alias hops.
-    fn resolve_from(&self, segments: &[String], depth: u8) -> Option<(Key, usize)> {
+    /// The resolution of an absolute path (`[crate, module.., Name, ..]`), or
+    /// `None` when it does not resolve within `depth` alias hops.
+    fn resolve_from(&self, segments: &[String], depth: u8) -> Option<Found> {
         if depth == 0 {
             return None;
         }
@@ -221,9 +232,19 @@ impl Index {
             }
             if here.declared.contains_key(segment) {
                 let file = self.file_of(krate, &module)?;
-                return Some(((file, segment.clone()), at + 2));
+                return Some(Found {
+                    key: (file, segment.clone()),
+                    krate: krate.clone(),
+                    module,
+                    used: at + 2,
+                    through_shim: false,
+                });
             }
             let target = here.aliases.get(segment)?;
+            // A `crate::`/`self::` alias outside the crate root is a shim; one
+            // at the root is the crate's stated surface.
+            let shim = matches!(target.first().map(String::as_str), Some("crate" | "self"))
+                && !module.is_empty();
             let mut absolute: Vec<String> = match target.first().map(String::as_str) {
                 Some("crate") => std::iter::once(krate.clone())
                     .chain(target[1..].iter().cloned())
@@ -237,19 +258,19 @@ impl Index {
             };
             let alias_len = absolute.len();
             absolute.extend(rest[at + 1..].iter().cloned());
-            let (key, used) = self.resolve_from(&absolute, depth - 1)?;
+            let mut found = self.resolve_from(&absolute, depth - 1)?;
             // The original path consumed everything through this segment,
             // plus whatever of its remainder the alias's resolution used.
-            return Some((key, at + 2 + used.saturating_sub(alias_len)));
+            found.used = at + 2 + found.used.saturating_sub(alias_len);
+            found.through_shim |= shim;
+            return Some(found);
         }
         None
     }
 
-    /// The defining site of `path` read from inside `krate`, and how many of
-    /// its segments that consumed. Only a path starting at `crate` or at one of
-    /// the tree's crates is resolved.
-    #[must_use]
-    pub fn resolve(&self, krate: &str, path: &[String]) -> Option<(Key, usize)> {
+    /// The resolution of `path` read from inside `krate`. Only a path starting
+    /// at `crate` or at one of the tree's crates is resolved.
+    fn resolve_found(&self, krate: &str, path: &[String]) -> Option<Found> {
         let first = path.first()?;
         let absolute: Vec<String> = if first == "crate" {
             std::iter::once(krate.to_owned())
@@ -261,6 +282,30 @@ impl Index {
             return None;
         };
         self.resolve_from(&absolute, 8)
+    }
+
+    /// The defining site of `path` read from inside `krate`, and how many of
+    /// its segments that consumed.
+    #[must_use]
+    pub fn resolve(&self, krate: &str, path: &[String]) -> Option<(Key, usize)> {
+        self.resolve_found(krate, path)
+            .map(|found| (found.key, found.used))
+    }
+
+    /// How a reader in crate `from` spells a resolved item at its home:
+    /// `crate::m::Name` inside its own crate, `<crate>::m::Name` elsewhere
+    /// (`from` is empty for a file no crate's library holds).
+    fn home(found: &Found, from: &str) -> String {
+        let head = if found.krate == from {
+            "crate"
+        } else {
+            found.krate.as_str()
+        };
+        std::iter::once(head)
+            .chain(found.module.iter().map(String::as_str))
+            .chain(std::iter::once(found.key.1.as_str()))
+            .collect::<Vec<_>>()
+            .join("::")
     }
 
     /// Every defining site of `name`: the file and declaration text of each.
@@ -432,6 +477,209 @@ fn path_at(text: &str) -> Option<(Vec<String>, usize)> {
         }
     }
     (segments.len() >= 2).then_some((segments, at))
+}
+
+/// Every file of `files` whose text changes when each path through a shim is
+/// respelled at its item's home and each shim becomes a private `use`
+/// (CLOUD-2793's `respell-through-shims`). `manifests` declares the crates.
+///
+/// THREE PASSES PER FILE, in this order:
+/// 1. A grouped `use` (`use crate::rules::{Rule, Kind};`) with a leaf reaching
+///    through a shim is regenerated from the syntax tree, one `use` per home
+///    module, keeping its attributes and visibility: pass 2's scan cannot see
+///    inside a group.
+/// 2. Every other path resolving through a shim — in code, a `use`, a doc link
+///    or a macro — is respelled at its item's home, keeping the segments after
+///    the item. String and char literals are never touched.
+/// 3. In a library file below its crate's root, a `pub` or `pub(crate)`
+///    `use crate::…` loses its visibility: it may still serve its own module's
+///    bare names, and `cargo fix` removes the ones nothing uses.
+///
+/// A path the index cannot resolve is left as written, so what this misses is
+/// a compile error naming the site, never a silent change.
+#[must_use]
+pub fn respell_through_shims(
+    files: &BTreeMap<String, String>,
+    manifests: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let index = Index::new(files, manifests);
+    files
+        .iter()
+        .filter_map(|(path, text)| {
+            let from = index.crate_of(path).unwrap_or_default();
+            let grouped = regroup_uses(text, &from, &index);
+            let respelled = respell_paths(&grouped, &from, &index);
+            let below_root = index
+                .files
+                .get(path)
+                .is_some_and(|(_, module)| !module.is_empty());
+            let out = if below_root {
+                downgrade_shims(&respelled)
+            } else {
+                respelled
+            };
+            (out != *text).then(|| (path.clone(), out))
+        })
+        .collect()
+}
+
+/// Pass 1: a grouped `use` with a leaf through a shim, regenerated by home.
+fn regroup_uses(text: &str, from: &str, index: &Index) -> String {
+    let parse = SourceFile::parse(text, Edition::Edition2024);
+    if !parse.errors().is_empty() {
+        return text.to_owned();
+    }
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for declaration in parse
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Use::cast)
+    {
+        let Some(tree) = declaration.use_tree() else {
+            continue;
+        };
+        if !tree
+            .syntax()
+            .descendants()
+            .any(|node| ast::UseTreeList::can_cast(node.kind()))
+        {
+            continue;
+        }
+        let resolved: Vec<(crate::module_graph::UseLeaf, Option<Found>)> =
+            crate::module_graph::use_leaves(&tree)
+                .into_iter()
+                .map(|leaf| {
+                    let hit = index
+                        .resolve_found(from, &leaf.path)
+                        .filter(|found| found.through_shim);
+                    (leaf, hit)
+                })
+                .collect();
+        if resolved.iter().all(|(_, hit)| hit.is_none()) {
+            continue;
+        }
+        // Attributes and visibility: every token before `use`.
+        let head: String = declaration
+            .syntax()
+            .children_with_tokens()
+            .take_while(|child| child.kind() != ra_ap_syntax::SyntaxKind::USE_KW)
+            .map(|child| child.to_string())
+            .collect();
+        let mut by_prefix: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (leaf, hit) in resolved {
+            let full = hit.map_or_else(|| leaf.path.join("::"), |found| Index::home(&found, from));
+            let (prefix, last) = full.rsplit_once("::").unwrap_or(("", full.as_str()));
+            let item = if leaf.renamed && leaf.name != last {
+                format!("{last} as {}", leaf.name)
+            } else {
+                last.to_owned()
+            };
+            by_prefix.entry(prefix.to_owned()).or_default().push(item);
+        }
+        let lines: Vec<String> = by_prefix
+            .into_iter()
+            .map(|(prefix, items)| {
+                let tail = match items.as_slice() {
+                    [one] => one.clone(),
+                    _ => format!("{{{}}}", items.join(", ")),
+                };
+                if prefix.is_empty() {
+                    format!("{head}use {tail};")
+                } else {
+                    format!("{head}use {prefix}::{tail};")
+                }
+            })
+            .collect();
+        let range = declaration.syntax().text_range();
+        edits.push((
+            usize::from(range.start())..usize::from(range.end()),
+            lines.join("\n"),
+        ));
+    }
+    let mut out = text.to_owned();
+    for (range, replacement) in edits.into_iter().rev() {
+        out.replace_range(range, &replacement);
+    }
+    out
+}
+
+/// Pass 2: every resolvable path through a shim, respelled at its home.
+fn respell_paths(body: &str, from: &str, index: &Index) -> String {
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let rest = &body[at..];
+        if let Some(len) = literal_len(rest) {
+            out.push_str(&rest[..len]);
+            at += len;
+            continue;
+        }
+        let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
+        if starts_path
+            && let Some((segments, len)) = path_at(rest)
+            && let Some(found) = index.resolve_found(from, &segments)
+            && found.through_shim
+        {
+            out.push_str(&Index::home(&found, from));
+            for segment in &segments[found.used.min(segments.len())..] {
+                out.push_str("::");
+                out.push_str(segment);
+            }
+            at += len;
+            continue;
+        }
+        let next = rest.chars().next().map_or(1, char::len_utf8);
+        out.push_str(&rest[..next]);
+        at += next;
+    }
+    out
+}
+
+/// Pass 3: `pub use crate::…` and `pub(crate) use crate::…` become `use crate::…`.
+fn downgrade_shims(text: &str) -> String {
+    let parse = SourceFile::parse(text, Edition::Edition2024);
+    if !parse.errors().is_empty() {
+        return text.to_owned();
+    }
+    let mut cuts: Vec<std::ops::Range<usize>> = Vec::new();
+    for declaration in parse
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Use::cast)
+    {
+        let Some(visibility) = declaration.visibility() else {
+            continue;
+        };
+        let spelled: String = visibility
+            .syntax()
+            .text()
+            .to_string()
+            .split_whitespace()
+            .collect();
+        let crate_rooted = declaration
+            .use_tree()
+            .and_then(|tree| tree.path())
+            .is_some_and(|path| path.syntax().text().to_string().starts_with("crate"));
+        if matches!(spelled.as_str(), "pub" | "pub(crate)") && crate_rooted {
+            let range = visibility.syntax().text_range();
+            // The visibility and the one space after it.
+            let end = usize::from(range.end());
+            let end = if text[end..].starts_with(' ') {
+                end + 1
+            } else {
+                end
+            };
+            cuts.push(usize::from(range.start())..end);
+        }
+    }
+    let mut out = text.to_owned();
+    for range in cuts.into_iter().rev() {
+        out.replace_range(range, "");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -815,5 +1063,95 @@ mod tests {
             None,
             "a virtual manifest is no crate"
         );
+    }
+
+    const SHIMMED: &[(&str, &str)] = &[
+        ROOT,
+        (
+            "src/lib.rs",
+            "pub mod rules;\npub mod model;\npub mod user;\npub use model::Root;\n",
+        ),
+        (
+            "src/model.rs",
+            "pub struct Rule;\npub struct Kind;\npub struct Root;\n",
+        ),
+        (
+            "src/rules.rs",
+            "pub use crate::model::{Kind, Rule};\npub fn check(_: &Rule) {}\n",
+        ),
+        (
+            "src/user.rs",
+            "use crate::rules::{check, Kind, Rule};\npub fn f() -> crate::rules::Rule { let _ = \"crate::rules::Rule\"; crate::Root; Rule }\n",
+        ),
+        ("tests/it.rs", "fn t() { let _ = app::rules::Rule; }\n"),
+    ];
+
+    fn respelled(files: &[(&str, &str)]) -> BTreeMap<String, String> {
+        let (sources, manifests) = tree(files);
+        respell_through_shims(&sources, &manifests)
+    }
+
+    /// Fails by: a path through a shim left at the shim, so deleting the shim
+    /// breaks it; a crate-root re-export (the crate's stated surface)
+    /// respelled; or a string touched.
+    #[test]
+    fn a_path_through_a_shim_is_respelled_at_its_home_and_nothing_else_moves() {
+        let changed = respelled(SHIMMED);
+        let user = &changed["src/user.rs"];
+        assert!(user.contains("-> crate::model::Rule"), "{user}");
+        assert!(
+            user.contains("\"crate::rules::Rule\""),
+            "a string is data: {user}"
+        );
+        assert!(
+            user.contains("crate::Root;"),
+            "a root re-export stays: {user}"
+        );
+    }
+
+    /// Fails by: a grouped import through a shim left whole, or split without
+    /// keeping its non-shim leaf at its own path.
+    #[test]
+    fn a_grouped_import_through_a_shim_is_regrouped_by_home() {
+        let user = respelled(SHIMMED)["src/user.rs"].clone();
+        assert!(user.contains("use crate::model::{Kind, Rule};"), "{user}");
+        assert!(user.contains("use crate::rules::check;"), "{user}");
+    }
+
+    /// Fails by: a shim kept public (it would still count), deleted where its
+    /// own module still names the item bare, or the crate root's own
+    /// re-export downgraded.
+    #[test]
+    fn a_shim_becomes_a_private_use_and_the_roots_surface_stays() {
+        let changed = respelled(SHIMMED);
+        let rules = &changed["src/rules.rs"];
+        assert!(
+            rules.starts_with("use crate::model::{Kind, Rule};"),
+            "{rules}"
+        );
+        assert!(
+            !changed.contains_key("src/lib.rs"),
+            "{:?}",
+            changed.get("src/lib.rs")
+        );
+    }
+
+    /// Fails by: a file outside the crate's library (an integration test)
+    /// left naming the shim through the crate's name.
+    #[test]
+    fn a_test_outside_the_crate_is_respelled_through_the_crate_name() {
+        let test = respelled(SHIMMED)["tests/it.rs"].clone();
+        assert!(test.contains("app::model::Rule"), "{test}");
+    }
+
+    /// Fails by: a second run changing anything — the migrated tree is a
+    /// fixed point, which is the recipe's own regression test.
+    #[test]
+    fn respelling_twice_changes_nothing() {
+        let (mut sources, manifests) = tree(SHIMMED);
+        for (path, text) in respell_through_shims(&sources, &manifests) {
+            sources.insert(path, text);
+        }
+        assert!(respell_through_shims(&sources, &manifests).is_empty());
     }
 }
