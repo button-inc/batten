@@ -199,13 +199,10 @@ use std::path::{Path, PathBuf};
     reason = "stays: `batten exec -- <cmd>` IS the spawn — the verb's whole contract is a transparent passthrough of a caller's argv, streams and exit code (CLOUD-285)"
 )]
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
@@ -251,69 +248,7 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 ///
 /// See the module docs: a surviving grandchild holding the write end means EOF
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
-const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// hk's format axis, adopted rather than invented.
-///
-/// `hk/src/structured_output.rs` already spells these three for a tool that
-/// reports on child processes, and a caller who knows hk must not have to learn
-/// a second vocabulary to read Batten. The names are hk's; what they range over
-/// is Batten's own record.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum OutputFormat {
-    /// Pointer lines, one per fact.
-    #[default]
-    Human,
-    /// One JSON document.
-    Json,
-    /// One JSON record per line.
-    Jsonl,
-}
-
-/// mise's style axis, adopted rather than invented.
-///
-/// `mise/src/task/task_output.rs` spells these seven, and its `style_only()`
-/// separates the stream *style* from the *suppression* of the tool's own
-/// metadata — a distinction Batten needs and would otherwise have conflated into
-/// one key. [`OutputStyle::style_only`] is that function, by that name.
-///
-/// **With one command in flight, `prefix`, `replacing` and `timed` render
-/// alike.** They are still accepted, because adopting half a vocabulary is how a
-/// caller learns that Batten's version of a name means something else; what
-/// distinguishes them is a bundle of concurrent children, which is CLOUD-430's
-/// subject and not this one's.
-///
-/// **`timed` emits no wall-clock field, and that is the byte-stability answer**
-/// §6 demands rather than a limitation. A duration in Batten's own output would
-/// make the same run print differently twice, and [`crate::capture`] already
-/// refuses a timestamp for exactly that reason.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum OutputStyle {
-    /// Each line carries the child's program name.
-    Prefix,
-    /// The child's bytes, verbatim and as they arrive.
-    #[default]
-    Interleave,
-    /// Each stream whole, in a fixed order, after the child exits.
-    KeepOrder,
-    /// As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten
-    /// never assumes it has.
-    Replacing,
-    /// As [`OutputStyle::Prefix`], minus the clock — see the type's docs.
-    Timed,
-    /// Batten says nothing of its own; the child still speaks.
-    Quiet,
-    /// Nobody speaks.
-    Silent,
-}
+pub(crate) const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl OutputStyle {
     /// mise's `style_only()`: the stream style with the suppression removed.
@@ -337,59 +272,6 @@ impl OutputStyle {
     const fn suppresses_child(self) -> bool {
         matches!(self, OutputStyle::Silent)
     }
-}
-
-/// The `[exec]` table: how `batten exec` owns what it dispatched.
-///
-/// One key today, and it is an opt-in rather than a tuning knob. `false` is not
-/// a conservative default chosen for taste — it is the *only* value that leaves
-/// the process topology byte-for-byte what it was, which is what an existing
-/// consumer's orchestrator is already built against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ExecConfig {
-    /// Whether Batten may put a dispatched command in its own process group and
-    /// take responsibility for tearing that group down.
-    ///
-    /// Declared rather than inferred, because the residual case is not
-    /// observable: an orchestrator two levels up intending to `kill(-pgid)` looks
-    /// exactly like one that is not. Even when this is `true`, Batten still
-    /// declines whenever mise's own two rules say an ancestor is already
-    /// managing — see [`GroupDecision`].
-    #[serde(default)]
-    pub manage_process_group: bool,
-    /// Whether the child's bytes are copied onto Batten's own streams.
-    ///
-    /// `false` is the CLOUD-429 default and the whole point: the bytes are
-    /// already stored, content-addressed and addressable, so printing them again
-    /// charges the caller a second time for output the engine has. `--tee`
-    /// restores the old behaviour verbatim.
-    #[serde(default)]
-    pub tee: bool,
-    /// How Batten's own record is encoded (hk's axis).
-    #[serde(default)]
-    pub format: OutputFormat,
-    /// How a teed child's bytes are presented, and whose output is suppressed
-    /// (mise's axis).
-    #[serde(default)]
-    pub style: OutputStyle,
-    /// How many of a `:::` bundle's commands run at once — mise's `--jobs`.
-    ///
-    /// `1` by default, which is stricter than mise's own default and chosen
-    /// rather than inherited: a bundle's commands share one working tree, and
-    /// widening concurrency a caller did not ask for is how two of them start
-    /// writing the same file. Zero is read as one.
-    #[serde(default = "one")]
-    pub jobs: usize,
-    /// Whether a bundle keeps going past a command that failed — mise's
-    /// `--continue-on-error`.
-    #[serde(default)]
-    pub continue_on_error: bool,
-}
-
-/// The `jobs` default, as a function because `serde` needs one.
-const fn one() -> usize {
-    1
 }
 
 impl Default for ExecConfig {
@@ -417,6 +299,7 @@ impl ExecConfig {
         style: OutputStyle::Interleave,
         jobs: 1,
         continue_on_error: false,
+        progress: Progress::Silent,
     };
 }
 
@@ -643,7 +526,7 @@ pub(crate) fn cancel_owned_group(repo_root: &Path) -> bool {
     // ABSENT IS THE COMMON CASE AND IT IS NOT A FAILURE: a gate run without the
     // grouping opt-in records no note, so there is no group to cancel and the
     // watcher simply loses whatever it was racing.
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return false;
     };
     let pgid = body.trim();
@@ -679,86 +562,42 @@ pub(crate) fn escalate_group(_pgid: &str) -> bool {
     false
 }
 
-/// Drain `pipe` into `sink`, accumulating everything that passed through.
-///
-/// The tee. Chunked rather than read-to-end-then-write so a long-running child's
-/// output still appears as it is produced: buffering it all until exit would make
-/// `batten exec -- cargo test` look hung.
-///
-/// `seen` is shared rather than returned because the caller may stop waiting
-/// (see [`PIPE_DRAIN_TIMEOUT`]): a return value is only readable by a join that
-/// completes, so a deadline over a returned `Vec` could only ever store nothing.
-/// Appended under the lock per chunk, which is the same granularity the write to
-/// `sink` already has.
-fn tee<R: Read, W: Write>(
-    mut pipe: R,
-    mut sink: W,
-    seen: &Mutex<Vec<u8>>,
-    spool: &Mutex<capture::Spool>,
-) -> Result<()> {
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = pipe.read(&mut chunk)?;
-        if read == 0 {
-            return Ok(());
-        }
-        let bytes = chunk.get(..read).unwrap_or(&[]);
-        sink.write_all(bytes)?;
-        sink.flush()?;
-        // Committed to the spool BEFORE the in-memory copy, because the spool is
-        // the only one another process can read (CLOUD-430) — a chunk that
-        // reached the caller and not the spool would be output a concurrent
-        // reader can never catch up to.
-        match spool.lock() {
-            Ok(mut held) => held.commit(bytes)?,
-            Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
-        }
-        match seen.lock() {
-            Ok(mut held) => held.extend_from_slice(bytes),
-            // A poisoned lock means the other end panicked mid-append. The bytes
-            // already on `sink` are the caller's answer either way, so the tee
-            // keeps teeing and the capture is what it is — dropping the stream
-            // here would take output away from the caller to protect bookkeeping.
-            Err(_) => return Err(anyhow::anyhow!("exec: the capture buffer was poisoned")),
-        }
-    }
-}
-
 /// What a tee thread reports, and where its bytes accumulate meanwhile.
 struct Drain {
-    /// The tee's own result, arriving when the pipe reaches EOF or errors.
-    outcome: mpsc::Receiver<Result<()>>,
+    /// The pump teeing the pipe, reporting when it reaches EOF or errors.
+    outcome: crate::stream::Pumping,
     /// Everything written through so far.
-    seen: Arc<Mutex<Vec<u8>>>,
-    /// The live capture this stream is spooling into, shared with the tee thread
-    /// so a drain that times out can still be sealed by the caller.
-    spool: Arc<Mutex<capture::Spool>>,
+    seen: crate::stream::Shared<Vec<u8>>,
+    /// The live capture this stream is spooling into, shared with the pump so a
+    /// drain that times out can still be sealed by the caller.
+    spool: crate::stream::Shared<capture::Spool>,
 }
 
 // THE DRAIN'S TWO DECISIONS, SHOWN RED BY WHAT IT REPORTS RATHER THAN BY A CLOCK
 // (CLOUD-2059). One budget across both streams leaves the second exactly what the
 // first left — `0ns` once the first waited it out — and a pipe that never closes
 // is reported as such.
-//MUTANT drain-budget-per-stream|s@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed() * 0),@|a_surviving_grandchild_cannot_hang_exec
-//MUTANT drain-timeout-unreported|s@^                Err(mpsc::RecvTimeoutError::Timeout) => true,$@                Err(mpsc::RecvTimeoutError::Timeout) => false,@|the_drain_reports_what_arrived_when_the_pipe_never_closes
 impl Drain {
-    /// Spawn a tee of `pipe` into `sink`.
+    /// Spawn a tee of `pipe` into `sink`, the spool, and the in-memory copy.
+    ///
+    /// The spool BEFORE the in-memory copy, because the spool is the only one
+    /// another process can read (CLOUD-430): a chunk that reached the caller and
+    /// not the spool would be output a concurrent reader can never catch up to.
     fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,
     {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let spool = Arc::new(Mutex::new(spool));
-        let (tx, outcome) = mpsc::channel();
-        let buffer = Arc::clone(&seen);
-        let spooling = Arc::clone(&spool);
-        // Detached on purpose. A thread blocked on a pipe a grandchild holds open
-        // cannot be joined, and there is nothing to join it *for*: its bytes are
-        // in `seen` already, and the process is on its way out.
-        drop(std::thread::spawn(move || {
-            drop(tx.send(tee(pipe, sink, &buffer, &spooling)));
-        }));
+        let seen = crate::stream::Shared::new(Vec::new());
+        let spool = crate::stream::Shared::new(spool);
+        let outcome = crate::stream::spawn_pump(
+            pipe,
+            vec![
+                Box::new(sink),
+                Box::new(spool.clone()),
+                Box::new(seen.clone()),
+            ],
+        );
         Self {
             outcome,
             seen,
@@ -824,25 +663,17 @@ impl Drain {
         // finished" is `try_recv`, and only when the answer is no does the
         // remaining budget get waited on. The bytes were always safe; this is the
         // output half.
-        let finished = |result: Result<()>| -> Result<bool> {
-            result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
-            Ok(false)
+        let timed_out = match self.outcome.finished(deadline) {
+            crate::stream::Pumped::Finished(result) => {
+                result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
+                false
+            }
+            // The pump thread died without reporting — a panic. The bytes it
+            // did append are still real.
+            crate::stream::Pumped::Lost => false,
+            crate::stream::Pumped::Running => true,
         };
-        let timed_out = match self.outcome.try_recv() {
-            Ok(result) => finished(result)?,
-            // Disconnected without a value means the tee thread died without
-            // reporting — a panic. The bytes it did append are still real.
-            Err(mpsc::TryRecvError::Disconnected) => false,
-            Err(mpsc::TryRecvError::Empty) => match self.outcome.recv_timeout(deadline) {
-                Ok(result) => finished(result)?,
-                Err(mpsc::RecvTimeoutError::Disconnected) => false,
-                Err(mpsc::RecvTimeoutError::Timeout) => true,
-            },
-        };
-        let bytes = match self.seen.lock() {
-            Ok(held) => held.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
+        let bytes = self.seen.bytes();
         if timed_out {
             // Pointer-only: the stream and a count, never a byte of what was
             // captured. Said out loud rather than swallowed, because a truncated
@@ -863,14 +694,12 @@ impl Drain {
         // or race it. `try_unwrap` succeeding is the ordinary case (the tee has
         // exited); the fallback reopens the same paths, which is safe because the
         // spool's identity is its handle rather than its file descriptor.
-        let spool = match Arc::try_unwrap(self.spool) {
-            Ok(held) => held
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("exec: the spool was poisoned"))?,
-            Err(shared) => match shared.lock() {
-                Ok(held) => held.reopen()?,
-                Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
-            },
+        let spool = match self.spool.into_inner() {
+            Ok(Some(held)) => held,
+            Ok(None) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
+            Err(shared) => shared
+                .with(capture::Spool::reopen)
+                .ok_or_else(|| anyhow::anyhow!("exec: the spool was poisoned"))??,
         };
         Ok((bytes, spool))
     }
@@ -898,6 +727,25 @@ struct ChildSink {
     at_line_start: bool,
     /// Whether these bytes reach a stream at all.
     discard: bool,
+    /// Whether a discarded stream still echoes its progress lines.
+    echo: bool,
+    /// The unterminated tail of the last chunk, held for [`Self::echo`] so a
+    /// progress line split across reads is matched whole.
+    pending: Vec<u8>,
+}
+
+/// Whether `line` reports progress: a step's `stage <name> ran|hit <seconds>`,
+/// or a mutant sweep's `mutate sweep: row …` / `mutate schema: …` line. One line
+/// each, a pointer-sized summary, never the payload.
+#[must_use]
+pub fn is_progress_line(line: &str) -> bool {
+    if line.contains("mutate sweep: row ") || line.contains("mutate schema: ") {
+        return true;
+    }
+    line.split_once("stage ").is_some_and(|(_, rest)| {
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        matches!(words.as_slice(), [_, "ran" | "hit", seconds] if seconds.parse::<f64>().is_ok())
+    })
 }
 
 impl ChildSink {
@@ -915,6 +763,8 @@ impl ChildSink {
             prefix,
             at_line_start: true,
             discard: !showing || style.style_only() == OutputStyle::KeepOrder,
+            echo: settings.progress == Progress::Echo && stream.is_stderr(),
+            pending: Vec::new(),
         }
     }
 
@@ -938,6 +788,15 @@ impl ChildSink {
 impl Write for ChildSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if self.discard {
+            if self.echo {
+                self.pending.extend_from_slice(buf);
+                while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = self.pending.drain(..=end).collect();
+                    if is_progress_line(&String::from_utf8_lossy(&line)) {
+                        std::io::stderr().write_all(&line)?;
+                    }
+                }
+            }
             // Reported as written, because it was: the capture has it. Returning
             // a short count here would make the tee loop spin on bytes it has
             // already accounted for.
@@ -1142,7 +1001,10 @@ impl Record<'_> {
 ///
 /// `CommandExt::process_group` rather than mise's `pre_exec(setpgid)`: the
 /// workspace forbids `unsafe`, and for this purpose the two are the same call.
-#[cfg(unix)]
+///
+/// ONE FUNCTION ON EVERY PLATFORM (#1276): it only decides, and [`lead_group`]
+/// is the no-op where there are no groups, so a second cfg arm was a second
+/// escape in the spawn census for a body that did nothing.
 #[expect(
     clippy::disallowed_types,
     reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
@@ -1153,14 +1015,6 @@ fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
     }
 }
 
-/// [`group_at_spawn`] where there are no process groups.
-#[cfg(not(unix))]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
-)]
-fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
-
 /// Make the child of `builder` lead a process group of its own, marked so a
 /// nested mise knows an ancestor already manages it.
 ///
@@ -1169,24 +1023,24 @@ fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
 /// suite left in the sweep's own group cannot be signalled apart from the sweep —
 /// so killing it reached its direct child only, and every hung suite left its test
 /// binary sleeping under init (CLOUD-2059).
-#[cfg(unix)]
+///
+/// ONE FUNCTION, THE PLATFORM SPLIT INSIDE IT (#1276): where there are no process
+/// groups it leaves the builder alone, and a cfg twin carried a second escape in
+/// the spawn census for that empty body.
 #[expect(
     clippy::disallowed_types,
     reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
 )]
 pub(crate) fn lead_group(builder: &mut Command) {
-    use std::os::unix::process::CommandExt as _;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
 
-    builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+        builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+    }
+    #[cfg(not(unix))]
+    let _ = builder;
 }
-
-/// [`lead_group`] where there are no process groups.
-#[cfg(not(unix))]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
-)]
-pub(crate) fn lead_group(_builder: &mut Command) {}
 
 /// The on-disk note that a group is currently owned, and by which Batten.
 ///
@@ -1287,7 +1141,6 @@ impl Reaper {
     }
 }
 
-//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 impl Drop for Reaper {
     fn drop(&mut self) {
         if !self.armed {
@@ -1380,7 +1233,7 @@ struct ForwardingThread {
     /// The worker itself, answering why it escalated, if it did.
     worker: std::thread::JoinHandle<Option<Escalation>>,
     /// The signal Batten was sent, or `0` for none. Read once, after the join.
-    received: Arc<std::sync::atomic::AtomicI32>,
+    received: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// The group to forward to, published by [`Forwarding::adopt`] once the
     /// child exists. `0` until then.
     ///
@@ -1390,7 +1243,7 @@ struct ForwardingThread {
     /// the alternative orders the two the other way and leaves a window in
     /// which the child is a group leader and Batten still holds the default
     /// dispositions.
-    pgid: Arc<std::sync::atomic::AtomicI32>,
+    pgid: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// This forwarder's place in [`forwarding`]'s count, released on every path:
     /// with the forwarder on an early `?` (one used to leave the count raised for
     /// the rest of the process), and in [`Forwarding::finish_reporting`] BEFORE
@@ -1432,7 +1285,9 @@ const ADOPT_GRACE: Duration = Duration::from_secs(2);
 /// `None` when no group ever arrived, which means the spawn failed or never
 /// happened — there is nothing to forward to and the signal stays recorded.
 #[cfg(unix)]
-fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::process::Pid> {
+fn await_group(
+    slot: &std::sync::Arc<std::sync::atomic::AtomicI32>,
+) -> Option<rustix::process::Pid> {
     use std::sync::atomic::Ordering;
 
     let deadline = std::time::Instant::now() + ADOPT_GRACE;
@@ -1518,7 +1373,6 @@ pub(crate) fn terminate(signal: i32) -> Result<()> {
 // A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
 // case reads the recorded reason, so a swallowed second signal shows up as the
 // grace expiring rather than as a teardown that took longer.
-//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -1556,11 +1410,11 @@ impl Forwarding {
         let mut signals = signal_hook::iterator::Signals::new(FORWARDED)
             .context("install the signal forwarder for the wrapped command")?;
         let handle = signals.handle();
-        let received = Arc::new(AtomicI32::new(0));
-        let pgid = Arc::new(AtomicI32::new(0));
+        let received = std::sync::Arc::new(AtomicI32::new(0));
+        let pgid = std::sync::Arc::new(AtomicI32::new(0));
 
-        let seen = Arc::clone(&received);
-        let group = Arc::clone(&pgid);
+        let seen = std::sync::Arc::clone(&received);
+        let group = std::sync::Arc::clone(&pgid);
         let worker = std::thread::spawn(move || {
             let first = {
                 let mut stream = signals.forever();
@@ -1870,7 +1724,7 @@ pub fn run_in_with_env(
 ) -> Result<ExitCode> {
     let bundle = split_bundle(command)?;
     let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
-    report_bundle(&bundle, &outcomes, patterns, settings, report)
+    report_bundle(repo_root, &bundle, &outcomes, patterns, settings, report)
 }
 
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
@@ -2337,7 +2191,7 @@ fn piped_through(
             }));
         }
     }
-    let finished = child.wait_with_output().ok()?;
+    let finished = child.streamed_wait().ok()?;
     let mut output = String::from_utf8_lossy(&finished.stdout).into_owned();
     if diagnostics == Diagnostics::Keep {
         // STDOUT FIRST, because that is where a verdict is written and a caller
@@ -2401,7 +2255,6 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
 
 // Carried from the retired shim's `forks-instead-of-execing` row (CLOUD-843): a
 // fork leaves the recorded pid pointing at a process that is not the server.
-//MUTANT spawn-forks-instead-of-execing|s@    let failed = command.exec();@    let failed = match command.status() { Ok(_) => std::process::exit(0), Err(error) => error };@|the_servers_pid_is_this_processs_it_execs_rather_than_forks
 /// Become `argv`: replace this process, or say why it could not be.
 ///
 /// # Why this is a THIRD shape beside `piped` and `detached`
@@ -2745,8 +2598,6 @@ fn dispatch_decided(
 /// The split is what `--jobs` forces: with several children in flight nothing may
 /// write to a shared stream on the completion path, or the bundle's own output
 /// would be ordered by the machine.
-//MUTANT escalation-unreported|s@^    if let Some(escalation) = escalated {$@    if let Some(escalation) = None::<Escalation> {@|a_second_signal_escalates_instead_of_being_swallowed
-//MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 fn run_one(
     repo_root: &Path,
     run: u64,
@@ -2913,6 +2764,7 @@ fn run_one(
 
 /// Render everything the bundle has to say, and decide its exit code.
 fn report_bundle(
+    repo_root: &Path,
     bundle: &[&[String]],
     outcomes: &[Outcome],
     patterns: &[OutputPattern],
@@ -2966,6 +2818,17 @@ fn report_bundle(
                 .collect(),
         }
         .emit(settings.format, report)?;
+        // CAPTURED, NOT SHOWN, SO POINTED AT (CLOUD-2284): with no tee the
+        // child's words reached nobody, and a handle alone is one more call
+        // away. Each command's streams get the one pointer every stored output
+        // takes, a view read in one hop.
+        if !settings.tee && settings.format == OutputFormat::Human {
+            for outcome in outcomes {
+                if let Some(line) = capture::streams_pointer(repo_root, &outcome.captures) {
+                    writeln!(report, "{line}")?;
+                }
+            }
+        }
     }
 
     // BATTEN DIES OF THE SIGNAL BATTEN WAS SENT (CLOUD-746 S2), and this is the
@@ -3038,10 +2901,43 @@ fn report_bundle(
     )))
 }
 
+// THE PROCESS ADAPTER moved to `crate::capture::child_io` (#1276): `secrets`
+// captured through it, and reaching `exec` pulled `task` along, past the
+// recorded worst closure. Re-exported so `exec::Streamed` keeps resolving.
+pub use crate::capture::{Keep, Streamed, StreamedChild};
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{ExecConfig, ExecProgress as Progress, OutputFormat, OutputStyle};
+
+// THE ONE SPAWN of the adapter stays in `exec`, the placed module: the traits
+// live in `capture` so a caller names them without an edge onto `exec`, and the
+// impl for `Command` is here, where the spawn-placement table already allows
+// it, rather than widening that table to `capture` (#1276).
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this impl IS the census's one capture route — every spawn site that \
+              reads its child's output reaches its streams through here, not its own loop (#1276)"
+)]
+impl Streamed for std::process::Command {
+    fn streamed_output_keeping(&mut self, keep: Keep) -> std::io::Result<std::process::Output> {
+        if !keep.stdin {
+            self.stdin(std::process::Stdio::null());
+        }
+        if !keep.stdout {
+            self.stdout(std::process::Stdio::piped());
+        }
+        if !keep.stderr {
+            self.stderr(std::process::Stdio::piped());
+        }
+        self.spawn()?.streamed_wait()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::mpsc;
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {
@@ -3193,6 +3089,43 @@ mod tests {
         let mut sink = ChildSink::of(&ExecConfig::DEFAULT, "child", capture::LiveStream::STDOUT);
         assert!(sink.discard, "the default shows the caller nothing");
         assert_eq!(sink.write(b"hello").expect("a discard cannot fail"), 5);
+    }
+
+    /// Fails by: a stage or sweep line not echoed, a payload line echoed, or a
+    /// progress line split across reads matched in halves rather than whole.
+    #[test]
+    fn a_discarded_stream_echoes_its_progress_lines_and_nothing_else() {
+        for line in [
+            "[verify:test-replay] stage test-replay ran 774.369\n",
+            "[hooks]   cargo-clippy – stage lint:clippy hit 663.809\n",
+            "[hooks]   mutant:changed – mutate sweep: row 24/351 branch-age reuse caught 1s\n",
+            "mutate schema: build 1 clean, 857 unviable\n",
+        ] {
+            assert!(is_progress_line(line), "{line}");
+        }
+        for line in [
+            "[deny] warning[duplicate]: found 2 duplicate entries for crate 'cfg-if'\n",
+            "the stage is set\n",
+            "stage left ran away\n",
+            "test result: ok. 1 passed\n",
+        ] {
+            assert!(!is_progress_line(line), "{line}");
+        }
+        let settings = ExecConfig {
+            progress: Progress::Echo,
+            ..ExecConfig::DEFAULT
+        };
+        let mut sink = ChildSink::of(&settings, "child", capture::LiveStream::STDERR);
+        assert!(sink.discard && sink.echo, "echo rides a discarded stream");
+        sink.write_all(b"[x] stage x r").expect("write");
+        assert_eq!(
+            sink.pending, b"[x] stage x r",
+            "an unterminated line is held"
+        );
+        sink.write_all(b"an 1.0\nnext").expect("write");
+        assert_eq!(sink.pending, b"next", "the whole line was taken at its end");
+        let quiet = ChildSink::of(&settings, "child", capture::LiveStream::STDOUT);
+        assert!(!quiet.echo, "only stderr carries progress");
     }
 
     #[test]
@@ -3493,12 +3426,12 @@ mod tests {
         name: &str,
         stream: capture::LiveStream,
         seen: &[u8],
-    ) -> (Drain, mpsc::Sender<Result<()>>) {
-        let (tx, outcome) = mpsc::channel();
+    ) -> (Drain, mpsc::Sender<std::io::Result<()>>) {
+        let (outcome, tx) = crate::stream::Pumping::held();
         let drain = Drain {
             outcome,
-            seen: Arc::new(Mutex::new(seen.to_vec())),
-            spool: Arc::new(Mutex::new(scratch_spool(name, stream))),
+            seen: crate::stream::Shared::new(seen.to_vec()),
+            spool: crate::stream::Shared::new(scratch_spool(name, stream)),
         };
         (drain, tx)
     }
@@ -4012,10 +3945,39 @@ mod tests {
         }
     }
 
+    /// How long [`reap`] waits for a group the case asked to leave.
+    #[cfg(unix)]
+    const REAP_GRACE: Duration = Duration::from_secs(5);
+
     /// Reap this process's child `group` leader, which the caller has made
-    /// sure is exiting.
+    /// sure is exiting — or KILL it and fail at [`REAP_GRACE`].
+    ///
+    /// BOUNDED, BECAUSE A MUTANT BREAKS THE PREMISE. A cancel mutated into a
+    /// no-op leaves the spinner running, and an unbounded wait then hangs the
+    /// case until the runner's timeout SIGKILLs it, which runs no `Drop`: the
+    /// TERM-ignoring group outlived its case and spun a core for fourteen hours
+    /// (#1276). Failing here kills the mutant and reaps the group.
+    #[cfg(unix)]
     fn reap(group: &mut Group) {
-        await_reaped(group.pid.parse().expect("a numeric pid"));
+        let pid: u32 = group.pid.parse().expect("a numeric pid");
+        let (reaped, exited) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            await_reaped(pid);
+            let _ = reaped.send(());
+        });
+        if exited.recv_timeout(REAP_GRACE).is_err() {
+            let _ = escalate_group(&group.pid);
+            let _ = waiter.join();
+            group.reaped = true;
+            panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
+        }
+        let _ = waiter.join();
+        group.reaped = true;
+    }
+
+    /// No process groups off unix.
+    #[cfg(not(unix))]
+    fn reap(group: &mut Group) {
         group.reaped = true;
     }
 

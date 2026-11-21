@@ -66,6 +66,15 @@ declared_modules := {
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",
+	# `module_graph` arrived with CLOUD-2789: the crate's own module graph read
+	# off the syntax tree, for the gate that holds its largest cycle.
+	"module_graph",
+	# CLOUD-2789's phase 2 vocabulary, each below the module cycle by
+	# measurement: `config_model` (the config's types), `preset_catalog` (the
+	# vendored presets as data), `surface_table` (the command surface as data)
+	# and `config_check` (each section's rules, below the loader). `item_index`
+	# (CLOUD-2790) resolves a path to its defining site for `test replay`.
+	"config_model", "preset_catalog", "surface_table", "config_check", "item_index",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
@@ -183,6 +192,15 @@ declared_modules := {
 	# a pure, lossless rewrite that a `fix` calls. It reaches nothing in this
 	# crate, only `ra_ap_syntax`, so it is a LEAF.
 	"codemod",
+	# `fsio` arrived with CLOUD-2692: every filesystem read the crate makes, so a
+	# read can be batched, streamed or queued in one place. It reaches nothing in
+	# this crate, only `std` and `compio`, so it is a LEAF.
+	"fsio",
+	# `mutation_markers` arrived with CLOUD-2253: the Rust tier's build-time
+	# refusal of hand-written mutation markers and a second cargo-mutants argv.
+	# `build.rs` includes it by `#[path]`, so it is compiled outside this crate
+	# and must reach nothing in it: a LEAF by construction, not by choice.
+	"mutation_markers",
 	# `remedy` arrived with CLOUD-1576: two pure string predicates over a row's
 	# remedy columns, which `rules` and `lint` call. It reaches nothing in this
 	# crate, so it is a LEAF.
@@ -905,6 +923,11 @@ declared_modules := {
 	# `step`'s class of effect, and writes the runner's files through `durable`.
 	# It decides nothing, so its `rules` and `hook` edges are forbidden below.
 	"ci_step",
+	# `forge_event` arrived with the your-counselling bundle: it shapes one forge
+	# webhook delivery into the `forge` hook event the handlers select on.
+	# `githook` arrived with it: argv[0] dispatch makes batten every git hook,
+	# routing through `[hook.git]`, an entry point like `main`.
+	"forge_event", "githook",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -1044,6 +1067,15 @@ forbidden[from] contains to if {
 		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
 		# further out. The loader names the row through the leaf instead.
 		"config": {"resolve", "trust", "lint", "epoch", "step"},
+		# CLOUD-2789's vocabulary sits below the loader and every feature: that
+		# placement is what took it out of the module cycle, and an edge back up
+		# would put it in again. The catalog sits below the model it feeds; the
+		# command table below the layer that interprets it.
+		"config_model": {"config", "config_check", "rules", "hook", "resolve", "trust"},
+		"preset_catalog": {"config_model", "config", "preset"},
+		"config_check": {"config", "rules", "hook", "resolve", "trust", "record", "receipt"},
+		"surface_table": {"surface", "cli", "lib", "config"},
+		"item_index": {"rules", "hook", "config", "replay"},
 		"resolve": {"trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
@@ -1134,6 +1166,11 @@ forbidden[from] contains to if {
 		# is the class `rules/policy-modules.md` records for parsers. The source is
 		# injected so that edge is unwritable rather than merely unwise.
 		"graph": {"rules", "hook", "facts"},
+		# `module_graph -> {rules, hook, facts}` (CLOUD-2789): it reads Rust
+		# source for its structure, as `codemod` does, and judges nothing; an
+		# edge to a decider would make the gate over the crate's cycles depend
+		# on a module inside the cycle it measures.
+		"module_graph": {"rules", "hook", "facts"},
 		# `register -> {rules, hook}` (CLOUD-2005): the key-set module JOINS and
 		# never acquires. `rules` reads each declared path through `acquire`
 		# and hands over lines or parsed frontmatter, so an edge back would make

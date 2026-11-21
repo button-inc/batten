@@ -48,7 +48,7 @@
 //! # Gates decide, never estimate (non-negotiable rule 3)
 //!
 //! A row's `check` resolves to a command and an exit code over a real object.
-//! There is no model verdict, no heuristic, and no "looks fine". A check that
+//! There is no gated-model verdict, no heuristic, and no "looks fine". A check that
 //! could not be SPAWNED is a could-not-look and is reported as such — never as
 //! passing, which would be the false green this whole tool exists to refuse, and
 //! never as a reason to repair, which would make an unreadable check into a
@@ -76,84 +76,13 @@
 //! id is a token out of the reader's own committed config, and what it means is
 //! written down there, once, in the row's `gloss`.
 
+use crate::capture::Streamed as _;
 use std::path::Path;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use anyhow::Result;
-
-use crate::error::UsageError;
-
-/// One declared precondition, and optionally the fix for it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Startup {
-    /// The stable token a report names.
-    ///
-    /// Separate from the command for [`crate::markers::Marker`]'s reason: the
-    /// argv is free to change without the thing it is called in reports changing
-    /// with it.
-    pub id: String,
-    /// What this row is about, in one line, for a reader of the config.
-    ///
-    /// Required rather than optional: a precondition nobody wrote the meaning of
-    /// down is one the next reader cannot decide whether to keep — and since the
-    /// report is pointer-only, this is the only place that meaning can live.
-    pub gloss: String,
-    /// The command deciding whether the environment is right, as argv.
-    ///
-    /// Exit `0` is provisioned; anything else is not. argv rather than a shell
-    /// string for `[[hook.action]]`'s reason — there is then no quoting layer
-    /// between what an operator wrote and what runs: no word splitting, no glob
-    /// expansion, no `$(…)`.
-    pub check: Vec<String>,
-    /// How the check's run becomes a verdict.
-    ///
-    /// Absent is [`Decided::ExitStatus`], which is the ordinary case and the one
-    /// every row before CLOUD-1454 assumed.
-    #[serde(default, skip_serializing_if = "Decided::is_default")]
-    pub decided_by: Decided,
-    /// The command that fixes it, as argv. Absent means diagnose-only.
-    ///
-    /// A row with no repair is not a lesser row: some preconditions genuinely
-    /// cannot be fixed from inside the container, and a row saying so is more
-    /// use than a repair that silently does nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repair: Option<Vec<String>>,
-}
-
-/// How a check's run is read as an answer.
-///
-/// **This exists because a program can be a perfectly good reporter and a
-/// useless gate**, and a row declaring one as its check is dead rather than
-/// wrong-looking (CLOUD-1454). Measured on the row this was added for:
-/// `mise ls --current` prints `(missing)` beside a tool that is not installed
-/// and exits `0`, so `toolchain-is-provisioned` reported `ok` over a container
-/// with nothing installed — and because a `[[startup]]` row only repairs when
-/// its check FAILS, the `mise install --yes` that would have fixed it never ran.
-/// A dead gate and a provisioned container were byte-identical on the report.
-///
-/// The remedy stays inside the argv bound rather than growing a shell: the same
-/// program has a spelling that says nothing when there is nothing to say
-/// (`mise ls --current --missing`), so what the row needed was a way to declare
-/// that SILENCE is the pass — not a pipeline, a `test`, or a wrapper task.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum Decided {
-    /// Exit `0` is provisioned. The default, and what every row means unless it
-    /// says otherwise.
-    #[default]
-    ExitStatus,
-    /// Exit `0` **and** nothing written to stdout is provisioned.
-    ///
-    /// Rule 4 holds here in the TYPE rather than by care: what crosses back is a
-    /// `bool` over the child's stdout, never a byte of it, so a check whose
-    /// output names paths, versions or hosts still cannot put any of that in a
-    /// report. That is the same bound [`Outcome`] already carries, one layer
-    /// earlier.
-    SilentExit,
-}
+pub use crate::config_check::startup::validate;
+pub use crate::config_model::{Decided, Startup};
 
 impl Decided {
     /// Whether this is the value an absent key means, so the derived schema and
@@ -163,7 +92,7 @@ impl Decided {
         clippy::trivially_copy_pass_by_ref,
         reason = "serde's `skip_serializing_if` calls this with a reference to the field, so the signature is the derive's rather than this author's; taking `self` by value does not compile"
     )]
-    const fn is_default(&self) -> bool {
+    pub(crate) const fn is_default(&self) -> bool {
         matches!(self, Self::ExitStatus)
     }
 }
@@ -224,7 +153,10 @@ impl Outcome {
         }
         let subjects =
             crate::doctor::finding_subjects(&self.id, self.reason.unwrap_or("failed"), &[]);
-        Some(crate::doctor::workspace_refusal(&subjects))
+        Some(crate::doctor::workspace_refusal(
+            &subjects,
+            crate::refusal::Fix::None,
+        ))
     }
 
     fn passed(id: &str) -> Self {
@@ -304,7 +236,13 @@ fn ran_clean(root: &Path, argv: &[String], decided_by: Decided) -> Option<bool> 
             // `output()` rather than a piped `status()`: a check that writes more
             // than a pipe buffer and is never drained deadlocks, and a gate that
             // hangs is worse than one that answers wrong.
-            Decided::SilentExit => command.output().map(|out| {
+            Decided::SilentExit => command
+                .streamed_output_keeping(crate::capture::Keep {
+                    stdin: true,
+                    stdout: false,
+                    stderr: true,
+                })
+                .map(|out| {
                 out.status.success() && out.stdout.iter().all(u8::is_ascii_whitespace)
             }),
         }
@@ -385,51 +323,6 @@ pub fn repair(root: &Path, rows: &[Startup]) -> Vec<Outcome> {
             }
         })
         .collect()
-}
-
-/// Refuse a row the engine cannot act on, at LOAD rather than at the first run.
-///
-/// An empty `check` is the one that matters: [`ran_clean`] would answer
-/// could-not-look forever, so the row would report a failure nobody can fix and
-/// its repair would never run. Refusing it at load says which row and why, once,
-/// instead of once per session — the same direction `[[pattern]]`'s load-time
-/// refusal takes one surface over.
-///
-/// # Errors
-///
-/// A [`UsageError`] naming the offending row's id.
-pub fn validate(rows: &[Startup]) -> Result<()> {
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    for row in rows {
-        if row.check.is_empty() {
-            return Err(UsageError::raise(format!(
-                "[[startup]] {}: `check` is empty, so the row could never decide anything",
-                row.id
-            )));
-        }
-        if row.repair.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "[[startup]] {}: `repair` is present and empty — omit the key for a \
-                 diagnose-only row rather than declaring a repair that runs nothing",
-                row.id
-            )));
-        }
-        if row.gloss.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "[[startup]] {}: `gloss` is empty, and the report is pointer-only — this is \
-                 the one place the row's meaning can be written down",
-                row.id
-            )));
-        }
-        if !seen.insert(row.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "[[startup]] {}: declared twice — one id, one row, or a report names a \
-                 verdict a reader cannot trace back",
-                row.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

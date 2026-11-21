@@ -43,60 +43,11 @@
 //! dump, and echoing it would put that in the log of every landing.
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 
-/// The `[bot_lane]` table: which proposals this repository will file a row for.
-///
-/// Absent means the repository runs no bot lane, and the verbs say so rather than
-/// filing against defaults — a lane assembled from engine literals would be a row
-/// asserting a bump nobody configured, which is the CLOUD-198 class with a new
-/// author.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BotLane {
-    /// The forge repository, `owner/name`, that the lane's pull requests live in.
-    pub repo: String,
-    /// The logins whose pull requests earn a row.
-    ///
-    /// A list rather than a pattern: a login is a literal the forge assigns, and
-    /// a regex over it would admit a neighbour nobody meant to trust.
-    pub bots: Vec<String>,
-    /// The manifests this lane owns, as globs. A PR touching none of them is
-    /// refused rather than given an invented row.
-    pub owned_manifests: Vec<String>,
-    /// The hidden marker that ties a mirror issue to the pull request it was
-    /// filed for.
-    ///
-    /// A comment rather than a label or a title convention: it survives an edit,
-    /// it is invisible rendered, and it is what makes `ensure` idempotent across
-    /// the window where the row exists and the PR body does not yet name it.
-    pub marker_prefix: String,
-    /// What the tracker's own sync leaves on the issue once it has mirrored it.
-    /// The key is read from a comment carrying this, never from the issue body —
-    /// that body is this lane's own text, so a key named there would be one we
-    /// wrote rather than one the tracker assigned.
-    pub linkback_marker: String,
-    /// The tracker's key prefix, which a key is this followed by digits.
-    ///
-    /// The consumer's vocabulary, exactly as the Ready grammar's `[[pattern]]`
-    /// rows are: a tracker's key shape in `crates/batten` is non-negotiable rule
-    /// 1's violation.
-    pub key_prefix: String,
-    /// The branch prefix a bot receipt may be keyed to. A branch outside it is
-    /// refused onto the agent claim receipt, which attests something else.
-    pub branch_prefix: String,
-    /// The path of the file whose text is the derived row's body, with
-    /// `{{...}}` placeholders substituted.
-    ///
-    /// A tracked file rather than a string in the config: the body is a page of
-    /// consumer prose carrying a Ready block, and a page of markdown inside a
-    /// TOML value is unreviewable. It is also what keeps `ready-lint`'s grammar
-    /// and the text it judges in one place a human edits.
-    pub body_template: String,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::BotLane;
 
 /// The placeholders [`BotLane::body_template`] may carry.
 ///
@@ -959,7 +910,7 @@ mod tests {
         .unwrap();
         assert_eq!(path, receipts.join("bot.renovate-x"));
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             "CLOUD-700\nbot renovate[bot]\npr 7\nderived-at 2026-01-01T00:00:00Z\nbase -\n"
         );
         let _ = std::fs::remove_dir_all(&receipts);

@@ -1,0 +1,22 @@
+[package]
+name = "batten-fsio"
+description = "Every filesystem read Batten makes, batched on a completion queue where the platform has one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# THE FIRST CRATE OF THE GIX-STYLE SPLIT (CLOUD-2384, CLOUD-2692). CLOUD-1765's
+# census found 69 of 124 modules extractable and named no first cut; this is
+# one: a leaf with no edge into `batten`, only `std` and `compio` below it.
+# `batten` re-exports it as `crate::fsio`, so a call site names one path
+# whichever crate the code lives in.
+
+[dependencies]
+compio.workspace = true
+
+[lints]
+workspace = true

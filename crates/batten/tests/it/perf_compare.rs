@@ -98,6 +98,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use common::{Fixture, run_with_stdin, stderr, stdout};
 
@@ -542,7 +543,7 @@ fn the_threshold_is_overridable_for_a_re_measurement() {
         .expect("stdin is piped")
         .write_all(records.as_bytes())
         .expect("write the records");
-    let output = child.wait_with_output().expect("collect the output");
+    let output = child.streamed_wait().expect("collect the output");
     // The same 1.1x pair that passes at 1.30 is a regression at 1.05, which is
     // what proves the override reached the comparison rather than being ignored.
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));

@@ -61,7 +61,7 @@
 //!
 //! Non-negotiable rule 3. The predicate is **every declared question answered
 //! non-emptily ⇒ issue**, never "is this justification good", which is exactly the
-//! model verdict a gate may not contain. The forcing function is articulation, not
+//! gated-model verdict a gate may not contain. The forcing function is articulation, not
 //! approval — the cost is thinking, not asking.
 
 use std::collections::BTreeMap;
@@ -694,7 +694,7 @@ fn lock(dir: &Path) -> Result<std::fs::File> {
 #[must_use]
 pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
     let path = record_path(repo_root, admission).ok()?;
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let record: Record = serde_json::from_slice(&bytes).ok()?;
     (record.predicate_type == PREDICATE_TYPE).then_some(record)
 }
@@ -872,7 +872,7 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
@@ -946,7 +946,7 @@ pub fn admitted(
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
@@ -1000,9 +1000,61 @@ pub fn admitted(
 /// ISSUED record still binds the same terms, which is the economy [`admitted`]
 /// enforces with `State::Spent`. That gap is closed one field over: the address
 /// binds `answers`, so a block with no articulation cannot recompute at all.
+/// A spent admission for `rule`/`verdict` over a subject that NAMES `path` —
+/// its first word, before the program it was refused under — in this
+/// situation (step 14).
+///
+/// The post-call protected-write comparison knows the path that changed and
+/// not the program that changed it: the program is what escaped the pre-call
+/// gate. So the subject's path half is what binds, and the other four fields
+/// bind exactly as [`admitted`]'s do.
+///
+/// # Errors
+///
+/// Propagates only a store-resolution failure, as [`admitted`] does.
+pub fn admitted_path(
+    repo_root: &Path,
+    rule: &str,
+    verdict: &str,
+    path: &str,
+    anchor: &str,
+    epoch: &str,
+) -> Result<Option<String>> {
+    let dir = store_dir(repo_root)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(None);
+    };
+    for entry in entries.flatten() {
+        let file = entry.path();
+        if file.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(bytes) = crate::fsio::read(&file) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
+            continue;
+        };
+        let binding = &record.binding;
+        let named = binding
+            .subject
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .next()
+            .is_some_and(|first| first == path);
+        if record.state == State::Spent
+            && named
+            && binding.rule == rule
+            && binding.verdict == verdict
+            && binding.anchor.token() == anchor
+            && binding.epoch == epoch
+        {
+            return Ok(Some(record.admission));
+        }
+    }
+    Ok(None)
+}
+
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
-//MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
 pub fn admitted_by_block(
     message: &str,
     rule: &str,
@@ -1104,7 +1156,7 @@ pub fn questions_for(entry: &crate::verdict::DeclaredVerdict) -> Option<Vec<Ques
 ///
 /// **The gate never adjudicates the reason** (non-negotiable rule 3): the
 /// predicate is presence and well-formedness, never quality. An answer is
-/// well-formed when it is not blank — anything stronger is a model verdict, and a
+/// well-formed when it is not blank — anything stronger is a gated-model verdict, and a
 /// gate containing one would be worse than today's password.
 #[must_use]
 pub fn unanswered<'a>(
@@ -1149,6 +1201,62 @@ mod tests {
             prev: None,
             author: "alec@button.is".to_owned(),
         }
+    }
+
+    /// Fails by: a spent admission answering a protected write it does not
+    /// bind on any one of its five terms — another rule, verdict, path,
+    /// call or policy epoch — or an issued one answering at all.
+    #[test]
+    fn a_path_admission_binds_every_term() {
+        let scratch = crate::scratch::scratch("admission-admitted-path");
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let spent = |binding: Binding| Record {
+            state: State::Spent,
+            ..Record::issue(binding)
+        };
+        let bound = binding();
+        let anchor = bound.anchor.token();
+        store(&root, &spent(bound.clone())).unwrap();
+        store(
+            &root,
+            &Record::issue(Binding {
+                subject: "c.rs".to_owned(),
+                ..bound.clone()
+            }),
+        )
+        .unwrap();
+        let ask = |rule: &str, verdict: &str, path: &str, anchor: &str, epoch: &str| {
+            admitted_path(&root, rule, verdict, path, anchor, epoch).unwrap()
+        };
+        let (rule, verdict, epoch) = (bound.rule.as_str(), bound.verdict.as_str(), "epoch-1");
+        assert!(
+            ask(rule, verdict, "a.rs", &anchor, epoch).is_some(),
+            "the premise"
+        );
+        assert_eq!(
+            ask(rule, verdict, "b.rs", &anchor, epoch),
+            None,
+            "not its first path"
+        );
+        assert_eq!(
+            ask(rule, verdict, "c.rs", &anchor, epoch),
+            None,
+            "issued, not spent"
+        );
+        assert_eq!(ask("other", verdict, "a.rs", &anchor, epoch), None, "rule");
+        assert_eq!(ask(rule, "other", "a.rs", &anchor, epoch), None, "verdict");
+        assert_eq!(
+            ask(rule, verdict, "a.rs", "call:other", epoch),
+            None,
+            "anchor"
+        );
+        assert_eq!(
+            ask(rule, verdict, "a.rs", &anchor, "epoch-2"),
+            None,
+            "epoch"
+        );
     }
 
     #[test]

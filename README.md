@@ -161,9 +161,12 @@ borrowing one.
   wrote. `check` on built-in defaults is still _planned_ (CLOUD-70) — today it
   requires a `batten.toml` in the working directory, which is what makes `init`
   the first command a new repository runs.
-- **Gates decide, they do not estimate.** A predicate that only approximates its
-  own question — a model judgement, or a match over open-ended content — may
-  advise; it never blocks.
+- **Gates decide, they do not estimate.** A gate never blocks on the judgement
+  of the model it gates — the agent's own, or an external judge's; those may
+  advise. A Batten-managed model is a command and may decide: pinned by digest,
+  deterministic, run inside `batten`, its text kept in the engine with only a
+  typed label reaching a module, a remedy that is an action, and precision
+  measured on a committed corpus.
 - **Consumer #1 is Batten itself** — its own checked-in `batten.toml` runs
   against its own repository.
 
@@ -469,7 +472,7 @@ channel is the child's, and the one thing that makes such a channel readable is
 that **Batten never mints a `2` on it**: a `2` out of `exec` came from the wrapped
 command, and nothing can mistake it for a verdict. Renumbering an output match to
 `2` would spend that guarantee for a symmetry the table does not ask for. Decided
-on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten/src/exit.rs`
+on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten-base/src/exit.rs`
 carries the reasoning and `crates/batten/tests/it/extension_surfaces.rs` gates it.
 
 ### Whatever you reach for: output is a pointer, never the payload
@@ -582,6 +585,9 @@ harness payload on **stdin** — which is what the `stdin` input is for:
 
 With `stdin` empty the Action closes the descriptor rather than leaving it open,
 so a verb that reads standard input ends at EOF instead of blocking the job.
+
+`exit-code` accepts every normalized event, so a `[[hook.handler]]` keyed on any
+of them runs there, and its advisory drain wakes on `PostToolBatch`.
 
 The Action does **not** prepend its install directory to `PATH`. A `$GITHUB_PATH`
 write changes how every later step in the job resolves a command, which is a

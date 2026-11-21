@@ -135,7 +135,6 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::emission;
@@ -152,19 +151,6 @@ pub const WAKE_SCHEMA: u32 = 1;
 /// The subdirectory holding one wake-state file per session, under a bound
 /// store.
 const DRAIN_DIR: &str = "drain";
-
-/// The coalescing window, in milliseconds, when the config declares none.
-///
-/// A batch of tool calls lands in well under a second on every host surveyed, so
-/// this is sized to span one comfortably while staying far below the interval at
-/// which an agent would notice a finding arriving late. It is a **default, not a
-/// constant**: the §7 obligation is that pacing comes from config, and this is
-/// only what an absent `[drain]` table resolves to.
-pub const DEFAULT_INTERVAL_MS: u64 = 2_000;
-
-/// Consecutive empty drains before wakes stop paying for one, when the config
-/// declares none.
-pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
 
 /// What a drain says when its payload is byte-identical to the last one it
 /// emitted (CLOUD-166).
@@ -186,160 +172,11 @@ pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
 /// for theirs (CLOUD-2145). Not a finding, so no severity word.
 pub const UNCHANGED: &str = "batten unchanged";
 
-/// Distinct identities one rule may spend entries on in a single drain, when the
-/// config declares none.
-///
-/// Ten because the cap is a **rule-health** threshold rather than a display
-/// preference: a check that fires on more than ten distinct identities inside
-/// one changed scope is telling the operator something about itself, and the
-/// summary line is the honest way to say it in one line instead of eleven.
-pub const DEFAULT_CARDINALITY_CAP: usize = 10;
-
-/// The rendered payload's token ceiling, when the config declares none.
-///
-/// Sized to a payload an agent reads rather than skims — roughly forty pointer
-/// lines — and small enough that the drain firing on every batch boundary of a
-/// long session stays a rounding error against the context it is protecting.
-pub const DEFAULT_TOKEN_BUDGET: usize = 1_024;
-
-/// How many of a subject's evaluations the flap ratio is computed over, when the
-/// config declares none (CLOUD-165).
-///
-/// Eight because the window has to be long enough that an ordinary raise-then-fix
-/// — one transition — stays far under any useful threshold, and short enough that
-/// an identity which has *stopped* oscillating is believed again within a few
-/// evaluations. Nagios ships twenty-one state slots for a check evaluated on a
-/// timer; a window counted in evaluation boundaries needs fewer, because every
-/// entry in it is a real scan rather than a poll.
-pub const DEFAULT_FLAP_WINDOW: usize = 8;
-
-/// The flap threshold as state changes per hundred adjacent evaluations, when the
-/// config declares none.
-///
-/// Fifty: half the transitions the window could possibly hold. A raise, a fix and
-/// a regression inside eight evaluations scores well under it; a check alternating
-/// on every scan scores one hundred. Nagios's defaults bracket the same region
-/// from either side, and the integer spelling is what keeps the comparison behind
-/// a suppression exact.
-pub const DEFAULT_FLAP_PERCENT: u32 = 50;
-
-/// How many times a **flapping** identity may be emitted inside its window,
-/// before the drain stops repeating it.
-///
-/// Three, and the number matters less than what it bounds: an oscillation says
-/// everything it has to say in the first couple of emissions, and the rest is the
-/// flood this policy exists to stop. A steady identity is never capped by it, so
-/// this is not a rate limit on the drain (see [`crate::emission::Assessment::decide`]).
-pub const DEFAULT_EMIT_CAP: usize = 3;
-
-/// The `[drain]` table: how often the advisory drain may wake, when it stops
-/// asking, and how much it may say when it does.
-///
-/// Every key here bounds **the engine's own output**, which is why none of them
-/// is layered raise-only by [`crate::resolve`]: "raise" has no meaning for an
-/// interval — a longer one is quieter and a shorter one is louder — and a cap on
-/// what Batten prints about itself is not a policy bar a local file could
-/// weaken. The committed authority sets them, and a local file does not move
-/// them.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DrainConfig {
-    /// The coalescing window in milliseconds. Every wake inside it after a drain
-    /// is masked.
-    ///
-    /// `0` disables coalescing: every wake drains. That is a legitimate setting
-    /// — it is what a host that really does deliver one wake per batch would
-    /// want — and not a disabled feature, which is why it is spelled as the
-    /// bottom of the range rather than as an `enabled` flag.
-    #[serde(default = "default_interval_ms")]
-    pub interval_ms: u64,
-    /// How many consecutive silent drains before wakes stop draining until the
-    /// store moves.
-    ///
-    /// `0` means the give-up applies immediately once a drain says nothing, so a
-    /// quiet session pays a format read per wake and nothing more.
-    #[serde(default = "default_empty_poll_giveup")]
-    pub empty_poll_giveup: u32,
-    /// Distinct identities one rule may spend entries on in a single drain.
-    ///
-    /// A rule over it renders one `rule R: K+ findings` summary line instead,
-    /// and never `K` entries. `0` caps every rule that surfaced anything, which
-    /// is the honest bottom of the range — a drain of nothing but summary lines
-    /// — rather than a disabled feature.
-    #[serde(default = "default_cardinality_cap")]
-    pub cardinality_cap: usize,
-    /// The rendered payload's ceiling, in estimated tokens.
-    ///
-    /// Applied after the cap, over the payload as a whole. `0` means the drain
-    /// says nothing at all, which is a legitimate setting for a host that reads
-    /// findings some other way and not a disabled feature.
-    #[serde(default = "default_token_budget")]
-    pub token_budget: usize,
-    /// How many of a subject's evaluations the flap ratio is computed over
-    /// (CLOUD-165), counted in evaluation boundaries and never in wall-clock time.
-    ///
-    /// `0` and `1` both mean no window can hold a transition, so nothing is ever
-    /// annotated flapping and nothing is ever flap-suppressed — the honest bottom
-    /// of the range, and the setting a consumer uses to turn the policy off
-    /// without a second key that could disagree with this one.
-    #[serde(default = "default_flap_window")]
-    pub flap_window: usize,
-    /// The flap threshold, as state changes per hundred adjacent evaluations.
-    ///
-    /// `0` annotates every identity with two evaluations in its window, and `101`
-    /// or above annotates none, both of which are the range's honest ends rather
-    /// than special cases.
-    #[serde(default = "default_flap_percent")]
-    pub flap_percent: u32,
-    /// How many times a flapping identity may be emitted inside its window.
-    ///
-    /// `0` withholds a flapping identity outright. A steady one is unaffected at
-    /// any value, because the cap and the annotation are read as a conjunction.
-    #[serde(default = "default_emit_cap")]
-    pub emit_cap: usize,
-}
-
-fn default_interval_ms() -> u64 {
-    DEFAULT_INTERVAL_MS
-}
-
-fn default_empty_poll_giveup() -> u32 {
-    DEFAULT_EMPTY_POLL_GIVEUP
-}
-
-fn default_cardinality_cap() -> usize {
-    DEFAULT_CARDINALITY_CAP
-}
-
-fn default_token_budget() -> usize {
-    DEFAULT_TOKEN_BUDGET
-}
-
-fn default_flap_window() -> usize {
-    DEFAULT_FLAP_WINDOW
-}
-
-fn default_flap_percent() -> u32 {
-    DEFAULT_FLAP_PERCENT
-}
-
-fn default_emit_cap() -> usize {
-    DEFAULT_EMIT_CAP
-}
-
-impl Default for DrainConfig {
-    fn default() -> Self {
-        DrainConfig {
-            interval_ms: DEFAULT_INTERVAL_MS,
-            empty_poll_giveup: DEFAULT_EMPTY_POLL_GIVEUP,
-            cardinality_cap: DEFAULT_CARDINALITY_CAP,
-            token_budget: DEFAULT_TOKEN_BUDGET,
-            flap_window: DEFAULT_FLAP_WINDOW,
-            flap_percent: DEFAULT_FLAP_PERCENT,
-            emit_cap: DEFAULT_EMIT_CAP,
-        }
-    }
-}
+// The `[drain]` section lives with the model (CLOUD-2789).
+pub use crate::config_model::{
+    DEFAULT_CARDINALITY_CAP, DEFAULT_EMIT_CAP, DEFAULT_EMPTY_POLL_GIVEUP, DEFAULT_FLAP_PERCENT,
+    DEFAULT_FLAP_WINDOW, DEFAULT_INTERVAL_MS, DEFAULT_TOKEN_BUDGET, DrainConfig,
+};
 
 /// What a wake resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,7 +428,6 @@ struct Group<'a> {
 /// a drain the size of what changed. A count that ROSE is news again, which is
 /// CLOUD-82's re-raise; a count that fell is not, because re-raising on a fix
 /// punishes the fix.
-//MUTANT told-relisted|s@^    let told = previous.get(\&surfaced.record.identity.fingerprint.to_hex());$@    let told = None::<\&u64>;@|a_finding_told_earlier_is_counted_not_relisted
 fn already_told(surfaced: &Surfaced<'_>, previous: &BTreeMap<String, u64>) -> bool {
     let told = previous.get(&surfaced.record.identity.fingerprint.to_hex());
     match (told, surfaced.instance.occurrences) {
@@ -715,8 +551,6 @@ fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> Strin
 /// how many are new and how many were told earlier — and then the command that
 /// returns exactly that rule's set. Everything listed and nothing told is the
 /// locations alone, the count being their number.
-//MUTANT drain-severity-from-tier|s@^    let severity = group.severity.finding_severity();$@    let severity = crate::refusal::Severity::of_tier(group.tier);@|every_line_is_a_pointer_and_never_a_payload
-//MUTANT location-cap-unread|s@^    let listed = group.fresh.len().min(cap);$@    let listed = group.fresh.len();@|a_rule_past_its_location_cap_points_at_the_rest
 fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -> (String, usize) {
     let listed = group.fresh.len().min(cap);
     // THE RULE'S OWN SEVERITY (CLOUD-2145), never the advisory tier's: one rule
@@ -760,9 +594,6 @@ fn told_line(groups: &[&Group<'_>]) -> String {
 /// budget, with the class's own route to the rest. Rendered through the one
 /// projection, so it is headed like every finding and is the ONLY line saying
 /// so — the definition is a lookup the legend names.
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT drain-cut-unreported|s@^        crate::verdict::Native::DrainFitBroken,$@        crate::verdict::Native::CallGrantNow,@|an_over_budget_payload_is_cut_and_points_at_the_journal
-//MUTANT-SUITE crates/batten/src/drain.rs
 fn budget_summary(withheld: usize, budget: usize) -> String {
     crate::refusal::Refusal::engine(
         crate::verdict::Native::DrainFitBroken,
@@ -1003,10 +834,6 @@ struct Clamped {
 /// **What is anchored is what was told.** A listed identity and a told one
 /// anchor the next drain's delta; an elided or cut one does not, so it is news
 /// again next time — which is how the list pages as the agent fixes it.
-//MUTANT backlog-relisted|s@^        if group.fresh.is_empty() {$@        if false {@|a_drain_s_size_follows_the_turn_not_the_backlog
-//MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&candidates.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
-//MUTANT budget-first-line-exempt|s@^        let fits = cut == 0 \&\& room;$@        let fits = cut == 0 \&\& (room \x7c\x7c lines.is_empty());@|a_drain_never_renders_past_its_token_budget
-//MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(cut, config.token_budget));$@        let _ = cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
 fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
     let mut candidates: Vec<String> = Vec::new();
     let mut owners: Vec<Option<(usize, usize)>> = Vec::new();
@@ -1116,7 +943,7 @@ fn wake_path(store_dir: &Path, session: &str) -> PathBuf {
 /// file the reason findings stop being surfaced.
 #[must_use]
 pub fn load_wake(store_dir: &Path, session: &str) -> WakeState {
-    let Ok(text) = std::fs::read_to_string(wake_path(store_dir, session)) else {
+    let Ok(text) = crate::fsio::read_to_string(wake_path(store_dir, session)) else {
         return WakeState::default();
     };
     serde_json::from_str::<WakeState>(&text)
@@ -2435,7 +2262,7 @@ mod tests {
         // A future schema reads as fresh rather than as an error.
         let path = wake_path(&dir, "session-1");
         let mut future: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            serde_json::from_str(&crate::fsio::read_to_string(&path).unwrap()).unwrap();
         future["schema"] = serde_json::json!(WAKE_SCHEMA + 1);
         std::fs::write(&path, future.to_string()).unwrap();
         assert_eq!(load_wake(&dir, "session-1"), WakeState::default());

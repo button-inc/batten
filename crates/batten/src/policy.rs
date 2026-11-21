@@ -98,9 +98,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
+pub use crate::config_model::preset_names;
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
 use crate::facts::Look;
-use crate::rules::{Rule, RuleKind};
 
 /// The unattributed deny set: a set of bare strings, and the shape CLOUD-689
 /// shipped.
@@ -290,18 +291,6 @@ pub struct Violation {
 // resolver landing while this text still claims no network exists, so the next
 // reader inherits a guarantee nobody is holding.
 
-/// Every vendored preset's name, in a stable order.
-///
-/// Derived from [`crate::preset::MANIFESTS`] so the binary and the published
-/// schema cannot
-/// disagree about what may be enabled — the same discipline `surface::SURFACE`
-/// carries, and the reason an unknown name is a config error rather than a
-/// silent no-op.
-#[must_use]
-pub fn preset_names() -> Vec<&'static str> {
-    crate::preset::names()
-}
-
 // `preset_modules` is gone (CLOUD-1181): the load site reads the whole manifest
 // now, so a second lookup returning only the modules was one more place that
 // could answer about a preset without seeing its scope — which is the fact the
@@ -440,6 +429,20 @@ pub struct Bundle {
     /// `Option` keeps could-not-look distinct from not-yet-read, and `Arc` keeps
     /// the live-path clone a refcount rather than a copy.
     described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
+    /// An interpreted bundle's [`Bundle::tree_reads`], taken once: seeded from
+    /// the cache entry under the bundle's key where one holds it
+    /// ([`remember_reads`]), so the two halves of a split `enforce` do not both
+    /// describe it from scratch. Bytecode reads its own header instead.
+    reads: std::sync::OnceLock<Reads>,
+}
+
+/// What a bundle reads off the tree input document: see [`Bundle::tree_reads`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reads {
+    /// Exactly these `input.tree` keys, and nothing else on the input.
+    Known(BTreeSet<String>),
+    /// A read this reader cannot name, so any key may be read.
+    Opaque,
 }
 
 impl Bundle {
@@ -533,6 +536,50 @@ impl Bundle {
         found
     }
 
+    /// Every `input.tree` key this bundle's modules read, or [`Reads::Opaque`]
+    /// when that cannot be established statically (step 13a).
+    ///
+    /// Derived from the same [`describe`] reading [`Self::session_start_facts`]
+    /// trusts, and conservative everywhere it cannot see: a bundle with no
+    /// reading, a bare `input` or `input.tree` (an alias such as
+    /// `t := input.tree`, or a variable index `input.tree[k]`, arrives as one of
+    /// these), any read of `input.facts`/`input.call` or of a top-level key the
+    /// tree document does not emit, and a bytecode entry written without the
+    /// read set are all `Opaque`. Opaque is what makes a policy row LIVE, which
+    /// is the side an undeterminable answer must fall on.
+    #[must_use]
+    pub fn tree_reads(&self) -> Reads {
+        if let Evaluator::Compiled(compiled) = &self.evaluator {
+            return compiled.reads.as_ref().map_or(Reads::Opaque, |keys| {
+                Reads::Known(keys.iter().cloned().collect())
+            });
+        }
+        self.reads.get_or_init(|| self.described_reads()).clone()
+    }
+
+    /// [`Self::tree_reads`] read off the [`describe`] reading.
+    fn described_reads(&self) -> Reads {
+        let Some(described) = self.described() else {
+            return Reads::Opaque;
+        };
+        let mut keys = BTreeSet::new();
+        for module in described {
+            for rule in &module.rules {
+                for path in &rule.input_paths {
+                    let Some(rest) = path.strip_prefix("tree.") else {
+                        return Reads::Opaque;
+                    };
+                    let key = rest.split('.').next().unwrap_or(rest);
+                    if key.is_empty() {
+                        return Reads::Opaque;
+                    }
+                    keys.insert(key.to_owned());
+                }
+            }
+        }
+        Reads::Known(keys)
+    }
+
     /// The pointer a bundle-level diagnostic is reported against: its first
     /// module's path, or the enabling row's id when it holds none.
     ///
@@ -566,7 +613,7 @@ impl Bundle {
     /// pure "N sources, one engine" function CLOUD-837 made it and its callers
     /// keep their signature.
     #[must_use]
-    pub fn with_severity(mut self, rule: &crate::rules::Rule) -> Self {
+    pub fn with_severity(mut self, rule: &crate::config_model::Rule) -> Self {
         self.severity = rule.severity();
         self.predicate_severity = rule.predicate_severity.clone().unwrap_or_default();
         self
@@ -664,6 +711,7 @@ impl Clone for Bundle {
             predicate_severity: self.predicate_severity.clone(),
             evaluator: self.evaluator.clone(),
             described: self.described.clone(),
+            reads: self.reads.clone(),
         }
     }
 }
@@ -745,7 +793,7 @@ pub struct Vocabulary<'a> {
     /// module reads is projected from it, so a caller with the patterns always
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
-    pub recorders: &'a [crate::recorder::Declared],
+    pub recorders: &'a [crate::config_model::RecorderDeclared],
     /// The `[[register]]` table (CLOUD-2005), read by a `reference` rule.
     ///
     /// Here for `recorders`' reason: config the consumer declares, fixed for the
@@ -761,7 +809,7 @@ pub struct Vocabulary<'a> {
     /// the recorders needs the verb-written families too or half the store is
     /// invisible to it. Carrying it on this struct is what keeps the arity of the
     /// four public entry points from growing again.
-    pub records: &'a [crate::record::Declared],
+    pub records: &'a [crate::config_model::RecordDeclared],
 }
 
 impl Vocabulary<'_> {
@@ -781,8 +829,8 @@ impl Vocabulary<'_> {
     };
 }
 
-impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
-    fn from(config: &'a crate::config::Config) -> Self {
+impl<'a> From<&'a crate::config_model::Config> for Vocabulary<'a> {
+    fn from(config: &'a crate::config_model::Config) -> Self {
         Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
@@ -991,7 +1039,7 @@ pub fn load(
         // consumer who enabled `trunk-basd` should be told, not quietly gated by
         // nothing.
         if let Some(name) = rule.preset.as_deref() {
-            let manifest = crate::preset::find(name).ok_or_else(|| {
+            let manifest = crate::preset_catalog::find(name).ok_or_else(|| {
                 UsageError::raise(format!(
                     "rule `{}` enables the preset `{name}`, which this binary does not ship; \
                      the ones it does are {}",
@@ -1129,14 +1177,18 @@ fn check_tables(
 /// Refuse a preset enabled at a scope none of its modules decide (CLOUD-1181,
 /// CLOUD-1672) — see the call site in [`load`] for why this precedes
 /// compilation. Lifted out whole for `clippy::too_many_lines`.
-fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &str) -> Result<()> {
+fn check_preset_scope(
+    rule: &Rule,
+    manifest: &crate::preset_catalog::Manifest,
+    name: &str,
+) -> Result<()> {
     if manifest.decides(rule.scope) {
         return Ok(());
     }
     let decided: Vec<&str> = manifest
         .scopes()
         .into_iter()
-        .map(crate::rules::RuleScope::as_str)
+        .map(crate::config_model::RuleScope::as_str)
         .collect();
     Err(UsageError::raise(format!(
         "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
@@ -1220,7 +1272,7 @@ fn compile_for(
 /// crate already takes for that lint instead of raising a cap.
 fn preset_sources(
     rule: &Rule,
-    manifest: &crate::preset::Manifest,
+    manifest: &crate::preset_catalog::Manifest,
     name: &str,
 ) -> Result<Vec<(String, String)>> {
     // THE PROVIDER COMPARISON, AND UNLIKE THE SCOPE ONE ITS CALLER RUNS FIRST,
@@ -1253,7 +1305,7 @@ fn preset_sources(
             .modules
             .iter()
             .filter(|module| module.scope == rule.scope)
-            .map(crate::preset::PresetModule::name)
+            .map(crate::preset_catalog::PresetModule::name)
             .collect();
         return Err(UsageError::raise(format!(
             "rule `{}` excepts `{unknown}`, which the preset `{name}` does not ship at scope \
@@ -1280,10 +1332,11 @@ fn preset_sources(
     // declared — so the reader can see which half to change.
     if sources.is_empty() {
         let reads: Vec<&str> = manifest.providers_at(rule.scope);
+        let repair = provider_repair(&reads);
         return Err(UsageError::raise(format!(
             "rule `{}` enables the preset `{name}` at scope `{}`, but every module \
              there reads {}, and this row declares {} — on another provider those \
-             modules match nothing and would report a clean tree they never read",
+             modules match nothing and would report a clean tree they never read{repair}",
             rule.id,
             rule.scope.as_str(),
             reads.join(" and "),
@@ -1291,6 +1344,21 @@ fn preset_sources(
         )));
     }
     Ok(sources)
+}
+
+/// The repair a provider refusal ends with (CLOUD-2658): the column and the
+/// values the preset's modules read, so the reader does not have to know the
+/// key. Empty when no module names a provider.
+fn provider_repair(reads: &[&str]) -> String {
+    let values: Vec<String> = reads
+        .iter()
+        .filter(|read| **read != "no provider")
+        .map(|read| format!("provider = \"{read}\""))
+        .collect();
+    if values.is_empty() {
+        return String::new();
+    }
+    format!("; declare it on the row as {}", values.join(" or "))
 }
 
 /// Read one row's declared module text, from the working tree or from a ref.
@@ -1307,7 +1375,9 @@ fn ejected_originals(sources: &[(String, String)]) -> BTreeMap<String, &'static 
         .iter()
         .filter_map(|(path, text)| {
             let (preset, module, _) = crate::preset::ejected_from(text)?;
-            let original = crate::preset::find(&preset)?.module(&module)?.source;
+            let original = crate::preset_catalog::find(&preset)?
+                .module(&module)?
+                .source;
             Some((path.clone(), original))
         })
         .collect()
@@ -1328,7 +1398,7 @@ fn read_sources(
                     "rule `{rule_id}` registers `{path}`, which is absent at {reference}"
                 ))
             })?,
-            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+            None => crate::fsio::read_to_string(root.join(path)).map_err(|_| {
                 UsageError::raise(format!(
                     "rule `{rule_id}` registers `{path}`, which cannot be read"
                 ))
@@ -1416,8 +1486,6 @@ fn without_test_rules(source: &str) -> String {
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
-//MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
-//MUTANT package-address-dropped|s@            packages.insert(relative);@            packages.insert(Vec::new());@|the_module_s_own_violation_still_raises
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -1455,11 +1523,19 @@ pub fn compile(
         let package = engine
             .add_policy(path.clone(), source.clone())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
-        // A package outside `data.batten` is unreachable by the one query this
-        // gate runs, so it has no address to record.
-        if let Some(relative) = relative_package(&package) {
-            packages.insert(relative);
-        }
+        // A PACKAGE OUTSIDE `data.batten` IS REFUSED, NOT SKIPPED (CLOUD-2696).
+        // The one query this gate runs never reaches it, so live it decided
+        // nothing and the call was allowed, while `policy test` evaluated its
+        // cases directly and passed them: a module green under its own tests and
+        // inert at the gate, with nothing to tell the two apart.
+        let Some(relative) = relative_package(&package) else {
+            return Err(UsageError::raise(format!(
+                "`{path}` declares `{package}`, outside `data.batten`, so the gate's query \
+                 never reaches it and it would decide nothing live; name it \
+                 `package batten.<name>`"
+            )));
+        };
+        packages.insert(relative);
         modules.push(Module { path: path.clone() });
     }
 
@@ -1523,6 +1599,7 @@ pub fn compile(
         predicate_severity: BTreeMap::new(),
         evaluator: Evaluator::Interpreted(Box::new(engine)),
         described: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
 }
 
@@ -1793,7 +1870,6 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -2011,6 +2087,226 @@ pub(crate) struct Compiled {
     entries: BTreeSet<(Vec<String>, String)>,
     /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
     facts: Vec<String>,
+    /// The tree keys the bundle reads, from [`Bundle::tree_reads`]; `None` is
+    /// [`Reads::Opaque`] (step 13a). Bytecode carries no AST, so the reading is
+    /// taken when the entry is written, as `facts` is.
+    reads: Option<Vec<String>>,
+}
+
+/// The text bytecode is compiled from: each module as written, with every `:=`
+/// statement followed by a check that what it bound is defined (#1276,
+/// CLOUD-2696).
+///
+/// **THE BYTECODE COMPILER DROPS A GUARD THE LANGUAGE REQUIRES.** regorus 0.15
+/// (and its `main`) emits `Guard NotUndefined` after every binding context but
+/// `:=` — `PlanContext::require_defined_values` in its `destructuring.rs` omits
+/// `ColonAssignment` — so `x := f(a)` with `f` undefined for `a` binds
+/// `Undefined` and the body runs on, where OPA and regorus's own interpreter
+/// fail it. Under a `not` over `x` that is a violation no case raises
+/// (`an_undefined_helper_decides_alike_in_both_evaluators`).
+///
+/// The guard is restored at the source: after each such statement, `; v == v`
+/// for every variable its left side binds. An equality over `Undefined` fails
+/// the body exactly as the missing guard would have, and over a defined value
+/// it holds. Only the program is compiled from this text; the interpreter,
+/// `policy test` and every pointer keep the module as written, so ONE evaluator
+/// decides, once, from the cached program. CLOUD-2696's first answer re-decided
+/// every bytecode refusal by compiling an interpreter from source, which cost
+/// every refusing or advising hook call a parse (measured 1.68× on `wired`).
+///
+/// `None` is could-not-look: the AST would not serialize, or an offset is not a
+/// boundary of its module's text. The bundle then stays interpreted.
+fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut out = Vec::with_capacity(policies.len());
+    for policy in &policies {
+        let source = policy.get("source")?;
+        let path = source.get("file")?.as_str()?.to_owned();
+        let mut text = source.get("contents")?.as_str()?.to_owned();
+        let mut guards = Vec::new();
+        colon_assignments(policy.get("ast")?, &mut guards);
+        // Spliced from the end, so each offset still holds when it is used.
+        guards.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        for (at, guard) in guards {
+            if !text.is_char_boundary(at) {
+                return None;
+            }
+            text.insert_str(at, &guard);
+        }
+        out.push((path, text));
+    }
+    Some(out)
+}
+
+/// Every input a bundle's own cases hand it: the term of each
+/// `with input as <term>` modifier in its modules, evaluated by the interpreter
+/// in the module's package so its helpers resolve (#1276).
+///
+/// **THE PARITY CORPUS.** Bytecode and interpreter must decide alike, and a
+/// handful of fixed calls never reached the input that split them over an
+/// undefined helper (CLOUD-2696). A module's cases are exactly the inputs its
+/// author proved decisions over, so they are the inputs the two evaluators must
+/// agree on. A term that reads a variable local to a function body (a case
+/// helper's own parameters) does not stand alone and is not an input here.
+///
+/// `None` is could-not-look: a bundle with no interpreter, or an AST that will
+/// not serialize. Each input is a JSON document.
+#[must_use]
+pub fn case_inputs(bundle: &Bundle) -> Option<Vec<String>> {
+    let engine = bundle.evaluator.engine()?;
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut inputs = BTreeSet::new();
+    for policy in &policies {
+        let text = policy.get("source")?.get("contents")?.as_str()?;
+        let ast = policy.get("ast")?;
+        let package = reference_path(ast.get("package")?.get("refr")?)?;
+        let mut terms = Vec::new();
+        input_terms(ast, text, &mut terms);
+        for term in terms {
+            let mut probe = engine.clone();
+            let module =
+                format!("package {package}\n\nimport rego.v1\n\nbatten_case_input := {term}\n");
+            if probe
+                .add_policy(String::from("batten-case-input.rego"), module)
+                .is_err()
+            {
+                continue;
+            }
+            let Ok(results) = probe.eval_query(format!("data.{package}.batten_case_input"), false)
+            else {
+                continue;
+            };
+            let value = results
+                .result
+                .first()
+                .and_then(|result| result.expressions.first())
+                .map(|expression| expression.value.clone());
+            if let Some(value) = value.filter(|value| *value != regorus::Value::Undefined)
+                && let Ok(document) = value.to_json_str()
+            {
+                inputs.insert(document);
+            }
+        }
+    }
+    Some(inputs.into_iter().collect())
+}
+
+/// The source text of every `with input as <term>` term under `node`.
+fn input_terms(node: &serde_json::Value, text: &str, found: &mut Vec<String>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(mods) = map.get("with_mods").and_then(serde_json::Value::as_array) {
+                for modifier in mods {
+                    let names_input = modifier
+                        .get("refr")
+                        .and_then(reference_path)
+                        .is_some_and(|path| path == "input");
+                    if let Some(term) = modifier
+                        .get("as")
+                        .filter(|_| names_input)
+                        .and_then(|term| expr_text(term, text))
+                    {
+                        found.push(term.to_owned());
+                    }
+                }
+            }
+            for value in map.values() {
+                input_terms(value, text, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                input_terms(item, text, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An expression's own source text, by the span of its single variant.
+fn expr_text<'t>(expr: &serde_json::Value, text: &'t str) -> Option<&'t str> {
+    let span = expr.as_object()?.values().next()?.get("span")?;
+    let start = usize::try_from(span.get("start")?.as_u64()?).ok()?;
+    let end = usize::try_from(span.get("end")?.as_u64()?).ok()?;
+    text.get(start..end)
+}
+
+/// Every `:=` statement under `node`: the byte offset its statement ends at,
+/// with the guard that goes there.
+fn colon_assignments(node: &serde_json::Value, found: &mut Vec<(usize, String)>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(stmts) = map.get("stmts").and_then(serde_json::Value::as_array) {
+                found.extend(stmts.iter().filter_map(statement_guard));
+            }
+            for value in map.values() {
+                colon_assignments(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                colon_assignments(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A statement's guard, when it is a `:=` binding at least one named variable:
+/// `; v == v` per variable, at the statement's end — after any `with` modifier,
+/// which the statement's span covers.
+fn statement_guard(stmt: &serde_json::Value) -> Option<(usize, String)> {
+    let assign = stmt
+        .get("literal")?
+        .get("Expr")?
+        .get("expr")?
+        .get("AssignExpr")?;
+    if assign.get("op")?.as_str()? != "ColEq" {
+        return None;
+    }
+    let mut vars = BTreeSet::new();
+    bound_vars(assign.get("lhs")?, &mut vars);
+    vars.remove("_");
+    if vars.is_empty() {
+        return None;
+    }
+    let end = usize::try_from(stmt.get("span")?.get("end")?.as_u64()?).ok()?;
+    let mut guard = String::new();
+    for var in &vars {
+        guard.push_str("; ");
+        guard.push_str(var);
+        guard.push_str(" == ");
+        guard.push_str(var);
+    }
+    Some((end, guard))
+}
+
+/// The variables a binding pattern names: a bare variable, or each one inside
+/// an array or object pattern.
+fn bound_vars(node: &serde_json::Value, vars: &mut BTreeSet<String>) {
+    if let Some(name) = node
+        .get("Var")
+        .and_then(|var| var.get("value"))
+        .and_then(serde_json::Value::as_str)
+    {
+        vars.insert(name.to_owned());
+        return;
+    }
+    match node {
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                bound_vars(value, vars);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                bound_vars(item, vars);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// [`compile`] on the hot path, through the bytecode cache (CLOUD-2236).
@@ -2024,7 +2320,6 @@ pub(crate) struct Compiled {
 ///
 /// The cache is best-effort by construction: an unwritable state directory or
 /// an unreadable entry is a miss, never an error.
-//MUTANT cache-never-read|s@read_cached(path, \&key@read_cached(Path::new("/"), \&key@|a_warm_load_compiles_no_engine
 fn compile_cached(
     root: &Path,
     id: &str,
@@ -2042,6 +2337,9 @@ fn compile_cached(
     }
     let bundle = compile(id, sources, data)?;
     let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
+        if let Some(path) = path.as_deref() {
+            remember_reads(path, &key, &bundle);
+        }
         return Ok(bundle);
     };
     if let Some(path) = path {
@@ -2063,18 +2361,21 @@ struct CacheHeader {
     packages: BTreeSet<Vec<String>>,
     entries: BTreeSet<(Vec<String>, String)>,
     facts: Vec<String>,
+    /// The tree read set (step 13a); absent reads as [`Reads::Opaque`].
+    #[serde(default)]
+    reads: Option<Vec<String>>,
 }
 
 /// The cache format; a change to [`CacheHeader`] or to how bytecode is written
 /// bumps it, which makes every older entry a miss. `2` since the entry moved
 /// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
 /// key line, and the binary is identified by its build ID. `3` keys the pattern
-/// table by its digest rather than its text.
-const CACHE_FORMAT: &str = "batten-policy-rvm-3";
+/// table by its digest rather than its text. `4` records the tree read set
+/// (step 13a), without which a bytecode bundle can only answer `Opaque`.
+const CACHE_FORMAT: &str = "batten-policy-rvm-5";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
-//MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
     // load asked, and each answer canonicalised the root, derived the state
@@ -2116,7 +2417,6 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// included, is a miss, and a relink to identical code is not. The pattern
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
-//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
 fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
@@ -2163,9 +2463,11 @@ fn read_cached(
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
     let (head, body) = bytes.split_at(split);
     let header: CacheHeader = serde_json::from_slice(head).ok()?;
-    // Only a whole program: a partial one is regorus asking to recompile.
+    // Only a whole program: a partial one is regorus asking to recompile, and
+    // none at all is an interpreted bundle's read set ([`remember_reads`]).
+    let program = body.get(1..).filter(|program| !program.is_empty())?;
     let regorus::rvm::program::DeserializationResult::Complete(program) =
-        regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
+        regorus::rvm::program::Program::deserialize_binary(program).ok()?
     else {
         return None;
     };
@@ -2174,6 +2476,7 @@ fn read_cached(
         data: data_value(data)?,
         entries: header.entries,
         facts: header.facts,
+        reads: header.reads,
     };
     Some(Bundle {
         id: id.to_owned(),
@@ -2187,7 +2490,46 @@ fn read_cached(
         predicate_severity: BTreeMap::new(),
         evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled)),
         described: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
+}
+
+/// Seed interpreted `bundle`'s read set from the entry at `path` under `key`,
+/// or describe it and write an entry holding it: the same [`CacheHeader`]
+/// with no program after it, which [`read_cached`] never reads as bytecode.
+///
+/// THE HALF A ROW IS JUDGED IN IS READ OFF THIS SET ([`Bundle::tree_reads`]),
+/// so a bundle the bytecode compiler cannot express, which every load
+/// compiles afresh, still classifies once per key rather than once per half.
+/// Best-effort like every entry: one that cannot be read or written costs a
+/// description, never an answer.
+fn remember_reads(path: &Path, key: &str, bundle: &Bundle) {
+    let held = crate::cache::read(path, key).and_then(|bytes| {
+        let head = bytes.split(|byte| *byte == b'\n').next()?;
+        serde_json::from_slice::<CacheHeader>(head).ok()
+    });
+    if let Some(header) = held {
+        let reads = header.reads.map_or(Reads::Opaque, |keys| {
+            Reads::Known(keys.into_iter().collect())
+        });
+        let _ = bundle.reads.set(reads);
+        return;
+    }
+    let header = CacheHeader {
+        declared: bundle.declared.clone(),
+        packages: bundle.packages.clone(),
+        entries: BTreeSet::new(),
+        facts: Vec::new(),
+        reads: match bundle.tree_reads() {
+            Reads::Known(keys) => Some(keys.into_iter().collect()),
+            Reads::Opaque => None,
+        },
+    };
+    let Ok(mut bytes) = serde_json::to_vec(&header) else {
+        return;
+    };
+    bytes.push(b'\n');
+    crate::cache::write(path, key, &bytes);
 }
 
 /// Write the entry for `bundle`, atomically; a failure leaves the next call a
@@ -2198,6 +2540,7 @@ fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
         packages: bundle.packages.clone(),
         entries: compiled.entries.clone(),
         facts: compiled.facts.clone(),
+        reads: compiled.reads.clone(),
     };
     let (Ok(mut bytes), Ok(program)) = (
         serde_json::to_vec(&header),
@@ -2231,13 +2574,20 @@ fn entry_point(package: &[String], rule: &str) -> String {
     path
 }
 
-//MUTANT bootstrap-entry-fixed|s@candidates.iter().find_map(@candidates.iter().take(1).find_map(@|the_repositorys_bundles_answer_alike_compiled_and_interpreted
 impl Compiled {
     /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
     /// compiler cannot express a rule it defines.
     fn from_bundle(bundle: &Bundle, data: &serde_json::Value) -> Option<Self> {
         use regorus::languages::rego::compiler::Compiler;
-        let mut engine = bundle.evaluator.engine()?.clone();
+        // The program is compiled from the guarded text ([`guarded_sources`]),
+        // over the same data the interpreter holds.
+        let mut engine = new_engine();
+        engine
+            .add_data(regorus::Value::from_json_str(&data.to_string()).ok()?)
+            .ok()?;
+        for (path, text) in guarded_sources(bundle.evaluator.engine()?)? {
+            engine.add_policy(path, text).ok()?;
+        }
         let mut candidates = Vec::new();
         for package in &bundle.packages {
             for rule in ANSWERED_RULES {
@@ -2269,6 +2619,10 @@ impl Compiled {
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            reads: match bundle.tree_reads() {
+                Reads::Known(keys) => Some(keys.into_iter().collect()),
+                Reads::Opaque => None,
+            },
         })
     }
 
@@ -2402,7 +2756,13 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
-    let Some(answered) = answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]) else {
+    denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]))
+}
+
+/// The violations an answer carries, or could-not-look where it carries none
+/// readable or names an id the bundle never declared.
+fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
+    let Some(answered) = answered else {
         return Look::CouldNotLook;
     };
 
@@ -2464,7 +2824,6 @@ pub struct Rewrite {
 }
 
 /// Whether a module may rewrite this tool input key ([`REWRITABLE`]).
-//MUTANT rewrite-key-unchecked|s@^    REWRITABLE.contains(\&key)$@    true@|a_rewrite_outside_the_allowlist_is_refused
 #[must_use]
 pub fn rewritable(key: &str) -> bool {
     REWRITABLE.contains(&key)
@@ -2690,7 +3049,7 @@ fn bundle_members(
 /// A [`UsageError`] (exit `1`) naming the offending key and the module path.
 /// Pointer-only: never a line of the module body.
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
-    let tree_scoped = rule.scope == crate::rules::RuleScope::Tree;
+    let tree_scoped = rule.scope == crate::config_model::RuleScope::Tree;
     let emittable = tree_keys();
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal: `load` has already
@@ -2822,7 +3181,7 @@ fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<S
     // the VENDORED PRESETS — the third is the one that bites: `trunk push
     // forced` is a preset's class, and a set built from the first two refuses
     // a name the collapse arm requires.
-    let vendored = crate::preset::verdict_rows();
+    let vendored = crate::config_check::preset::verdict_rows();
     verdicts
         .iter()
         .filter(|entry| !entry.retired())
@@ -2961,8 +3320,6 @@ pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
-//MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
-//MUTANT identity-arm-dropped|s@            Some(class) if rule.id != class => findings.push(format!(@            Some(class) if false \&\& rule.id != class => findings.push(format!(@|a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,
@@ -3073,8 +3430,6 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 /// # Errors
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
@@ -3097,8 +3452,6 @@ pub fn registry_for(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(\x7c_\x7c false) {@|a_class_the_binary_ships_is_still_refused_by_check
 fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
     let vendored: BTreeSet<String> = crate::verdict::vendored()
         .into_iter()
@@ -3499,7 +3852,7 @@ fn claim_ids(
 /// can never fire, two that contradict, a cycle — and nothing decided any of
 /// them. At 33 committed rows that was still tractable by reading; it does not
 /// stay tractable, and "read it carefully" is not a gate: non-negotiable rule 3
-/// makes a model verdict inadmissible, so the alternative to a decidable
+/// makes a gated-model verdict inadmissible, so the alternative to a decidable
 /// mechanism here is not careful review, it is nothing.
 ///
 /// # Why the sweep has to be DRIVEN
@@ -3867,7 +4220,7 @@ pub fn call_input_schema() -> Result<String> {
             facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
         }
     }
-    let document = serde_json::json!({
+    let mut document = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "batten mediated-call policy input",
         "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
@@ -3902,7 +4255,7 @@ pub fn call_input_schema() -> Result<String> {
                     // undefined path that denies nothing — the same load-bearing
                     // line the `facts` object below carries, for the same reason.
                     "segments": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. For the SPAN's structure -- its terminator, its input redirection, its raw text. A PROGRAM is anchored on `programs`, not on `words[0]`, which is the first word and not the first program (CLOUD-1382).",
                         "items": {
                             "type": "object",
@@ -3915,6 +4268,9 @@ pub fn call_input_schema() -> Result<String> {
                                 // CLOUD-1949: output sent into a file, which
                                 // makes any reader in the segment a writer.
                                 "output-redirect": {"type": "boolean"},
+                                // #1276: the output redirections' targets,
+                                // never an operator token or a `&` duplication.
+                                "redirect-writes": {"type": "array", "items": {"type": "string"}},
                                 // CLOUD-1381. `null` at the top level; a
                                 // `kind`/`role` pair inside a control-flow node,
                                 // so a module decides from the node rather than
@@ -3981,7 +4337,140 @@ pub fn call_input_schema() -> Result<String> {
             },
         },
     });
+    extend_call_schema(&mut document);
     Ok(serde_json::to_string_pretty(&document)?)
+}
+
+/// Step 23 (#1276, CLOUD-2775): an interpreter's spawn whose argv is not a
+/// literal — reached but unreadable — names the file it came from and whether
+/// that file is tracked and clean. Absent on every other `programs` entry.
+fn opaque_reach_keys(program: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, kind) in [
+        ("opaque", "boolean"),
+        ("source", "string"),
+        ("trusted", "boolean"),
+    ] {
+        program.insert(key.to_owned(), serde_json::json!({ "type": kind }));
+    }
+}
+
+/// The keys `call_input_schema` adds after its `json!` document is built: one
+/// more key inline exceeds the macro's recursion limit.
+///
+/// * `forge` (CLOUD-2689): a forge event's tokens, never a body.
+/// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
+/// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
+///   past its own value-taking options, and the words before it.
+/// * a program's `via`, `unread`, `nested` and `tasks`, and the call's
+///   `task-programs` (step 14) and `step-programs` (step 21).
+fn extend_call_schema(document: &mut serde_json::Value) {
+    let forge = serde_json::json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "event": {"type": ["string", "null"]},
+            "action": {"type": ["string", "null"]},
+            "repo": {"type": ["string", "null"]},
+            "number": {"type": ["integer", "null"]},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+        },
+    });
+    if let Some(call) = document
+        .pointer_mut("/properties/call/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        call.insert("forge".to_owned(), forge);
+        // CLOUD-2709: the kind of machine, as the environment declared it —
+        // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!({"type": "string", "enum": ["disposable", "machine"]}),
+        );
+        // CLOUD-2672: where the call stands, what it reaches, and its home.
+        call.insert(
+            "cwd".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        call.insert(
+            "roots".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        call.insert(
+            "home".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+    }
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "redirects".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
+    if let Some(program) = document
+        .pointer_mut("/properties/call/properties/programs/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        program.insert(
+            "subcommand".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "global-options".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        // Step 14: how the entry was reached, whether its text parsed, the
+        // verb after the subcommand, and the tasks a `mise` starts.
+        program.insert(
+            "via".to_owned(),
+            serde_json::json!({"type": ["string", "null"], "enum": [null, "script", "cargo run", "step run", "ci step", "exec", "task"]}),
+        );
+        program.insert("unread".to_owned(), serde_json::json!({"type": "boolean"}));
+        program.insert(
+            "receipted".to_owned(),
+            serde_json::json!({"type": "boolean"}),
+        );
+        program.insert(
+            "nested".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "tasks".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        opaque_reach_keys(program);
+    }
+    // Step 14: every program the call's tasks reach, each a `programs` entry
+    // carrying the `task` whose body ran it; `null` where the task receipt
+    // could not be read.
+    let entry = document
+        .pointer("/properties/call/properties/programs/items")
+        .cloned();
+    if let (Some(mut entry), Some(call)) = (
+        entry,
+        document
+            .pointer_mut("/properties/call/properties")
+            .and_then(serde_json::Value::as_object_mut),
+    ) {
+        if let Some(properties) = entry
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert("task".to_owned(), serde_json::json!({"type": "string"}));
+        }
+        call.insert(
+            "task-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry.clone()}),
+        );
+        call.insert(
+            "step-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry}),
+        );
+    }
 }
 
 /// A reference expression as a dotted path: `batten.trunk_based`, `violation`.
@@ -4018,21 +4507,48 @@ fn reference_path(expr: &serde_json::Value) -> Option<String> {
 /// bracket index (`input.tree.documents["x"]`) simply stops the chain, which is
 /// what the caller wants: the KEY is the first segment and the rest is the
 /// module's business.
+///
+/// **The longest resolvable reference only** (step 13a): the head of a chain
+/// is not recorded beside it, so `input.tree.documents` yields `tree.documents`
+/// and never also `tree`. A chain whose outer link does not resolve — a
+/// variable index, `input.tree[k]` — records its longest resolvable head,
+/// `tree`. A bare `input` that is not the head of a chain (`x := input`) is
+/// recorded as the empty path, so a reader asking "which keys" can tell an
+/// unknowable read from none.
 fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
+    collect_input_paths_at(value, found, false);
+}
+
+/// [`collect_input_paths`], told whether `value` is the `refr` of a chain whose
+/// outer link already resolved — in which case `value` is a head, not a read.
+fn collect_input_paths_at(value: &serde_json::Value, found: &mut Vec<String>, head: bool) {
     match value {
         serde_json::Value::Object(object) => {
-            if let Some(path) = reference_path(value)
-                && let Some(rest) = path.strip_prefix("input.")
-            {
-                found.push(rest.to_owned());
+            let resolved = reference_path(value);
+            if !head && let Some(path) = resolved.as_deref() {
+                if path == "input" {
+                    found.push(String::new());
+                } else if let Some(rest) = path.strip_prefix("input.") {
+                    found.push(rest.to_owned());
+                }
             }
-            for child in object.values() {
-                collect_input_paths(child, found);
+            // A link that resolved makes its `refr` a head; one that did not
+            // (a variable index) leaves the `refr` as the longest read.
+            let chained = resolved.is_some() || head;
+            for (name, child) in object {
+                match name.as_str() {
+                    "RefDot" | "RefBrack" => {
+                        for (field, inner) in child.as_object().into_iter().flatten() {
+                            collect_input_paths_at(inner, found, field == "refr" && chained);
+                        }
+                    }
+                    _ => collect_input_paths_at(child, found, false),
+                }
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                collect_input_paths(item, found);
+                collect_input_paths_at(item, found, false);
             }
         }
         _ => {}
@@ -4625,6 +5141,179 @@ pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
     Ok(Look::Is(Analysis { swept, unswept }))
 }
 
+/// Run each registered module's own `test_` rules (CLOUD-835).
+///
+/// **The gap this closes.** `crates/batten/tests/it/policy_modules.rs` exercises
+/// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
+/// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
+/// cases onto policy rows, and CLOUD-202 measured the trap that makes an
+/// untested port worse than none — the shell tasks spell `1 = violation,
+/// 2 = could not read` and this contract is the exact inverse.
+///
+/// **The fixture is the row's own `documents`.** No new config key: CLOUD-833
+/// already gave a tree-scoped policy row the documents it hands its bundle, and
+/// `crate::rules::tree_document` already parses them and returns the ones the tree does
+/// not carry rather than guessing. Non-negotiable 6 keeps configuration narrow,
+/// and this is the reuse that honours it.
+///
+/// # Exit codes, and the two faults kept apart
+///
+/// `2` when a test failed or a published predicate went unexercised — the row's
+/// §7(b) is explicit that the latter is *"reported, not green"*. `1` when the
+/// suite could not run: a declared fixture the tree does not carry, or a sweep
+/// that did not happen. Separating them is CLOUD-202's whole lesson, and
+/// `tests/policy_test.rs` asserts each independently so the port cannot
+/// reintroduce the inversion it exists to avoid.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
+/// module will not load — both refused by [`load`] with their own
+/// message, at the boundary where a config fault belongs.
+/// The tree input one policy suite runs against.
+///
+/// Split out of `run_policy_test` so that function reads as a loop over rows;
+/// what it holds is the pair of deliberate omissions, which are easier to see
+/// stated together than buried in an argument list.
+///
+/// **A SUITE RUNS AGAINST NO PRODUCED RECORD** (CLOUD-851). A module's tests must
+/// decide the same way on every machine, and the sink store is per-checkout state
+/// that differs between them — so a test that wants a baseline supplies it with
+/// `with input as`, the same way a mediated-call suite supplies its call.
+///
+/// **AND AGAINST NO GIT FACT**, for exactly the same reason (CLOUD-907). HEAD, the
+/// branch, the remotes and whether a ref resolves are all per-checkout state: a
+/// suite that read them would pass on the author's machine and fail in CI's
+/// detached, remote-less clone, which is a test asserting its environment rather
+/// than its module.
+pub(crate) fn suite_input(
+    rule: &crate::config_model::Rule,
+    documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
+    tracked: &[String],
+) -> Result<(String, Vec<(String, crate::rules::NotAcquired)>)> {
+    // A mediated-call row declares no documents, so its tests run against `{}`
+    // and supply their own input with `with input as` — OPA and Conftest's own
+    // shape, and the reason neither surface needs a fixture key.
+    Ok(crate::rules::tree_document(
+        documents,
+        &crate::rules::Declared {
+            documents: &crate::rules::declared_documents(rule, tracked)?,
+            lines: &crate::rules::declared_lines(rule, tracked)?,
+            invocations: &crate::rules::declared_invocations(rule, tracked)?,
+            uses: &crate::rules::declared_uses(rule, tracked)?,
+            // EMPTY, unlike its neighbours above, and the asymmetry is the
+            // point (CLOUD-1167). `documents` and the three beside it name paths
+            // INSIDE the repository, so a declared one that is missing is a
+            // fixture the author owes. An `[[rule.external]]` row names a file
+            // outside it — a launcher's settings, a toolchain's data directory —
+            // which is legitimately absent on a CI runner, in a fresh container,
+            // and on any host that does not run that launcher. Resolving the
+            // declared list here would report every such host as a missing
+            // fixture and fail `policy test` for a file the module's own `test_`
+            // rules never read: they supply their input with `with input as`,
+            // which is what this call is building the SHAPE for.
+            //
+            // Whether a declared out-of-root file actually resolves is `check`'s
+            // question, and `check` answers it the way the family requires — the
+            // id goes to `input.tree.missing` with its cause and the row is
+            // skipped, rather than running against a fabricated empty document.
+            // EMPTY for `external`'s reason: a staged read needs an index this
+            // shape-building call has no reason to open.
+            staged: &[],
+            // Nothing to fall back FOR: the list above is empty, so no path ever
+            // reaches the extension test this would answer.
+            staged_format: None,
+            external: &[],
+        },
+        tracked,
+        // A module's own `test_` rules supply their input with `with input as`,
+        // so every member here is empty for one reason: this call builds the
+        // SHAPE, and the case chooses the values.
+        &crate::rules::Resolved {
+            traversals: &serde_json::Value::Null,
+            review: &crate::facts::Look::IsNot,
+            produced: &std::collections::BTreeMap::new(),
+            records: &std::collections::BTreeMap::new(),
+            records_blocked: &std::collections::BTreeMap::new(),
+            git: &crate::git::GitFacts::default(),
+            symbols: &crate::facts::Look::IsNot,
+            external: &std::collections::BTreeMap::new(),
+            state: None,
+            forge: None,
+            tool_verdicts: None,
+            plan: None,
+            minted: None,
+            captured: None,
+        },
+    ))
+}
+
+/// Whether one policy module's own `test_<case>` rule passes under `root`'s
+/// committed config: `Some(true)` passed, `Some(false)` failed, `None` when no
+/// registered rule's module is `module` or the module declares no such test
+/// (CLOUD-2255).
+///
+/// THE MUTATION SWEEP'S REGO SUITE, IN PROCESS. A `#MUTANT` row in a module
+/// that names one of the module's own tests is judged by that test, the way
+/// `opa test --run` selects one: through the same load, input and evaluator
+/// `policy test` uses, over the staged (mutated) tree, so the registry data the
+/// module reads is supplied and nothing is spawned. Conftest, the other `.rego`
+/// suite, supplies none of it.
+///
+/// # Errors
+///
+/// When the config under `root` does not resolve or a bundle does not load:
+/// could-not-look, never a pass.
+pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
+    let config = crate::resolve::resolve(root, &crate::resolve::Overrides::default())?;
+    let Some(rule) = config.rules.iter().find(|rule| {
+        rule.kind == crate::config_model::RuleKind::Policy && rule.module.as_deref() == Some(module)
+    }) else {
+        return Ok(None);
+    };
+    // EVERY ROW LOADED, ONE EVALUATED: the registry check holds the declared
+    // verdicts against the raisers among the loaded bundles, so loading the one
+    // row would refuse every class another module raises.
+    let bundles = load(
+        root,
+        &config.rules,
+        Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
+            recorders: &config.recorders,
+            registers: &config.registers,
+            traversals: &config.traversals,
+            records: &config.records,
+        },
+        ModuleChecks::Run,
+        None,
+    )?;
+    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+        return Ok(None);
+    };
+    let tracked = crate::git::tree_files(root)?;
+    let documents = crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
+    let (input, _) = suite_input(rule, &documents, &tracked)?;
+    let crate::facts::Look::Is(suite) = test(
+        bundle,
+        &input,
+        rule.scope == crate::config_model::RuleScope::MediatedCall,
+    )?
+    else {
+        return Ok(None);
+    };
+    let name = format!("test_{case}");
+    let named = |ids: &[TestId]| ids.iter().any(|id| id.name == name);
+    Ok(if named(&suite.passed) {
+        Some(true)
+    } else if named(&suite.failed) {
+        Some(false)
+    } else {
+        None
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -4882,6 +5571,118 @@ rules contains not_quoted\n";
         Compiled::from_bundle(&bundle, &serde_json::json!({}))
             .expect("the fixture compiles to bytecode")
             .into_bundle(bundle)
+    }
+
+    /// CLOUD-2696's shape: a helper function undefined for the call, bound with
+    /// `:=` and then negated over. Both evaluators must read the undefined
+    /// helper as no violation. Fails by: the bytecode deciding a violation the
+    /// interpreter — and so `policy test` — does not.
+    const UNDEFINED_HELPER: &str = r#"package batten.helper
+
+import rego.v1
+
+rules contains "commit name refused"
+
+subject(args) := message if {
+	some i, word in args
+	word == "-m"
+	message := args[i + 1]
+}
+
+violation contains {"rule": "commit name refused", "verdict": "commit name refused", "subjects": []} if {
+	some program in input.call.programs
+	message := subject(program.arguments)
+	not regex.match(`^feat`, message)
+}
+"#;
+
+    #[test]
+    fn an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix: x"]}]}}"#;
+        let right = r#"{"call":{"programs":[{"arguments":["commit","-m","feat: x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]);
+        // As `compile_cached` builds it, and nothing re-decides its answer.
+        let compiled = bytecode(bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]));
+        assert!(compiled.is_bytecode());
+        let before = engines_constructed();
+        let _ = verdicts(&compiled, wrong);
+        assert_eq!(
+            engines_constructed() - before,
+            0,
+            "the program decides a refusal alone: no interpreter is built to re-decide it"
+        );
+        let refused = Some(vec!["commit name refused".to_owned()]);
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, none),
+                Some(Vec::new()),
+                "{evaluator}: no -m, no subject"
+            );
+            assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
+            assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
+        }
+    }
+
+    /// The same undefined helper behind an ARRAY pattern, so the guard covers
+    /// every variable a pattern binds. No `with`: the RVM refuses the keyword
+    /// and such a bundle stays interpreted; where the guard lands after a
+    /// modifier is the text-level case below. Fails by: a pattern's variable
+    /// left unguarded.
+    const UNDEFINED_PAIR: &str = r#"package batten.pair
+
+import rego.v1
+
+rules contains "pair refused"
+
+pair(args) := [first, rest] if {
+	some i, word in args
+	word == "-m"
+	first := args[i + 1]
+	rest := args[i + 2]
+}
+
+violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects": []} if {
+	some program in input.call.programs
+	[first, _] := pair(program.arguments)
+	not startswith(first, "feat")
+}
+"#;
+
+    #[test]
+    fn a_pattern_binding_an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix","x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]));
+        assert!(compiled.is_bytecode());
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(verdicts(bundle, none), Some(Vec::new()), "{evaluator}");
+            assert_eq!(
+                verdicts(bundle, wrong),
+                Some(vec!["pair refused".to_owned()]),
+                "{evaluator}"
+            );
+        }
+    }
+
+    /// Fails by: a `:=` statement left unguarded, a guard for `_` or for an `=`
+    /// statement, or a guard placed before the statement's `with` modifier.
+    #[test]
+    fn every_colon_binding_is_guarded_after_its_whole_statement() {
+        let module = "package batten.g\nimport rego.v1\n\nx if {\n\ta := input.a\n\t[b, _] := input.b with input.c as 1\n\td = input.d\n}\n";
+        let bundle = bundle_of("row", &[("policy/g.rego", module)]);
+        let guarded = guarded_sources(bundle.evaluator.engine().expect("interpreted"))
+            .expect("the AST serializes");
+        assert_eq!(
+            guarded,
+            vec![(
+                String::from("policy/g.rego"),
+                module
+                    .replacen("a := input.a", "a := input.a; a == a", 1)
+                    .replacen("with input.c as 1", "with input.c as 1; b == b", 1),
+            )]
+        );
     }
 
     #[test]
@@ -5306,5 +6107,132 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
                 gloss: "g".to_owned(),
             });
         assert!(Vocabulary::from(&config).words.is_some());
+    }
+
+    // ── step 13a: the tree read set ────────────────────────────────────────
+
+    /// A tree-scope module with `body` as its one rule body.
+    fn reading(body: &str) -> String {
+        format!(
+            "package batten.reads\n\nimport rego.v1\n\nrules contains \"x probe probex\"\n\n\
+             violation contains {{\"rule\": \"x probe probex\", \"verdict\": \"x probe probex\", \
+             \"subjects\": []}} if {{\n{body}\n}}\n"
+        )
+    }
+
+    fn reads_of(body: &str) -> Reads {
+        let module = reading(body);
+        bundle_of("row", &[("policy/r.rego", &module)]).tree_reads()
+    }
+
+    fn known(keys: &[&str]) -> Reads {
+        Reads::Known(keys.iter().map(|key| (*key).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_dotted_or_literal_index_read_names_its_key() {
+        assert_eq!(
+            reads_of("\tsome path, _ in input.tree.documents\n\tpath != \"\""),
+            known(&["documents"])
+        );
+        assert_eq!(
+            reads_of("\tinput.tree[\"git-index\"] != null"),
+            known(&["git-index"]),
+            "a string-literal index is the dotted read"
+        );
+    }
+
+    #[test]
+    fn a_read_this_reader_cannot_name_is_opaque() {
+        // An alias, a variable index, a bare `input`, and the other surface: each
+        // could read any key, so none may be read as a closed set.
+        for body in [
+            "\tt := input.tree\n\tt.documents != null",
+            "\tsome k\n\tinput.tree[k] != null",
+            "\tx := input\n\tx.tree.documents != null",
+            "\tinput.facts.receipts != null",
+            "\tinput.call.command != null",
+        ] {
+            assert_eq!(reads_of(body), Reads::Opaque, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_chain_records_its_longest_read_and_never_its_head() {
+        // THE FIX THE OPAQUE ARM DEPENDS ON: the walk used to record every link of
+        // a chain, so `input.tree.documents` also recorded `tree` and every module
+        // would have read as a bare `input.tree`.
+        let module = reading("\tinput.tree.documents.x != null");
+        let bundle = bundle_of("row", &[("policy/r.rego", &module)]);
+        let described = bundle.described().expect("the fixture describes");
+        let paths: Vec<&String> = described
+            .iter()
+            .flat_map(|module| module.rules.iter())
+            .flat_map(|rule| rule.input_paths.iter())
+            .collect();
+        assert_eq!(paths, vec!["tree.documents.x"]);
+    }
+
+    #[test]
+    fn bytecode_carries_the_read_set_and_an_entry_without_one_is_opaque() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let bundle = compile("row", &sources, &data).expect("the fixture compiles");
+        let compiled =
+            Compiled::from_bundle(&bundle, &data).expect("the fixture compiles to bytecode");
+        let carried = compiled.into_bundle(compile("row", &sources, &data).expect("compiles"));
+        assert!(carried.is_bytecode());
+        assert_eq!(carried.tree_reads(), known(&["lines"]));
+        // An entry written before the read set existed deserialises with none.
+        let header: CacheHeader =
+            serde_json::from_str(r#"{"declared":[],"packages":[],"entries":[],"facts":[]}"#)
+                .expect("an old header still parses");
+        assert!(header.reads.is_none(), "an old entry carries no read set");
+        let old = Compiled::from_bundle(&bundle, &data).expect("bytecode");
+        let old = Compiled {
+            reads: header.reads,
+            ..old
+        }
+        .into_bundle(bundle);
+        assert_eq!(old.tree_reads(), Reads::Opaque);
+    }
+
+    /// Fails by: an interpreted bundle describing its read set afresh where an
+    /// entry under its key holds one (both halves of a split `enforce`
+    /// classifying from scratch), the entry it writes read back as bytecode,
+    /// or the set it writes not the one it describes.
+    #[test]
+    fn an_interpreted_bundle_reads_its_read_set_off_the_entry_under_its_key() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let path = crate::scratch::scratch("policy-interpreted-reads").join("row.rvm");
+        let key = cache_key("row", &sources, &[0; 32]);
+        let first = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &first);
+        assert_eq!(first.tree_reads(), known(&["lines"]));
+        assert!(
+            read_cached(&path, &key, "row", &sources, "{}").is_none(),
+            "a read set alone is no bytecode"
+        );
+        let second = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &second);
+        assert_eq!(second.tree_reads(), known(&["lines"]), "read back");
+        // A SENTINEL THE MODULE NEVER READS proves the entry answered, not a
+        // fresh description.
+        let header = CacheHeader {
+            declared: BTreeSet::new(),
+            packages: BTreeSet::new(),
+            entries: BTreeSet::new(),
+            facts: Vec::new(),
+            reads: Some(vec![String::from("sentinel")]),
+        };
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        crate::cache::write(&path, &key, &bytes);
+        let third = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &third);
+        assert_eq!(third.tree_reads(), known(&["sentinel"]));
     }
 }

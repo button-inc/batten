@@ -54,58 +54,13 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::rules::Selector;
-
-/// The `[census]` table: the measurements a consumer declares over its own tree.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Census {
-    /// Where this repository writes shell, for `batten census shell`. Absent
-    /// means the census has nothing declared to read, which the verb refuses
-    /// rather than reporting a zero it did not measure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell: Option<ShellCensus>,
-}
-
-/// `[census.shell]`: the homes shell may live in, and the files that must stay
-/// shell.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct ShellCensus {
-    /// Manifests whose command strings are counted, one row per file.
-    #[serde(default, rename = "manifest", skip_serializing_if = "Vec::is_empty")]
-    pub manifests: Vec<Manifest>,
-    /// Workflow files whose `run:` steps are counted, as globs over tracked paths.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workflows: Vec<String>,
-    /// Paths that must stay shell because nothing else can run where they do, as
-    /// globs. Still measured, reported apart, and never totalled.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exempt: Vec<String>,
-}
-
-/// One manifest whose command strings are counted.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Manifest {
-    /// The manifest's repo-relative path.
-    pub path: String,
-    /// The keys whose values are commands, as they are spelled before ` = `.
-    pub keys: Vec<String>,
-    /// The header prefix that opens one named unit — a task table, say. Every
-    /// shell line between one such header and the next is that unit's. Absent,
-    /// each shell line is reported on its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Census, Manifest, ShellCensus};
 
 impl ShellCensus {
     /// Refuse a declaration that would count nothing while reading as covered.
@@ -182,7 +137,6 @@ const BAN_UNREAD_OPERATORS: [char; 5] = ['{', '}', '[', ']', '\\'];
 ///
 /// The row below reads every glob as portable, and the unit case's brace, class
 /// and escape then load.
-//MUTANT ban-unread-operator-admitted|s@^    glob.chars().find(.c. BAN_UNREAD_OPERATORS.contains(c))$@    glob.chars().find(char::is_ascii_control)@|a_glob_the_ban_reads_differently_is_refused
 fn ban_unread(glob: &str) -> Option<char> {
     glob.chars().find(|c| BAN_UNREAD_OPERATORS.contains(c))
 }
@@ -213,12 +167,6 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 /// The grammar's mutation rows. Each one breaks a clause the ban's own module
 /// carries, so a census that lost it would count differently from the gate; each
 /// is caught by the unit case it names, run from this file.
-//MUTANT-SUITE crates/batten/src/census.rs
-//MUTANT comments-counted|s@    !text.is_empty() && !text.starts_with('#')@    !text.is_empty()@|a_body_counts_its_code_lines_and_skips_comments_and_blanks
-//MUTANT metacharacters-unread|s@    if value.contains(METACHARACTERS) {@    if false {@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT env-prefix-unread|s@ \x7c\x7c first.contains('=')@ \x7c\x7c false@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT block-never-ends|s@        indent(line) + 2$@        indent(line) + 200@|a_block_ends_at_the_first_line_at_or_left_of_its_key
-//MUTANT workflow-one-liner-unread|s@        } else if !rest.is_empty() && shell_syntax(rest) {@        } else if false {@|a_block_ends_at_the_first_line_at_or_left_of_its_key
 #[must_use]
 pub fn code_line(line: &str) -> bool {
     let text = line.trim();
@@ -532,8 +480,6 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 ///
 /// An exempt file is set apart and never totalled; the row below reads the
 /// exempt list as empty, and the compiled tier's pinned totals go red.
-//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
-//MUTANT exempt-unread|s@    let exempt: Vec<Selector> = declared$@    let exempt: Vec<Selector> = ShellCensus::default()@|the_census_counts_the_fixture_as_the_shapes_say
 ///
 /// `tracked` is the tree's tracked paths, which is where workflows and shell
 /// files are found; a declared manifest is read by its path whether or not it
@@ -563,7 +509,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
     let mut set_apart: BTreeMap<String, usize> = BTreeMap::new();
 
     for manifest in &declared.manifests {
-        let text = std::fs::read_to_string(root.join(&manifest.path)).map_err(|err| {
+        let text = crate::fsio::read_to_string(root.join(&manifest.path)).map_err(|err| {
             anyhow::anyhow!(
                 "census shell: the declared manifest {} cannot be read: {err}",
                 manifest.path
@@ -588,7 +534,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         let is_workflow = workflows.iter().any(|selector| selector.matches(path));
         // A path that is not a file — a submodule's gitlink, a file deleted from
         // the working tree — has no lines to count.
-        let Ok(bytes) = std::fs::read(root.join(path)) else {
+        let Ok(bytes) = crate::fsio::read(root.join(path)) else {
             continue;
         };
         // Decoding every tracked file to ask about its first two bytes would
@@ -668,7 +614,7 @@ pub fn run_shell(
     let declared = declared.ok_or_else(|| {
         UsageError::raise(format!(
             "census shell: no [census.shell] in {}; nothing declares where shell lives here",
-            crate::config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })?;
     let tracked = crate::git::tracked_paths(root)?;

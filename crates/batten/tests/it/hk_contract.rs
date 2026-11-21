@@ -75,7 +75,6 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
 //
 // The declared mutation, in a plain comment because `hk.pkl` is no sweep route;
 // killed by hand:
-// MUTANT clippy-runs-per-workspace|s@^    exclude = List("fuzz/\*\*")$@@|every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step
 #[test]
 fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
     let root = common::at_root(".");
@@ -150,7 +149,7 @@ fn a_caller_suppressing_steps_does_not_drift_the_contract() {
         .args(["hk", "drift"])
         .current_dir(&root)
         .env(hk::CALLER_SKIP, "sbom-check,batten-check")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         code(&output),

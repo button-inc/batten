@@ -116,7 +116,7 @@ fn spawn(dir: &Path, server: &str, launcher: &Path, args: &[&str]) -> std::proce
     command.args(args);
     command
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten mcp spawn")
 }
 
@@ -404,7 +404,7 @@ fn a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_lin
             std::env::join_paths(["/usr/bin", "/bin"]).expect("a joinable PATH"),
         )
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten mcp spawn");
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
@@ -504,7 +504,7 @@ fn a_host_that_cannot_replace_a_process_refuses_the_launch() {
     }
     let output = batten()
         .args(["mcp", "spawn", "fixture", "--", "cmd", "/c", "exit", "0"])
-        .output()
+        .streamed_output()
         .expect("run batten mcp spawn");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(

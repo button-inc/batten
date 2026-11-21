@@ -63,31 +63,12 @@
 //! is nothing to promote, and re-deciding a failure Batten did not diagnose would
 //! make the wrapper's verdict unreadable. Only `0` is promotable.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::capture::Stream;
-use crate::error::UsageError;
-
-/// Which captured stream a pattern is matched against.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Watched {
-    /// The child's standard output only.
-    Stdout,
-    /// The child's standard error only.
-    Stderr,
-    /// Both streams.
-    ///
-    /// The default, and deliberately the *widest* reading: a tool that moves a
-    /// warning from one stream to the other between releases would otherwise
-    /// silently stop being gated, and a pattern that quietly matches nothing is
-    /// the failure this whole feature exists to prevent.
-    #[default]
-    Both,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_check::outputs::{validate, validate_environment, validate_named};
+pub use crate::config_model::{OutputPattern, Watched};
 
 impl Watched {
     /// Every value, so anything ranging over the vocabulary is derived.
@@ -114,29 +95,6 @@ impl Watched {
     }
 }
 
-/// One declared output predicate: a literal that must not appear.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OutputPattern {
-    /// The stable identifier a match is reported under.
-    ///
-    /// Required, and it is what keeps the report pointer-only: a finding names
-    /// `stream:line` plus this id, never the line that matched. Without an id the
-    /// only way to say *which* pattern fired would be to echo the bytes.
-    pub id: String,
-    /// The case-sensitive literal that must not appear in the watched stream.
-    pub pattern: String,
-    /// Which stream to watch. Defaults to both.
-    #[serde(default)]
-    pub stream: Watched,
-    /// What the caller should do about it.
-    ///
-    /// Required, unlike on a file rule. A file finding is a `path:line` a reader
-    /// can open; a promoted exit code is all a caller gets back, so a refusal
-    /// naming only its id would be un-actionable (CLOUD-122).
-    pub reason: String,
-}
-
 /// Where a pattern matched: the stream and the 1-based line within it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hit {
@@ -160,80 +118,6 @@ impl Hit {
     pub fn line_text(&self) -> String {
         format!("{}:{} {}", self.stream, self.line, self.id)
     }
-}
-
-/// Refuse a malformed `[[exec_pattern]]` table at load, so a typo cannot sit inert.
-///
-/// # Errors
-///
-/// As [`validate_named`].
-pub fn validate(patterns: &[OutputPattern]) -> anyhow::Result<()> {
-    validate_named(patterns, "exec_pattern")
-}
-
-/// Refuse a malformed `[[verify_environment_pattern]]` table at load.
-///
-/// # A SECOND ENTRY POINT OVER ONE IMPLEMENTATION, and both reasons are real
-///
-/// The checks are identical — same type, same four ways to be malformed — so the
-/// body is [`validate_named`] and this adds none of its own. What it adds is a
-/// NAME, twice over.
-///
-/// It names the table in the refusal. `validate` spelled `exec_pattern` into
-/// every message, so the second table's malformed row would have reported a row
-/// in a table the author had not touched — a pointer to the wrong file, which is
-/// worse than no pointer.
-///
-/// And it names the table to `config.rs`'s census, which resolves each declared
-/// table to its validator BY THE CALL STRING. Two tables sharing
-/// `outputs::validate(` are one call site to that gate: it finds the first,
-/// reads the class wrapping it, and reports the second as unwrapped. A distinct
-/// entry point is what makes the census able to see both.
-///
-/// # Errors
-///
-/// As [`validate_named`].
-pub fn validate_environment(patterns: &[OutputPattern]) -> anyhow::Result<()> {
-    validate_named(patterns, "verify_environment_pattern")
-}
-
-/// Refuse a malformed pattern table at load, so a typo cannot sit inert.
-///
-/// `table` is the caller's own table name, carried into every message so a
-/// refusal points at the file and row an author has to edit.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] for an empty id, pattern or reason, or a duplicate id.
-pub fn validate_named(patterns: &[OutputPattern], table: &str) -> anyhow::Result<()> {
-    let mut seen: Vec<&str> = Vec::with_capacity(patterns.len());
-    for pattern in patterns {
-        if pattern.id.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "{table}: id must not be empty — it is what a match is reported as"
-            )));
-        }
-        if pattern.pattern.is_empty() {
-            return Err(UsageError::raise(format!(
-                "{table} {}: pattern must not be empty — an empty literal matches every run",
-                pattern.id
-            )));
-        }
-        if pattern.reason.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "{table} {}: reason is required — a promoted exit code is all the caller gets back",
-                pattern.id
-            )));
-        }
-        if seen.contains(&pattern.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "{table} {}: declared twice",
-                pattern.id
-            )));
-        }
-        seen.push(&pattern.id);
-    }
-    Ok(())
 }
 
 /// Every hit of `patterns` in one captured `stream`.
@@ -277,6 +161,7 @@ pub fn reasons(patterns: &[OutputPattern], found: &[Hit]) -> Vec<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::error::UsageError;
 
     fn pattern(id: &str, literal: &str, stream: Watched) -> OutputPattern {
         OutputPattern {

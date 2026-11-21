@@ -54,8 +54,6 @@
 
 // CLOUD-1681: dropping the `Push` row's precheck restores the path from a
 // pending bet to a publish, which is the state measured twice.
-//MUTANT-SUITE crates/batten/tests/it/land_speculation.rs
-//MUTANT live-bet-reaches-the-push|s@                    precheck: Some(Precheck::BetLive),@                    precheck: None,@|a_live_bet_is_refused_by_the_row_that_would_publish_it
 
 use crate::land::Step;
 

@@ -35,8 +35,9 @@
 # a placement admitting one. Both are answerable from the delta, and both were
 # unanswered until now.
 #
-#MUTANT spawn-escape-unread|s@escape_pattern@"nope"@|an_added_spawn_escape_is_refused
-#MUTANT placement-widening-unread|s@placement_pattern@"nope"@|an_added_spawn_placement_is_refused
+#MUTANT spawn-escape-unread|s@patterns\[escape_pattern\]@patterns[placement_pattern]@|an_added_spawn_escape_is_refused
+#MUTANT placement-widening-unread|s@patterns\[placement_pattern\]@patterns[escape_pattern]@|an_added_spawn_placement_is_refused
+#MUTANT escape-indent-is-identity|s@\["base-lines"\]\[path\]; trim_space(l) == trim_space(line)@["base-lines"][path]; l == line@|an_escape_reindented_in_place_is_clean
 #MUTANT-SUITE crates/batten/tests/it/spawn_widening.rs
 
 # METADATA
@@ -163,6 +164,56 @@ violation contains {
 	engine_source(path)
 	some line in added_lines(path)
 	escapes(line)
+	net_growth(line) > 0
+}
+
+# THE SAME LINE, REPEATED IN ITS OWN FILE (CLOUD-2778). `added_lines` is a set,
+# so a second escape whose lint line matches one the file already carries byte
+# for byte (every `clippy::disallowed_types,` does) read as no change. Counted
+# instead: the file holds more of the line than its base did, and the changed
+# engine sources hold more in total, so the inventory grew.
+violation contains {
+	"rule": "spawn add other",
+	"verdict": "spawn write refused",
+	"subjects": [{"path": path}],
+} if {
+	some path, base_lines in delta["base-lines"]
+	engine_source(path)
+	head_lines := input.tree.lines[path]
+	some line in {l | some l in head_lines}
+	escapes(line)
+	count([l | some l in head_lines; l == line]) > count([l | some l in base_lines; l == line])
+	net_growth(line) > 0
+}
+
+# HOW MANY MORE TIMES `line` APPEARS across the changed engine sources than in
+# their base (#1276). `added_lines` is a set difference within ONE file, so it
+# already reads a move between functions as no change; a move between FILES read
+# as an addition, and #1276's move of the process adapter from `exec.rs` to
+# `capture.rs`, which shrank the inventory, was refused as a new escape.
+#
+# COUNTED, NOT SET-COMPARED: an escape line's text repeats (every
+# `clippy::disallowed_types,` is the same line), so the file losing one still
+# holds others and a set test sees nothing removed. Only narrows the clause
+# above: a line it did not already find is never reached.
+net_growth(line) := growth if {
+	edited := [path |
+		some path, _ in delta["base-lines"]
+		engine_source(path)
+		input.tree.lines[path]
+	]
+	added := [path |
+		some path in delta.added
+		engine_source(path)
+		not delta["base-lines"][path]
+	]
+
+	# INDENTATION IS NOT IDENTITY (#1276): the same escape moved from a closure
+	# to a module changes its leading space and nothing else, so each side is
+	# counted over trimmed text. A copy or a repeat still grows the trimmed count.
+	head := sum([n | some path in array.concat(edited, added); n := count([l | some l in input.tree.lines[path]; trim_space(l) == trim_space(line)])])
+	base := sum([n | some path in edited; n := count([l | some l in delta["base-lines"][path]; trim_space(l) == trim_space(line)])])
+	growth := head - base
 }
 
 # ---------------------------------------------------------------------------
@@ -262,6 +313,51 @@ test_an_added_spawn_escape_is_refused if {
 # The attribute written on one line reaches the same refusal. Both spellings are
 # in this crate, and a pattern anchored on only the continuation form would miss
 # every single-line one.
+test_an_escape_moved_between_engine_files_is_clean if {
+	count(violation) == 0 with input as tree(
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
+			"crates/batten/src/capture.rs": ["fn b() {}", "    clippy::disallowed_types,"],
+		},
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,", "    clippy::disallowed_types,"],
+			"crates/batten/src/capture.rs": ["fn b() {}"],
+		},
+	)
+}
+
+# THE SAME ESCAPE RE-INDENTED IS NOT A NEW ONE (#1276): measured on
+# `pr_watch.rs`, where the crate's one `disallowed_methods` exemption moved from
+# a closure to the `clock` module and read as an added escape.
+test_an_escape_reindented_in_place_is_clean if {
+	count(violation) == 0 with input as tree(
+		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "    clippy::disallowed_methods,"]},
+		{"crates/batten/src/pr_watch.rs": ["fn a() {}", "            clippy::disallowed_methods,"]},
+	)
+}
+
+test_an_escape_copied_to_another_file_is_refused if {
+	some v in violation with input as tree(
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
+			"crates/batten/src/capture.rs": ["fn b() {}", "    clippy::disallowed_types,"],
+		},
+		{
+			"crates/batten/src/exec.rs": ["fn a() {}", "    clippy::disallowed_types,"],
+			"crates/batten/src/capture.rs": ["fn b() {}"],
+		},
+	)
+	v.verdict == "spawn write refused"
+}
+
+test_a_repeated_escape_line_in_its_own_file_is_refused if {
+	some v in violation with input as tree(
+		{"crates/batten/src/thing.rs": ["    clippy::disallowed_types,", "fn a() {}", "    clippy::disallowed_types,"]},
+		{"crates/batten/src/thing.rs": ["    clippy::disallowed_types,", "fn a() {}"]},
+	)
+	v.verdict == "spawn write refused"
+}
+
 test_a_single_line_escape_is_refused_too if {
 	some v in violation with input as tree(
 		{"crates/batten/src/thing.rs": ["#[expect(clippy::disallowed_types)]"]},

@@ -1,0 +1,6604 @@
+//! The landing lease's wire half: ref discovery and a compare-and-swap over a
+//! remote ref, spoken as git smart-HTTP over [`crate::fetch`] (CLOUD-1274).
+//!
+//! # Why this module exists at all, and why it is not a library call
+//!
+//! The landing lease is a **compare-and-swap over a remote ref**, and
+//! `mem:workflow/landing-loop` records two properties the design was
+//! pressure-tested into, each costing an incident: the lease must live on
+//! `refs/heads` (the agent proxy 403s a push elsewhere, and GitHub does not
+//! enforce the fast-forward rule off `refs/heads` either — a parentless orphan was
+//! ACCEPTED on a custom namespace), and renewal must be a true CAS, which a REST
+//! `PATCH` with `force:false` does not give.
+//!
+//! Every library route to that operation is refused by a gate in this tree, and
+//! each refusal was measured rather than assumed:
+//!
+//! * **gix cannot push.** `gix-protocol` ships `fetch`, `handshake` and `ls_refs`;
+//!   the only `push` symbols in gix are `push_url()` configuration setters.
+//! * **gix's own HTTP transports** resolve `reqwest` — barred by
+//!   `AMBIENT_CRATES` — plus `security-framework` and `core-foundation`, both
+//!   `FRAMEWORK_CRATES` names, and `ring`/`aws-lc-sys` `links` crates.
+//! * **git2/libgit2** cannot reach HTTPS without its `https` feature, and every
+//!   configuration carrying it resolves `openssl-sys` — a `FRAMEWORK_CRATES` name
+//!   `macos-link-check` refuses BY NAME, with no vendored exemption.
+//!   `vendored-openssl` does not change it. Adopting git2 would mean retiring
+//!   `macos-link-check`, which is `governed_at_head` and so cannot be edited.
+//!
+//! So the protocol is spoken directly over the client this crate already vendored
+//! and already bounded. That buys the CAS for **no new dependency, no `links`
+//! crate, no Apple framework and no governed gate touched** — and it keeps
+//! `git.rs`'s in-process gix reads exactly as they are.
+//!
+//! # The CAS is the protocol's own, not something layered on top
+//!
+//! receive-pack takes a command list of `<old-sha> <new-sha> <ref>`, and the
+//! server applies it only while the ref still reads `<old-sha>`. That is a
+//! genuine CAS decided by the server under its own lock — strictly stronger than
+//! `--force-with-lease`, which compares against what the CLIENT last observed and
+//! races anything that moved in between.
+//!
+//! # Where this may be reached from
+//!
+//! Nowhere on a gate surface. `policy/module-layering.rego` forbids the resolved
+//! `use` edge from `hook` and from `check` to this module, for the reason it
+//! already forbids `hook -> fetch`: a network round trip on the mediated path is
+//! what CLOUD-689's ceiling and CLOUD-747's no-runtime assertion both refuse.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use crate::Result;
+use crate::fetch::{self, Call};
+
+/// The two smart-HTTP services, named as the wire names them.
+///
+/// Spelled as an enum rather than passed as a string because the name appears in
+/// three places per exchange — the discovery query, the `Content-Type` of the
+/// request and the advertisement's own first line — and three spellings of one
+/// service is how a transport starts disagreeing with itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    /// Reading: ref discovery and object fetch.
+    UploadPack,
+    /// Writing: the ref update this module exists for.
+    ReceivePack,
+}
+
+impl Service {
+    /// The wire name, which is also the path segment and the media-type stem.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Service::UploadPack => "git-upload-pack",
+            Service::ReceivePack => "git-receive-pack",
+        }
+    }
+}
+
+/// What the remote said its refs are.
+///
+/// **A ref ABSENT from this map does not exist on the remote**, which is the
+/// distinction the lease turns on: an unheld lease is an absent ref, and creating
+/// it is a CAS from the all-zero object id. Collapsing absent into "zero" here
+/// would make a caller unable to tell a lease nobody has taken from one this
+/// module failed to read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Advertisement {
+    /// Full ref name to object id.
+    pub refs: BTreeMap<String, String>,
+    /// The capabilities the server offered, as it spelled them.
+    pub capabilities: Vec<String>,
+}
+
+/// The object id git uses for "this ref does not exist", on both sides of a
+/// command.
+pub const ZERO: &str = "0000000000000000000000000000000000000000";
+
+impl Advertisement {
+    /// The id `name` points at, or [`ZERO`] where the remote does not carry it.
+    ///
+    /// The CAS's `old` side wants exactly this collapse — creating a ref is a
+    /// swap from zero — while [`Advertisement::refs`] keeps the distinction for
+    /// every caller that needs to tell absent from unread.
+    #[must_use]
+    pub fn head_of(&self, name: &str) -> &str {
+        self.refs.get(name).map_or(ZERO, String::as_str)
+    }
+}
+
+/// The request headers for one exchange, with the credential attached when there
+/// is one.
+///
+/// **An absent credential is not an error.** A public remote needs none, and a
+/// private one answers `401`, which every caller here already reports as
+/// could-not-look rather than as an unheld lease.
+///
+/// # GIT-OVER-HTTP TAKES `Basic`, AND THIS SENT `Bearer`
+///
+/// These headers go to the SMART-HTTP endpoints — `info/refs`,
+/// `git-upload-pack`, `git-receive-pack` — which are not the REST API and do not
+/// share its auth scheme. Git's HTTP transport is specified on Basic
+/// authentication with the token as the password, and GitHub rejects a bearer
+/// token there outright. `crate::rest` is the other half and is correct as it
+/// stands: `Bearer` is what `api.github.com` wants.
+///
+/// Measured on this branch, one token, four arms:
+///
+/// | request                          | scheme   | status |
+/// | -------------------------------- | -------- | ------ |
+/// | `info/refs?service=git-upload-pack` | `Bearer` | `401`  |
+/// | `info/refs?service=git-upload-pack` | `Basic`  | `200`  |
+/// | `repos/{owner}/{repo}`              | `Bearer` | `200`  |
+/// | `repos/{owner}/{repo}` (none)       | —        | `403`  |
+///
+/// So a configured credential made the fetch FAIL where no credential at all
+/// would have succeeded against a public remote — and every caller reports that
+/// `401` as could-not-look, which is honest about the reading and silent about
+/// the cause. `land` stopped at `fetch main from the remote` with a credential
+/// that was valid the whole time.
+///
+/// The username is ignored by GitHub for a token — `x-access-token` is the
+/// convention its own documentation and tooling use, so it is what a reader
+/// grepping for this will recognise.
+///
+/// The credential is [`crate::rest::declared_credential`]'s, read here rather
+/// than through a reader of this module's own: the four spawns CLOUD-1338
+/// removed all justified themselves with *"this crate carries no HTTP client
+/// that resolves a forge credential"*, so the reader has one home.
+fn headers(accept: &str, content_type: Option<&str>) -> Vec<(String, String)> {
+    headers_for(
+        accept,
+        content_type,
+        crate::rest::declared_credential().as_deref(),
+    )
+}
+
+/// [`headers`]'s decision, over a credential the caller already resolved.
+///
+/// **Split from the environment read so the SCHEME is testable**, which is the
+/// same split `carries` takes over its two forge calls: reading `GH_TOKEN` is an
+/// effect and this is a pure function of what it returned. A case that had to
+/// set a process variable to reach the decision would need `unsafe` — which the
+/// workspace forbids — and would be asserting over whatever the runner's own
+/// environment happened to hold.
+fn headers_for(
+    accept: &str,
+    content_type: Option<&str>,
+    token: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut headers = vec![(String::from("Accept"), accept.to_owned())];
+    if let Some(content_type) = content_type {
+        headers.push((String::from("Content-Type"), content_type.to_owned()));
+    }
+    if let Some(token) = token {
+        headers.push((
+            String::from("Authorization"),
+            format!("Basic {}", base64_of(&format!("x-access-token:{token}"))),
+        ));
+    }
+    headers
+}
+
+/// Standard base64 of `raw`, which is what a `Basic` credential is carried as.
+///
+/// **Hand-rolled rather than vendored**, on the trade `query_value` states one
+/// screen down: the alphabet and the padding rule are eight lines of RFC 4648,
+/// and a dependency here would go through `deny.toml`, `macos-link-check`,
+/// `darwin-link`, the ambient-authority bound and the SBOM inventory to buy
+/// them.
+fn base64_of(raw: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = raw.as_bytes();
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut padded = [0_u8; 4];
+        padded[1..=chunk.len()].copy_from_slice(chunk);
+        let triple = u32::from_be_bytes(padded);
+        for index in 0..=chunk.len() {
+            let shift = 18 - 6 * u32::try_from(index).unwrap_or(0);
+            let sextet = usize::try_from((triple >> shift) & 0x3f).unwrap_or(0);
+            encoded.push(char::from(ALPHABET[sextet]));
+        }
+        // PADDED TO A FOUR-CHARACTER GROUP, because a decoder is entitled to
+        // require it and a credential is not the place to find out which one
+        // does not.
+        for _ in chunk.len()..3 {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
+/// Ask the remote what it carries, over the service that will be used next.
+///
+/// **Discovery is service-specific and that is not a formality**: a server may
+/// advertise different refs and different capabilities to a reader and a writer,
+/// and the `old` side of a CAS must come from the receive-pack view or it is a
+/// value from a different conversation.
+///
+/// # Errors
+///
+/// A non-200 answer, a body that is not a well-formed advertisement, or a
+/// transport failure — all could-not-look (exit `3`), never a verdict about the
+/// lease. A lease gate that could not read the lease has not judged it.
+pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
+    let url = format!(
+        "{}/info/refs?service={}",
+        remote.trim_end_matches('/'),
+        service.as_str()
+    );
+    let responses = fetch::spend(&[Call {
+        url: &url,
+        headers: &headers("*/*", None),
+        body: None,
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: ref discovery answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_advertisement(&response.body, service)
+}
+
+/// Parse a smart-HTTP advertisement body.
+///
+/// Split out from [`advertise`] because it is the half that can be tested without
+/// a world — the transport's own suite proves the request, and this proves the
+/// reading, which is where every shape error actually lives.
+///
+/// # Errors
+///
+/// A body whose first pkt-line does not name `service`, or whose lines are not
+/// pkt-framed. Both are could-not-look.
+pub fn parse_advertisement(body: &[u8], service: Service) -> Result<Advertisement> {
+    let mut lines = pktlines(body)?;
+    // THE FIRST LINE IS THE SERVICE BANNER, and checking it is what stops a
+    // proxy's error page or a dumb-HTTP directory listing being read as an empty
+    // ref set — which would answer "the lease is unheld" about a server that
+    // never spoke git at all.
+    let banner = lines
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the advertisement is empty"))?;
+    let expected = format!("# service={}", service.as_str());
+    if banner.trim() != expected {
+        return Err(anyhow::anyhow!(
+            "lease: the advertisement does not announce {}",
+            service.as_str()
+        ));
+    }
+    lines.remove(0);
+
+    let mut refs = BTreeMap::new();
+    let mut capabilities = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let line = line.trim_end_matches('\n');
+        if line.is_empty() {
+            continue;
+        }
+        // CAPABILITIES RIDE THE FIRST REF, after a NUL. On a repository with no
+        // refs at all the server sends the zero id under `capabilities^{}`, which
+        // parses through this same path and contributes no ref — the empty-remote
+        // case, and one the lease meets on a fresh fleet.
+        let (payload, caps) = match line.split_once('\0') {
+            Some((payload, caps)) if index == 0 => (payload, Some(caps)),
+            _ => (line, None),
+        };
+        if let Some(caps) = caps {
+            capabilities = caps
+                .split(' ')
+                .filter(|c| !c.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+        let Some((id, name)) = payload.split_once(' ') else {
+            continue;
+        };
+        if name == "capabilities^{}" {
+            continue;
+        }
+        refs.insert(name.to_owned(), id.to_owned());
+    }
+    Ok(Advertisement { refs, capabilities })
+}
+
+/// One ref update, as receive-pack takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update {
+    /// What the ref must currently read for the swap to apply — [`ZERO`] to
+    /// create it.
+    pub old: String,
+    /// What it becomes — [`ZERO`] to delete it.
+    pub new: String,
+    /// The full ref name. `refs/heads/…`, per the lease's own pressure-tested
+    /// property.
+    pub name: String,
+}
+
+impl Update {
+    /// The command line receive-pack reads, without its pkt framing.
+    ///
+    /// `report-status` is requested on the first command's capability list,
+    /// because without it the server may answer with nothing at all and a silent
+    /// success is indistinguishable from a silent rejection — which for a CAS is
+    /// the whole answer.
+    #[must_use]
+    pub fn command(&self) -> String {
+        format!("{} {} {}\0report-status\n", self.old, self.new, self.name)
+    }
+}
+
+/// What the server did with a command list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// The swap applied: the ref read `old` and now reads `new`.
+    Applied,
+    /// The ref did not read `old`, so nothing was written. **This is the CAS
+    /// losing, which is an ordinary outcome rather than an error** — the caller
+    /// re-observes and decides again.
+    Rejected {
+        /// The server's own reason, carried verbatim as a pointer for a reader.
+        reason: String,
+    },
+}
+
+/// Parse receive-pack's report-status.
+///
+/// # Errors
+///
+/// A report that is not pkt-framed, or that carries neither `unpack` nor a
+/// per-ref line — could-not-look, because a push whose result cannot be read has
+/// not been shown to have applied.
+pub fn parse_report(body: &[u8]) -> Result<Outcome> {
+    let lines = pktlines(body)?;
+    let mut unpacked = false;
+    for line in &lines {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("unpack ") {
+            if rest != "ok" {
+                return Ok(Outcome::Rejected {
+                    reason: format!("unpack {rest}"),
+                });
+            }
+            unpacked = true;
+        } else if let Some(rest) = line.strip_prefix("ng ") {
+            return Ok(Outcome::Rejected {
+                reason: rest.to_owned(),
+            });
+        }
+    }
+    if !unpacked {
+        return Err(anyhow::anyhow!(
+            "lease: the push reported no unpack status, so nothing is known about it"
+        ));
+    }
+    // EVERY `ng` RETURNS ABOVE, so reaching here with a good unpack means every
+    // command was accepted. Read that way round rather than by counting `ok`
+    // lines: a server that reports the unpack and omits the per-ref line would
+    // otherwise read as a rejection it never issued.
+    Ok(Outcome::Applied)
+}
+
+/// Split a smart-HTTP body into its pkt-line payloads and whatever follows them.
+///
+/// **The framing is `gix-packetline`'s, not this module's**, for the reason
+/// `rules/policy-modules.md` gives one domain over: a second parser is a
+/// second AUTHORITY, and two readers of one wire can disagree about a truncation
+/// or length case neither author had in mind. What this function adds is the
+/// BOUNDARY — where the pkt-framed section stops and a raw packfile begins —
+/// because upload-pack answers `NAK` and then the pack with nothing framed
+/// between them.
+///
+/// A flush-pkt is a delimiter and never a payload, so a caller iterates lines
+/// without having to know where the sections are. Sideband is not decoded:
+/// neither exchange this module performs asks for it.
+///
+/// # Errors
+///
+/// A line whose length header promises more bytes than the body carries. That is
+/// could-not-look rather than a short read — reading the remainder as a whole
+/// line is how a proxy-truncated answer becomes a confident wrong verdict about
+/// the lease.
+fn pkt_split(body: &[u8]) -> Result<(Vec<String>, &[u8])> {
+    let mut lines = Vec::new();
+    let mut rest = body;
+    while !rest.is_empty() {
+        match gix_packetline::decode::streaming(rest) {
+            Ok(gix_packetline::decode::Stream::Complete {
+                line,
+                bytes_consumed,
+            }) => {
+                if let Some(payload) = line.as_slice() {
+                    lines.push(String::from_utf8_lossy(payload).into_owned());
+                }
+                rest = &rest[bytes_consumed..];
+            }
+            // A HEADER THAT PROMISES MORE THAN IS THERE IS A TRUNCATION, and it
+            // is the one decode outcome that must not be read as "the framed
+            // section ended here": the bytes it wants are missing rather than
+            // being something else.
+            Ok(gix_packetline::decode::Stream::Incomplete { bytes_needed }) => {
+                return Err(anyhow::anyhow!(
+                    "lease: a pkt-line is short by {bytes_needed} byte(s)"
+                ));
+            }
+            // ANYTHING ELSE IS THE BOUNDARY. `PACK` is not four hex digits, so
+            // this is how the framed section ends when a packfile follows it —
+            // and it is also how a proxy's HTML error page ends up as an empty
+            // line set, which every caller here refuses on its own terms rather
+            // than by trusting the framing.
+            Err(_) => break,
+        }
+    }
+    Ok((lines, rest))
+}
+
+/// The pkt-line payloads of a body that carries nothing else.
+///
+/// # Errors
+///
+/// As [`pkt_split`].
+fn pktlines(body: &[u8]) -> Result<Vec<String>> {
+    Ok(pkt_split(body)?.0)
+}
+
+/// Frame `payload` as one pkt-line.
+///
+/// # Errors
+///
+/// A payload that will not fit the 4-hex length header. The lease's own lines are
+/// three object ids and a ref name, so this is unreachable for its own callers
+/// and is checked anyway rather than truncating a command silently.
+fn pktline(payload: &str) -> Result<Vec<u8>> {
+    let mut framed = Vec::new();
+    gix_packetline::blocking_io::encode::data_to_write(payload.as_bytes(), &mut framed)
+        .map_err(|err| anyhow::anyhow!("lease: a pkt-line will not frame: {err}"))?;
+    Ok(framed)
+}
+
+/// The flush-pkt, which ends a section.
+const FLUSH: &[u8] = b"0000";
+
+/// Compose a receive-pack request body: the command list, a flush, then the pack.
+///
+/// # Errors
+///
+/// As [`pktline`].
+pub fn receive_pack_body(update: &Update, pack: &[u8]) -> Result<Vec<u8>> {
+    let mut body = pktline(&update.command())?;
+    body.extend_from_slice(FLUSH);
+    body.extend_from_slice(pack);
+    Ok(body)
+}
+
+/// Perform the compare-and-swap.
+///
+/// Returns [`Outcome::Rejected`] when the ref had moved — the CAS losing is an
+/// answer, not a failure, and the caller decides what to do about it.
+///
+/// # Errors
+///
+/// A transport failure or an unreadable report: could-not-look, exit `3`. **Every
+/// lease gate fails OPEN on that**, per the landing loop's own asymmetry — the
+/// cost of failing open is one matrix and the cost of failing closed is the fleet.
+pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
+    let url = format!(
+        "{}/{}",
+        remote.trim_end_matches('/'),
+        Service::ReceivePack.as_str()
+    );
+    let body = receive_pack_body(update, pack)?;
+    let content_type = format!("application/x-{}-request", Service::ReceivePack.as_str());
+    let responses = fetch::spend(&[Call {
+        url: &url,
+        headers: &headers(
+            &format!("application/x-{}-result", Service::ReceivePack.as_str()),
+            Some(&content_type),
+        ),
+        body: Some(&body),
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: receive-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    parse_report(&response.body)
+}
+
+/// A git object, as both halves of its identity: the id it hashes to and the
+/// bytes that hash to it.
+///
+/// Carried together because a pack writer needs the bytes and a CAS command needs
+/// the id, and computing the id twice from two places is how the two stop
+/// agreeing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    /// The object id, as forty hex characters.
+    pub id: String,
+    /// What kind of object it is.
+    ///
+    /// **Carried rather than assumed, and a live run is what taught that.** A
+    /// `want` for one commit returns its whole CLOSURE, so the pack a lease read
+    /// receives carries the commit AND the empty tree it points at — and a reader
+    /// that assumed every member was a commit refused the real answer while
+    /// passing every synthetic case, because the fixture packs it was tested
+    /// against carried one object each.
+    pub kind: gix::object::Kind,
+    /// The object's payload — no loose header, which is not part of what a pack
+    /// carries.
+    pub body: Vec<u8>,
+}
+
+/// The identity every lease object is authored and committed by.
+///
+/// **Supplied rather than read from configuration, and that is a portability fix
+/// rather than a style choice**: `git commit-tree` refuses with "Author identity
+/// unknown" on any machine with no configured `user.email`, which is every CI
+/// runner and every fresh clone — measured on the bash predecessor, where every
+/// acquiring test passed locally and failed in CI for exactly that reason.
+/// Pinning it also makes the lease object independent of whoever runs it, which
+/// is the right property for a commit nobody authored and nothing merges.
+const LEASE_NAME: &str = "batten";
+/// The email half of [`LEASE_NAME`].
+const LEASE_EMAIL: &str = "batten@localhost";
+
+/// Mint a lease object: a parentless commit over the empty tree carrying
+/// `message`.
+///
+/// **Parentless and over the empty tree** so it shares history with nothing and
+/// can never fast-forward over a live lease — the property that makes every swap
+/// a genuine CAS rather than an occasional silent merge.
+///
+/// **The caller supplies `seconds`, and the message must carry a nonce.** Git
+/// addresses objects by content, so two mints agreeing on every field produce the
+/// SAME id, and pushing an id the ref already points at is an "up to date" no-op
+/// that reports success — a rejected claim read as a win. Measured on the bash
+/// predecessor: without a nonce a second acquire reported "acquired" rather than
+/// recognising its own lease, and a renew left the ref unmoved. This function
+/// does not invent one, because a mint that salted itself could not be tested for
+/// the property it exists to have.
+///
+/// # Errors
+///
+/// A commit that will not serialise, or a hash that will not finalise. Both are
+/// could-not-look.
+pub fn lease_object(message: &str, seconds: i64) -> Result<Object> {
+    use gix::objs::WriteTo as _;
+
+    let who = gix::actor::Signature {
+        name: LEASE_NAME.into(),
+        email: LEASE_EMAIL.into(),
+        time: crate::git::utc_at(seconds),
+    };
+    let commit = gix::objs::Commit {
+        tree: gix::hash::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+        parents: std::iter::empty().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: message.into(),
+        extra_headers: Vec::new(),
+    };
+    let mut body = Vec::new();
+    commit
+        .write_to(&mut body)
+        .map_err(|err| anyhow::anyhow!("lease: the lease commit will not serialise: {err}"))?;
+    let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Commit, &body)
+        .map_err(|err| anyhow::anyhow!("lease: the lease commit will not hash: {err}"))?;
+    Ok(Object {
+        id: id.to_string(),
+        kind: gix::object::Kind::Commit,
+        body,
+    })
+}
+
+/// The pack type numbers, which are the wire's own and not gix's.
+///
+/// Only the four undeltified kinds are named. `6` and `7` are the delta forms,
+/// refused by number where they are met rather than given a name here, since
+/// naming them would suggest a reader that resolves them.
+const fn pack_type(kind: gix::object::Kind) -> u8 {
+    match kind {
+        gix::object::Kind::Commit => 1,
+        gix::object::Kind::Tree => 2,
+        gix::object::Kind::Blob => 3,
+        gix::object::Kind::Tag => 4,
+    }
+}
+
+/// The inverse of [`pack_type`], or `None` for a delta or an unassigned number.
+const fn pack_kind(number: u8) -> Option<gix::object::Kind> {
+    match number {
+        1 => Some(gix::object::Kind::Commit),
+        2 => Some(gix::object::Kind::Tree),
+        3 => Some(gix::object::Kind::Blob),
+        4 => Some(gix::object::Kind::Tag),
+        _ => None,
+    }
+}
+/// The pack format this module writes and reads.
+const PACK_VERSION: u32 = 2;
+
+/// Write a packfile carrying `objects`, each undeltified.
+///
+/// **No deltas, deliberately.** A lease is one small parentless commit, so a
+/// delta would save nothing and would put a second encoding on a path whose whole
+/// job is to be unambiguous. The reader below refuses one for the same reason
+/// rather than growing a resolver it can never exercise.
+///
+/// # Errors
+///
+/// A body that will not compress, or a trailer that will not hash.
+pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+
+    let count = u32::try_from(objects.len())
+        .map_err(|_| anyhow::anyhow!("lease: a pack cannot carry {} objects", objects.len()))?;
+    let mut pack = Vec::from(*b"PACK");
+    pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
+    pack.extend_from_slice(&count.to_be_bytes());
+    for object in objects {
+        // The type/size header: four size bits in the first byte beside the
+        // type, then seven per continuation byte, little-endian, with the high
+        // bit meaning "another byte follows".
+        let size = object.body.len();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "masked to four bits before the cast"
+        )]
+        // A SUM OF DISJOINT FIELDS rather than `|`, which `^` would equal: the
+        // type sits above bit 3 and the size bits below it.
+        let mut byte = (pack_type(object.kind) << 4) + ((size & 0x0f) as u8);
+        // ANOTHER BYTE WHILE ANY SIZE IS LEFT, asked as "is the rest non-zero"
+        // rather than compared: a comparison's `>=` mutant never lets the rest
+        // reach a stop, and hangs where it should fail.
+        let mut rest = size >> 4;
+        while let Some(left) = std::num::NonZeroUsize::new(rest) {
+            // Below 0x80 by construction, so the continuation bit is added.
+            pack.push(byte + 0x80);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "masked to seven bits before the cast"
+            )]
+            {
+                byte = (left.get() & 0x7f) as u8;
+            }
+            rest = left.get() >> 7;
+        }
+        pack.push(byte);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder
+            .write_all(&object.body)
+            .and_then(|()| encoder.finish())
+            .map_err(|err| anyhow::anyhow!("lease: an object will not compress: {err}"))
+            .map(|compressed| pack.extend_from_slice(&compressed))?;
+    }
+    // THE TRAILER IS OVER EVERYTHING BEFORE IT, which is what makes a truncated
+    // pack detectable by the server rather than half-applied.
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(&pack);
+    let checksum = hasher
+        .try_finalize()
+        .map_err(|err| anyhow::anyhow!("lease: the pack trailer will not hash: {err}"))?;
+    pack.extend_from_slice(checksum.as_slice());
+    Ok(pack)
+}
+
+/// Read the undeltified objects out of a packfile.
+///
+/// # Errors
+///
+/// A body that is not a version-2 pack, an object that is a delta, a member that
+/// will not inflate, or a pack carrying fewer objects than its header claims. All
+/// could-not-look: a lease body that cannot be read has not been read, and the
+/// caller fails open on that rather than deciding from a guess.
+pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
+    if pack.len() < 12 || &pack[..4] != b"PACK" {
+        return Err(anyhow::anyhow!("lease: the answer is not a packfile"));
+    }
+    let version = u32::from_be_bytes([pack[4], pack[5], pack[6], pack[7]]);
+    if version != PACK_VERSION {
+        return Err(anyhow::anyhow!(
+            "lease: the pack is version {version}, which this reader does not speak"
+        ));
+    }
+    let count = u32::from_be_bytes([pack[8], pack[9], pack[10], pack[11]]);
+    let mut cursor = 12_usize;
+    let mut objects: Vec<Object> = Vec::new();
+    // WHERE EACH MEMBER STARTED, because an offset delta names its base by the
+    // distance back to it. The index is the pack's own coordinate system and
+    // there is no other way to resolve one — an id would do, but an ofs-delta
+    // deliberately does not carry one.
+    let mut at_offset: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for _ in 0..count {
+        let start = cursor;
+        let rest = &pack[cursor..];
+        let (number, size, header) = pack_header(rest)?;
+        cursor += header;
+        // A delta names a base, and the two forms name it differently: `6` by a
+        // negative offset into this same pack, `7` by object id. Both are read
+        // here rather than refused, because a real server delta-compresses any
+        // multi-object pack and a fetch that refused them could not read one.
+        let base = match number {
+            OFS_DELTA => {
+                let (distance, read) = offset_base(&pack[cursor..])?;
+                cursor += read;
+                let base_at = start.checked_sub(distance).ok_or_else(|| {
+                    anyhow::anyhow!("lease: an offset delta points before the pack")
+                })?;
+                let index = *at_offset.get(&base_at).ok_or_else(|| {
+                    anyhow::anyhow!("lease: an offset delta names no member of this pack")
+                })?;
+                Some(index)
+            }
+            REF_DELTA => {
+                let raw = pack.get(cursor..cursor + 20).ok_or_else(|| {
+                    anyhow::anyhow!("lease: a reference delta runs off the end of the pack")
+                })?;
+                cursor += 20;
+                let id = crate::digest::hex(raw);
+                let index = objects
+                    .iter()
+                    .position(|object| object.id == id)
+                    .ok_or_else(|| {
+                        // A THIN PACK NAMES A BASE THE PACK DOES NOT CARRY. Refused
+                        // rather than resolved from the odb: nothing here asks for a
+                        // thin pack, so accepting one would be a path no test reaches.
+                        anyhow::anyhow!("lease: a reference delta names a base outside this pack")
+                    })?;
+                Some(index)
+            }
+            _ => None,
+        };
+        let kind = match base {
+            Some(_) => gix::object::Kind::Blob,
+            None => pack_kind(number).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "lease: the pack carries object type {number}, which this reader does not \
+                     resolve"
+                )
+            })?,
+        };
+        let rest = &pack[cursor..];
+        let mut body = Vec::with_capacity(size);
+        let mut inflate = flate2::Decompress::new(true);
+        let status = inflate
+            .decompress_vec(rest, &mut body, flate2::FlushDecompress::Finish)
+            .map_err(|err| anyhow::anyhow!("lease: a pack member will not inflate: {err}"))?;
+        // THE STREAM MUST HAVE ENDED, and the length check below does not imply
+        // it: a zlib stream's last bytes are its adler-32, so a member truncated
+        // by exactly that much still inflates to its full declared size and only
+        // the end-of-stream marker is missing. Measured here — the truncation
+        // case passed on the length check alone.
+        if status != flate2::Status::StreamEnd {
+            return Err(anyhow::anyhow!(
+                "lease: a pack member's compressed stream does not end"
+            ));
+        }
+        if body.len() != size {
+            return Err(anyhow::anyhow!(
+                "lease: a pack member inflated to {} bytes and its header claims {size}",
+                body.len()
+            ));
+        }
+        let consumed = usize::try_from(inflate.total_in())
+            .map_err(|_| anyhow::anyhow!("lease: a pack member's length does not fit"))?;
+        cursor += consumed;
+        // A DELTA'S INFLATED BYTES ARE INSTRUCTIONS, NOT AN OBJECT. Applying them
+        // to the base yields the object, and the KIND is the base's — a delta
+        // carries no kind of its own, which is why the placeholder above is
+        // replaced here rather than trusted.
+        let (kind, body) = match base {
+            Some(index) => {
+                let base = objects
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's base has gone missing"))?;
+                (base.kind, apply_delta(&base.body, &body)?)
+            }
+            None => (kind, body),
+        };
+        // HASHED AS ITS OWN KIND, because the loose header the id is taken over
+        // names it: hashing a tree as a commit yields an id nothing on the remote
+        // carries, and `fetch_object`'s "does this answer carry what was asked
+        // for" check would then refuse every real answer.
+        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &body)
+            .map_err(|err| anyhow::anyhow!("lease: a pack member will not hash: {err}"))?;
+        at_offset.insert(start, objects.len());
+        objects.push(Object {
+            id: id.to_string(),
+            kind,
+            body,
+        });
+    }
+    Ok(objects)
+}
+
+/// The pack type number for a delta naming its base by offset.
+const OFS_DELTA: u8 = 6;
+
+/// The pack type number for a delta naming its base by object id.
+const REF_DELTA: u8 = 7;
+
+/// Read an offset delta's base distance — git's other variable-length integer.
+///
+/// **It is NOT the size encoding [`pack_header`] uses**, and that is the trap:
+/// this one adds `1 << 7` at each continuation so the encoding is dense rather
+/// than merely little-endian, which makes a decoder written from the size
+/// encoding read a base that is subtly too close.
+///
+/// # Errors
+///
+/// An encoding that runs off the end of the pack.
+fn offset_base(rest: &[u8]) -> Result<(usize, usize)> {
+    let mut index = 0;
+    let mut byte = *rest
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: an offset delta has no base"))?;
+    let mut value = usize::from(byte & 0x7f);
+    index += 1;
+    while byte & 0x80 != 0 {
+        byte = *rest.get(index).ok_or_else(|| {
+            anyhow::anyhow!("lease: an offset delta runs off the end of the pack")
+        })?;
+        value = value
+            .checked_add(1)
+            .and_then(|value| value.checked_shl(7))
+            .and_then(|value| value.checked_add(usize::from(byte & 0x7f)))
+            .ok_or_else(|| anyhow::anyhow!("lease: an offset delta's base does not fit"))?;
+        index += 1;
+    }
+    Ok((value, index))
+}
+
+/// Apply a delta stream to its base.
+///
+/// The format is two varint sizes then a run of instructions: a high bit set
+/// means COPY a span out of the base, clear means INSERT the next `n` literal
+/// bytes. Both sizes are checked against what actually happens, because a delta
+/// that produces the wrong length silently produces the wrong OBJECT — and an
+/// object hashed from wrong bytes gets an id nothing asked for, which surfaces
+/// far from here.
+///
+/// # Errors
+///
+/// A stream that runs off its own end, names a span outside the base, or produces
+/// a result of a length its own header did not declare.
+fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
+    let mut cursor = 0;
+    let declared_base = delta_size(delta, &mut cursor)?;
+    if declared_base != base.len() {
+        return Err(anyhow::anyhow!(
+            "lease: a delta expects a {declared_base}-byte base and its base is {}",
+            base.len()
+        ));
+    }
+    let declared = delta_size(delta, &mut cursor)?;
+    let mut out = Vec::with_capacity(declared);
+    while cursor < delta.len() {
+        let instruction = delta[cursor];
+        cursor += 1;
+        if instruction & 0x80 == 0 {
+            // INSERT. A zero-length insert is not a no-op, it is a malformed
+            // stream — git never emits one and treating it as harmless would let
+            // a corrupt delta loop.
+            let length = usize::from(instruction & 0x7f);
+            if length == 0 {
+                return Err(anyhow::anyhow!(
+                    "lease: a delta carries a zero-length insert"
+                ));
+            }
+            let bytes = delta
+                .get(cursor..cursor + length)
+                .ok_or_else(|| anyhow::anyhow!("lease: a delta's insert runs off its end"))?;
+            out.extend_from_slice(bytes);
+            cursor += length;
+            continue;
+        }
+        // COPY. Offset and length are each assembled from whichever of the four
+        // and three following bytes the instruction's low bits say are present,
+        // so an absent byte means that octet is zero rather than that the stream
+        // is short.
+        let mut offset = 0_usize;
+        for shift in 0..4 {
+            if instruction & (1 << shift) != 0 {
+                let byte = *delta
+                    .get(cursor)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+                offset |= usize::from(byte) << (shift * 8);
+                cursor += 1;
+            }
+        }
+        let mut length = 0_usize;
+        for shift in 0..3 {
+            if instruction & (0x10 << shift) != 0 {
+                let byte = *delta
+                    .get(cursor)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+                length |= usize::from(byte) << (shift * 8);
+                cursor += 1;
+            }
+        }
+        // The one magic number in the format: a length of zero means 0x10000.
+        if length == 0 {
+            length = 0x1_0000;
+        }
+        let span = base
+            .get(offset..offset + length)
+            .ok_or_else(|| anyhow::anyhow!("lease: a delta copies a span outside its base"))?;
+        out.extend_from_slice(span);
+    }
+    if out.len() != declared {
+        return Err(anyhow::anyhow!(
+            "lease: a delta produced {} bytes and declared {declared}",
+            out.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// One of a delta header's two little-endian varint sizes.
+fn delta_size(delta: &[u8], cursor: &mut usize) -> Result<usize> {
+    let mut value = 0_usize;
+    let mut shift = 0_u32;
+    loop {
+        let byte = *delta
+            .get(*cursor)
+            .ok_or_else(|| anyhow::anyhow!("lease: a delta header runs off its end"))?;
+        *cursor += 1;
+        // **THE SHIFT IS BOUNDED, and it was not** (review of #848). `shift += 7`
+        // with no bound over bytes the REMOTE supplied: ten continuation bytes
+        // reach 70, which is `attempt to shift left with overflow` in a debug
+        // build — a panic on a reachable path, which `.claude/rules/rust.md`
+        // forbids — and a silently masked shift in release, so the decoded size is
+        // wrong and surfaces as the generic length mismatch rather than as the
+        // malformed input it is. A truncated or corrupted pack through a flaky
+        // proxy is enough; no malice required.
+        //
+        // A varint wider than the machine's own word cannot describe a size this
+        // process could allocate, so it is could-not-look rather than a value to
+        // salvage — the same direction every other reader on this path takes.
+        value |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: a delta header's size varint is out of range")
+        })?;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+}
+
+/// Read a pack object header: its type, its inflated size, and its own length.
+///
+/// # Errors
+///
+/// A header that runs off the end of the pack.
+fn pack_header(rest: &[u8]) -> Result<(u8, usize, usize)> {
+    let first = *rest
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the pack ends where an object header should be"))?;
+    let kind = (first >> 4) & 0x07;
+    let mut size = usize::from(first & 0x0f);
+    let mut shift = 4_u32;
+    let mut index = 1;
+    let mut byte = first;
+    while byte & 0x80 != 0 {
+        byte = *rest.get(index).ok_or_else(|| {
+            anyhow::anyhow!("lease: an object header runs off the end of the pack")
+        })?;
+        // Bounded for `delta_size`'s reason, one function up: the same unbounded
+        // shift over the same remote-supplied bytes.
+        size |= usize::from(byte & 0x7f).checked_shl(shift).ok_or_else(|| {
+            anyhow::anyhow!("lease: an object header's size varint is out of range")
+        })?;
+        shift += 7;
+        index += 1;
+    }
+    Ok((kind, size, index))
+}
+
+/// Read one object back from the remote, by id.
+///
+/// **Plain `want`/`done` with no `deepen` and no sideband.** A lease is a
+/// parentless commit over the empty tree, so its whole closure is itself — there
+/// is no history to shorten, and asking for a shallow negotiation would add a
+/// section to parse for no object saved. Without sideband the packfile follows
+/// the `NAK` line raw, which is the boundary [`pkt_split`] returns.
+///
+/// # Errors
+///
+/// A transport failure, a non-200 answer, an unreadable pack, or a pack that does
+/// not carry the id that was asked for. The last is the load-bearing one: a
+/// server answering with some OTHER object is not an answer about this lease, and
+/// accepting it would let a stale or unrelated body decide who holds the matrix.
+pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
+    let url = format!(
+        "{}/{}",
+        remote.trim_end_matches('/'),
+        Service::UploadPack.as_str()
+    );
+    let mut body = pktline(&format!("want {id} no-progress\n"))?;
+    body.extend_from_slice(FLUSH);
+    body.extend_from_slice(&pktline("done\n")?);
+    let responses = fetch::spend(&[Call {
+        url: &url,
+        headers: &headers(
+            &format!("application/x-{}-result", Service::UploadPack.as_str()),
+            Some(&format!(
+                "application/x-{}-request",
+                Service::UploadPack.as_str()
+            )),
+        ),
+        body: Some(&body),
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: upload-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    let (_, pack) = pkt_split(&response.body)?;
+    objects_in(pack)?
+        .into_iter()
+        .find(|object| object.id == id)
+        .ok_or_else(|| anyhow::anyhow!("lease: the answer does not carry the object asked for"))
+}
+
+/// The lease body's own fields, as `mint` writes them and `observe` reads them.
+///
+/// **Three of these are ADVISORY and three are not, and the separation is
+/// load-bearing rather than documentary.** `holder` decides ownership and nothing
+/// else does; `expires` decides liveness. `branch`, `head`, `next` and `progress`
+/// are read by waiters and by CI and by NO predicate that decides who holds the
+/// lease — because an identity another clone could DERIVE (from a branch, a head,
+/// an issue key) is an identity another clone could accidentally claim, which is
+/// the two-holders bug the whole design exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Body {
+    /// The clone that holds it. The ONE field ownership is decided by.
+    pub holder: String,
+    /// The instant it lapses, or `0` for a tombstone.
+    ///
+    /// **`0` is a sentinel and not an instant.** A release is a DECLARATION and an
+    /// expiry is an INFERENCE, and only the second needs a clock; epoch 0 is
+    /// unmistakable under any clock and on any machine. Conflating the two made a
+    /// release wait a full beat before anyone could take it, and made three
+    /// separate renderers print a wall-clock epoch as an age.
+    pub expires: i64,
+    /// The branch this lease authorises to spend a matrix. Advisory.
+    pub branch: String,
+    /// The commit that is about to become trunk, for a waiter deciding what to
+    /// rebase onto. Advisory.
+    pub head: String,
+    /// The one admitted successor, or empty. Advisory.
+    pub next: String,
+    /// A peer's request that the holder release, naming the peer. Advisory, and
+    /// the most advisory field here (CLOUD-1778).
+    ///
+    /// # Why a REQUEST rather than an eviction
+    ///
+    /// No failure detector is accurate in an asynchronous system, so every
+    /// suspicion that a holder is wedged is a heuristic and some of them are
+    /// wrong. A design that let a peer TAKE the lease on suspicion would be wrong
+    /// under exactly those cases. So this field carries no authority at all: the
+    /// holder reads it, and the holder decides.
+    ///
+    /// The unilateral half — a fenced compare-and-set that advances a token the
+    /// evicted holder's next write then fails — is the referee's and is not built
+    /// here. Both halves exist because they are sound for different things: a
+    /// request is cheap and correct when the holder is healthy but idle, and
+    /// fencing is the only thing that is safe when it is not.
+    ///
+    /// # IT IS NOT A STEAL WEARING A DIFFERENT NAME
+    ///
+    /// Honouring a notice RELEASES the lease; it does not hand it to the
+    /// requester, who must then win the next acquire like anybody else. That is
+    /// the property to protect, and it is the same sentence [`reservation`]
+    /// carries about the holder id: a mechanism by which naming yourself gets you
+    /// the lease is a steal however politely it is spelled. A waiter that could
+    /// evict-and-inherit would make "I suspect you are stuck" the fastest route to
+    /// the front of the queue.
+    ///
+    /// # AND IT IS HONOURED AT A LAP BOUNDARY, NEVER MID-MATRIX
+    ///
+    /// The beat keeps renewing while a notice is pending, which looks like
+    /// ignoring it and is the opposite. A holder that stopped renewing here would
+    /// lose the lease inside its own CI matrix, a second lander would start, and
+    /// that is precisely the overlap [`beat`] was written to close. The notice is
+    /// reported to the lap driver, which honours it where releasing costs nothing
+    /// — between laps, with no matrix in flight.
+    pub stand_down: String,
+    /// The holder's own progress token. **Opaque by design**: a rival tests it for
+    /// EQUALITY OVER TIME and never interprets it, so no clock crosses the wire.
+    /// Advisory.
+    pub progress: String,
+    /// The body format's MAJOR, and the one field a reader may refuse over.
+    ///
+    /// **"There is one administrator" is false here by construction**: the fleet
+    /// runs whatever versions its agents happen to carry, and nothing coordinates
+    /// an upgrade. So a body needs a way to say "you do not speak this", and a
+    /// reader needs a way to hear it that is not "parse it loosely and act on the
+    /// fields I recognised" — which is what the old parser did, and which turns a
+    /// format change into silent disagreement across a mixed fleet.
+    ///
+    /// **ABSENT MEANS 1, AND THAT IS THE COMPATIBILITY HINGE.** Every lease
+    /// written before this field existed carries no `schema:` line, and those
+    /// bodies are exactly schema 1 — so the default is a reading rather than a
+    /// guess. A reader seeing a major it does not know treats the lease as
+    /// [`Observed::Garbage`]: held, respected until it ages out, and diagnosable.
+    /// That is the same safe arm an unreadable lease already takes, and the
+    /// opposite of ignoring the field and racing the writer.
+    ///
+    /// **READERS SHIP BEFORE WRITERS**, which is why this lands emitting 1 rather
+    /// than 2. An old reader ignores an unknown key, so it would parse a `schema:
+    /// 2` body loosely and act on it — the exact failure this field prevents. The
+    /// major may only be raised once a release that REFUSES an unknown one is out
+    /// across the fleet.
+    pub schema: u32,
+    /// The batten version that minted this body. Advisory, and never a gate.
+    ///
+    /// Advertised so that version skew is VISIBLE rather than inferred from
+    /// behaviour. A waiter that sees a holder older than itself can say so, and a
+    /// stale agent can be asked to stand down by a peer — but the asking is
+    /// advisory and this field decides nothing, for [`Body`]'s stated reason: an
+    /// identity another clone could derive is one another clone could accidentally
+    /// claim. Refusing to honour a lease because its writer is old would hand
+    /// every upgrade a fleet-wide outage.
+    pub writer: String,
+    /// What makes every mint a distinct object. See [`lease_object`].
+    pub nonce: String,
+}
+
+/// The body major this build writes and is the highest it can read.
+///
+/// One constant for both directions deliberately: a build that wrote a major it
+/// could not read would be announcing a format to a fleet it is not itself part
+/// of.
+pub const BODY_SCHEMA: u32 = 1;
+
+/// This build's own version, as [`Body::writer`] advertises it.
+///
+/// `CARGO_PKG_VERSION` here, and `spec.rs`'s argument against it does not reach
+/// this use: that one refuses it for a SPEC version, where the number is a claim
+/// about a document's content and must not move just because the crate shipped.
+/// This is the opposite — the claim IS "which build wrote this", so tracking the
+/// crate is the whole point.
+#[must_use]
+pub fn writer_version() -> String {
+    String::from(env!("CARGO_PKG_VERSION"))
+}
+
+/// The banner every lease body opens with, so a commit that is not a lease is not
+/// read as one.
+const BANNER: &str = "land-lock";
+
+impl Body {
+    /// The body as [`lease_object`] takes it.
+    #[must_use]
+    pub fn render(&self) -> String {
+        // `nonce:` STAYS LAST. Its uniqueness argument is what makes every mint a
+        // distinct sha, and the check half treats it as the terminal line.
+        //
+        // `schema:` IS FIRST AFTER THE BANNER, so a reader that refuses an unknown
+        // major has seen it before it has read a single field it might act on.
+        // Ordering is not what makes the refusal correct — the parser reads the
+        // whole body before deciding — but a format whose version is buried in the
+        // middle invites a streaming reader that acts before it checks.
+        format!(
+            "{BANNER}\nschema: {}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nstand-down: {}\nprogress: {}\nwriter: {}\nnonce: {}\n",
+            self.schema,
+            self.holder,
+            self.expires,
+            self.branch,
+            self.head,
+            self.next,
+            self.stand_down,
+            self.progress,
+            self.writer,
+            self.nonce
+        )
+    }
+
+    /// Explicitly handed over, as opposed to merely lapsed. No clock involved.
+    ///
+    /// Private (CLOUD-2242): a reader outside this module asks
+    /// [`Observed::state`], never this.
+    #[must_use]
+    const fn released(&self) -> bool {
+        self.expires == 0
+    }
+
+    /// Lapsed as of `now`.
+    ///
+    /// `>=`, not `>`: a lease with zero seconds left has none, and the release
+    /// tombstone sets the expiry to exactly now. Under `>` that read as still-held
+    /// for one more second, so a release did not free the lease until the clock
+    /// ticked — measured, as a release the releaser itself still saw as held.
+    #[must_use]
+    const fn expired(&self, now: i64) -> bool {
+        now >= self.expires
+    }
+}
+
+/// Read a lease body out of a commit object.
+///
+/// **A commit that does not open with the banner is not a lease**, and returning
+/// `None` for it is the same refusal [`parse_advertisement`] makes about a body
+/// that never announced a service: a foreign object parsed loosely yields empty
+/// fields, which read as an unheld lease.
+///
+/// A body with no `expires:` line yields `None` for the same reason rather than
+/// defaulting here — the default belongs to the caller that knows its own TTL, and
+/// a parser inventing one would report a lease it could not read as one it could.
+///
+/// **A present-but-empty `schema:` is not an absent one.** The empty-value block
+/// below carries an arm for it so it takes the same refusal an unparseable major
+/// takes; without that arm it falls to `_ => {}`, `schema` stays `None`, and the
+/// reading turns `None` into [`BODY_SCHEMA`] — a body whose writer disagrees with
+/// us about what the field IS, parsed loosely and acted on, which is the exact
+/// failure the major was added to stop (CLOUD-1792).
+// The arm, reverted. The old spelling stayed green under the suite that already
+// existed because `schema: tomorrow` contains `": "` and reaches the match arm —
+// two spellings of one case taking different branches, and the test picked the
+// branch that already worked.
+#[must_use]
+pub fn parse_body(object: &[u8]) -> Option<Body> {
+    let text = String::from_utf8_lossy(object);
+    let mut body = Body::default();
+    let mut banner = false;
+    let mut expires = None;
+    // `Option<Option<u32>>`: absent, present-and-unreadable, present-and-a-number.
+    // The three are different answers and collapsing the middle into either
+    // neighbour is the loose parse this field exists to refuse.
+    let mut schema: Option<Option<u32>> = None;
+    for line in text.lines() {
+        if line == BANNER {
+            banner = true;
+            continue;
+        }
+        let Some((key, value)) = line.split_once(": ") else {
+            // The commit's own headers and its blank separator land here, as does
+            // a field written with an empty value — `branch: ` has no `": "` to
+            // split on once the trailing space is gone, and an empty advisory
+            // field is a READING rather than an absence.
+            if let Some(key) = line.strip_suffix(':') {
+                match key {
+                    "branch" => body.branch.clear(),
+                    "head" => body.head.clear(),
+                    "next" => body.next.clear(),
+                    "stand-down" => body.stand_down.clear(),
+                    "progress" => body.progress.clear(),
+                    // `schema:` with nothing after it is NOT the absent field.
+                    // Absence means "written before the field existed", and reads
+                    // as major 1; a field that is present and says nothing was
+                    // written by something that disagrees with us about what the
+                    // field IS, which is the whole reason the major exists. Route
+                    // it to the same refusal an unparseable value takes.
+                    "schema" => schema = Some(None),
+                    _ => {}
+                }
+            }
+            continue;
+        };
+        match key {
+            "holder" => value.clone_into(&mut body.holder),
+            "expires" => expires = value.parse().ok(),
+            "branch" => value.clone_into(&mut body.branch),
+            "head" => value.clone_into(&mut body.head),
+            "next" => value.clone_into(&mut body.next),
+            "progress" => value.clone_into(&mut body.progress),
+            "writer" => value.clone_into(&mut body.writer),
+            "stand-down" => value.clone_into(&mut body.stand_down),
+            "nonce" => value.clone_into(&mut body.nonce),
+            // PARSED PERMISSIVELY, REFUSED BELOW. A `schema:` line this reader
+            // cannot turn into a number is not schema 1 — it is a body written by
+            // something that does not agree with us about what the field even is,
+            // and reading it as the oldest format would be the loose parse this
+            // field exists to stop. `None` here falls into the unknown-major arm.
+            "schema" => schema = Some(value.parse::<u32>().ok()),
+            _ => {}
+        }
+    }
+    if !banner {
+        return None;
+    }
+    // ABSENT IS 1, UNREADABLE AND TOO-NEW ARE REFUSALS. Every body written before
+    // this field existed is schema 1, so the absent case is a reading rather than
+    // a default — and a major above what this build speaks yields `None`, which
+    // the caller renders as `Observed::Garbage`: still held, still respected until
+    // it ages out, and now diagnosable instead of silently misread.
+    body.schema = match schema {
+        None => BODY_SCHEMA,
+        Some(Some(major)) if major <= BODY_SCHEMA => major,
+        Some(_) => return None,
+    };
+    body.expires = expires?;
+    Some(body)
+}
+
+/// What a read of the remote lease found.
+///
+/// **Absent and unreadable are different states and must never collapse.** An
+/// unreachable remote read as an unheld lease is precisely the misread that lets
+/// two sessions land at once, so "could not look" is `Err` from the reader and
+/// never a variant here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observed {
+    /// No lease ref on the remote. The next acquire wins.
+    Absent,
+    /// A lease is there, at `sha`, saying `body`.
+    Held {
+        /// The lease object's id — the CAS's expected value.
+        sha: String,
+        /// What it says.
+        body: Body,
+    },
+    /// The ref is there and carries no lease body.
+    ///
+    /// **A separate state rather than a default body, and that distinction is the
+    /// whole of what the health gate reads.** Substituting a full-TTL body keeps
+    /// the SAFE behaviour — a lease we do not understand is respected until it
+    /// ages out, never treated as free — but it also makes the wrong ref
+    /// indistinguishable from a healthy hold, so a stray push blocks landing for a
+    /// TTL with nothing anywhere saying why. Every decision below still treats
+    /// this as held; only the report can now tell them apart.
+    Garbage {
+        /// The object the ref points at, for the CAS's expected value.
+        sha: String,
+        /// Why it did not read as a lease. A pointer, never the ref body.
+        why: String,
+    },
+}
+
+/// What a reading of the lease MEANS at one instant: exactly one state, decided
+/// once (CLOUD-2242).
+///
+/// [`Observed::Held`] is "a ref that parses", which includes a released
+/// tombstone and an expired body, and every reader re-derived liveness by hand —
+/// 43 sites asking `released() || expired(now)`. One forgot: `holder_head` took
+/// any parsed body as a live holder and every lap speculated on a branch whose
+/// lease had lapsed hours before. `Body::released` and `Body::expired` are
+/// private to this module, so a reader outside it cannot ask; it matches here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lease<'a> {
+    /// No lease ref on the remote.
+    Absent,
+    /// Held by `body.holder` as of the instant asked.
+    Live {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// Lapsed: its expiry has passed without a release.
+    Expired {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// Explicitly handed over: the release tombstone.
+    Released {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// The ref carries no lease body: respected until it ages out.
+    Garbage {
+        /// The object the ref points at.
+        sha: &'a str,
+        /// Why it did not read as a lease.
+        why: &'a str,
+    },
+}
+
+impl Observed {
+    /// The one classification. Released before expired: the tombstone's expiry
+    /// is zero, so it is also expired, and a release is the more specific fact.
+    #[must_use]
+    pub fn state(&self, now: i64) -> Lease<'_> {
+        match self {
+            Self::Absent => Lease::Absent,
+            Self::Garbage { sha, why } => Lease::Garbage { sha, why },
+            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },
+            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },
+            Self::Held { sha, body } => Lease::Live { sha, body },
+        }
+    }
+}
+
+impl<'a> Lease<'a> {
+    /// The live holder's body, or `None` for every other state.
+    #[must_use]
+    pub const fn live(self) -> Option<&'a Body> {
+        match self {
+            Self::Live { body, .. } => Some(body),
+            Self::Absent | Self::Expired { .. } | Self::Released { .. } | Self::Garbage { .. } => {
+                None
+            }
+        }
+    }
+}
+
+/// May this branch spend a matrix right now?
+///
+/// **The one question a runner can ask.** Every other verb answers about a CLONE
+/// — ownership is a holder id minted per clone, which a runner has nothing to
+/// compare against. A branch name is the one identifier both ends see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authority {
+    /// Run, for the reason given.
+    Run(String),
+    /// Stop: the lease authorises somebody else, named in the reason.
+    Stop(String),
+}
+
+/// Decide [`Authority`] over a lease reading.
+///
+/// **`None` IS COULD-NOT-LOOK AND IT ANSWERS `Run`.** Every other refusal in this
+/// design fails closed and this one deliberately does not: a lease it cannot read
+/// stops EVERY job in the fleet, where waving one matrix through costs one matrix.
+/// The asymmetry is the whole justification, and it is why an unreachable remote
+/// answers `Run` here while it is an error to a status reader.
+///
+/// A lease carrying no branch is the same reading one level in — during the
+/// rollout of the field that row was not an edge case, it was every lease.
+#[must_use]
+pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authority {
+    let Some(observed) = observed else {
+        return Authority::Run(String::from(
+            "cannot read the lease; running rather than stopping the fleet",
+        ));
+    };
+    // GARBAGE FAILS OPEN HERE like everything else this arm cannot read. It is the
+    // health gate's finding, not this one's: stopping the fleet over a ref
+    // somebody mis-pushed is the cost this arm exists never to pay.
+    //
+    // READ IT WITH `turn`'S GARBAGE ARM, WHICH ANSWERS `Turn::Wait`. Neither arm
+    // is the whole reading and this one alone is the more reassuring half. An
+    // unparseable body is UNHELD AND UNCONTESTED: every reader runs (here), and
+    // nobody takes the ref (there), so `main` can take two landers at once. That
+    // is the cost a stricter `parse_body` would spend — a body a newer build
+    // writes and an older one rejects is not a lease the older one waits for, it
+    // is one it ignores while landing. Anyone weighing that change reads both
+    // arms, or reads half the consequence (CLOUD-1703).
+    let body = match observed.state(now) {
+        Lease::Live { body, .. } => body,
+        Lease::Garbage { .. } => {
+            return Authority::Run(String::from(
+                "the lease does not parse; running rather than stopping the fleet",
+            ));
+        }
+        Lease::Absent | Lease::Expired { .. } | Lease::Released { .. } => {
+            return Authority::Run(format!("no lease is held; {want} may run"));
+        }
+    };
+    if body.branch.is_empty() {
+        return Authority::Run(String::from(
+            "the lease names no branch; running rather than guessing",
+        ));
+    }
+    if body.branch == want {
+        return Authority::Run(format!("the lease authorises {want}"));
+    }
+    // THE ADMITTED SUCCESSOR, and the reason the bound is two rather than one. A
+    // branch that reserved the slot behind this holder is buying the matrix that
+    // OVERLAPS the holder's merge — so stopping it here would cancel the very run
+    // the reservation exists to start, and the queue would be cold again with the
+    // mechanism intact and useless. Exactly one, by construction: the slot is
+    // filled by a CAS, so nothing here counts, compares ages or breaks ties.
+    if !body.next.is_empty() && body.next == want {
+        return Authority::Run(format!(
+            "the lease authorises {want} as the successor behind {}",
+            body.branch
+        ));
+    }
+    // Pointer-only (non-negotiable rule 4): the holder's branch is a ref name the
+    // caller could read for itself, and naming it is what makes a stopped run
+    // diagnosable rather than mysterious. No lease body, no expiry arithmetic.
+    Authority::Stop(format!("the lease authorises {}, not {want}", body.branch))
+}
+
+/// Where the lease lives, and the bounds the design was pressure-tested into.
+///
+/// **`refs/heads`, and the reason is the forge's fast-forward rule — NOT a
+/// namespace restriction.** This paragraph used to claim both, and the first half
+/// was wrong for two years.
+///
+/// # The namespace claim was a misdiagnosed credential failure (CLOUD-416)
+///
+/// It asserted that this sandbox's git proxy permits writes under `refs/heads`
+/// and rejects every other namespace. **Deliberately paraphrased rather than
+/// quoted**: a refuted sentence left sitting here verbatim is one a future reader
+/// lifts out of its correction, which is how it survived this long.
+///
+/// Measured 2026-09-11 as a controlled pair — same object, same ref, same push,
+/// one variable:
+///
+/// ```text
+/// fenced, PAT via credential helper:  push → refs/sessions/<sha>   exit 0
+/// unfenced, ambient injected token:   push → refs/sessions/<sha>   HTTP 403
+/// ```
+///
+/// `refs/batten-probe/<nonce>` behaved identically. So the 403 is the injected
+/// credential being unscoped for the write, and the namespace never came into it
+/// — the symptom `mem:github-access` measures and this comment attributed to a
+/// proxy write policy. CLOUD-416 records the lease being implemented four times,
+/// "two of those passes existed only because the environment lied and nothing said
+/// so"; this is the sentence that carried the lie forward.
+///
+/// **A custom namespace is therefore available**, which unblocks the per-agent
+/// refs and `refs/sessions/<sha>` transcripts rather than this one struct.
+///
+/// # The fast-forward claim is the one that survived, and it is the real reason
+///
+/// The same run confirmed the other half: a **parentless orphan was ACCEPTED** on
+/// `refs/sessions/`, so the forge does not enforce the fast-forward rule off
+/// `refs/heads`. That is what keeps the lease here.
+///
+/// Read precisely, because the old text conflated two mechanisms. It is not what
+/// makes the CAS work — `--force-with-lease` sends the expected old value and the
+/// forge swaps atomically, in any namespace, and a lease RENEWAL is a non-fast-
+/// forward update by design. What the rule protects is everything else that reads
+/// this ref as a branch-shaped thing, and the blast radius of a bug that writes a
+/// wrong object here.
+///
+/// **And off `refs/heads` that same missing rule is a FEATURE, not a loss.** An
+/// append-only log branch wants fast-forward enforcement and belongs here too; a
+/// content-addressed transcript wants exactly the parentless orphan the rule would
+/// refuse, and is structurally inert precisely because it can never become an
+/// ancestor of trunk. One property, opposite signs, decided per structure — which
+/// is why the old text's sweeping conclusion — that losing the rule forfeits the
+/// safety property outright — was wrong to draw once about the lease and then
+/// reuse everywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Terms {
+    /// The remote the lease lives on, as a URL the transport can reach.
+    pub remote: String,
+    /// The lease's OWN ref. **Deliberately not the branch a lease authorises** —
+    /// those are different things with confusingly similar names, and writing this
+    /// one into the body would stamp the lease's own ref into every lease while
+    /// looking correct.
+    pub reference: String,
+    /// How long a fresh lease lasts.
+    pub ttl: i64,
+    /// How often a holder re-mints it. **The TTL is three beats wide on purpose**:
+    /// a dropped connection, a proxy hiccup or a rate limit must not hand the
+    /// lease away, so two consecutive failures are survivable and a third is not.
+    pub beat: i64,
+}
+
+/// How many beats fit inside a TTL — the RATIO the field docs call the property.
+///
+/// Written once because it is now read twice: [`Terms::default`] derives the
+/// shipped beat from it, and [`terms`] restores it when an operator declares a
+/// `LAND_LOCK_HEARTBEAT` that is not narrower than their `LAND_LOCK_TTL`. Two
+/// spellings of one relation is exactly the drift this module records elsewhere,
+/// and the pair went unchecked for its whole life because the relation lived in
+/// prose (review of #848).
+const BEATS_PER_TTL: i64 = 4;
+
+/// The shipped TTL. The beat is derived, so the two cannot be edited apart.
+const DEFAULT_TTL: i64 = 120;
+
+impl Default for Terms {
+    fn default() -> Self {
+        Self {
+            remote: String::from("origin"),
+            reference: String::from("refs/heads/batten-land-lock"),
+            // 120s over a 30s beat. See the field docs for why the ratio rather
+            // than either number is the property, and `BEATS_PER_TTL` for where
+            // that ratio is written down.
+            ttl: DEFAULT_TTL,
+            beat: DEFAULT_TTL / BEATS_PER_TTL,
+        }
+    }
+}
+
+/// Why a clone has no lease terms, and the two are not the same answer.
+///
+/// **A clone with no remote is a FACT about the clone, not a failure to look.**
+/// The could-not-look guard exists so an unreadable lease is never reported as a
+/// free one; a repository with no remote has no lease ref to misread, so folding
+/// it into that guard made `lease status` an error in every clone that has not
+/// been pushed anywhere — including the census fixture, where every other
+/// data-channel verb answers cleanly.
+///
+/// The distinction is only ever RELAXED for the reporting arms. The write arms
+/// refuse either way, because acquiring a lease that has nowhere to live is not
+/// something a missing remote makes safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TermsMissing {
+    /// No remote is configured, so this clone cannot participate in a lease.
+    NoRemote,
+    /// A remote exists and something about reading it failed. This is the
+    /// could-not-look the guard is for.
+    Unreadable(String),
+}
+
+impl TermsMissing {
+    /// The diagnostic, for the arms that report one.
+    #[must_use]
+    pub fn say(&self, name: &str) -> String {
+        match self {
+            TermsMissing::NoRemote => format!("no remote named {name} is configured"),
+            TermsMissing::Unreadable(reason) => reason.clone(),
+        }
+    }
+}
+
+/// Terms for a caller with no clone at all, built from the forge's own
+/// environment.
+///
+/// **THE PRE-CHECKOUT HALF OF `lease guard`, WHICH HAD NO SUCCESSOR** (review of
+/// #848, CLOUD-420). [`terms`] resolves the remote through `git::remotes`, which
+/// answers `Ok(vec![])` for a directory that is not a repository — so on the
+/// only deployment the verb has, a workflow's step 0 "before any checkout or
+/// toolchain install", it landed on [`TermsMissing::NoRemote`] and the lease was
+/// never read. The guard ran with its lease half switched off and only the
+/// staleness read could stop anything, so two landers could spend matrices
+/// concurrently: the exact condition the guard exists to prevent.
+///
+/// The predecessor solved it and said so at its own site —
+/// *"A throwaway repo in `RUNNER_TEMP` is what lets this run as the genuine FIRST
+/// step, before any checkout exists"* — building a `git init` clone with an
+/// `extraheader` credential purely so the shell's `git ls-remote` had somewhere
+/// to run. This engine needs none of that: [`advertise`] takes a URL and speaks
+/// smart HTTP through [`crate::rest`]'s own credential, so the remote is the
+/// only thing missing and the environment names it.
+///
+/// `None` where it does not — which keeps this a strictly ADDITIONAL reading. A
+/// caller that cannot build these terms is exactly where it was before, and the
+/// guard's fail-open posture is unchanged.
+///
+/// `lookup` is the environment, supplied by the caller (`|name|
+/// std::env::var(name).ok()`), so every branch here is a case rather than a
+/// process variable a suite would need `unsafe` to set.
+#[must_use]
+pub fn terms_from_environment(lookup: impl Fn(&str) -> Option<String>) -> Option<Terms> {
+    let server = lookup("GITHUB_SERVER_URL")
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| String::from("https://github.com"));
+    // **A NON-DEFAULT `LAND_LOCK_REMOTE` IS UNANSWERABLE FROM HERE, SO IT IS
+    // REFUSED RATHER THAN GUESSED** (review of #848). The environment names THIS
+    // repository; `LAND_LOCK_REMOTE` names an ALIAS, and resolving an alias to a
+    // URL needs the clone this function exists to work without. Building the
+    // environment's slug anyway would read a lease ref on the wrong repository —
+    // finding none, answering `Run`, and spending the matrix while a rival holds
+    // the real lease. That is the two-lander condition this function was added
+    // to close, reintroduced for every consumer whose lease does not live on
+    // `origin`.
+    //
+    // `None` is the documented fail-open and leaves such a consumer exactly
+    // where it was, which is the honest answer: a reading nobody can take.
+    if remote_name_from(&lookup) != "origin" {
+        return None;
+    }
+    let slug = lookup("GITHUB_REPOSITORY").filter(|slug| !slug.trim().is_empty())?;
+    let mut resolved = Terms {
+        remote: format!("{}/{slug}", server.trim_end_matches('/')),
+        ..Terms::default()
+    };
+    // The same two bounds `terms` honours, through the same reader, so a suite
+    // driving one path does not silently get the shipped values on the other.
+    let secs = |name: &str| lookup(name).as_deref().and_then(positive_secs);
+    if let Some(ttl) = secs("LAND_LOCK_TTL") {
+        resolved.ttl = ttl;
+    }
+    if let Some(beat) = secs("LAND_LOCK_HEARTBEAT") {
+        resolved.beat = beat;
+    }
+    bound_the_relation(&mut resolved);
+    if let Some(reference) = lookup("LAND_LOCK_BRANCH") {
+        resolved.reference = format!("refs/heads/{reference}");
+    }
+    Some(resolved)
+}
+
+/// Restore the TTL/beat relation `BEATS_PER_TTL` declares.
+///
+/// **ONE AUTHORITY, because it had two and they were already drifting** (review
+/// of #848). [`terms`] and [`terms_from_environment`] each carried a copy, so a
+/// correction to one silently left the other enforcing the older rule — which is
+/// exactly the shape the clamp itself exists to stop.
+///
+/// # Both halves move, and which one moves is the whole decision
+///
+/// The BEAT moves first: the TTL is the outer bound — how long a dead holder can
+/// wedge the fleet — so an operator who raised it wants it raised, and the beat
+/// is an implementation detail of staying alive inside it.
+///
+/// **But clamping the beat alone cannot restore the relation below
+/// `BEATS_PER_TTL`.** `(ttl / BEATS_PER_TTL).max(1)` is integer division, so
+/// `LAND_LOCK_TTL=1` clamped the beat to `1` and left `1 * 4 > 1` — still
+/// violated, and worse than the case the clamp was written for: the lease
+/// expires at the instant the heartbeat is due, [`Body::expired`] is
+/// `now >= expires`, and a waiter's `expired(now) && held_for >= beat` takes it
+/// from a live holder on every beat.
+///
+/// So the TTL is floored first. A TTL narrower than one beat asks for something
+/// the relation cannot express, and the narrowest that CAN express it is
+/// `BEATS_PER_TTL` seconds.
+fn bound_the_relation(resolved: &mut Terms) {
+    resolved.ttl = resolved.ttl.max(BEATS_PER_TTL);
+    // At least 1 once the TTL is floored, so no beat is ever clamped to 0.
+    resolved.beat = resolved.beat.min(resolved.ttl / BEATS_PER_TTL);
+}
+
+/// The remote the lease lives on, by configured name.
+///
+/// Named here rather than at each reader because [`terms`] and every diagnostic
+/// that reports a missing remote must agree on which name went missing.
+#[must_use]
+pub fn remote_name() -> String {
+    remote_name_from(&|name| std::env::var(name).ok())
+}
+
+/// [`remote_name`] through a caller's lookup, so the one default has one home
+/// whichever environment is asked.
+fn remote_name_from(lookup: &impl Fn(&str) -> Option<String>) -> String {
+    lookup("LAND_LOCK_REMOTE").unwrap_or_else(|| String::from("origin"))
+}
+
+/// A positive whole number of seconds from the environment, or `None`.
+///
+/// **Zero and negative are `None`**, not values: every bound the lease carries is
+/// a duration, and a zero TTL or beat would turn a lease into a spin rather than
+/// into a tighter test.
+#[must_use]
+pub fn env_secs(name: &str) -> Option<i64> {
+    std::env::var(name).ok().as_deref().and_then(positive_secs)
+}
+
+/// [`env_secs`]'s reading of one value: a positive whole number of seconds.
+fn positive_secs(raw: &str) -> Option<i64> {
+    raw.trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds > 0)
+}
+
+/// Resolve the lease's terms from this checkout.
+///
+/// **The remote must resolve to a URL rather than a name.** The transport speaks
+/// smart-HTTP over the vendored client, which has no notion of a git remote
+/// alias, and a name reaching it would be an unresolvable host rather than a
+/// clear refusal here.
+///
+/// **It lives in this module rather than beside the verb dispatch**, and that is
+/// CLOUD-1148's move rather than tidying: a `[[recorder]]` column now asks the
+/// lease for a grade ([`adjudicate`]), and a resolver reachable only from `lib`
+/// would have had to be written a second time to serve it — which is the second
+/// authority every other duplicated reading in this repository was.
+///
+/// # Errors
+///
+/// [`TermsMissing`], whose two variants are a fact about the clone and a
+/// could-not-look respectively. The distinction is the whole point; see its docs.
+pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
+    let name = remote_name();
+    let remotes = crate::git::remotes(root)
+        .map_err(|err| TermsMissing::Unreadable(format!("cannot read this repository: {err}")))?;
+    let url = remotes
+        .iter()
+        .find(|(configured, _)| *configured == name)
+        .map(|(_, url)| url.clone());
+    let Some(url) = url else {
+        // **AN EMPTY LIST IS TWO ANSWERS, AND THE `map_err` ABOVE REACHES
+        // NEITHER** (review of #848). `git::remotes` answers `Ok(vec![])` for a
+        // directory it cannot open at all — its own comment says so, on the
+        // shell-era reason that a non-zero exit could not be told from an empty
+        // one — so that `map_err` never fires and `Unreadable`, the
+        // could-not-look half of this very type, was UNCONSTRUCTIBLE. A clone
+        // whose `.git` is corrupt or permission-denied reported the FACT "no
+        // remote is configured" and `lease status` exited 0 over it.
+        //
+        // Asked here rather than by widening `git::remotes`, whose empty answer
+        // every other caller already reads as a fact: this is the one caller
+        // that needs the two apart, so it takes the second reading itself.
+        return Err(if crate::git::worktree_root(root).is_err() {
+            TermsMissing::Unreadable(String::from(
+                "this directory could not be read as a repository, so whether a lease remote is configured is unknown",
+            ))
+        } else {
+            TermsMissing::NoRemote
+        });
+    };
+    let mut resolved = Terms {
+        remote: url,
+        ..Terms::default()
+    };
+    // Overridable so a suite can drive the bounds without waiting out a real TTL.
+    // Each falls back to the shipped default rather than to zero: a TTL of zero
+    // is a lease that has already lapsed, which would report as a fleet with no
+    // lease at all rather than as a misconfiguration.
+    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+        resolved.ttl = ttl;
+    }
+    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+        resolved.beat = beat;
+    }
+    // **THE RELATION IS THE SAFETY PROPERTY, AND IT WAS PROSE.** `Terms`' own
+    // field docs say the TTL is three beats wide on purpose, and every consumer
+    // of `beat`/`ttl` assumes it — but the two were read INDEPENDENTLY, each
+    // filtered only for `> 0`, so `LAND_LOCK_HEARTBEAT=120 LAND_LOCK_TTL=30`
+    // loaded clean and left the lease expired for 90s of every beat. A waiter's
+    // `body.expired(now) && held_for >= terms.beat` then takes a lease whose
+    // holder is alive and two landers run concurrently, which is the one thing
+    // this module exists to prevent (review of #848).
+    //
+    // THE TTL IS KEPT AND THE BEAT IS DERIVED, which is not a coin toss between
+    // two values. The TTL is the OUTER bound — how long a dead holder can wedge
+    // the fleet — so an operator who raised it wants it raised, and it is the
+    // half that stays. The beat is an implementation detail of staying alive
+    // inside it, so it is the half that moves, back to the width the field docs
+    // already declare. Restoring the relation cannot widen the window a waiter
+    // sees; it can only shorten it.
+    //
+    // **AND THE GUARD IS THE RATIO, NOT THE LIMIT** (review of #848). This fired
+    // only at `beat >= ttl`, so it enforced "a beat shorter than the TTL" while
+    // the paragraph above calls the RELATION the safety property. `LAND_LOCK_TTL=31`
+    // against the shipped 30s beat passed both filters and loaded with a
+    // one-second margin between a renewal and expiry — and the renewal is a smart
+    // HTTP round trip, so a second of latency leaves the lease expired while its
+    // holder is alive. That is the same two-landers outcome the measurement above
+    // describes, reached by an env var rather than by two.
+    bound_the_relation(&mut resolved);
+    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+        resolved.reference = format!("refs/heads/{reference}");
+    }
+    Ok(resolved)
+}
+
+/// Whether an observed lease leaves the clone reading it free to spend.
+///
+/// **The decision, extracted from both of its callers, and that is `rust.md`'s
+/// rule rather than tidying**: the failing condition is a lease held by a rival
+/// on a real remote, which no fixture in this sandbox can produce, so the
+/// predicate is tested directly instead of asserting a conclusion over a
+/// precondition nothing created. `batten lease status`'s verdict and
+/// [`adjudicate`]'s `lease-status` answer are the two callers, and a second copy
+/// of this comparison is exactly the drift that made the shell and the engine
+/// disagree about the same lease.
+///
+/// **Absent, released and expired are one answer here**: the next `acquire`
+/// wins, so nothing is authorised away from this clone.
+///
+/// **`Garbage` IS NOT IN THAT SET, and the sentence putting it there was false
+/// about the column it feeds** (review of #848). It read *"a lease nothing can
+/// parse stays held to every DECISION, and the decision this feeds is the
+/// `landing-loop` preset's, which reads a could-not-look column rather than this
+/// one"* — but [`adjudicate`] turned the `true` into exit `0`, and `batten.toml`
+/// maps `"0"` to `authorised`, so the column recorded AUTHORISED. The preset's
+/// refusal could not hold and this clone landed beside a live holder.
+///
+/// It also contradicted [`Observed::Garbage`]'s own doc one screen up — *"Every
+/// decision below still treats this as held"* — which is the reading that
+/// survives: a ref that is there and will not parse has not shown this clone
+/// owns anything, and the safe direction over a lease is the closed one.
+#[must_use]
+pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> bool {
+    let body = match observed.state(now) {
+        Lease::Absent | Lease::Expired { .. } | Lease::Released { .. } => return true,
+        Lease::Garbage { .. } => return false,
+        Lease::Live { body, .. } => body,
+    };
+    body.holder == holder
+}
+
+/// Does `holder` hold this lease RIGHT NOW?
+///
+/// # THE COMPLEMENT OF [`authorises_this_clone`], AND NOT ITS NEGATION
+///
+/// That predicate answers *may this clone proceed*, so it is `true` for a lease
+/// that is absent, released or expired — nobody is in the way. This one answers
+/// *do I still own what I took*, and every one of those states is `false`: a
+/// lease I released is a lease somebody else may hold.
+///
+/// The distinction is why this is a function rather than a comparison at the
+/// call site. `unwind_lap` open-coded `body.holder == holder` and dropped both
+/// time-varying clauses (review of #848), so a lap whose lease had lapsed still
+/// read as owning the pull request and would re-draft one another lander now
+/// owns. A comparison cannot go stale; a lease can, and that is the whole
+/// content of the two clauses.
+#[must_use]
+pub fn holds_now(observed: &Observed, holder: &str, now: i64) -> bool {
+    // Absent is nobody's. Garbage has not SHOWN this clone owns anything,
+    // which is the same closed direction `authorises_this_clone` takes over a
+    // ref that will not parse; a lapsed or released body is nobody's either.
+    observed
+        .state(now)
+        .live()
+        .is_some_and(|body| body.holder == holder)
+}
+
+/// The lease reading this run's recorder columns share.
+///
+/// `None` is could-not-look, collapsed: no remote, no terms, or a lease that
+/// would not read are all answers the caller turns into the same `3`.
+///
+/// **A FAILED READING IS NOT CACHED**, which is what keeps this a pairing rather
+/// than a latch: a transient failure on the first column must not condemn the
+/// second to could-not-look for the rest of the run. Only a reading that
+/// succeeded is worth pairing, because only that one has something for the
+/// second column to agree with.
+fn paired_reading(root: &Path) -> Option<(Terms, Observed)> {
+    static READING: std::sync::Mutex<Option<(std::path::PathBuf, Terms, Observed)>> =
+        std::sync::Mutex::new(None);
+
+    // A poisoned lock is could-not-look like any other unreadable input; it is
+    // not worth a panic on a path whose whole posture is to answer `3`.
+    let mut held = READING.lock().ok()?;
+    if let Some((_, resolved, observed)) = held.as_ref().filter(|(at, ..)| at == root) {
+        return Some((resolved.clone(), observed.clone()));
+    }
+    let resolved = terms(root).ok()?;
+    let observed = observe(&resolved).ok()?;
+    *held = Some((root.to_path_buf(), resolved.clone(), observed.clone()));
+    Some((resolved, observed))
+}
+
+/// What a `[[recorder]]` column may ask the landing lease for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked {
+    /// Does the lease authorise THIS CLONE right now?
+    Status,
+    /// Which branch, if any, the live holder admitted behind it.
+    Successor,
+}
+
+/// One recorder answer, in the exit-status-and-stdout contract a spawned program
+/// would have produced (CLOUD-1148 §2).
+///
+/// # It answers in the ENGINE'S table, and the consumer's `status` map reconciles
+///
+/// `mise-tasks/land-lock.sh status` answered `0` authorising / `1` held
+/// elsewhere / `2` could-not-look, and `[program.land-lock-status]` mapped the
+/// first two and deliberately left the third unmapped — which is where the
+/// lease's fail-open asymmetry is enforced, because an unmapped status records
+/// could-not-look and the `landing-loop` preset's refusal cannot hold over it.
+///
+/// This returns the engine's one table instead: `0` authorising, `2` held
+/// elsewhere, `3` could-not-look. The consumer's map moves with it, once. Every
+/// other spelling of the reconciliation — a per-verb exception here, a second
+/// table in the recorder — would put the same decision in two places.
+///
+/// # `None` is could-not-look and reaches the column as `-`
+///
+/// A clone with no remote, an unreadable identity and an unreachable lease all
+/// answer `3` rather than `None`, because each is a reading the recorder should
+/// store as *could not look* rather than an evaluation that failed. `None` is
+/// reserved for the shape [`crate::recorder::evaluate`] already uses it for.
+/// # ONE OBSERVATION SERVES BOTH COLUMNS OF ONE RUN
+///
+/// **The `verdict` and `successor` columns could describe two different lease
+/// states** (review of #848). `crate::recorder` calls this once per [`Asked`],
+/// and each call took its own `terms` plus its own [`observe`] — two smart-HTTP
+/// round trips each — with nothing pairing them. So the status read at T1 could
+/// see a rival's live lease while the successor read at T2 saw the renewal that
+/// admitted this branch behind it, and the preset then compared a successor
+/// drawn from a lease state that never coexisted with the verdict.
+///
+/// That is [`observe`]'s own argument one level out: it takes the sha and the
+/// body from ONE read precisely so they cannot describe different leases, and
+/// the predecessor's measured 16-of-40 wrong bodies is what it cost when they
+/// could. Two columns of one row are the same pairing.
+///
+/// So the reading is taken once per root and reused. Scoped to the process — a
+/// `batten check` run reads these columns moments apart and then exits — which
+/// is what makes the cache a PAIRING rather than a staleness bet: the question
+/// is never "is this current", it is "do these two answers describe one lease".
+#[must_use]
+pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> {
+    let unknown = Some((crate::exit::ExitCode::Internal.code(), String::new()));
+    let Some((_resolved, observed)) = paired_reading(root) else {
+        return unknown;
+    };
+    match asked {
+        // THE SUCCESSOR IS SILENT WHERE THERE IS NONE, and silent-and-`0` rather
+        // than could-not-look: "no reservation stands" is a reading, and the
+        // preset compares the empty token against a branch name and finds them
+        // unequal, which is the refusal standing rather than being waved.
+        Asked::Successor => {
+            let next = observed
+                .state(now)
+                .live()
+                .map(|body| body.next.clone())
+                .unwrap_or_default();
+            Some((0, format!("{next}\n")))
+        }
+        Asked::Status => {
+            let Ok(git_dir) = crate::git::git_dir(root) else {
+                return unknown;
+            };
+            let Ok(holder) = Local::under(&git_dir).holder() else {
+                return unknown;
+            };
+            // A REF THAT WILL NOT PARSE IS COULD-NOT-LOOK ON THIS COLUMN, never
+            // a verdict. `authorises_this_clone` now fails closed on it, which is
+            // right for a caller deciding whether to spend — but `2` here would
+            // record `held-elsewhere`, asserting a holder nobody could read. `3`
+            // is unmapped, so the column reads `-` and the preset sees that it
+            // could not look.
+            if matches!(observed, Observed::Garbage { .. }) {
+                return unknown;
+            }
+            if authorises_this_clone(&observed, &holder, now) {
+                Some((0, String::new()))
+            } else {
+                Some((crate::exit::ExitCode::Violation.code(), String::new()))
+            }
+        }
+    }
+}
+
+/// Read the remote lease.
+///
+/// Two round trips, and the pairing is a correctness property rather than an
+/// economy: the sha and the body BOTH come from this read, so they are guaranteed
+/// to describe the same lease. The bash predecessor took the sha from one command
+/// and the body from a shared per-clone file, and measured **16 of 40 concurrent
+/// reads returning the WRONG body** — which pairs THIS lease's sha with ANOTHER
+/// lease's holder, so a release would CAS against that sha while judging ownership
+/// from that holder. That is precisely the theft the CAS exists to prevent.
+///
+/// # Errors
+///
+/// Anything that stops the lease being read — could-not-look, and never an unheld
+/// lease. **An unreachable remote read as free is the misread that lets two
+/// sessions land at once**, so it is an error here and every caller decides for
+/// itself which way to fail.
+pub fn observe(terms: &Terms) -> Result<Observed> {
+    let advertisement = advertise(&terms.remote, Service::ReceivePack)?;
+    let Some(sha) = advertisement.refs.get(&terms.reference) else {
+        return Ok(Observed::Absent);
+    };
+    let object = fetch_object(&terms.remote, sha)?;
+    // A LEASE WE CANNOT PARSE IS ONE WE DO NOT UNDERSTAND, and treating it as free
+    // would be the same misread as an unreachable remote. It stays HELD to every
+    // decision here — and is reported as what it is rather than as a hold, which
+    // is the half a substituted default body silently threw away.
+    let Some(body) = parse_body(&object.body) else {
+        return Ok(Observed::Garbage {
+            sha: sha.clone(),
+            why: String::from("the ref carries no lease body"),
+        });
+    };
+    Ok(Observed::Held {
+        sha: sha.clone(),
+        body,
+    })
+}
+
+/// Compare-and-swap the lease to `body`, from whatever `observed` said.
+///
+/// The expected value is what makes this safe to call from a heartbeat: a lease
+/// that changed hands underneath is rejected rather than overwritten. [`Absent`]
+/// swaps from [`ZERO`], which is how the very first claim is made without a
+/// separate create path — so two sessions racing the same free state CAS from the
+/// same expected value and exactly one wins.
+///
+/// [`Absent`]: Observed::Absent
+///
+/// # Errors
+///
+/// A transport failure or an unreadable report. A LOST RACE IS NOT AN ERROR — it
+/// is [`Outcome::Rejected`], because reporting a rival's win as a failure makes
+/// every caller that fails open on could-not-look fail open on a lease it lost.
+pub fn cas(terms: &Terms, observed: &Observed, body: &Body, now: i64) -> Result<Outcome> {
+    let old = match observed {
+        Observed::Absent => ZERO,
+        Observed::Held { sha, .. } | Observed::Garbage { sha, .. } => sha.as_str(),
+    };
+    let object = lease_object(&body.render(), now)?;
+    // A FAILED MINT MUST NEVER BECOME A DELETE. The bash predecessor interpolated
+    // its mint straight into a refspec, so an empty result produced git's DELETE
+    // refspec rather than a no-op — and on the renew path, whose expected value is
+    // the caller's own live lease, that CAS would have SUCCEEDED and destroyed the
+    // lease it held. Here the id is a value the mint either produced or did not,
+    // and `?` is what makes an unproduced one a refused swap.
+    let update = Update {
+        old: old.to_owned(),
+        new: object.id.clone(),
+        name: terms.reference.clone(),
+    };
+    swap(&terms.remote, &update, &pack_of(&[object])?)
+}
+
+/// The body a fresh claim mints.
+///
+/// **`next` is deliberately NOT carried from the previous holder.** A fresh
+/// acquire is a new turn, and the previous holder's successor has already had its
+/// admission — carrying it forward would authorise a third branch, then a fourth,
+/// and the bound the whole design rests on would drift upward one handover at a
+/// time. Renewal carries it and acquisition does not, which is the one asymmetry
+/// between those two paths.
+#[must_use]
+pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) -> Body {
+    Body {
+        holder: holder.to_owned(),
+        expires: now + terms.ttl,
+        branch: branch.to_owned(),
+        head: head.to_owned(),
+        next: String::new(),
+        // EMPTY ON ACQUISITION, which is what keeps a notice from outliving the
+        // holder it was aimed at. A fresh claim inheriting a stand-down would ask
+        // every future holder to release on the strength of one request made of
+        // somebody else.
+        stand_down: String::new(),
+        progress: String::new(),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+    }
+}
+
+/// Does this branch land WITHOUT ever taking the lease?
+///
+/// # The population is the LANDER's, and that is the whole predicate
+///
+/// Some branches are fast-forwarded by a workflow that fires on a `workflow_run`
+/// completion, so no agent holds the lease on their behalf and the runner-side
+/// precondition would refuse the very run it exists to let through. Which
+/// branches those are is a fact about which workflow lands them, and the workflow
+/// selects on the branch NAME — so this does too.
+///
+/// **Not `crate::bot::is_lane_bot`, and collapsing the two would be wrong in both
+/// directions.** That keys on a forge LOGIN. A human who names a branch with one
+/// of these prefixes still gets fast-forwarded by the lander and still holds no
+/// lease, so it must be exempt; a lane bot pushing a branch these prefixes do not
+/// name is landed the ordinary way and must be judged.
+///
+/// **A PREFIX ON THE BRANCH, never a substring anywhere in the ref**, which the
+/// predecessor's suite pinned as its own case. Given a full ref, the branch is
+/// its `refs/heads/` remainder — a caller handing one over must not have the
+/// question answered about the wrong string.
+///
+/// An empty prefix is ignored rather than matching everything: a blank row in
+/// consumer config is a typo, and reading it as *exempt every branch* would
+/// silently switch the whole gate off.
+///
+/// **ONE PREFIX, NEVER EVERY LEADING ONE.** `trim_start_matches` strips the
+/// pattern repeatedly, so a branch literally named `refs/heads/lane/x` — which
+/// git permits under `refs/heads/` — reduced to `lane/x` and was exempted by a
+/// `lane/` row it does not belong to. `strip_prefix` removes at most one and
+/// falls back to the branch as given, which is the only reading that answers the
+/// question about the string the caller actually named.
+#[must_use]
+pub fn lands_by_fast_forward(branch: &str, prefixes: &[String]) -> bool {
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    prefixes
+        .iter()
+        .filter(|prefix| !prefix.is_empty())
+        .any(|prefix| branch.starts_with(prefix.as_str()))
+}
+
+/// The body a release leaves behind.
+///
+/// **A tombstone, not a delete**: the expiry CASes to `0`, which leaves the lease
+/// instantly claimable by anyone. That is all a release has to mean, and it keeps
+/// every write in this module the same single operation.
+#[must_use]
+pub fn tombstone(body: &Body) -> Body {
+    Body {
+        expires: 0,
+        // STAMPED, NEVER CARRIED. Every mint here is THIS build writing a body
+        // now, so advertising the version it inherited would name a writer that
+        // did not write it — and on `reservation`, which a WAITER mints onto the
+        // holder's body, the inherited value is a different agent's entirely.
+        // Carrying forward would make the one field that exists to expose skew
+        // the field that hides it.
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// The body a heartbeat mints, carrying forward what it must not erase.
+///
+/// **`next` and `progress` are carried and that is not tidiness.** A renewal
+/// re-mints the WHOLE body, so a `next` written by a waiter between two beats
+/// would be erased within one beat — by the holder, silently — and the admitted
+/// successor would then be cancelled by CI mid-run. `progress` carries for the
+/// mirrored hazard: a caller that cannot compute one would erase it by the act of
+/// renewing, and the lease would look unstealable-forever to every rival.
+#[must_use]
+pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> Body {
+    Body {
+        expires: now + terms.ttl,
+        progress: progress.map_or_else(|| body.progress.clone(), str::to_owned),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// One heartbeat: renew this clone's lease if it still holds it.
+///
+/// # THE LAP HAD NO HEARTBEAT AT ALL, WHICH IS WHAT THIS EXISTS FOR
+///
+/// The lap acquires once and then spends the whole of CI inside `Step::Wait`
+/// (review of #848). The TTL is 120 seconds by default and the wait polls up to
+/// an hour, so roughly two minutes into a twenty-minute matrix the lease read
+/// EXPIRED, [`authorises`] handed it to the next branch, and a second lander
+/// bought a matrix concurrently — the exact overlap the singleton exists to
+/// prevent. Worse, the first branch's own later jobs then failed their step-0
+/// guard against the new holder and were cancelled mid-landing.
+///
+/// The predecessor backgrounded a heartbeat process, which is why
+/// [`crate::run_lease_hold`]'s doc and `note_release`'s both speak as though one
+/// exists. The port dropped it and nothing noticed, because a lease that expires
+/// under you fails by letting somebody ELSE succeed.
+///
+/// # SILENT AND BEST-EFFORT, AND `false` IS NOT AN ALARM
+///
+/// Every arm answers `false` without writing anything: no identity, no lease, a
+/// lease held by somebody else, a rejected CAS, a push that did not go through.
+/// The caller drives this from inside a poll, where a diagnostic per beat would
+/// bury the wait's own output, and where a single failed push must NOT be read
+/// as a lost lease — [`crate::run_lease_hold`] states the reason and this shares
+/// it: the TTL is deliberately several beats wide precisely so one blip is
+/// survivable. What a caller does with a run of failures is the caller's; one is
+/// not news.
+///
+/// # `progress` IS THE WHOLE POINT OF THE BEAT, NOT AN EXTRA
+///
+/// `None` carries the stored token forward, for [`renewal`]'s own reason: a beat
+/// that erased it would make the lease unstealable to every rival. But a caller
+/// that passes `None` FOREVER never populates it either, and an always-empty
+/// token disarms [`turn`]'s steal arm, which tests `!body.progress.is_empty()`
+/// before it will disbelieve a holder. That is not hypothetical: the port to an
+/// in-process heartbeat left `None` hardcoded here, so no lease in the fleet ever
+/// carried a token, and a holder that beat without landing could not be stolen
+/// from by anyone (CLOUD-1703). A caller that CAN compute its own progress —
+/// [`crate::run_land_singleton`]'s heartbeat reads it from the task registry with
+/// [`progress_of`] — must pass it, and only a caller with nothing to say passes
+/// `None`.
+/// What one beat found.
+///
+/// **A richer answer than the `bool` this replaced, because the beat is the only
+/// thing that reads the lease every few seconds** — so it is where a peer's
+/// stand-down notice is seen, and a `bool` had nowhere to put it. Collapsing the
+/// notice into `false` would have been worse than dropping it: `false` means "one
+/// beat did not write", which the caller is explicitly told is not news.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Beat {
+    /// The lease was renewed.
+    Renewed,
+    /// Nothing was written, and it is not news — no identity, no lease, a lease
+    /// held by somebody else, a rejected CAS, a push that did not land. See
+    /// [`beat`] for why one of these is survivable by construction.
+    Quiet,
+    /// Renewed, AND a peer has asked this holder to release, naming itself.
+    ///
+    /// **Renewed as well, and the conjunction is the point.** Not renewing while a
+    /// notice is pending would drop the lease inside this holder's own CI matrix
+    /// and let a second lander start — the overlap [`beat`] exists to close,
+    /// reintroduced by the mechanism meant to be polite. The caller honours this
+    /// at a lap boundary, where releasing costs nothing.
+    StandDown(String),
+}
+
+#[must_use]
+pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> Beat {
+    let Ok((_, holder)) = identity(root) else {
+        return Beat::Quiet;
+    };
+    let Ok(observed) = observe(terms) else {
+        return Beat::Quiet;
+    };
+    if !holds_now(&observed, &holder, now) {
+        return Beat::Quiet;
+    }
+    let Observed::Held { body, .. } = &observed else {
+        return Beat::Quiet;
+    };
+    // READ BEFORE THE RE-MINT, because the re-mint carries `stand_down` forward
+    // like every other advisory field and the reading must be of what the peer
+    // actually wrote rather than of our own copy of it.
+    let asked = stand_down_requested(body, &holder).map(str::to_owned);
+    let renewed = renewal(terms, body, progress, now);
+    if !matches!(cas(terms, &observed, &renewed, now), Ok(Outcome::Applied)) {
+        return Beat::Quiet;
+    }
+    // THE RENEWAL FIRST, THE NOTICE SECOND. A holder that reported the notice
+    // without renewing would be honouring it immediately, which is exactly the
+    // mid-matrix release this ordering exists to prevent.
+    asked.map_or(Beat::Renewed, Beat::StandDown)
+}
+
+/// Fill the one successor slot, re-minting every other field verbatim.
+///
+/// **The WAITER writes this, not the holder**, and that is forced rather than
+/// chosen: waiters are not registered anywhere, so the holder has no way to name
+/// one. A waiter appending itself is also what makes the slot a race with exactly
+/// one winner — the same CAS that makes the lease safe, used for a second, smaller
+/// decision.
+///
+/// **It is not a claim on the lease.** The holder id and the expiry are re-minted
+/// AS THEY WERE: the holder keeps holding, its heartbeat carries the new field
+/// forward, and ownership still answers for the holder. A reservation that moved
+/// the holder id would be a steal wearing a different name, and one that recomputed
+/// the expiry would hand the holder a fresh TTL every time a waiter arrived.
+#[must_use]
+pub fn reservation(body: &Body, want: &str) -> Body {
+    Body {
+        next: want.to_owned(),
+        // THE WAITER'S VERSION, NOT THE HOLDER'S — see `tombstone`. This is the
+        // one mint where the writer is a DIFFERENT agent from the holder the body
+        // names, so carrying `writer` forward would attribute this write to the
+        // holder and make the skew field actively misleading.
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// A peer's request that the holder release, naming the peer (CLOUD-1778).
+///
+/// [`reservation`]'s shape exactly — one field moved, everything else re-minted
+/// verbatim — and for the same reasons. A notice that recomputed the holder id
+/// would be a steal; one that recomputed the expiry would hand the holder a fresh
+/// TTL for the trouble of being asked to leave.
+///
+/// **`next` IS NOT SET HERE, AND THAT IS THE WHOLE SAFETY PROPERTY.** The
+/// requester does not become the successor by asking. It releases the holder and
+/// then races the next acquire like anybody else, because a route by which naming
+/// yourself gets you the lease is a steal however politely it is spelled. A caller
+/// that wants both must take both, separately and visibly.
+#[must_use]
+pub fn notice(body: &Body, from: &str) -> Body {
+    Body {
+        stand_down: from.to_owned(),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// Should `ours` ask a holder writing `theirs` to stand down?
+///
+/// The predicate behind the only sender of [`notice`] (CLOUD-1798). Strictly
+/// newer, and **every uncertain reading answers `false`**:
+///
+/// - **An equal build is not out-ranked.** Two clones on the same version asking
+///   each other to stand down is a request loop with no newer party to win it.
+/// - **An unreadable version on either side is not evidence of anything.** A
+///   body minted by a build whose version this one cannot parse might be newer;
+///   reading it as older would let an old clone evict the whole fleet, which is
+///   the inversion [`Body::writer`]'s own doc refuses when it says the field
+///   decides nothing on its own.
+///
+/// A pre-release or build suffix is cut before the comparison rather than
+/// ordered, because the question here is "is the holder behind us" and no
+/// decision in this repository turns on `-rc.1` ordering. Saying so is cheaper
+/// than implementing an ordering nothing asks for.
+#[must_use]
+pub fn outranks(ours: &str, theirs: &str) -> bool {
+    fn triple(version: &str) -> Option<(u64, u64, u64)> {
+        let core = version.trim().split(['-', '+']).next().unwrap_or_default();
+        let mut parts = core.split('.');
+        let mut next = || parts.next()?.parse::<u64>().ok();
+        let (major, minor, patch) = (next()?, next()?, next()?);
+        // A FOURTH SEGMENT IS NOT A VERSION THIS UNDERSTANDS. Reading `1.2.3.4`
+        // as `1.2.3` would rank two distinct builds equal.
+        parts.next().is_none().then_some((major, minor, patch))
+    }
+    match (triple(ours), triple(theirs)) {
+        (Some(ours), Some(theirs)) => ours > theirs,
+        _ => false,
+    }
+}
+
+/// Is it worth `asker` leaving a stand-down request on this body?
+///
+/// The three guards of the notice sender as one pure predicate, so the decision
+/// is testable without a ref, a CAS or a wire (CLOUD-1798). Each clause is a
+/// distinct way to get this wrong:
+///
+/// 1. **Strictly newer** — [`outranks`], which refuses an equal build and every
+///    unreadable one.
+/// 2. **Not already asked** — idempotence. Without it every lap of every waiter
+///    rewrites the ref and the holder's own heartbeat CAS fails against a stream
+///    of cosmetic updates, evicting by contention rather than by asking.
+/// 3. **Never self-addressed** — the mirror of
+///    [`stand_down_requested`]'s own guard, one step earlier: that one stops a
+///    holder honouring a notice it minted onto itself, this one stops it being
+///    written.
+///
+/// A released or expired body is not excluded here and does not need to be: the
+/// caller only reaches this on `Turn::Wait`, which those states never produce.
+#[must_use]
+pub fn worth_asking(body: &Body, asker: &str) -> bool {
+    outranks(&writer_version(), &body.writer)
+        && body.stand_down.trim().is_empty()
+        && body.holder != asker
+}
+
+/// Has a peer asked this holder to stand down?
+///
+/// A pure reading over a body already in hand, so the beat pays no extra fetch
+/// for it and a caller can ask the same question of a lease it observed for some
+/// other reason.
+///
+/// **A notice naming the holder itself is ignored**, which is not a courtesy: the
+/// holder re-mints the whole body every beat, so a self-named notice would survive
+/// its own release and ask every future holder to stand down forever.
+#[must_use]
+pub fn stand_down_requested<'body>(body: &'body Body, holder: &str) -> Option<&'body str> {
+    let from = body.stand_down.trim();
+    (!from.is_empty() && from != holder).then_some(from)
+}
+
+/// Sixteen hex characters of entropy, which is what keeps every mint distinct.
+///
+/// See [`lease_object`] for why a mint that agreed with another mint on every
+/// other field would push an id the ref already carries — an "up to date" no-op
+/// that REPORTS SUCCESS, turning a rejected claim into an apparent win.
+fn nonce() -> String {
+    let mut bytes = [0_u8; 8];
+    // The engine's own source, so a lease's uniqueness rests on the same primitive
+    // every other unforgeable value here does rather than on a second one.
+    getrandom::fill(&mut bytes).map_or_else(
+        // COULD-NOT-LOOK IS NOT A CONSTANT. A fixed fallback would make two clones
+        // that both failed to read entropy mint the same object, which is exactly
+        // the collision the nonce exists to prevent — so the fallback is the one
+        // value guaranteed to differ between two processes on one machine.
+        |_| format!("{:016x}", std::process::id()),
+        |()| {
+            bytes
+                .iter()
+                .fold(String::with_capacity(16), |mut out, byte| {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "{byte:02x}");
+                    out
+                })
+        },
+    )
+}
+
+/// The clone's own bookkeeping, under `$GIT_DIR`.
+///
+/// **Per CLONE, not per process**, and that is forced: `hold`, `held` and
+/// `release` run as separate processes from the `acquire` that won, so a
+/// per-process holder id would leave the holder unable to recognise its own lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Local {
+    /// `$GIT_DIR/batten-land-lock`.
+    pub dir: std::path::PathBuf,
+}
+
+impl Local {
+    /// The bookkeeping directory under a git dir.
+    #[must_use]
+    pub fn under(git_dir: &std::path::Path) -> Self {
+        Self {
+            dir: git_dir.join("batten-land-lock"),
+        }
+    }
+
+    /// This clone's holder id, minted once and reused by every later verb.
+    ///
+    /// # Errors
+    ///
+    /// A directory or file this clone cannot write. **Never defaulted**: a
+    /// holder id that fell back to a constant would let two clones that both
+    /// failed to write one recognise each other's leases as their own, which is
+    /// the two-holders bug arriving through the identity rather than the CAS.
+    pub fn holder(&self) -> Result<String> {
+        let path = self.dir.join("holder");
+        if let Ok(existing) = crate::fsio::read_to_string(&path) {
+            let existing = existing.trim();
+            if !existing.is_empty() {
+                return Ok(existing.to_owned());
+            }
+        }
+        let minted = format!(
+            "{}-{}-{}",
+            std::env::var("HOSTNAME").unwrap_or_else(|_| String::from("host")),
+            std::process::id(),
+            nonce()
+        );
+        std::fs::create_dir_all(&self.dir)?;
+        crate::durable::replace(&path, format!("{minted}\n"))?;
+        Ok(minted)
+    }
+
+    /// Record that THIS clone's head reddened the metered matrix on `trunk`.
+    ///
+    /// The written value is a trunk POSITION, never an instant, and that is the
+    /// whole reason [`cooling`] can decide without a clock: the cooldown lapses
+    /// when the trunk moves off this sha or when the pool goes idle, both of them
+    /// observable events (CLOUD-1784's decomposition, CLOUD-1797's wiring).
+    ///
+    /// Beside `holder` in the same per-clone directory, because it is the same
+    /// kind of fact — something this clone knows about itself that must outlive
+    /// the process, since the `land` that reddened CI and the `acquire` that must
+    /// be held back are different processes.
+    ///
+    /// # THE RECORD NAMES ITS OWN REF, and that is not decoration
+    ///
+    /// It stores `<tracking-ref>\t<sha>`, so the reader resolves the ref the
+    /// WRITER used rather than a constant of its own. A reader that assumed
+    /// `origin/main` would compare this clone's poisoned sha against an unrelated
+    /// ref on any other base, never match, and answer "not cooling" — a
+    /// fail-open arm inside a mechanism that exists to fail closed, which is the
+    /// shape CLOUD-1792 was filed over. Naming the ref costs one field and
+    /// removes the assumption entirely.
+    ///
+    /// # Errors
+    ///
+    /// A directory or file this clone cannot write. **Never swallowed**: a poison
+    /// that failed to record reads as an unpoisoned clone on the next acquire,
+    /// which is the defect this exists to close.
+    pub fn poison(&self, tracking: &str, at: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        crate::durable::replace(self.dir.join("poisoned"), format!("{tracking}\t{at}\n"))?;
+        Ok(())
+    }
+
+    /// The ref and position this clone last poisoned, if it has poisoned one.
+    ///
+    /// `None` for an absent, empty or malformed record, and for one this clone
+    /// cannot read. **Unreadable reads as unpoisoned on purpose** — the opposite
+    /// of [`Local::holder`]'s rule, and for the opposite reason: a holder id that
+    /// defaulted would let two clones claim one lease, while a cooldown that
+    /// defaulted to ON would hold a clone back over a file it cannot read, which
+    /// is the single-agent stranding [`cooling`]'s idle-pool clause exists to
+    /// prevent.
+    ///
+    /// A record missing its tab is malformed rather than a bare sha, because a
+    /// bare sha is what the FIRST spelling of this wrote and reading it loosely
+    /// would resurrect the assumption the tab exists to remove.
+    #[must_use]
+    pub fn poisoned(&self) -> Option<(String, String)> {
+        let record = crate::fsio::read_to_string(self.dir.join("poisoned")).ok()?;
+        // Neither half can be empty: the record is trimmed first, so a tab it
+        // still carries has a non-blank byte on each side of it.
+        let (tracking, at) = record.trim().split_once('\t')?;
+        Some((tracking.to_owned(), at.to_owned()))
+    }
+
+    /// How long `token` has been what this clone sees under `name`, on OUR clock.
+    ///
+    /// **Expiry alone is not safe to steal on**, which is the whole reason this
+    /// exists. `expires` is an absolute instant minted on the HOLDER's clock and
+    /// compared against ours, and skew in one direction makes a live lease look
+    /// expired — stealing on that reading produces exactly the two holders the
+    /// design exists to prevent.
+    ///
+    /// A heartbeat mints a new nonce every beat, so a live holder CHANGES THE SHA
+    /// every beat. "This exact value has been sitting there longer than a beat" is
+    /// therefore evidence of the same thing expiry claims, derived entirely from
+    /// durations on ONE clock, and no skew can forge it. The cost is one extra
+    /// beat before a dead lease can be taken, which a waiter spends waiting anyway.
+    ///
+    /// **It RECORDS what it sees**, so a reader that only wants to render a number
+    /// must not call it: doing so would move the instant a rival's steal becomes
+    /// due, and would report `0` on a first call anyway.
+    ///
+    /// A first sighting is `0`, and a value this clone cannot record is `0` too —
+    /// a corroboration clock that cannot be kept has corroborated nothing.
+    #[must_use]
+    pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
+        let path = self.dir.join(name);
+        let seen = crate::fsio::read_to_string(&path).unwrap_or_default();
+        let mut fields = seen.split_whitespace();
+        let previous = fields.next().unwrap_or_default();
+        let since: Option<i64> = fields.next().and_then(|at| at.parse().ok());
+        match since {
+            Some(since) if previous == token => now.saturating_sub(since),
+            _ => {
+                let _ = std::fs::create_dir_all(&self.dir);
+                let _ = crate::durable::replace(&path, format!("{token} {now}\n"));
+                0
+            }
+        }
+    }
+}
+
+/// What a waiter may do about the lease it just read.
+///
+/// **Three ways in and one way out.** The ref does not exist yet, it was
+/// tombstoned by a release, or its holder stopped beating — all three are one
+/// compare-and-swap from the same expected value, which is why there is no
+/// separate create path to race.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Turn {
+    /// This clone already holds it, and it has not lapsed.
+    Mine,
+    /// Take it. The reason is a pointer for the report, never a lease body.
+    Take(String),
+    /// Somebody else holds it and the evidence to take it does not exist.
+    Wait,
+}
+
+/// Decide a [`Turn`] over one observation.
+///
+/// **`held_for` and `progress_for` are DURATIONS ON THIS CLOCK**, measured by
+/// [`Local::held_for`], and passing anything derived from the lease's own
+/// `expires` here would reintroduce the skew this design removes.
+///
+/// The two stealing arms fail in OPPOSITE directions and both are deliberate:
+///
+/// * An absent or released lease is a STATEMENT rather than a deduction, so it
+///   needs no corroboration and no clock at all.
+/// * An expired one is a deduction, so it needs the sha to have sat unchanged for
+///   a beat.
+/// * A lease that is still BEATING but has not progressed fails CLOSED — no
+///   token, no steal — which is every lease minted before the field existed and
+///   every holder that cannot see its own progress. Releasing a lease wrongly
+///   costs its holder one lap; stealing one wrongly puts two holders on the same
+///   trunk.
+#[must_use]
+pub fn turn(
+    terms: &Terms,
+    observed: &Observed,
+    holder: &str,
+    held_for: i64,
+    progress_for: i64,
+    stall_beats: i64,
+    now: i64,
+) -> Turn {
+    // GARBAGE IS WAIT, and it is the one place this differs from `authorises`:
+    // taking a ref nobody can read means overwriting whatever a stray push put
+    // there, and a well-meant fix that races a real holder is worse than waiting
+    // out a TTL. The health gate reports it; nothing here repairs it.
+    //
+    // AND `authorises` ANSWERS `Run` ON THE SAME REF, which is the half this arm
+    // does not say on its own. Waiting here does not hold the fleet back — it
+    // declines to CONTEST a ref that every reader is already running past. So an
+    // unparseable body is unheld and uncontested at once, and two landers can
+    // write one trunk under it. Deliberate: both arms fail toward motion, and the
+    // health gate is what makes the state visible rather than either of them.
+    // Stated because the pair is the reading, not either arm (CLOUD-1703).
+    let body = match observed {
+        Observed::Held { body, .. } => body,
+        Observed::Garbage { .. } => return Turn::Wait,
+        Observed::Absent => return Turn::Take(String::from("no lease is held")),
+    };
+    if body.holder == holder && !body.expired(now) {
+        return Turn::Mine;
+    }
+    if body.released() {
+        return Turn::Take(format!("took the lease {} released", body.holder));
+    }
+    if body.expired(now) && held_for >= terms.beat {
+        return Turn::Take(format!(
+            "took the lease {}s after {} stopped holding it",
+            now.saturating_sub(body.expires),
+            body.holder
+        ));
+    }
+    let stall = stall_beats.saturating_mul(terms.beat);
+    if !body.progress.is_empty() && progress_for >= stall {
+        // A steal from a holder that never stopped beating reads as theft unless
+        // it says which evidence it acted on. Pointer-only: two counts.
+        return Turn::Take(format!(
+            "took the lease from {}, which was still beating but had not progressed in \
+             {progress_for}s (stall bound: {stall}s)",
+            body.holder
+        ));
+    }
+    Turn::Wait
+}
+
+/// Does a poison cooldown still hold this clone back from taking the lease?
+///
+/// **The condition is two EVENTS, never a duration** (CLOUD-1778). An agent whose
+/// head turned CI red takes no further turn until either the trunk moves or the
+/// pool goes idle — both observable, neither a timer, so the no-wall-clock
+/// invariant survives a mechanism that would obviously have been written as one.
+///
+/// # Why an agent that poisoned CI must not simply re-take
+///
+/// Nothing stops it today. A holder whose matrix goes red releases and may win
+/// the very next acquire, replay onto the same trunk and buy another matrix on
+/// the same defect — spending the metered resource twice to learn what it already
+/// knows, while every waiter that prepped behind it sits through both.
+///
+/// # Why the trunk moving lapses it
+///
+/// The cooldown is a claim about ONE base: that this branch, on that trunk, is
+/// red. When the trunk advances the claim is about a tree that no longer exists,
+/// and holding the agent back further would punish it for a state nobody is in.
+///
+/// # Why an idle pool lapses it, and this is the anti-outage half
+///
+/// Waiting exists so somebody ELSE gets the slot. With no lease on the ref there
+/// is nobody else, and a cooldown that survived an empty pool would strand a
+/// single-agent fleet completely — one red matrix and nothing can ever land
+/// again. `CLOUD-1043`'s releaser clause is the same argument for its own
+/// mechanism, and it is preserved here rather than rediscovered.
+///
+/// A released lease counts as idle for the same reason: the tombstone says the
+/// holder handed it back, so the ref exists but nobody is holding it.
+#[must_use]
+pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) -> bool {
+    let Some(at) = poisoned_at else {
+        return false;
+    };
+    // THE TRUNK MOVED — the claim was about a base that is no longer trunk.
+    if at != trunk_now {
+        return false;
+    }
+    // THE POOL IS IDLE — nobody is waiting, so waiting buys nothing and would
+    // strand a single-agent fleet.
+    match observed {
+        Observed::Absent => false,
+        Observed::Held { body, .. } => !body.released(),
+        // A ref nobody can read is NOT evidence the pool is idle, and reading it
+        // as idle would let the one agent that just poisoned CI take the lease on
+        // the strength of a failed parse. `turn` already answers `Wait` for this
+        // state; the cooldown agrees rather than arguing with it.
+        Observed::Garbage { .. } => true,
+    }
+}
+
+/// [`cooling`], asked by the clone `holder` at `now` (CLOUD-2248).
+///
+/// **A lease nobody ELSE is holding counts as idle too.** `holder` is this
+/// clone: its own lapsed lease is not a rival — a `land` killed mid-lap leaves
+/// exactly that, and reading it as "not idle" made the clone wait on itself for
+/// every lap of three runs, with nothing on the ref but its own dead body. An
+/// expired lease is a rival nobody is beating, and `cooling` is only asked once
+/// [`turn`] has already answered `Take` — so an expiry reached here has sat its
+/// corroborating beat, and no skew reads it. What still holds the cooldown is
+/// another clone with a LIVE lease, or another clone reserved `next` behind it:
+/// those are somebody else, and the slot is theirs to have.
+// Each rival clause, dropped. Either alone clears the measured self-deadlock,
+// so each is pinned by its own assertion: a lapsed rival nobody is beating, and
+// this clone's own live lease (CLOUD-2248).
+#[must_use]
+pub fn cooling_for(
+    poisoned_at: Option<&str>,
+    trunk_now: &str,
+    observed: &Observed,
+    holder: &str,
+    now: i64,
+) -> bool {
+    let Some(at) = poisoned_at else {
+        return false;
+    };
+    // THE TRUNK MOVED — the claim was about a base that is no longer trunk.
+    if at != trunk_now {
+        return false;
+    }
+    // THE POOL IS IDLE — nobody is waiting, so waiting buys nothing and would
+    // strand a single-agent fleet.
+    match observed {
+        Observed::Absent => false,
+        Observed::Held { body, .. } => {
+            let rival_holds = !body.released() && !body.expired(now) && body.holder != holder;
+            let rival_waits = !body.next.is_empty() && body.next != holder;
+            rival_holds || rival_waits
+        }
+        // A ref nobody can read is NOT evidence the pool is idle, and reading it
+        // as idle would let the one agent that just poisoned CI take the lease on
+        // the strength of a failed parse. `turn` already answers `Wait` for this
+        // state; the cooldown agrees rather than arguing with it.
+        Observed::Garbage { .. } => true,
+    }
+}
+
+/// What the holder's own bookkeeping says about whether it is MOVING.
+///
+/// **Liveness answers a different question, and answers it happily for a process
+/// wedged forever.** A holder that is alive, whose trap would fire perfectly well,
+/// and which has stopped landing, is exactly the case a TTL cannot see: it keeps
+/// beating, so every rival waits on it indefinitely.
+///
+/// Two stamps rather than one maximum, and folding them is the mistake worth
+/// stating: the hang bound may only be applied WHILE A LOOP IS ACTUALLY TICKING,
+/// which is exactly `tick_at > advance`. Folded, a 90-second bound would be
+/// applied to a verify step that legitimately runs for minutes, and the
+/// mechanism's first act would be to kill healthy landings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// The later of "a lap step began" and "the world moved" — the last time
+    /// anything actually advanced.
+    pub advance: i64,
+    /// The last time a loop went round, whether or not it learned anything.
+    pub tick_at: i64,
+}
+
+impl Progress {
+    /// The opaque token a lease carries.
+    ///
+    /// **A rival tests it for EQUALITY OVER TIME and never interprets it**, which
+    /// is what keeps the holder's clock out of the rival's decision: the two
+    /// fields mean something to the writer and nothing to anyone else.
+    #[must_use]
+    pub fn token(self) -> String {
+        format!("{}.{}", self.advance, self.tick_at)
+    }
+}
+
+/// Read a task's progress stamps out of the registry the task runner writes.
+///
+/// **A READ of a data file, not a re-derivation.** The registry's layout has one
+/// owner and this does not become a second one: it answers "what did the writer
+/// record", never "is this task healthy", which is [`bail`]'s question.
+///
+/// `None` is the honest answer wherever there is nothing to read — no entry, or
+/// an entry with no usable stamp at all. **A land whose bookkeeping never
+/// registered is not evidence of a stall**, and killing one on that reading would
+/// be inventing the finding.
+#[must_use]
+pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
+    let text =
+        crate::fsio::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
+    let field = |name: &str| -> i64 {
+        text.lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}: ")))
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    let advance = field("phase_since").max(field("sig_at"));
+    if advance == 0 {
+        return None;
+    }
+    Some(Progress {
+        advance,
+        tick_at: field("tick_at"),
+    })
+}
+
+/// The token a land publishes about ITSELF, read by its own pid.
+///
+/// # Why this is a function and not two lines at the call site
+///
+/// It is the composition that was missing, not either half. [`progress_of`] and
+/// [`Progress::token`] both existed and were both tested, and `body.progress` was
+/// still empty on every lease in the fleet, because nothing joined them to a
+/// heartbeat (CLOUD-1703). A defect of wiring is only catchable where the wiring
+/// has a name, so this has one.
+///
+/// **`pid` is the caller's own `std::process::id()`.** A heartbeat runs inside
+/// the land it serves, so it reads the entry it is itself writing; the predecessor
+/// took the pid from `LAND_LOCK_HOLDER_PID`, a variable whose only binder was the
+/// retired shell heartbeat, which is how it came to have a reader and no writer.
+///
+/// `None` wherever there is nothing to read, which [`progress_of`] documents as
+/// the honest answer for a lap whose bookkeeping never registered rather than as
+/// evidence of a stall.
+#[must_use]
+pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
+    progress_of(git_dir, pid).map(Progress::token)
+}
+
+/// What the heartbeat should do about the land it serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bail {
+    /// Keep holding.
+    Hold,
+    /// Release and stop it, for the reason given.
+    Stop(String),
+}
+
+/// Decide whether the land holding this lease is still moving.
+///
+/// **`None` IS `Hold`**, and that is the fail-open half of a deliberately
+/// asymmetric pair: this clone and every rival agree to say nothing rather than
+/// guess about a land that never registered. The rival's own steal fails the other
+/// way — no token, no steal — because releasing a lease wrongly costs its holder
+/// one lap, while stealing one wrongly puts two holders on the same trunk.
+#[must_use]
+pub fn bail(
+    progress: Option<Progress>,
+    terms: &Terms,
+    stall_beats: i64,
+    hang_beats: i64,
+    now: i64,
+) -> Bail {
+    let Some(progress) = progress else {
+        return Bail::Hold;
+    };
+    if now.saturating_sub(progress.advance) >= stall_beats.saturating_mul(terms.beat) {
+        return Bail::Stop(format!("has not advanced in {stall_beats} beats"));
+    }
+    // ONLY WHILE A LOOP IS TICKING. A phase with no loop is judged by the stall
+    // bound alone, because a verify step legitimately runs longer than this one.
+    if progress.tick_at > progress.advance
+        && now.saturating_sub(progress.tick_at) >= hang_beats.saturating_mul(terms.beat)
+    {
+        return Bail::Stop(format!("stopped turning {hang_beats} beats ago"));
+    }
+    Bail::Hold
+}
+
+/// Is the process this heartbeat serves still the task it was started for?
+///
+/// **Existence is not enough, and that is measured rather than cautious**: pids
+/// recycle, and this container was observed wrapping its pid space inside twenty
+/// minutes — well under the stall bound. So the pid must still BE a process whose
+/// command line carries `marker`.
+///
+/// **Anything that cannot be evaluated reads as GONE.** A wrongly released lease
+/// costs one lap and the holder's own fence catches it before it acts; a wrongly
+/// renewed one wedges the fleet for as long as nobody notices. Release is the
+/// cheap direction.
+///
+/// # `/proc` is the whole mechanism, so this probe is Linux-only and says so
+///
+/// The command line comes from `/proc/<pid>/cmdline`, which exists on Linux and
+/// nowhere else this crate builds for. That was left implicit and the Windows job
+/// found it: the read simply failed, the unevaluable-reads-as-gone arm answered
+/// `false`, and the ANTI-VACUITY case beside it — the one proving the predicate
+/// does not answer `false` for everything — was the thing that went red. A probe
+/// that is inert on a target is exactly what that case exists to catch, and it
+/// caught it on the one platform `cross-check` cannot see, because `cross-check`
+/// type-checks and does not run.
+///
+/// So the platform split is declared rather than inherited. On a target without
+/// `/proc` the answer is `false` for every pid, which is the stated asymmetry
+/// taken to its limit: the probe contributes nothing and the lease is decided by
+/// the corroboration clocks alone. That is inert, not wrong — but it is a
+/// property somebody should have to delete a `cfg` to change, rather than one
+/// that follows silently from a missing file.
+#[must_use]
+#[cfg(target_os = "linux")]
+pub fn holder_alive(pid: u32, marker: &str) -> bool {
+    let Ok(raw) = crate::fsio::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    let command = String::from_utf8_lossy(&raw).replace('\0', " ");
+    command.contains(marker)
+}
+
+/// The same question where no `/proc` answers it — see the Linux arm's docs.
+///
+/// Inert by construction: every pid reads as gone, so this never renews a lease
+/// on a holder's behalf and never contributes to stealing one either. A steal
+/// still needs the corroboration clocks `turn` requires.
+#[must_use]
+#[cfg(not(target_os = "linux"))]
+pub fn holder_alive(_pid: u32, _marker: &str) -> bool {
+    false
+}
+
+/// The lease ref's health, as a gate rather than a report.
+///
+/// **This runs on a CLOCK, never on the landing path**, and the split is the one
+/// the tree already draws between a property of the COMMIT and a property of the
+/// WORLD. Neither refusal below is a correctness hazard for the trunk — the lease
+/// decides who goes first, never what may land — so on the landing path it would
+/// fail whichever PR happened to be in flight over a condition that PR did not
+/// cause and cannot fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Health {
+    /// Nobody has ever taken it, or a holder handed it back, or it lapsed. All
+    /// three are healthy and all three mean the next claimant wins.
+    Free(String),
+    /// Somebody is landing right now, within one term.
+    Held(String),
+    /// **Nothing legitimate produces this.** A lease is only ever minted at one
+    /// term from now, so a horizon further out means somebody wrote the ref by
+    /// hand or under a different term — and it would block the fleet for however
+    /// long it says.
+    Wedged(String),
+    /// The ref exists and is not a lease. Every decision above treats it as held,
+    /// which is safe and silent — so without this it blocks landing for a term
+    /// with nothing anywhere saying why.
+    Garbage(String),
+}
+
+impl Health {
+    /// Whether this is a state a fleet can land through.
+    #[must_use]
+    pub const fn healthy(&self) -> bool {
+        matches!(self, Health::Free(_) | Health::Held(_))
+    }
+}
+
+/// Judge the lease ref's health.
+///
+/// **Reported, never repaired.** Overwriting a lease this cannot understand is how
+/// a well-meant fix races a real holder, and the two refusals below are both
+/// "something that is not this protocol wrote the ref" — a human's decision, not
+/// a gate's.
+///
+/// Pointer-only throughout: a state, a holder id and a count of seconds. Never the
+/// ref body.
+#[must_use]
+pub fn health(observed: &Observed, terms: &Terms, now: i64) -> Health {
+    let body = match observed {
+        Observed::Absent => {
+            return Health::Free(String::from("absent — nobody holds the landing lease"));
+        }
+        Observed::Garbage { why, .. } => {
+            return Health::Garbage(format!(
+                "{why}. It reads as held, so landing is blocked until it expires or is overwritten"
+            ));
+        }
+        Observed::Held { body, .. } => body,
+    };
+    // A LEASE WITH NO HOLDER CANNOT BE RELEASED BY ANYONE, since release requires
+    // recognising your own id. Checked before the arithmetic for the same reason
+    // the parse is: a state nobody can leave is a wedge whatever its expiry says.
+    if body.holder.is_empty() {
+        return Health::Garbage(String::from(
+            "a lease with no holder cannot be released by anyone",
+        ));
+    }
+    // THE ADMITTED SUCCESSOR (CLOUD-369), rendered ONCE and appended by every arm
+    // below. The lease bounds confirming runs at two — the holder plus one branch
+    // `reserve` admitted — and this report is what a human reads on a wedged
+    // lease. Naming only the holder shows half the occupancy, so the one view
+    // meant to explain who is spending CI could not name the second spender.
+    //
+    // Rendered here rather than at each arm so the four cannot drift into
+    // describing the same field differently, which is the predecessor's own
+    // reason for hoisting it.
+    let behind = successor_clause(body);
+    // The release sentinel, reported as a declaration rather than as an expiry
+    // fifty-odd years in the past.
+    if body.released() {
+        return Health::Free(format!("free — released by {}{behind}", body.holder));
+    }
+    // **CHECKED, because `expires` is parsed straight out of a ref body somebody
+    // may have written by hand** — which is the very case the `Wedged` arm below
+    // exists for (review of #848). `i64::MIN` parses fine, is not `released()`,
+    // and then this subtraction overflows: a panic under overflow checks, and in
+    // release a wrap to a large positive `left`, so a lease that lapsed decades
+    // ago reports as wedged for another nine billion seconds and blocks the fleet
+    // on a lease that is actually free. `expired()` and `released()` above are
+    // total; only this was not.
+    //
+    // A body whose arithmetic will not close is garbage rather than a duration,
+    // and garbage is the state this module already refuses to read as an
+    // occupancy.
+    // **EXPIRY IS ASKED BEFORE THE ARITHMETIC, AND THE ORDER IS THE FIX** (review
+    // of #848). The `checked_sub` below removed a panic and kept the wrong
+    // verdict: an underflowing `expires` took the guard arm and reported
+    // `Wedged` — blocking — over a lease `Body::expired`, `authorises`, `turn`
+    // and `authorises_this_clone` ALL already treat as free and takeable. So
+    // `lease check` exited 2 with "landing is blocked until it expires" while
+    // the next `acquire` would have won, which is the outcome the comment on the
+    // guard named as the defect it was closing.
+    //
+    // `expired` is the one authority on whether a lease has lapsed, and it is
+    // total — a comparison, never a subtraction. Reaching for it first means the
+    // arithmetic below only ever runs on a lease that is genuinely live.
+    if body.expired(now) {
+        return Health::Free(format!(
+            "free — lapsed by {} {}s ago{behind}",
+            body.holder,
+            now.saturating_sub(body.expires)
+        ));
+    }
+    // A body whose arithmetic will not close is GARBAGE rather than a duration,
+    // which is what the prose here always said and what the arm now returns. It
+    // is unreachable for any lease that reached this line — `expired` is false,
+    // so `expires > now` and the difference is positive — and it is kept because
+    // a total function that cannot answer must say so rather than pick a side.
+    let Some(left) = body.expires.checked_sub(now) else {
+        return Health::Garbage(format!(
+            "held by {}{behind} with an expiry that will not compare — the body is not a lease this can read",
+            body.holder
+        ));
+    };
+    if left > terms.ttl {
+        return Health::Wedged(format!(
+            "held by {}{behind} for another {left}s, beyond the {}s any lease may claim",
+            body.holder, terms.ttl
+        ));
+    }
+    Health::Held(format!("held by {}{behind}, {left}s left", body.holder))
+}
+
+/// The admitted successor as a clause, or the empty string.
+///
+/// **Advisory exactly like `branch:` and `head:`** — read for the report, never
+/// for a verdict. It is absent on every lease minted before CLOUD-369 and on
+/// every lease nobody has reserved behind, so an empty reading is the ORDINARY
+/// case and the output stays byte-identical whenever it is empty. That
+/// byte-identity is asserted by a case of its own in the suite this conserves.
+fn successor_clause(body: &Body) -> String {
+    if body.next.is_empty() {
+        return String::new();
+    }
+    format!(", {} admitted behind it", body.next)
+}
+
+/// Delete `reference` on `remote`, from whatever it currently reads.
+///
+/// **A delete is the same command with [`ZERO`] on the NEW side**, so it inherits
+/// the CAS: a ref that moved between the read and the write is refused rather
+/// than deleted. That is the property a plain force-delete does not have, and it
+/// matters here for the reason it matters on the lease — the thing being removed
+/// is shared state somebody else may have just written.
+///
+/// The pack carries no objects, because a delete adds none. An empty pack is a
+/// header and a checksum, which is what receive-pack expects for this command.
+///
+/// # This sandbox's git proxy REFUSES a delete, measured 2026-09-01
+///
+/// A push of a new ref applies; a delete of that same ref answers **403**, by
+/// this code and by the `git` binary alike (`send-pack: unexpected disconnect`).
+/// So this function is correct and unexercisable here, and its opt-in driver is
+/// deliberately not run in this environment.
+///
+/// **That costs the landing loop nothing**, which is why it is a note rather than
+/// a blocker: `mem:workflow/landing-loop` already records that the closing
+/// `could not delete origin/<branch>` is *"expected output, not a failure"* —
+/// GitHub's auto-delete-on-merge wins the race, so the branch is normally gone
+/// before anyone asks. A caller treats this as best-effort.
+///
+/// # Errors
+///
+/// A transport failure or an unreadable report. A ref that already reads
+/// something else is [`Outcome::Rejected`], not an error.
+pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
+    let advertisement = advertise(remote, Service::ReceivePack)?;
+    let old = advertisement.head_of(reference);
+    if old == ZERO {
+        // Already gone. Idempotent in effect, so idempotent in what it reports —
+        // the same reason a release that finds a tombstone says "already
+        // released" rather than minting a second one.
+        return Ok(Outcome::Applied);
+    }
+    let update = Update {
+        old: old.to_owned(),
+        new: ZERO.to_owned(),
+        name: reference.to_owned(),
+    };
+    swap(remote, &update, &pack_of(&[])?)
+}
+
+/// Push `head` to `reference` on `remote`, replacing the remote's value only
+/// when `admit` accepts it.
+///
+/// # The CAS proves the swap was atomic; `admit` proves it loses nothing
+///
+/// `Update` carries `old` and `new`, and receive-pack applies the change **only
+/// while the ref still reads `old`**, decided under the server's own lock. That
+/// closes the window between reading the advertisement and swapping — and
+/// nothing else. `old` is the value read a moment ago, so on its own the CAS
+/// asserts nothing about what the caller has SEEN: a sibling commit pushed an
+/// hour earlier is overwritten silently. That is the hazard `--force-with-lease`
+/// guards against by comparing with what the client last observed, and the one
+/// this function once claimed to cover while it did not (CLOUD-2056). `admit`
+/// restores it: the caller says which remote values this push may replace, and
+/// any other sends nothing.
+///
+/// # What is sent
+///
+/// [`crate::git::objects_to_send`] decides the object set — the commits in `base..head`
+/// plus their tree closure, minus what `base` already carries. `base` is the ref's
+/// CURRENT value on the remote, read from the advertisement, so the pack carries
+/// only what this push actually adds.
+///
+/// An absent ref advertises [`ZERO`], which is both "must not exist" to the CAS
+/// and, here, "the remote has nothing to subtract" — so a first push of a branch
+/// sends its whole closure, which is correct and is the one case that is large.
+///
+/// # Errors
+///
+/// A transport failure, an unreadable report, or a repository whose objects will
+/// not enumerate. **A lost race is not an error** — it is [`Outcome::Rejected`],
+/// for the reason [`cas`] states.
+pub fn push(
+    remote: &str,
+    repo: &std::path::Path,
+    reference: &str,
+    head: &str,
+    admit: &dyn Fn(&str) -> bool,
+) -> Result<Outcome> {
+    let advertisement = advertise(remote, Service::ReceivePack)?;
+    let old = advertisement.head_of(reference);
+    // THE CALLER'S ASSERTION, before anything is sent (CLOUD-2056). The CAS
+    // below only proves the ref did not move DURING the swap; whether `old` is a
+    // value this push may replace at all is the caller's to say, from what it
+    // has seen. A refusal sends nothing and reads exactly as a lost race.
+    if !admit(old) {
+        return Ok(Outcome::Rejected {
+            reason: format!("{reference} holds {old}, which this push was not admitted to replace"),
+        });
+    }
+    // The subtraction base is the remote's OWN current value, never a local
+    // guess: a branch this clone rebased carries commits the remote never had,
+    // and any base but the advertised one either sends too little (a broken
+    // push) or re-sends history the remote has had for months.
+    let base = (old != ZERO).then_some(old);
+    let objects: Vec<Object> = crate::git::objects_to_send(repo, base, head)?
+        .into_iter()
+        .map(|raw| Object {
+            id: raw.id,
+            kind: raw.kind,
+            body: raw.body,
+        })
+        .collect();
+    let update = Update {
+        old: old.to_owned(),
+        new: head.to_owned(),
+        name: reference.to_owned(),
+    };
+    swap(remote, &update, &pack_of(&objects)?)
+}
+
+/// The id `remote` advertises for `qualified`, or a usage error naming the ref.
+///
+/// THE CALLER NAMED THE REF, so a ref the remote does not advertise is a statement
+/// about the invocation — exit 1 under §7, one line — and not the engine failing
+/// (CLOUD-2066). Raised as an internal error it reached `land replay origin/main`
+/// as exit 3 with a backtrace, which tells a caller the binary is broken. Failing
+/// to reach the remote at all stays an internal error, in [`advertise`].
+fn advertised_head<'a>(
+    advertisement: &'a Advertisement,
+    remote: &str,
+    qualified: &str,
+) -> Result<&'a str> {
+    let want = advertisement.head_of(qualified);
+    if want == ZERO {
+        return Err(crate::error::UsageError::raise(format!(
+            "lease: {remote} does not advertise {qualified}"
+        )));
+    }
+    Ok(want)
+}
+
+/// Fetch `reference` from `remote`, returning the sha it now points at and every
+/// object the local odb was missing.
+///
+/// # `have` lines are the whole economy of this, not an optimisation
+///
+/// [`fetch_object`] sends `want` and `done` with no `have` at all, which is right
+/// for a lease — a parentless commit whose closure is two objects. Asking for a
+/// branch tip that way would have the server send THE ENTIRE HISTORY on every
+/// lap. The `have` lines are what let it compute a delta instead, and they are
+/// taken from local commits reachable from the caller's own tips.
+///
+/// **Bounded, and the bound is a COUNT rather than a clock.** A full `have` list
+/// is the whole local history; git's own client sends a window and stops. The
+/// window here is [`HAVE_WINDOW`]: enough for the server to find a common
+/// ancestor on any branch a lap could be on, and small enough that the request
+/// stays one round trip. Too small costs a bigger pack, never a wrong answer.
+///
+/// # Errors
+///
+/// A transport failure, a ref the remote does not advertise, or a pack that will
+/// not read. **A ref the remote does not have is an error, not an empty fetch** —
+/// "there is nothing to fetch" and "the thing you named is not there" are
+/// different answers and only one of them is safe to continue from.
+pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fetched> {
+    let advertisement = advertise(remote, Service::UploadPack)?;
+    // **QUALIFIED, BECAUSE THE ADVERTISEMENT IS KEYED BY FULL REF NAME.**
+    // `Advertisement::refs` says so in its own field doc and `head_of` is an
+    // exact map lookup, but every driver-level caller carries `reference` SHORT
+    // — `main`, as the CLI positional and the tracking-ref construction both
+    // spell it. So `head_of("main")` missed `refs/heads/main`, answered `ZERO`,
+    // and this reported *"{remote} does not advertise main"* about a remote
+    // whose advertisement carried it twice. Measured against this repository:
+    // 79,973 bytes of advertisement, `refs/heads/main` present, the fetch
+    // refusing anyway.
+    //
+    // The `refs/` test rather than a slash test, because a branch is legitimately
+    // `feature/x` and prefixing by "has no slash" would leave exactly those
+    // unresolvable — which is the same half-right rule that made
+    // `gitwrite::FullName` accept a slashed short name verbatim.
+    let qualified = if reference.starts_with("refs/") {
+        reference.to_owned()
+    } else {
+        format!("refs/heads/{reference}")
+    };
+    let want = advertised_head(&advertisement, remote, &qualified)?;
+    // Already in hand: the local odb has it, so there is nothing on the wire to
+    // ask for. Reported as a fetch that moved nothing rather than as a no-op,
+    // because the caller's next question is "what does the ref read now".
+    if crate::git::has_object(repo, want) {
+        return Ok(Fetched {
+            head: want.to_owned(),
+            objects: Vec::new(),
+            advertised: advertisement.refs.keys().cloned().collect(),
+        });
+    }
+    let haves = crate::git::recent_commits(repo, HAVE_WINDOW);
+    let body = upload_pack_request(want, &haves)?;
+    let responses = fetch::spend(&[Call {
+        url: &format!(
+            "{}/{}",
+            remote.trim_end_matches('/'),
+            Service::UploadPack.as_str()
+        ),
+        headers: &headers(
+            &format!("application/x-{}-result", Service::UploadPack.as_str()),
+            Some(&format!(
+                "application/x-{}-request",
+                Service::UploadPack.as_str()
+            )),
+        ),
+        body: Some(&body),
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: upload-pack returned no answer"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: upload-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    // The framed section carries the negotiation's ACK/NAK and the pack follows
+    // it unframed — the same boundary `fetch_object` finds, and the reason
+    // `pkt_split` hands back its tail rather than stopping at the first line it
+    // cannot parse.
+    let (_, tail) = pkt_split(&response.body)?;
+    Ok(Fetched {
+        head: want.to_owned(),
+        objects: objects_in(tail)?,
+        advertised: advertisement.refs.keys().cloned().collect(),
+    })
+}
+
+/// What a [`fetch`] came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The sha the fetched reference points at.
+    pub head: String,
+    /// Every object the answer carried. **Empty means the odb already had it**,
+    /// never that the fetch failed.
+    pub objects: Vec<Object>,
+    /// Every ref the remote advertised on THIS exchange, by full name.
+    ///
+    /// Carried out rather than dropped because the fetch already read it, and
+    /// the one caller that needs it — the landing path's prune — would otherwise
+    /// have to take a second advertisement to learn what the first one said.
+    /// Two readings of "what does the remote carry" is two answers, and the
+    /// prune is exactly the decision that must not act on the staler one.
+    ///
+    /// **Never empty on a successful fetch**, because a fetch that found nothing
+    /// to want has already failed by then — so a caller may read emptiness as a
+    /// remote carrying no refs rather than as could-not-look.
+    pub advertised: Vec<String>,
+}
+
+/// How many local commits are offered as `have` lines.
+///
+/// A COUNT, never a clock, and deliberately generous: the cost of too few is a
+/// larger pack and the cost of too many is a larger request, so this errs toward
+/// the side whose failure is measured in bytes rather than in minutes.
+const HAVE_WINDOW: usize = 256;
+
+/// The `want`/`have`/`done` body.
+///
+/// The first `want` carries the capabilities, which is where they go on this
+/// protocol — a second `want` carrying them again is a malformed request. No
+/// sideband is asked for, so the pack arrives raw rather than multiplexed, which
+/// is what lets the reader find it by scanning past the framed section.
+fn upload_pack_request(want: &str, haves: &[String]) -> Result<Vec<u8>> {
+    let mut body = pktline(&format!("want {want} no-progress ofs-delta\n"))?;
+    body.extend_from_slice(FLUSH);
+    for have in haves {
+        body.extend_from_slice(&pktline(&format!("have {have}\n"))?);
+    }
+    body.extend_from_slice(&pktline("done\n")?);
+    Ok(body)
+}
+
+/// Ask a stalled holder to stop.
+///
+/// `SIGTERM`, so the holder's own trap runs and its cleanup happens — a `SIGKILL`
+/// here would leave behind exactly the orphaned state the liveness probe exists
+/// to clean up after.
+///
+/// # Why it lives here rather than in the dispatch module
+///
+/// It was written in `lib.rs`, and `spawn-adapters` refused it: a spawn belongs
+/// in a module the adapter table has PLACED, and the CLI dispatch is not one —
+/// placing it would admit every future spawn in the crate's largest file. So the
+/// call moved to the module that owns the fact, which is the same argument
+/// `symbols`, `pinned` and `prune` already carry on that table: the holder's pid
+/// comes off the lease record, and whether that process is still there is a
+/// property of the machine rather than of the tree.
+///
+/// **`kill(2)` in-process, through `rustix`'s safe wrapper** — the same crate
+/// `exec`'s reaper signals process groups with. This spawned `kill(1)` on the
+/// premise that no safe route existed; `rustix::process::kill_process` is one,
+/// and it was already a dependency (CLOUD-1924). Off unix there is no signal to
+/// send, which is what the spawn amounted to there as well.
+#[cfg(unix)]
+pub fn stop(pid: u32) {
+    if let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+    }
+}
+
+/// See the unix half: no signal exists to send here.
+#[cfg(not(unix))]
+pub fn stop(_pid: u32) {}
+
+// ---------------------------------------------------------------------------
+// CLOUD-420 / CLOUD-1148: the composite step-0 guard.
+// ---------------------------------------------------------------------------
+
+/// What the runner's step-0 guard decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Guarded {
+    /// Spend the matrix.
+    Run {
+        /// Why, as a pointer a human reads off a green step.
+        why: String,
+    },
+    /// Do not. The caller cancels the run it is standing in.
+    Stop {
+        /// Why, and it carries the REMEDY: a stopped run is a cancelled run with
+        /// no failed step of its own, so a reader who is not told sees a red
+        /// check and no cause.
+        why: String,
+    },
+}
+
+/// The guard's decision over the two readings it composes.
+///
+/// # STALENESS FIRST, AND THE LEASE IS NOT CONSULTED WHEN IT STOPS
+///
+/// The predecessor's ordering, conserved: `ci-lease-precondition.sh` sets `stop`
+/// from the staleness row and enters the lease table only `if [[ -z "$stop" ]]`.
+/// So `authority` is `None` where the caller never asked — one fewer forge read
+/// on a head that is doomed either way — and `None` is not a third verdict.
+///
+/// **AN UNREADABLE STALENESS ROW IS NOT A STOP, so it does not skip the lease**
+/// (review of #848). This arm returned `Run` before the `authority` match at all,
+/// which INVERTS the ordering the paragraph above claims to conserve: in the
+/// shell an unreadable row left `stop` UNSET — it said *"cannot read this head's
+/// landing mechanism; not judging its age"* and carried on — so the lease table
+/// was still entered. Measured consequence: with the forge rate-limited or the
+/// credential absent, `decide` yields `Unknown`, the lease was never observed,
+/// and a rival's live lease was ignored while this job spent a matrix.
+///
+/// `Unknown` still never stops on its own — it contributes no refusal — it just
+/// stops being a reason not to ask the other half.
+///
+/// # EVERY COULD-NOT-LOOK RUNS
+///
+/// This gate is the opposite of every other refusal in this repository. A
+/// reading it could not take would stop every job in the fleet, where waving one
+/// matrix through costs one matrix. So [`Carries::Unknown`] runs, an absent
+/// authority runs, and the only two things that stop are a head that provably
+/// does not carry trunk's landing mechanism and a lease that provably names
+/// somebody else.
+#[must_use]
+pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
+    match carries {
+        Carries::Stale { wanted } => {
+            return Guarded::Stop {
+                why: format!(
+                    "this head does not carry {wanted}, so it cannot be serialised against the \
+                     fleet. Rebase onto current trunk and land with it."
+                ),
+            };
+        }
+        Carries::Unknown { .. } | Carries::Current => {}
+    }
+    let unjudged = match carries {
+        Carries::Unknown { because } => format!("{because}; not judging this head's age. "),
+        _ => String::new(),
+    };
+    match authority {
+        Some(Authority::Stop(why)) => Guarded::Stop {
+            why: format!("{unjudged}{why}"),
+        },
+        Some(Authority::Run(why)) => Guarded::Run {
+            why: format!("{unjudged}{why}"),
+        },
+        // The caller could not read the lease at all. `authorises` fails open by
+        // contract and so does this.
+        None => Guarded::Run {
+            why: format!("{unjudged}the lease could not be read, so nothing refuses this branch"),
+        },
+    }
+}
+
+/// Ask the forge to cancel `run`: a lap's worthless matrix
+/// ([`crate::land::abandon`]) and the run a lease guard stands in.
+///
+/// [`crate::rest::Posted::Refused`] when the cancellation was refused, which the
+/// caller reports and then runs anyway: a guard that could not stop a run must
+/// not also fail the job it is standing in.
+#[must_use]
+pub fn cancel_run(repo: &str, run: &str) -> crate::rest::Posted {
+    crate::rest::post(&format!("repos/{repo}/actions/runs/{run}/cancel"))
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-1148 §2: does this head carry the landing mechanism trunk has?
+// ---------------------------------------------------------------------------
+
+/// What the staleness read decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Carries {
+    /// The head's history contains trunk's newest landing-mechanism commit.
+    Current,
+    /// It does not, so the head cannot be serialised against the fleet.
+    Stale {
+        /// Trunk's commit the head is missing. A pointer, never a diff.
+        wanted: String,
+    },
+    /// The reading could not be taken.
+    ///
+    /// **A distinct variant BECAUSE THE CALLER MUST FAIL OPEN ON IT.** Folding
+    /// it into `Stale` would cancel every run in the fleet on one unreachable
+    /// forge, and folding it into `Current` is how the predecessor's row went
+    /// dead. It is neither, and the caller decides — which for this gate means
+    /// run the matrix.
+    Unknown {
+        /// What could not be read. A pointer for a human, never a payload.
+        because: String,
+    },
+}
+
+/// One REST read, as the body text.
+///
+/// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn whose
+/// `#[expect(clippy::disallowed_types)]` reason claimed the crate carries no
+/// HTTP client that resolves a forge credential — eighty lines from
+/// the credential reader's predecessor in this same file, which reads `GH_TOKEN` and
+/// attaches a bearer header to a [`crate::fetch`] call. The claim was false where
+/// it was easiest to check.
+///
+/// Empty on any failure, which is the same could-not-look posture
+/// [`crate::main_watch::read`] takes: every failure to reach the forge is a
+/// reading nobody took, never a verdict.
+///
+/// # A NON-2xx BODY IS NOT A READING, AND THE STATUS IS WHAT SAYS SO
+///
+/// This returned `answer.body` for every status, so a `401`, a `403` and a
+/// rate-limited `5xx` were handed to the callers as text to parse (review of
+/// #848). No verdict flips today — the forge's error bodies are JSON OBJECTS, so
+/// `newest_landing_commit`'s `as_array()` and `head_carries`'s status match both
+/// abandon — but that is the reading being rescued by the accident of a body's
+/// SHAPE rather than by a status test, and a proxy that wraps errors in an array
+/// or a fifth `status` token would turn a refusal into a verdict.
+///
+/// [`crate::rest::Answer::is_reading`] is the one test, and this file's own
+/// siblings already take it.
+#[must_use]
+fn forge_read(path: &str) -> String {
+    crate::rest::get(path, None).map_or_else(String::new, |answer| {
+        if answer.is_reading() {
+            answer.body
+        } else {
+            String::new()
+        }
+    })
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
+/// Percent-encode one query VALUE.
+///
+/// **A local encoder rather than a crate**, and the trade is stated because it is
+/// the kind of thing that gets waved through: the unreserved set is four lines of
+/// RFC 3986 and vendoring a dependency here would go through `deny.toml`,
+/// `macos-link-check`, `darwin-link`, the ambient-authority bound and the SBOM
+/// inventory to buy them. Everything outside `A-Za-z0-9-._~` is escaped, which is
+/// the conservative direction: over-escaping a segment the server would have
+/// accepted costs nothing, and under-escaping is the defect.
+/// Percent-encode one PATH component, keeping `/` as the separator it is.
+///
+/// The sibling to [`query_value`], and the difference is the whole reason both
+/// exist: a query value has no structure, so `/` is escaped there; a path
+/// component like `owner/repo` or a ref named `release/1.x` carries its
+/// separators, and escaping them would ask the forge about a repository nobody
+/// named. What must NOT survive is `?`, `#` and whitespace, each of which
+/// re-keys or truncates the request.
+fn path_value(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+fn query_value(raw: &str) -> String {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            // The two hex digits by hand rather than through `format!`, which
+            // allocates per byte — and `write!` here would need `std::fmt::Write`
+            // in scope beside `std::io::Write`, which this module already uses.
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+/// The newest commit at `trunk` touching any of `paths`.
+///
+/// One request per path, and the newest sha across them wins. **`per_page=1`
+/// rather than a window**, because the question is "what is the latest" and a
+/// page of history would be bytes fetched to discard.
+///
+/// # ORDERED BY ANCESTRY, NEVER BY THE COMMITTER'S DATE
+///
+/// This compared `commit.committer.date` across paths, and that is a MUTABLE
+/// field: a rebase, a cherry-pick or a hand-set `GIT_COMMITTER_DATE` reorders it
+/// freely, and the endpoint's own ordering says nothing across two separate
+/// queries. An older trunk commit could therefore win, and [`carries`] would
+/// report `Current` for a head missing the later landing commit — the guard
+/// answering clean about exactly the staleness it exists to catch.
+///
+/// Every candidate is on `trunk`, so they are totally ordered by ancestry, and
+/// the newest is the one that CARRIES the others. That is one extra compare per
+/// additional path — three, for a four-row declaration — against a guard that
+/// already spends one request per path.
+///
+/// # A PATH THAT WOULD NOT READ IS COULD-NOT-LOOK FOR THE WHOLE READING
+///
+/// Not just an unorderable pair: a response that will not parse, is not an
+/// array, or carries an entry with no `sha` abandons the reading too. Skipping
+/// one leaves the newest-so-far holding an EARLIER path's commit, and returning
+/// that as authoritative is the same too-lenient verdict — a head missing the
+/// unread path's landing commit read as `Current` — that the ancestry ordering
+/// above exists to prevent. An empty array is not that: it is the answer that
+/// nothing on the trunk has touched the path.
+///
+/// Where [`head_carries`] cannot answer, the two candidates cannot be ordered at
+/// all, and there is no safe way to pick one: taking the older makes the guard
+/// too lenient, which is this function's own defect, and taking the newer makes
+/// it refuse a head it has no evidence against. So the reading is abandoned and
+/// the caller fails open, exactly as it does for a path that never answered.
+///
+/// `None` when no path answered, which is could-not-look rather than "nothing
+/// has ever touched the mechanism" — the two are indistinguishable from here and
+/// the caller fails open on both.
+#[must_use]
+pub fn newest_landing_commit(
+    repo: &str,
+    trunk: &str,
+    paths: &[String],
+) -> Option<(String, String)> {
+    let mut newest: Option<(String, String)> = None;
+    for path in paths {
+        // AN EMPTY ROW ASKS ABOUT THE WHOLE REPOSITORY. `path=` with no value is
+        // not "no filter I meant to write" to this endpoint — it is every commit
+        // on the trunk, so one blank entry in a consumer's `landing_paths` makes
+        // the newest trunk commit the answer and every head that is not tip-of-
+        // trunk read as stale. Skipped rather than refused, because this reading
+        // fails open on everything it cannot use.
+        if path.is_empty() {
+            continue;
+        }
+        // ENCODED, because a configured path is consumer data. A `&` or a `#` in
+        // one silently truncated or re-keyed the query, so the request asked
+        // about a different path than the row declared.
+        let raw = forge_read(&format!(
+            "repos/{}/commits?sha={}&path={}&per_page=1",
+            path_value(repo),
+            query_value(trunk),
+            query_value(path)
+        ));
+        // A PATH THAT WOULD NOT READ ABANDONS THE WHOLE READING, exactly as an
+        // unorderable pair does below. `continue`ing left `newest` holding an
+        // EARLIER path's commit and returned it as authoritative, so the guard
+        // reported `Current` for a head missing whatever the unread path landed
+        // — the same too-lenient answer the ancestry ordering above exists to
+        // stop, reached by the other route.
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return None;
+        };
+        let rows = document.as_array()?;
+        // An EMPTY array is an answer rather than a failure to read: no commit
+        // on the trunk has ever touched this path. That path contributes no
+        // candidate and the others still do.
+        let Some(entry) = rows.first() else {
+            continue;
+        };
+        let sha = entry.get("sha").and_then(serde_json::Value::as_str)?;
+        let Some((held, _)) = newest.as_ref() else {
+            newest = Some((sha.to_owned(), path.clone()));
+            continue;
+        };
+        if held == sha {
+            continue;
+        }
+        // Does the candidate carry what we hold? Then it is the later commit.
+        match head_carries(repo, held, sha) {
+            Some(true) => newest = Some((sha.to_owned(), path.clone())),
+            Some(false) => {}
+            None => return None,
+        }
+    }
+    newest
+}
+
+/// Does `head` carry `wanted`?
+///
+/// # Server-side ancestry, and the reason is the predecessor's own
+///
+/// `ci-lease-precondition.sh` already records why this is an API question rather
+/// than a `merge-base --is-ancestor`: that needs a deep fetch and "answers
+/// wrongly after a rebase or a cherry-pick, both of which are the normal shape
+/// of work here". The compare endpoint answers it in one request against no
+/// clone at all, which is what lets the guard stay the genuine FIRST step.
+///
+/// `identical` and `ahead` carry it; `behind` and `diverged` do not.
+/// [`crate::gitwrite::carries`] is the LOCAL form of the same question, used
+/// where a clone exists.
+#[must_use]
+pub fn head_carries(repo: &str, wanted: &str, head: &str) -> Option<bool> {
+    // ENCODED, for the reason `newest_landing_commit` states two functions up
+    // and this one did not carry (review of #848). `head` reaches here from a
+    // CLI positional or a workflow expression, so a `?`, a `#` or a space in it
+    // re-keys or truncates the path and the forge answers about a DIFFERENT
+    // comparison — or 404s, which reads back as `Carries::Unknown` and switches
+    // the staleness half of the guard off without saying so.
+    let raw = forge_read(&format!(
+        "repos/{}/compare/{}...{}",
+        path_value(repo),
+        path_value(wanted),
+        path_value(head)
+    ));
+    let document = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    let status = document.get("status")?.as_str()?;
+    match status {
+        "identical" | "ahead" => Some(true),
+        "behind" | "diverged" => Some(false),
+        // A status this does not know is not a guess. The forge has only ever
+        // sent those four, so a fifth means the contract moved and a verdict
+        // taken over it would be one nobody checked.
+        _ => None,
+    }
+}
+
+/// The staleness DECISION, over readings the caller already took.
+///
+/// **Split from the reads so the predicate is testable without a forge.** The
+/// two forge calls are `Cost::Effect` and cannot run in a suite; this is a pure
+/// function of what they returned, which is the same split
+/// `crates/batten/src/speculation.rs` makes and for the same reason: "does this
+/// do what the bash did" has to be answerable without a network.
+#[must_use]
+pub fn decide(
+    paths: &[String],
+    head: &str,
+    wanted: Option<&str>,
+    ancestral: Option<bool>,
+) -> Carries {
+    if paths.is_empty() {
+        return Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+    }
+    if head.trim().is_empty() {
+        return Carries::Unknown {
+            because: String::from("no head sha in the environment"),
+        };
+    }
+    let Some(wanted) = wanted else {
+        return Carries::Unknown {
+            because: String::from("no landing commit readable at trunk"),
+        };
+    };
+    match ancestral {
+        Some(true) => Carries::Current,
+        Some(false) => Carries::Stale {
+            wanted: wanted.to_owned(),
+        },
+        None => Carries::Unknown {
+            because: format!("the forge did not compare {wanted} with {head}"),
+        },
+    }
+}
+
+/// The whole staleness read: is this head's landing mechanism current with
+/// trunk's?
+///
+/// The two reads, then [`decide`]. Nothing branches here that is not in that
+/// function, which is what keeps the suite's verdict and production's the same.
+#[must_use]
+pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries {
+    if paths.is_empty() || head.trim().is_empty() {
+        return decide(paths, head, None, None);
+    }
+    let wanted = newest_landing_commit(repo, trunk, paths).map(|(sha, _)| sha);
+    let ancestral = wanted
+        .as_deref()
+        .and_then(|wanted| head_carries(repo, wanted, head));
+    decide(paths, head, wanted.as_deref(), ancestral)
+}
+
+/// This clone's bookkeeping directory and its holder id.
+///
+/// # Errors
+///
+/// The repository cannot be read, or no holder id can be minted.
+pub fn identity(root: &Path) -> std::result::Result<(Local, String), String> {
+    let git_dir =
+        crate::git::git_dir(root).map_err(|err| format!("cannot read this repository: {err}"))?;
+    let local = Local::under(&git_dir);
+    let holder = local
+        .holder()
+        .map_err(|err| format!("cannot mint a holder id: {err}"))?;
+    Ok((local, holder))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A ref the caller named and the remote does not carry is the caller's error,
+    /// exit 1, never the engine's (CLOUD-2066). `origin/main` is the measured
+    /// spelling: a tracking ref's short name passed where the remote's is wanted.
+    #[test]
+    fn an_unadvertised_ref_is_a_usage_error() {
+        let tip = "a".repeat(40);
+        let advertisement = Advertisement {
+            refs: BTreeMap::from([("refs/heads/main".to_owned(), tip.clone())]),
+            capabilities: Vec::new(),
+        };
+        assert_eq!(
+            advertised_head(&advertisement, "remote", "refs/heads/main").expect("advertised"),
+            tip
+        );
+        let refused = advertised_head(&advertisement, "remote", "refs/heads/origin/main")
+            .expect_err("a ref the remote does not carry");
+        assert!(
+            refused.downcast_ref::<crate::error::UsageError>().is_some(),
+            "an unadvertised ref is bad input, not an engine fault: {refused:#}"
+        );
+    }
+
+    fn framed(lines: &[&str]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for line in lines {
+            if line.is_empty() {
+                body.extend_from_slice(FLUSH);
+            } else {
+                body.extend_from_slice(&pktline(line).expect("frame"));
+            }
+        }
+        body
+    }
+
+    /// A remote standing in for the network: the refs it advertises, the
+    /// objects it serves, the status it answers, and every call it was asked.
+    struct Stand {
+        status: u16,
+        refs: Vec<(String, String)>,
+        objects: Vec<Object>,
+        asked: Vec<String>,
+        sent: Vec<Vec<u8>>,
+    }
+
+    type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
+
+    /// A remote answering `200` over `refs`, serving `objects`.
+    fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
+        let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
+            status: 200,
+            refs: refs
+                .iter()
+                .map(|(name, id)| ((*name).to_owned(), (*id).to_owned()))
+                .collect(),
+            objects,
+            asked: Vec::new(),
+            sent: Vec::new(),
+        }));
+        // It answers this thread's smart-HTTP calls: an advertisement for
+        // `info/refs`, `NAK` and a pack for upload-pack, and an applied report
+        // for receive-pack.
+        let answering = std::rc::Rc::clone(&stand);
+        let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
+            let mut stand = answering.borrow_mut();
+            let mut answers = Vec::new();
+            for call in calls {
+                stand.asked.push(call.url.to_owned());
+                stand
+                    .sent
+                    .push(call.body.map(<[u8]>::to_vec).unwrap_or_default());
+                let body = if let Some((_, service)) = call.url.split_once("service=") {
+                    let mut lines = vec![format!("# service={service}\n"), String::new()];
+                    for (index, (name, id)) in stand.refs.iter().enumerate() {
+                        let capabilities = if index == 0 { "\0report-status" } else { "" };
+                        lines.push(format!("{id} {name}{capabilities}\n"));
+                    }
+                    lines.push(String::new());
+                    framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+                } else if call.url.ends_with(Service::UploadPack.as_str()) {
+                    let mut body = framed(&["NAK\n"]);
+                    body.extend_from_slice(&pack_of(&stand.objects)?);
+                    body
+                } else {
+                    framed(&["unpack ok\n", ""])
+                };
+                answers.push(fetch::Response {
+                    status: stand.status,
+                    body,
+                    headers: Vec::new(),
+                });
+            }
+            Ok(answers)
+        });
+        fetch::stand_in(remote);
+        stand
+    }
+
+    /// The remote every stand-in case names.
+    const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
+
+    /// A lease object whose body is `body`.
+    fn lease_of(body: &Body) -> Object {
+        lease_object(&body.render(), 1_700_000_000).expect("mint")
+    }
+
+    /// A live body held by `holder`, admitting `next`.
+    fn held_by(holder: &str, next: &str) -> Body {
+        Body {
+            holder: holder.to_owned(),
+            expires: i64::MAX,
+            next: next.to_owned(),
+            schema: BODY_SCHEMA,
+            nonce: nonce(),
+            ..Body::default()
+        }
+    }
+
+    /// A fresh repository at a scratch path whose lease remote is [`REMOTE`].
+    fn leased_clone(name: &str) -> std::path::PathBuf {
+        let dir = crate::scratch::scratch(&format!("lease-{name}"));
+        crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
+        let config = dir.join(".git").join("config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
+        std::fs::write(
+            &config,
+            format!("{text}[remote \"origin\"]\n\turl = {REMOTE}\n"),
+        )
+        .expect("remote");
+        dir
+    }
+
+    /// This clone's own holder id.
+    fn own_holder(root: &Path) -> String {
+        Local::under(&crate::git::git_dir(root).expect("git dir"))
+            .holder()
+            .expect("holder")
+    }
+
+    /// Fails by: a `200` discovery read as a failure.
+    #[test]
+    fn a_served_advertisement_is_read() {
+        let tip = "1".repeat(40);
+        let stand = standing(&[("refs/heads/main", &tip)], Vec::new());
+        let advertised = advertise(REMOTE, Service::ReceivePack).expect("advertised");
+        assert_eq!(advertised.head_of("refs/heads/main"), tip);
+        assert_eq!(
+            stand.borrow().asked,
+            [format!("{REMOTE}/info/refs?service=git-receive-pack")]
+        );
+        stand.borrow_mut().status = 401;
+        assert!(advertise(REMOTE, Service::ReceivePack).is_err());
+    }
+
+    /// Fails by: a `200` report read as a failed push, or the object a pack
+    /// carries beside the one asked for taken in its place.
+    #[test]
+    fn a_swap_applies_and_a_fetch_takes_the_object_asked_for() {
+        let first = lease_of(&held_by("a", ""));
+        let second = lease_of(&held_by("b", ""));
+        let stand = standing(&[], vec![first, second.clone()]);
+        let update = Update {
+            old: String::from(ZERO),
+            new: second.id.clone(),
+            name: String::from("refs/heads/x"),
+        };
+        assert_eq!(
+            swap(REMOTE, &update, &pack_of(&[]).expect("pack")).expect("swapped"),
+            Outcome::Applied
+        );
+        assert_eq!(fetch_object(REMOTE, &second.id).expect("fetched"), second);
+        stand.borrow_mut().status = 500;
+        assert!(swap(REMOTE, &update, &pack_of(&[]).expect("pack")).is_err());
+        assert!(fetch_object(REMOTE, &second.id).is_err());
+    }
+
+    /// Fails by: an absent ref "deleted" with a swap anyway, or a present one
+    /// left in place.
+    #[test]
+    fn deleting_an_absent_ref_sends_nothing() {
+        let stand = standing(&[], Vec::new());
+        assert_eq!(
+            delete_ref(REMOTE, "refs/heads/gone").expect("idempotent"),
+            Outcome::Applied
+        );
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
+        let present = "3".repeat(40);
+        let stand = standing(&[("refs/heads/here", &present)], Vec::new());
+        assert_eq!(
+            delete_ref(REMOTE, "refs/heads/here").expect("deleted"),
+            Outcome::Applied
+        );
+        let asked = stand.borrow().asked.clone();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(
+            String::from_utf8_lossy(&stand.borrow().sent[1])
+                .contains(&format!("{present} {ZERO} refs/heads/here")),
+            "the swap deletes from what was advertised"
+        );
+    }
+
+    /// Fails by: a push its caller did not admit sent anyway, or a first push
+    /// of a branch subtracting a base the remote never had.
+    #[test]
+    fn a_push_sends_only_what_was_admitted() {
+        let dir = leased_clone("push");
+        let head = crate::git::head_commit(&dir).expect("head");
+        let stand = standing(&[], Vec::new());
+        let refused = push(REMOTE, &dir, "refs/heads/topic", &head, &|_| false)
+            .expect("a refusal is an outcome");
+        assert!(matches!(refused, Outcome::Rejected { .. }), "{refused:?}");
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
+        let pushed =
+            push(REMOTE, &dir, "refs/heads/topic", &head, &|old| old == ZERO).expect("pushed");
+        assert_eq!(pushed, Outcome::Applied);
+        assert!(
+            String::from_utf8_lossy(&stand.borrow().sent[2])
+                .contains(&format!("{ZERO} {head} refs/heads/topic")),
+            "the first push creates the ref"
+        );
+    }
+
+    /// Fails by: a `200` upload-pack answer read as a failed fetch.
+    #[test]
+    fn a_fetch_takes_the_advertised_tip() {
+        let dir = leased_clone("fetch");
+        let tip = lease_of(&held_by("a", ""));
+        let stand = standing(&[("refs/heads/main", &tip.id)], vec![tip.clone()]);
+        let fetched = fetch(REMOTE, &dir, "main").expect("fetched");
+        assert_eq!(fetched.head, tip.id);
+        stand.borrow_mut().status = 503;
+        assert!(fetch(REMOTE, &dir, "main").is_err());
+    }
+
+    /// Every answer a recorder column gives, over a stand-in lease, and ONE
+    /// reading per root while a different root takes its own.
+    ///
+    /// One case rather than two, because the pairing is one process-wide slot:
+    /// a second case adjudicating on another thread would move it between
+    /// this case's two reads of one root.
+    ///
+    /// Fails by: any constant reply, a reading never taken, a garbage ref
+    /// graded as a holder, or the cache answering for a root it was not taken
+    /// for or not answering for the one it was.
+    #[test]
+    fn a_recorder_column_grades_the_lease_it_reads() {
+        let mine = leased_clone("adjudicate-mine");
+        let holder = own_holder(&mine);
+        let lease = lease_of(&held_by(&holder, "feature/next"));
+        let reference = Terms::default().reference;
+        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &mine, 0),
+            Some((0, String::new()))
+        );
+        assert_eq!(
+            adjudicate(Asked::Successor, &mine, 0),
+            Some((0, String::from("feature/next\n")))
+        );
+
+        let theirs = leased_clone("adjudicate-theirs");
+        let lease = lease_of(&held_by("somebody-else", ""));
+        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &theirs, 0),
+            Some((crate::exit::ExitCode::Violation.code(), String::new()))
+        );
+
+        let garbled = leased_clone("adjudicate-garbage");
+        let junk = lease_object("not a lease\n", 1).expect("mint");
+        let _ = standing(&[(&reference, &junk.id)], vec![junk.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &garbled, 0),
+            Some((crate::exit::ExitCode::Internal.code(), String::new()))
+        );
+
+        let free = leased_clone("adjudicate-free");
+        let stand = standing(&[], Vec::new());
+        assert_eq!(
+            adjudicate(Asked::Successor, &free, 0),
+            Some((0, String::from("\n")))
+        );
+        let lease = lease_of(&held_by("a", "renewed-next"));
+        let restood = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Successor, &free, 0),
+            Some((0, String::from("\n"))),
+            "the free root's reading is reused"
+        );
+        assert!(restood.borrow().asked.is_empty(), "and nothing is re-read");
+        assert_eq!(stand.borrow().asked.len(), 1, "one discovery, no lease ref");
+        assert_eq!(
+            adjudicate(Asked::Successor, &mine, 0),
+            Some((0, String::from("renewed-next\n"))),
+            "another root takes its own"
+        );
+    }
+
+    /// Fails by: a lease this clone holds left unrenewed, or a renewal whose
+    /// swap applied reported as not written.
+    #[test]
+    fn a_beat_renews_the_lease_this_clone_holds() {
+        let dir = leased_clone("beat");
+        let holder = own_holder(&dir);
+        let terms = terms(&dir).expect("terms");
+        let lease = lease_of(&held_by(&holder, ""));
+        let stand = standing(&[(&terms.reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(beat(&dir, &terms, Some("1.2"), 0), Beat::Renewed);
+        assert!(
+            stand
+                .borrow()
+                .asked
+                .last()
+                .is_some_and(|url| url.ends_with(Service::ReceivePack.as_str())),
+            "the renewal is swapped in"
+        );
+        let theirs = lease_of(&held_by("somebody-else", ""));
+        let _ = standing(&[(&terms.reference, &theirs.id)], vec![theirs.clone()]);
+        assert_eq!(beat(&dir, &terms, None, 0), Beat::Quiet);
+    }
+
+    /// Fails by: a process whose command line does not carry the marker read
+    /// as the holder.
+    #[test]
+    fn a_live_pid_without_the_marker_is_not_the_holder() {
+        assert!(!holder_alive(
+            std::process::id(),
+            "batten-no-such-marker-in-any-cmdline"
+        ));
+    }
+
+    /// The environment's terms, every reading of it, through the caller's
+    /// lookup.
+    ///
+    /// Fails by: a constant answer, a server or slug that is blank read as one,
+    /// an alias remote guessed at, or a bound the environment set dropped.
+    #[test]
+    fn the_environment_terms_are_read_through_the_lookup() {
+        let looking = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(terms_from_environment(looking(&[])), None);
+        assert_eq!(
+            terms_from_environment(looking(&[("GITHUB_REPOSITORY", "  ")])),
+            None
+        );
+        assert_eq!(
+            terms_from_environment(looking(&[
+                ("GITHUB_REPOSITORY", "acme/widgets"),
+                ("LAND_LOCK_REMOTE", "upstream"),
+            ])),
+            None
+        );
+        let defaulted = terms_from_environment(looking(&[
+            ("GITHUB_REPOSITORY", "acme/widgets"),
+            ("GITHUB_SERVER_URL", " "),
+            ("LAND_LOCK_REMOTE", "origin"),
+        ]))
+        .expect("terms");
+        assert_eq!(defaulted.remote, "https://github.com/acme/widgets");
+        assert_eq!(defaulted.ttl, Terms::default().ttl);
+        assert_eq!(defaulted.reference, Terms::default().reference);
+        let bounded = terms_from_environment(looking(&[
+            ("GITHUB_REPOSITORY", "acme/widgets"),
+            ("GITHUB_SERVER_URL", "https://forge.example/"),
+            ("LAND_LOCK_TTL", "400"),
+            ("LAND_LOCK_HEARTBEAT", "20"),
+            ("LAND_LOCK_BRANCH", "lock"),
+        ]))
+        .expect("terms");
+        assert_eq!(
+            bounded,
+            Terms {
+                remote: String::from("https://forge.example/acme/widgets"),
+                reference: String::from("refs/heads/lock"),
+                ttl: 400,
+                beat: 20,
+            }
+        );
+    }
+
+    /// Fails by: zero, a negative or a non-number read as a duration, or a
+    /// positive one refused.
+    #[test]
+    fn only_a_positive_whole_number_is_seconds() {
+        assert_eq!(positive_secs(" 7 "), Some(7));
+        assert_eq!(positive_secs("1"), Some(1));
+        assert_eq!(positive_secs("0"), None);
+        assert_eq!(positive_secs("-3"), None);
+        assert_eq!(positive_secs("soon"), None);
+    }
+
+    /// The process variable is read: the test runner exports the package's
+    /// version components for every case it runs, so each is a variable whose
+    /// value the case knows without setting it, and some component of a
+    /// released version is positive.
+    ///
+    /// Fails by: any constant answer in place of the read.
+    #[test]
+    fn a_variable_in_the_environment_is_read_as_seconds() {
+        let components = [
+            ("CARGO_PKG_VERSION_PATCH", env!("CARGO_PKG_VERSION_PATCH")),
+            ("CARGO_PKG_VERSION_MINOR", env!("CARGO_PKG_VERSION_MINOR")),
+            ("CARGO_PKG_VERSION_MAJOR", env!("CARGO_PKG_VERSION_MAJOR")),
+        ];
+        let (name, value) = components
+            .iter()
+            .find(|(_, value)| positive_secs(value).is_some())
+            .expect("the premise: a released version has a positive component");
+        assert_eq!(
+            std::env::var(name).as_deref(),
+            Ok(*value),
+            "the premise: the runner exports the package version"
+        );
+        assert_eq!(env_secs(name), positive_secs(value));
+        assert_eq!(env_secs("BATTEN_NO_SUCH_VARIABLE_ANYWHERE"), None);
+    }
+
+    /// GIT-OVER-HTTP TAKES `Basic`, AND THIS SENT `Bearer` — so a configured
+    /// credential made the fetch fail where no credential would have succeeded.
+    ///
+    /// The scheme is the assertion. `headers` reaches the smart-HTTP endpoints,
+    /// which are not the REST API and do not share its auth: measured on this
+    /// branch, one token, `Bearer` answered `401` on `info/refs` and `Basic`
+    /// answered `200`. A case over the SCHEME rather than over a live request,
+    /// because the request is `Cost::Effect` and cannot run in a suite — which
+    /// is the same split `carries` takes one screen down.
+    #[test]
+    fn the_smart_http_credential_is_basic_rather_than_bearer() {
+        let auth = |token: Option<&str>| {
+            headers_for("application/x-git-upload-pack-advertisement", None, token)
+                .into_iter()
+                .find(|(name, _)| name == "Authorization")
+                .map(|(_, value)| value)
+        };
+
+        let sent = auth(Some("s3cr3t")).expect("a configured credential is attached");
+        assert!(
+            sent.starts_with("Basic "),
+            "git-over-HTTP rejects a bearer token outright: {sent}"
+        );
+        // `x-access-token:s3cr3t` encoded, so the case pins the ENCODING too — a
+        // base64 wrong by one character is a 401 nobody can read back.
+        assert_eq!(sent, "Basic eC1hY2Nlc3MtdG9rZW46czNjcjN0");
+
+        // AND AN ABSENT CREDENTIAL ATTACHES NOTHING, which is not a formality:
+        // a public remote answers a credential-free request, and this branch
+        // measured the inverted case — a configured token made the fetch FAIL
+        // where none would have succeeded.
+        assert!(auth(None).is_none());
+    }
+
+    /// The padding arm, which a credential's own length may never exercise.
+    #[test]
+    fn base64_pads_every_remainder() {
+        assert_eq!(base64_of(""), "");
+        assert_eq!(base64_of("f"), "Zg==");
+        assert_eq!(base64_of("fo"), "Zm8=");
+        assert_eq!(base64_of("foo"), "Zm9v");
+        assert_eq!(base64_of("foob"), "Zm9vYg==");
+        assert_eq!(base64_of("fooba"), "Zm9vYmE=");
+        assert_eq!(base64_of("foobar"), "Zm9vYmFy");
+    }
+
+    /// **A PREFIX ON THE BRANCH, NEVER A SUBSTRING ANYWHERE IN THE REF**, which
+    /// is `ci-lease-precondition.bats`'s own case: an arm matching mid-ref would
+    /// exempt a branch that merely mentions a lander's name, and the exemption is
+    /// the one thing in this gate that switches it off.
+    #[test]
+    fn the_exemption_is_a_prefix_on_the_branch_and_not_a_substring() {
+        let lanes = vec![String::from("lane/"), String::from("cut-")];
+
+        assert!(lands_by_fast_forward("lane/bump-x", &lanes));
+        assert!(lands_by_fast_forward("cut-v1.2.3", &lanes));
+        // The full ref resolves to the same answer as the branch name.
+        assert!(lands_by_fast_forward("refs/heads/lane/bump-x", &lanes));
+
+        assert!(
+            !lands_by_fast_forward("fix/not-lane/bump-x", &lanes),
+            "a mention mid-ref is not the lander's branch"
+        );
+        assert!(!lands_by_fast_forward("main", &lanes));
+    }
+
+    /// **AN EMPTY SET JUDGES EVERY BRANCH, and an empty ROW exempts none.**
+    ///
+    /// The default has to be *judge it* or a consumer that declares nothing has
+    /// no gate; and a blank row is a typo, which read as a prefix would match
+    /// every branch and silently switch the whole gate off — the failure the
+    /// exemption is most able to cause and least likely to be noticed for.
+    #[test]
+    fn nothing_declared_exempts_nothing_and_a_blank_row_exempts_nothing_either() {
+        assert!(!lands_by_fast_forward("lane/bump-x", &[]));
+        assert!(!lands_by_fast_forward(
+            "lane/bump-x",
+            &[String::new(), String::new()]
+        ));
+    }
+
+    #[test]
+    fn a_flush_is_a_delimiter_and_never_a_payload() {
+        let body = framed(&["one\n", "", "two\n"]);
+        assert_eq!(pktlines(&body).expect("parse"), vec!["one\n", "two\n"]);
+    }
+
+    #[test]
+    fn a_truncated_line_is_could_not_look_rather_than_a_short_read() {
+        // The header promises more than the body carries. Reading the remainder
+        // as a whole line is how a proxy-truncated answer becomes a confident
+        // wrong verdict about the lease.
+        let body = b"0010ab";
+        assert!(pktlines(body).is_err());
+    }
+
+    #[test]
+    fn a_non_git_body_does_not_parse_as_an_empty_ref_set() {
+        // AN HTML ERROR PAGE IS THE CASE THAT MATTERS: parsed loosely it yields
+        // no refs, which reads as "the lease is unheld" and hands the matrix to
+        // everyone at once.
+        let err = parse_advertisement(b"<html>nope</html>", Service::ReceivePack);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn the_advertisement_yields_refs_and_capabilities() {
+        let body = framed(&[
+            "# service=git-receive-pack\n",
+            "",
+            "1111111111111111111111111111111111111111 refs/heads/main\0report-status atomic\n",
+            "2222222222222222222222222222222222222222 refs/heads/batten-land-lock\n",
+            "",
+        ]);
+        let advertisement = parse_advertisement(&body, Service::ReceivePack).expect("parse");
+        assert_eq!(
+            advertisement
+                .refs
+                .get("refs/heads/batten-land-lock")
+                .map(String::as_str),
+            Some("2222222222222222222222222222222222222222")
+        );
+        assert!(
+            advertisement
+                .capabilities
+                .iter()
+                .any(|c| c == "report-status")
+        );
+    }
+
+    /// Fails by: capabilities read from any line carrying a NUL rather than
+    /// only the first ref's.
+    #[test]
+    fn only_the_first_ref_carries_capabilities() {
+        let body = framed(&[
+            "# service=git-receive-pack\n",
+            "1111111111111111111111111111111111111111 refs/heads/main\0report-status atomic\n",
+            "2222222222222222222222222222222222222222 refs/heads/other\0delete-refs\n",
+            "",
+        ]);
+        let advertisement = parse_advertisement(&body, Service::ReceivePack).expect("parse");
+        assert_eq!(advertisement.capabilities, vec!["report-status", "atomic"]);
+    }
+
+    #[test]
+    fn an_absent_ref_reads_as_zero_for_the_swap_and_stays_absent_in_the_map() {
+        let body = framed(&["# service=git-receive-pack\n", "", ""]);
+        let advertisement = parse_advertisement(&body, Service::ReceivePack).expect("parse");
+        assert_eq!(advertisement.head_of("refs/heads/batten-land-lock"), ZERO);
+        assert!(
+            !advertisement
+                .refs
+                .contains_key("refs/heads/batten-land-lock")
+        );
+    }
+
+    #[test]
+    fn the_command_carries_both_sides_and_asks_for_a_report() {
+        let update = Update {
+            old: String::from("1111111111111111111111111111111111111111"),
+            new: String::from("2222222222222222222222222222222222222222"),
+            name: String::from("refs/heads/batten-land-lock"),
+        };
+        assert_eq!(
+            update.command(),
+            "1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 refs/heads/batten-land-lock\0report-status\n"
+        );
+    }
+
+    #[test]
+    fn a_good_report_is_applied() {
+        let body = framed(&["unpack ok\n", "ok refs/heads/batten-land-lock\n", ""]);
+        assert_eq!(parse_report(&body).expect("parse"), Outcome::Applied);
+    }
+
+    #[test]
+    fn a_lost_race_is_rejected_rather_than_an_error() {
+        // THE CAS LOSING IS THE ORDINARY OUTCOME. Reporting it as an error would
+        // make the caller treat a rival's win as a broken lease and fail open on
+        // it — handing two branches the matrix at once, which is the one thing
+        // the lease exists to prevent.
+        let body = framed(&[
+            "unpack ok\n",
+            "ng refs/heads/batten-land-lock fetch first\n",
+            "",
+        ]);
+        assert_eq!(
+            parse_report(&body).expect("parse"),
+            Outcome::Rejected {
+                reason: String::from("refs/heads/batten-land-lock fetch first"),
+            }
+        );
+    }
+
+    #[test]
+    fn a_report_with_no_unpack_status_is_could_not_look() {
+        // A push whose result cannot be read has not been shown to have applied,
+        // and saying otherwise is the direction that loses a lease silently.
+        let body = framed(&["ok refs/heads/batten-land-lock\n", ""]);
+        assert!(parse_report(&body).is_err());
+    }
+
+    /// A directory nothing else in this process writes.
+    ///
+    /// Keyed on the thread as well as the pid, because the runner is parallel and
+    /// two cases sharing a sighting file would corroborate each other's tokens.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "batten-lease-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    fn body(holder: &str, expires: i64, progress: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                progress: progress.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    /// Every reading lands in exactly one state (CLOUD-2242): a tombstone is
+    /// released at any clock, a lapsed body is expired, an unexpired one live.
+    #[test]
+    fn each_body_is_classified_into_exactly_one_state() {
+        let now = 1000;
+        assert_eq!(Observed::Absent.state(now), Lease::Absent);
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("no banner"),
+        };
+        assert!(matches!(garbage.state(now), Lease::Garbage { .. }));
+        let stone = body("host-1-aa", 0, "");
+        for clock in [0, now, i64::MAX] {
+            assert!(
+                matches!(stone.state(clock), Lease::Released { .. }),
+                "a tombstone is released at {clock}"
+            );
+        }
+        assert!(matches!(
+            body("host-1-aa", now, "").state(now),
+            Lease::Expired { .. }
+        ));
+        assert!(matches!(
+            body("host-1-aa", now + 1, "").state(now),
+            Lease::Live { .. }
+        ));
+    }
+
+    /// A lapsed or released lease names nobody landing, so nothing bets on it
+    /// (CLOUD-2242): `holder_head` and `bet_liveness` read exactly `live()`.
+    /// Measured on #1132: every lap speculated on a branch whose lease had
+    /// lapsed 4.8 hours before.
+    #[test]
+    fn an_expired_lease_places_no_bet() {
+        let now = 1000;
+        assert_eq!(body("host-1-aa", now - 1, "").state(now).live(), None);
+        assert_eq!(body("host-1-aa", 0, "").state(now).live(), None);
+        assert!(body("host-1-aa", now + 60, "").state(now).live().is_some());
+    }
+
+    fn with_successor(holder: &str, expires: i64, next: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                next: next.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    /// **CLOUD-369 CLAUSE F: every state names the successor admitted behind
+    /// the holder, and the first port of `health` named it in none of them.**
+    ///
+    /// The lease bounds confirming runs at two — the holder plus one branch
+    /// `reserve` admitted — and this report is what a human reads on a wedged
+    /// lease. Naming only the holder shows half the occupancy, so the one view
+    /// meant to explain who is spending CI could not name the second spender.
+    ///
+    /// Five cases in `tests/land-lock-check.bats` assert it, one per state.
+    #[test]
+    fn every_health_state_names_the_admitted_successor() {
+        let terms = Terms::default();
+        let now = 1000;
+
+        let held = health(&with_successor("mine", now + 60, "theirs"), &terms, now);
+        assert!(
+            format!("{held:?}").contains("theirs admitted behind it"),
+            "a held lease names who is behind it: {held:?}"
+        );
+
+        let released = health(&with_successor("mine", 0, "theirs"), &terms, now);
+        assert!(
+            format!("{released:?}").contains("theirs admitted behind it"),
+            "a RELEASED lease still names who was admitted: {released:?}"
+        );
+
+        let lapsed = health(&with_successor("mine", now - 5, "theirs"), &terms, now);
+        assert!(
+            format!("{lapsed:?}").contains("theirs admitted behind it"),
+            "a LAPSED lease names the successor it left behind: {lapsed:?}"
+        );
+
+        let wedged = health(
+            &with_successor("mine", now + terms.ttl + 60, "theirs"),
+            &terms,
+            now,
+        );
+        assert!(
+            format!("{wedged:?}").contains("theirs admitted behind it"),
+            "a WEDGED lease names the successor too, and still fails: {wedged:?}"
+        );
+        assert!(
+            matches!(wedged, Health::Wedged(_)),
+            "and naming it does not soften the verdict: {wedged:?}"
+        );
+    }
+
+    /// **BYTE-IDENTICAL WHEN NO SUCCESSOR IS ADMITTED**, which is the ordinary
+    /// case: the field is absent on every lease minted before CLOUD-369 and on
+    /// every lease nobody has reserved behind.
+    ///
+    /// The anti-vacuity mirror for the case above — without it, a clause that
+    /// rendered `, admitted behind it` over an empty name would satisfy every
+    /// assertion there and corrupt every report that has no successor.
+    #[test]
+    fn a_lease_with_no_successor_renders_byte_identically() {
+        let terms = Terms::default();
+        let now = 1000;
+        for (expires, what) in [
+            (now + 60, "held"),
+            (0, "released"),
+            (now - 5, "lapsed"),
+            (now + terms.ttl + 60, "wedged"),
+        ] {
+            let rendered = format!(
+                "{:?}",
+                health(&with_successor("mine", expires, ""), &terms, now)
+            );
+            assert!(
+                !rendered.contains("admitted behind it"),
+                "{what} with no successor must read exactly as it did before: {rendered}"
+            );
+        }
+    }
+
+    /// A lease at exactly one TTL is the longest legitimate hold, not wedged.
+    ///
+    /// `>` rather than `>=`, and the boundary is the whole of it: the protocol
+    /// mints exactly `now + ttl`, so the maximum legitimate horizon IS one TTL
+    /// and refusing it would refuse every freshly-acquired lease.
+    #[test]
+    fn a_lease_at_exactly_one_ttl_is_the_longest_legitimate_hold() {
+        let terms = Terms::default();
+        let now = 1000;
+        assert!(matches!(
+            health(&with_successor("mine", now + terms.ttl, ""), &terms, now),
+            Health::Held(_)
+        ));
+        assert!(matches!(
+            health(
+                &with_successor("mine", now + terms.ttl + 1, ""),
+                &terms,
+                now
+            ),
+            Health::Wedged(_)
+        ));
+    }
+
+    fn at(expires: i64, holder: &str) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: holder.to_owned(),
+                expires,
+                ..Body::default()
+            },
+        }
+    }
+
+    #[test]
+    fn the_three_free_states_are_all_healthy_and_all_distinguishable() {
+        let terms = Terms::default();
+        assert!(matches!(
+            health(&Observed::Absent, &terms, 1000),
+            Health::Free(_)
+        ));
+        let Health::Free(released) = health(&at(0, "a"), &terms, 1000) else {
+            panic!("a tombstone is free");
+        };
+        assert!(released.contains("released"), "got: {released}");
+        let Health::Free(lapsed) = health(&at(900, "a"), &terms, 1000) else {
+            panic!("a lapsed lease is free");
+        };
+        // A declaration and an inference are reported differently, or a release
+        // renders as an expiry half a century in the past.
+        assert!(lapsed.contains("lapsed by a 100s ago"), "got: {lapsed}");
+    }
+
+    #[test]
+    fn a_horizon_beyond_one_term_is_wedged() {
+        // NOTHING LEGITIMATE PRODUCES THIS: a lease is only ever minted at one
+        // term from now, so a longer horizon means somebody wrote the ref by hand
+        // or under a different term — and it blocks the fleet for as long as it
+        // says.
+        let terms = Terms::default();
+        assert!(matches!(
+            health(&at(1000 + terms.ttl, "a"), &terms, 1000),
+            Health::Held(_)
+        ));
+        assert!(matches!(
+            health(&at(1000 + terms.ttl + 1, "a"), &terms, 1000),
+            Health::Wedged(_)
+        ));
+    }
+
+    #[test]
+    fn a_ref_that_is_not_a_lease_is_garbage_rather_than_a_hold() {
+        // Every decision treats it as held, which is safe and SILENT — so without
+        // this it blocks landing for a term with nothing anywhere saying why.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        let verdict = health(&garbage, &Terms::default(), 1000);
+        assert!(matches!(verdict, Health::Garbage(_)));
+        assert!(!verdict.healthy());
+    }
+
+    #[test]
+    fn a_lease_nobody_can_release_is_garbage_whatever_its_expiry_says() {
+        // Release requires recognising your own id, so a lease with no holder is
+        // a state nobody can leave — a wedge, however healthy its clock looks.
+        assert!(matches!(
+            health(&at(1_000_000, ""), &Terms::default(), 1000),
+            Health::Garbage(_)
+        ));
+    }
+
+    #[test]
+    fn garbage_is_waited_out_rather_than_taken() {
+        // TAKING IT MEANS OVERWRITING WHATEVER A STRAY PUSH PUT THERE, and a
+        // well-meant fix that races a real holder is worse than waiting a term.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        assert_eq!(
+            turn(&Terms::default(), &garbage, "me", 10_000, 10_000, 60, 1000),
+            Turn::Wait
+        );
+    }
+
+    #[test]
+    fn garbage_still_lets_the_fleet_run() {
+        // The other direction, and the asymmetry is the same one everywhere else:
+        // stopping the fleet over a ref somebody mis-pushed is the cost the
+        // authorising arm exists never to pay. The health gate is what reports it.
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("the ref carries no lease body"),
+        };
+        assert!(matches!(
+            authorises(Some(&garbage), "claude/x", 1000),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_land_that_never_registered_is_not_a_stall() {
+        // NO ENTRY, NO VERDICT. An unregistered land is not evidence, and killing
+        // one on that reading would be inventing the finding.
+        assert_eq!(bail(None, &Terms::default(), 60, 3, 1_000_000), Bail::Hold);
+    }
+
+    #[test]
+    fn a_land_that_stopped_advancing_is_stopped() {
+        let terms = Terms::default();
+        let progress = Progress {
+            advance: 1000,
+            tick_at: 1000,
+        };
+        assert_eq!(
+            bail(Some(progress), &terms, 60, 3, 1000 + 60 * terms.beat),
+            Bail::Stop(String::from("has not advanced in 60 beats"))
+        );
+        assert_eq!(
+            bail(Some(progress), &terms, 60, 3, 1000 + 60 * terms.beat - 1),
+            Bail::Hold
+        );
+    }
+
+    #[test]
+    fn the_hang_bound_applies_only_while_a_loop_is_ticking() {
+        // FOLDING THE TWO STAMPS WOULD KILL HEALTHY LANDINGS. A phase with no
+        // loop has `tick_at <= advance`, and a verify step legitimately runs for
+        // minutes — far longer than the three-beat hang bound.
+        let terms = Terms::default();
+        let quiet = Progress {
+            advance: 1000,
+            tick_at: 0,
+        };
+        let now = 1000 + 10 * terms.beat;
+        assert_eq!(bail(Some(quiet), &terms, 60, 3, now), Bail::Hold);
+        let ticking = Progress {
+            advance: 1000,
+            tick_at: 1001,
+        };
+        assert_eq!(
+            bail(Some(ticking), &terms, 60, 3, 1001 + 3 * terms.beat),
+            Bail::Stop(String::from("stopped turning 3 beats ago"))
+        );
+    }
+
+    /// **The verdict `lease status` and the `lease-status` column both carry.**
+    ///
+    /// Shown able to fail on the arm that matters: a live lease held by a rival
+    /// authorises nobody, and the same lease held by this clone authorises it.
+    /// Tested here rather than over the binary because the failing condition is
+    /// a lease on a real remote, which no fixture in this sandbox produces —
+    /// `.claude/rules/rust.md`'s rule for exactly that case.
+    ///
+    /// The regression it pins is measured rather than imagined: the first port
+    /// of `land-lock.sh status` returned `Success` on every answering path, so
+    /// `[program.land-lock-status]`'s `held-elsewhere` mapping became
+    /// unreachable, the recorder wrote `authorised` over a rival's lease, and
+    /// the `landing-loop` preset allowed the overlapping spend it exists to
+    /// refuse — a dead gate with a green suite, because no case drove the
+    /// producer.
+    #[test]
+    fn a_live_lease_authorises_its_holder_and_nobody_else() {
+        let now = 1000;
+        let live = body("mine", now + 60, "");
+        assert!(
+            authorises_this_clone(&live, "mine", now),
+            "the holder may spend"
+        );
+        assert!(
+            !authorises_this_clone(&live, "theirs", now),
+            "AND A RIVAL MAY NOT — the arm the whole verdict exists for"
+        );
+    }
+
+    /// Absent, released and expired are one answer, because the next `acquire`
+    /// wins and nothing is authorised away from anybody.
+    ///
+    /// The anti-vacuity mirror for the pair above: without it a predicate that
+    /// answered *not authorised* for every clone but the holder would pass,
+    /// which would stop a fleet standing on a free lease.
+    #[test]
+    fn a_lease_that_holds_nothing_authorises_every_clone() {
+        let now = 1000;
+        assert!(authorises_this_clone(&Observed::Absent, "anyone", now));
+        assert!(
+            authorises_this_clone(&body("theirs", 0, ""), "anyone", now),
+            "a tombstone is a DECLARATION, and `0` is its sentinel rather than an instant"
+        );
+        assert!(
+            authorises_this_clone(&body("theirs", now, ""), "anyone", now),
+            "zero seconds left is none left — the `>=` the expiry comparison uses"
+        );
+    }
+
+    /// **A REF THAT WILL NOT PARSE HAS NOT SHOWN THIS CLONE OWNS ANYTHING**, and
+    /// it lived in the case above asserting the opposite (review of #848).
+    ///
+    /// The premise there was that garbage "reaches the preset as could-not-look
+    /// on the COLUMN, so answering it here as a refusal would fail closed twice".
+    /// It did not: [`adjudicate`] turned the `true` into exit `0` and
+    /// `batten.toml` maps `"0"` to `authorised`, so the column recorded
+    /// AUTHORISED, the `landing-loop` refusal could not hold, and this clone
+    /// landed beside a live holder. It also contradicted [`Observed::Garbage`]'s
+    /// own doc — "Every decision below still treats this as held".
+    ///
+    /// Moved to its own case because it is not one of "absent, released and
+    /// expired": those three are provably free, and this one is unread.
+    /// `adjudicate` answers `3` for it now, which is the could-not-look column
+    /// the old premise described but did not produce.
+    #[test]
+    fn a_lease_nobody_can_parse_authorises_nobody() {
+        assert!(
+            !authorises_this_clone(
+                &Observed::Garbage {
+                    sha: String::from("1111111111111111111111111111111111111111"),
+                    why: String::from("the ref carries no lease body"),
+                },
+                "anyone",
+                1000
+            ),
+            "an unparseable lease must not read as free"
+        );
+    }
+
+    #[test]
+    fn a_progress_token_is_the_pair_and_nothing_interpreted() {
+        assert_eq!(
+            Progress {
+                advance: 100,
+                tick_at: 200
+            }
+            .token(),
+            "100.200"
+        );
+    }
+
+    #[test]
+    fn a_registry_entry_with_no_usable_stamp_is_no_evidence() {
+        // Distinct from an absent entry only in where it comes from; both are
+        // "cannot tell", and reading a zero as a stall at the epoch would make
+        // every unstamped land instantly reapable.
+        let dir = scratch("registry");
+        std::fs::create_dir_all(dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            dir.join("batten-tasks").join("4242"),
+            "task: land\npid: 4242\nphase_since: 0\nsig_at: 0\ntick_at: 0\n",
+        )
+        .expect("entry");
+        assert_eq!(progress_of(&dir, 4242), None);
+    }
+
+    #[test]
+    fn the_advance_is_the_later_of_the_two_ways_to_move() {
+        let dir = scratch("registry-advance");
+        std::fs::create_dir_all(dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            dir.join("batten-tasks").join("4243"),
+            "phase_since: 100\nsig_at: 700\ntick_at: 900\n",
+        )
+        .expect("entry");
+        assert_eq!(
+            progress_of(&dir, 4243),
+            Some(Progress {
+                advance: 700,
+                tick_at: 900
+            })
+        );
+    }
+
+    #[test]
+    fn a_pid_that_cannot_be_read_is_gone_rather_than_alive() {
+        // RELEASE IS THE CHEAP DIRECTION. A wrongly released lease costs one lap;
+        // a wrongly renewed one wedges the fleet.
+        assert!(!holder_alive(0, "batten land"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn this_process_is_alive_under_a_marker_it_carries() {
+        // The anti-vacuity mirror: without it the case above is satisfied by a
+        // predicate that answers `false` for everything.
+        //
+        // LINUX-ONLY, and the `cfg` is the finding rather than a convenience. The
+        // case read `/proc` directly and panicked on Windows CI — which is this
+        // assertion doing its job on a target where the predicate really IS
+        // vacuous, not a fixture that needed relaxing. The platform arm below
+        // pins what that target answers, so the vacuity is declared instead of
+        // being reported as a failure nobody could act on.
+        let mine = std::process::id();
+        let raw =
+            crate::fsio::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
+        let command = String::from_utf8_lossy(&raw).replace('\0', " ");
+        let word = command.split_whitespace().next().expect("argv0").to_owned();
+        assert!(holder_alive(mine, &word));
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn without_proc_the_probe_is_inert_rather_than_wrong() {
+        // The other half of the split: on a target with no `/proc` every pid
+        // reads as gone, including this process under its own argv0. Pinned so
+        // the inertness is a declared property rather than something a reader
+        // has to infer from a `cfg` on the function.
+        assert!(!holder_alive(std::process::id(), "batten"));
+    }
+
+    #[test]
+    fn an_absent_lease_is_taken_without_corroboration() {
+        // A statement rather than a deduction, so no clock and no beat.
+        assert!(matches!(
+            turn(&Terms::default(), &Observed::Absent, "me", 0, 0, 60, 100),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_released_lease_is_taken_without_corroboration() {
+        assert!(matches!(
+            turn(&Terms::default(), &body("them", 0, ""), "me", 0, 0, 60, 100),
+            Turn::Take(_)
+        ));
+    }
+
+    /// The poison cooldown lapses on either event and on neither timer
+    /// (CLOUD-1778).
+    ///
+    /// Fails by: making it a duration, which is the obvious implementation and
+    /// the one the no-wall-clock invariant forbids; or by dropping the idle arm,
+    /// which strands a single-agent fleet after one red matrix.
+    #[test]
+    fn a_poison_cooldown_lapses_when_the_trunk_moves_or_the_pool_idles() {
+        let held = Observed::Held {
+            sha: String::from("aaaa"),
+            body: Body {
+                holder: String::from("someone-else"),
+                expires: 1_700_000_060,
+                ..Body::default()
+            },
+        };
+        assert!(
+            cooling(Some("trunk-1"), "trunk-1", &held),
+            "same trunk and somebody is holding: the cooldown holds"
+        );
+        assert!(
+            !cooling(Some("trunk-1"), "trunk-2", &held),
+            "the trunk moved, so the claim is about a base that is no longer trunk"
+        );
+        assert!(
+            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent),
+            "nobody is waiting, so waiting buys nothing — and a surviving cooldown \
+             would strand a single-agent fleet after one red matrix"
+        );
+        assert!(
+            !cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &Observed::Held {
+                    sha: String::from("bbbb"),
+                    body: Body {
+                        expires: 0,
+                        ..Body::default()
+                    },
+                },
+            ),
+            "a tombstone is the holder handing it back: the ref exists, nobody holds it"
+        );
+        assert!(
+            !cooling(None, "trunk-1", &held),
+            "and an agent that poisoned nothing is never held back"
+        );
+        assert!(
+            cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &Observed::Garbage {
+                    sha: String::from("cccc"),
+                    why: String::from("not a lease"),
+                },
+            ),
+            "a ref nobody can read is not evidence the pool is idle"
+        );
+    }
+
+    /// The pool is idle unless somebody ELSE holds or waits (CLOUD-2248).
+    ///
+    /// Fails by: reading any unreleased body as a rival, which is what made a
+    /// clone whose own `land` was killed wait on its own lapsed lease for every
+    /// lap; or by reading every lapsed body as idle, which would let a clone that
+    /// poisoned CI jump a waiter reserved behind the dead holder.
+    #[test]
+    fn a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating() {
+        let me = "this-clone";
+        let now = 1_700_000_000;
+        let lease = |holder: &str, expires: i64, next: &str| Observed::Held {
+            sha: String::from("aaaa"),
+            body: Body {
+                holder: String::from(holder),
+                expires,
+                next: String::from(next),
+                ..Body::default()
+            },
+        };
+        assert!(
+            !cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now - 600, ""),
+                me,
+                now
+            ),
+            "this clone's own lapsed lease is nobody else waiting: the measured self-deadlock"
+        );
+        assert!(
+            !cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now - 600, ""),
+                me,
+                now
+            ),
+            "a lease nobody is beating holds no slot for anyone"
+        );
+        assert!(
+            !cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now + 600, ""),
+                me,
+                now
+            ),
+            "this clone is never its own rival, live lease or not"
+        );
+        assert!(
+            cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now - 600, "a-third-clone"),
+                me,
+                now
+            ),
+            "a lapsed holder with a rival reserved behind it: that rival is owed the slot"
+        );
+        assert!(
+            !cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now - 600, me),
+                me,
+                now
+            ),
+            "this clone reserved behind its own lapsed lease is still nobody else"
+        );
+        assert!(
+            cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now + 600, ""),
+                me,
+                now
+            ),
+            "a rival with a live lease is somebody else: the cooldown holds"
+        );
+    }
+
+    #[test]
+    fn an_expired_lease_is_not_taken_until_its_sha_has_sat_a_beat() {
+        // THE ONE EXTRA BEAT. Expiry is an instant on the HOLDER's clock; the
+        // sighting is a duration on ours, and no skew can forge it. Taking on
+        // expiry alone is what puts two holders on one trunk.
+        let terms = Terms::default();
+        assert_eq!(
+            turn(
+                &terms,
+                &body("them", 100, ""),
+                "me",
+                terms.beat - 1,
+                0,
+                60,
+                200
+            ),
+            Turn::Wait
+        );
+        assert!(matches!(
+            turn(&terms, &body("them", 100, ""), "me", terms.beat, 0, 60, 200),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_beating_but_stalled_lease_is_stealable() {
+        // The wedge this arm exists to end: every other arm waits for the holder
+        // to stop beating, and a holder that beats forever without landing never
+        // does.
+        let terms = Terms::default();
+        assert!(matches!(
+            turn(
+                &terms,
+                &body("them", 100_000, "1.2"),
+                "me",
+                0,
+                60 * terms.beat,
+                60,
+                200
+            ),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_carrying_no_progress_token_is_never_stall_stealable() {
+        // IT FAILS CLOSED, unlike the holder's own bail, and that asymmetry is
+        // the design: this is every lease minted before the field existed and
+        // every holder that cannot see its own progress. Releasing a lease
+        // wrongly costs one lap; stealing one wrongly puts two holders on the
+        // same trunk.
+        let terms = Terms::default();
+        assert_eq!(
+            turn(
+                &terms,
+                &body("them", 100_000, ""),
+                "me",
+                0,
+                1_000_000,
+                60,
+                200
+            ),
+            Turn::Wait
+        );
+    }
+
+    #[test]
+    fn a_live_lease_of_this_clones_own_is_not_re_taken() {
+        assert_eq!(
+            turn(
+                &Terms::default(),
+                &body("me", 100_000, ""),
+                "me",
+                0,
+                0,
+                60,
+                200
+            ),
+            Turn::Mine
+        );
+    }
+
+    #[test]
+    fn this_clones_own_expired_lease_is_taken_rather_than_assumed() {
+        // `Mine` is a claim about a LIVE lease. A holder that was paused past its
+        // TTL must re-take rather than carry on believing it holds one.
+        let terms = Terms::default();
+        assert!(matches!(
+            turn(&terms, &body("me", 100, ""), "me", terms.beat, 0, 60, 200),
+            Turn::Take(_)
+        ));
+    }
+
+    #[test]
+    fn a_first_sighting_is_zero_and_the_second_measures_from_it() {
+        let local = Local::under(&scratch("sighting"));
+        assert_eq!(local.held_for("seen", "abc", 100), 0);
+        assert_eq!(local.held_for("seen", "abc", 130), 30);
+        // A CHANGED VALUE RESTARTS THE CLOCK, which is what makes this evidence
+        // about the lease sitting still rather than about how long we have been
+        // watching.
+        assert_eq!(local.held_for("seen", "def", 200), 0);
+    }
+
+    #[test]
+    fn a_holder_id_is_minted_once_and_reused() {
+        // `hold`, `held` and `release` are separate processes from the `acquire`
+        // that won, so a per-process id would leave the holder unable to
+        // recognise its own lease.
+        let local = Local::under(&scratch("holder"));
+        let first = local.holder().expect("mint");
+        assert_eq!(local.holder().expect("read"), first);
+        assert!(!first.is_empty());
+        // Two clones never share an id, and each names the process that minted it.
+        let other = Local::under(&scratch("holder-other"))
+            .holder()
+            .expect("mint");
+        assert_ne!(other, first);
+        assert!(
+            first.contains(&format!("-{}-", std::process::id())),
+            "{first}"
+        );
+    }
+
+    /// Fails by: a land's own progress token read as absent, or as other than
+    /// the one its registry entry spells.
+    #[test]
+    fn a_land_reads_its_own_progress_from_the_registry() {
+        let git_dir = scratch("own-progress");
+        // Written as the registry spells it: `task::register` would ask the
+        // kernel for pid 42's group, which this fixture does not own.
+        std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            git_dir.join("batten-tasks").join("42"),
+            "phase_since: 5\ntick_at: 7\n",
+        )
+        .expect("entry");
+        assert_eq!(own_progress(&git_dir, 42).as_deref(), Some("5.7"));
+        assert_eq!(own_progress(&git_dir, 43), None);
+    }
+
+    #[test]
+    fn a_claim_does_not_carry_the_previous_holders_successor() {
+        // THE BOUND WOULD DRIFT UPWARD ONE HANDOVER AT A TIME. A fresh acquire is
+        // a new turn and the previous successor has had its admission; carrying it
+        // would authorise a third branch, then a fourth.
+        let terms = Terms::default();
+        let claimed = claim(&terms, "host-2-bb", "claude/b", "3333", 1_700_000_000);
+        assert!(claimed.next.is_empty());
+        assert_eq!(claimed.expires, 1_700_000_000 + terms.ttl);
+    }
+
+    #[test]
+    fn a_renewal_carries_the_successor_a_waiter_wrote() {
+        // Erasing it would cancel the admitted successor's run mid-flight, within
+        // one beat of the reservation being made.
+        let terms = Terms::default();
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            next: String::from("claude/b"),
+            progress: String::from("100.200"),
+            ..Body::default()
+        };
+        let renewed = renewal(&terms, &body, None, 1_700_000_030);
+        assert_eq!(renewed.next, "claude/b");
+        assert_eq!(renewed.progress, "100.200");
+        assert_eq!(renewed.holder, "host-1-aa");
+        assert_eq!(renewed.expires, 1_700_000_030 + terms.ttl);
+    }
+
+    #[test]
+    fn a_reservation_moves_one_field_and_leaves_the_holder_holding() {
+        // A reservation that moved the holder id would be a steal wearing a
+        // different name; one that recomputed the expiry would hand the holder a
+        // fresh TTL every time a waiter arrived.
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            head: String::from("2222"),
+            progress: String::from("100.200"),
+            nonce: String::from("aaaaaaaaaaaaaaaa"),
+            next: String::new(),
+            stand_down: String::new(),
+            schema: BODY_SCHEMA,
+            writer: String::from("0.0.1"),
+        };
+        let reserved = reservation(&body, "claude/b");
+        assert_eq!(reserved.next, "claude/b");
+        assert_eq!(reserved.holder, body.holder);
+        assert_eq!(reserved.expires, body.expires);
+        assert_eq!(reserved.branch, body.branch);
+        assert_eq!(reserved.head, body.head);
+        assert_eq!(reserved.progress, body.progress);
+        // The nonce must move even when nothing else does, or the re-mint is the
+        // object the ref already carries and the push is a success that changed
+        // nothing.
+        assert_ne!(reserved.nonce, body.nonce);
+    }
+
+    #[test]
+    fn a_tombstone_is_a_declaration_rather_than_an_instant() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            nonce: String::from("aaaaaaaaaaaaaaaa"),
+            ..Body::default()
+        };
+        let dead = tombstone(&body);
+        assert_eq!(dead.expires, 0);
+        assert!(dead.released());
+        // It still names who left it, so a lease nobody released stays the tell
+        // for a session that died holding one.
+        assert_eq!(dead.branch, "claude/a");
+        assert_ne!(dead.nonce, body.nonce);
+    }
+
+    #[test]
+    fn two_nonces_from_one_process_differ() {
+        // The whole uniqueness argument rests on this, and the fallback path is
+        // the one that could quietly break it: a constant there would make two
+        // clones that both failed to read entropy mint the same object.
+        assert_ne!(nonce(), nonce());
+    }
+
+    fn held(branch: &str, next: &str, expires: i64) -> Observed {
+        Observed::Held {
+            sha: String::from("1111111111111111111111111111111111111111"),
+            body: Body {
+                holder: String::from("host-1-aa"),
+                expires,
+                branch: branch.to_owned(),
+                next: next.to_owned(),
+                ..Body::default()
+            },
+        }
+    }
+
+    /// Fails by: the terms naming a remote other than the one configured.
+    #[test]
+    fn the_terms_name_the_configured_remote() {
+        let dir = scratch("terms-remote");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        crate::git::set_config_local(
+            &dir,
+            &format!("remote.{}.url", remote_name()),
+            "https://example.invalid/r.git",
+        )
+        .expect("a remote");
+        let resolved = terms(&dir)
+            .map_err(|missing| missing.say("origin"))
+            .expect("terms");
+        assert_eq!(resolved.remote, "https://example.invalid/r.git");
+    }
+
+    /// Fails by: a live lease read as nobody's, or as everybody's.
+    #[test]
+    fn a_live_lease_is_held_by_its_holder_alone() {
+        let lease = held("claude/a", "", 900);
+        assert!(holds_now(&lease, "host-1-aa", 100));
+        assert!(!holds_now(&lease, "host-2-bb", 100));
+    }
+
+    /// Fails by: a missing remote's sentence naming nothing, or an unreadable
+    /// one's losing the reason it carries.
+    #[test]
+    fn a_missing_terms_reading_says_what_is_missing() {
+        assert_eq!(
+            TermsMissing::NoRemote.say("origin"),
+            "no remote named origin is configured"
+        );
+        assert_eq!(
+            TermsMissing::Unreadable(String::from("why")).say("origin"),
+            "why"
+        );
+    }
+
+    /// Fails by: a free or held lease reported unhealthy.
+    #[test]
+    fn a_free_or_held_lease_is_healthy() {
+        assert!(Health::Free(String::new()).healthy());
+        assert!(Health::Held(String::new()).healthy());
+        assert!(!Health::Garbage(String::new()).healthy());
+    }
+
+    /// Fails by: an upload-pack request that asks for nothing, or omits a
+    /// `have` or the closing `done`.
+    #[test]
+    fn an_upload_pack_request_wants_then_haves_then_is_done() {
+        let request = upload_pack_request(&"a".repeat(40), &["b".repeat(40)]).expect("a request");
+        let mut expected =
+            pktline(&format!("want {} no-progress ofs-delta\n", "a".repeat(40))).expect("want");
+        expected.extend_from_slice(FLUSH);
+        expected.extend_from_slice(&pktline(&format!("have {}\n", "b".repeat(40))).expect("have"));
+        expected.extend_from_slice(&pktline("done\n").expect("done"));
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn a_lease_that_cannot_be_read_lets_the_fleet_run() {
+        // THE ASYMMETRY IS THE WHOLE JUSTIFICATION. Failing closed here stops
+        // EVERY job in the fleet; failing open costs one matrix. Every other
+        // refusal in this design goes the other way, so this case is asserted
+        // rather than left to follow from the code reading naturally.
+        assert!(matches!(
+            authorises(None, "claude/x", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_naming_no_branch_lets_the_fleet_run() {
+        // Every lease minted before the field existed is this row, so during a
+        // rollout it is not an edge case, it is all of them.
+        assert!(matches!(
+            authorises(Some(&held("", "", 900)), "claude/x", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_lease_held_by_another_branch_stops_this_one() {
+        let Authority::Stop(why) = authorises(Some(&held("claude/a", "", 900)), "claude/b", 100)
+        else {
+            panic!("a held lease must stop a branch it does not name");
+        };
+        // Pointer-only: the holder's branch is a ref name, never a lease body.
+        assert_eq!(why, "the lease authorises claude/a, not claude/b");
+    }
+
+    #[test]
+    fn the_admitted_successor_runs_beside_the_holder() {
+        // The bound is TWO, not one: stopping the reserved branch would cancel
+        // the very run the reservation exists to start.
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "claude/b", 900)), "claude/b", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    /// Fails by: a reserved slot admitting every branch rather than the one
+    /// it names.
+    #[test]
+    fn a_successor_slot_naming_another_branch_still_stops_this_one() {
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "claude/c", 900)), "claude/b", 100),
+            Authority::Stop(_)
+        ));
+    }
+
+    #[test]
+    fn a_released_lease_authorises_everyone_without_consulting_the_clock() {
+        // A tombstone satisfies `expired` trivially, so a reader that checked the
+        // clock first would render an epoch-scale age for it. It is a HANDOVER.
+        let lease = held("claude/a", "", 0);
+        assert!(matches!(
+            authorises(Some(&lease), "claude/b", 0),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn an_expired_lease_stops_nobody() {
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "", 100)), "claude/b", 100),
+            Authority::Run(_)
+        ));
+    }
+
+    #[test]
+    fn a_body_round_trips_through_its_own_rendering() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/x"),
+            head: String::from("2222222222222222222222222222222222222222"),
+            next: String::from("claude/y"),
+            stand_down: String::from("host-2-bb"),
+            progress: String::from("1700000000.1700000030"),
+            schema: BODY_SCHEMA,
+            writer: String::from("0.0.1"),
+            nonce: String::from("deadbeefdeadbeef"),
+        };
+        let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), Some(body));
+    }
+
+    /// **A NOTICE IS NOT A STEAL, and this is the case that says so.**
+    ///
+    /// The requester does not become the holder and does not become the
+    /// successor: it releases the holder and then races the next acquire like
+    /// anybody else. A mechanism by which naming yourself gets you the lease is a
+    /// steal however politely it is spelled, and "I suspect you are stuck" would
+    /// be the fastest route to the front of the queue.
+    #[test]
+    fn a_stand_down_notice_moves_one_field_and_grants_the_asker_nothing() {
+        let held = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            next: String::new(),
+            ..Body::default()
+        };
+        let asked = notice(&held, "host-2-bb");
+        assert_eq!(asked.stand_down, "host-2-bb", "the peer names itself");
+        assert_eq!(
+            asked.holder, "host-1-aa",
+            "and does NOT become the holder by asking"
+        );
+        assert!(
+            asked.next.is_empty(),
+            "nor the admitted successor — that is a separate, visible act"
+        );
+        assert_eq!(
+            asked.expires, held.expires,
+            "asking must not hand the holder a fresh TTL for the trouble"
+        );
+        assert_eq!(asked.branch, held.branch);
+    }
+
+    /// The holder reads it; a notice naming the holder itself does not.
+    ///
+    /// Self-named is ignored because the holder re-mints the whole body every
+    /// beat, so such a notice would survive its own release and ask every future
+    /// holder to stand down forever.
+    #[test]
+    fn a_notice_is_read_by_the_holder_and_a_self_named_one_is_not() {
+        let asked = Body {
+            stand_down: String::from("host-2-bb"),
+            ..Body::default()
+        };
+        assert_eq!(
+            stand_down_requested(&asked, "host-1-aa"),
+            Some("host-2-bb"),
+            "a peer's request reaches the holder"
+        );
+        assert_eq!(
+            stand_down_requested(&asked, "host-2-bb"),
+            None,
+            "a holder does not ask itself to leave, and a self-named notice would \
+             outlive every release"
+        );
+        assert_eq!(
+            stand_down_requested(&Body::default(), "host-1-aa"),
+            None,
+            "and no notice is no request"
+        );
+    }
+
+    /// **THE COMPATIBILITY HINGE, and the case the rollout turns on.**
+    ///
+    /// Every lease written before `schema:` existed carries no such line, and
+    /// those bodies ARE schema 1. A reader that refused them would stop the fleet
+    /// on the deploy that introduced the field; one that defaulted them to
+    /// anything else would mislabel every lease in flight.
+    #[test]
+    fn a_body_written_before_the_schema_field_reads_as_the_first_major() {
+        let object = lease_object(
+            "land-lock\nholder: host-1-aa\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a pre-schema body still parses");
+        assert_eq!(
+            body.schema, BODY_SCHEMA,
+            "an absent major is a reading, not a guess: these bodies are major 1"
+        );
+        assert_eq!(body.holder, "host-1-aa", "and the rest still parses");
+        assert!(
+            body.writer.is_empty(),
+            "a pre-schema body advertises no writer, and inventing one would \
+             report skew that was never measured"
+        );
+    }
+
+    /// A major above what this build speaks does not parse, so the caller renders
+    /// it as `Observed::Garbage` — held, respected until it ages out, diagnosable.
+    ///
+    /// **This is the arm that makes the field worth having.** Without it the
+    /// parser ignores the unknown key, acts on the fields it recognised, and a
+    /// format change becomes silent disagreement across a mixed fleet — which is
+    /// the "one administrator" fallacy with a lock under it.
+    #[test]
+    fn a_body_from_a_newer_major_is_refused_rather_than_read_loosely() {
+        let object = lease_object(
+            "land-lock\nschema: 99\nholder: host-9-zz\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(
+            parse_body(&object.body),
+            None,
+            "a body this build does not speak must not be acted on"
+        );
+    }
+
+    /// A `schema:` this reader cannot turn into a number is refused too.
+    ///
+    /// Reading it as the oldest format would be exactly the loose parse the field
+    /// exists to stop: a body whose version field is unintelligible was written by
+    /// something that does not agree with us about what the field is.
+    #[test]
+    fn an_unreadable_major_is_refused_rather_than_treated_as_the_oldest() {
+        let object = lease_object(
+            "land-lock\nschema: tomorrow\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    /// THE CASE. A `schema:` carrying nothing is refused, not read as the oldest.
+    ///
+    /// This spelling has no `": "` to split on, so it never reaches the arm
+    /// `an_unreadable_major_is_refused_rather_than_treated_as_the_oldest`
+    /// exercises. Before the empty-value arm existed it fell to `_ => {}`, left
+    /// `schema` at `None`, and was read as major 1 — the loose parse the field
+    /// exists to refuse, reached by a second spelling of the same case.
+    #[test]
+    fn a_body_carrying_an_empty_major_is_refused() {
+        let object = lease_object(
+            "land-lock\nschema:\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(
+            parse_body(&object.body),
+            None,
+            "a present-but-empty version field is a writer disagreeing about the \
+             field, not a body written before it existed"
+        );
+    }
+
+    /// Fails by: an empty advisory field ignored rather than read, so an
+    /// earlier line naming one outlives the later line clearing it.
+    #[test]
+    fn a_later_empty_advisory_field_clears_an_earlier_one() {
+        let object = lease_object(
+            "land-lock\nholder: a\nexpires: 1700000060\nnonce: bb\n\
+             branch: b\nhead: h\nnext: n\nstand-down: s\nprogress: p\n\
+             branch:\nhead:\nnext:\nstand-down:\nprogress:\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a well-formed body");
+        assert_eq!(
+            [
+                body.branch,
+                body.head,
+                body.next,
+                body.stand_down,
+                body.progress
+            ],
+            [""; 5].map(String::from)
+        );
+    }
+
+    /// Fails by: a re-mint carrying the inherited schema, writer or nonce
+    /// rather than stamping its own, or a renewal dropping the progress it was
+    /// handed.
+    #[test]
+    fn every_re_mint_stamps_its_own_schema_writer_and_nonce() {
+        let inherited = Body {
+            holder: String::from("a"),
+            schema: BODY_SCHEMA + 1,
+            writer: String::from("inherited"),
+            nonce: String::from("inherited"),
+            progress: String::from("old"),
+            ..Body::default()
+        };
+        let renewed = renewal(&Terms::default(), &inherited, Some("new"), 1);
+        assert_eq!(renewed.progress, "new");
+        for minted in [
+            tombstone(&inherited),
+            renewed,
+            reservation(&inherited, "b"),
+            notice(&inherited, "b"),
+        ] {
+            assert_eq!(minted.schema, BODY_SCHEMA);
+            assert_eq!(minted.writer, writer_version());
+            assert_ne!(minted.nonce, "inherited");
+            assert_eq!(minted.holder, "a");
+        }
+    }
+
+    /// The compatibility hinge, unbroken: NO `schema:` line still reads as 1.
+    ///
+    /// The anti-vacuity twin. Without it the case above is satisfied by refusing
+    /// every body, which would stop the whole fleet the moment this build met a
+    /// lease minted before the field was added.
+    #[test]
+    fn a_body_with_no_major_at_all_still_reads_as_the_oldest() {
+        let object = lease_object(
+            "land-lock\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("an older body is still readable");
+        assert_eq!(body.schema, BODY_SCHEMA);
+    }
+
+    /// And a body that states a major this build speaks is still acted on.
+    ///
+    /// The second twin: refusal must be keyed to the emptiness, not to the field
+    /// being present.
+    #[test]
+    fn a_body_stating_a_major_we_speak_still_parses() {
+        let object = lease_object(
+            "land-lock\nschema: 1\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a body this build speaks is readable");
+        assert_eq!(body.schema, BODY_SCHEMA);
+        assert_eq!(body.holder, "a");
+    }
+
+    /// Every mint stamps THIS build, and never inherits a predecessor's.
+    ///
+    /// `reservation` is the discriminating one: a WAITER mints it onto the
+    /// holder's body, so a carried `writer` would attribute the write to the
+    /// holder — making the one field that exists to expose skew the field that
+    /// hides it. The holder itself must still be carried, which is what separates
+    /// this from a steal.
+    #[test]
+    fn every_mint_advertises_the_build_that_wrote_it() {
+        let held = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            writer: String::from("0.0.1"),
+            schema: BODY_SCHEMA,
+            ..Body::default()
+        };
+        for minted in [
+            reservation(&held, "claude/y"),
+            tombstone(&held),
+            renewal(&Terms::default(), &held, None, 1_700_000_000),
+        ] {
+            assert_eq!(
+                minted.writer,
+                writer_version(),
+                "a mint advertises the build that performed it"
+            );
+            assert_eq!(minted.schema, BODY_SCHEMA);
+            assert_eq!(
+                minted.holder, "host-1-aa",
+                "and stamping the writer must not become a steal of the holder"
+            );
+        }
+    }
+
+    #[test]
+    fn a_commit_that_is_not_a_lease_does_not_parse_as_an_unheld_one() {
+        // The same refusal the advertisement makes: a foreign object parsed
+        // loosely yields empty fields, which read as a lease nobody holds.
+        let object = lease_object("some other commit\n", 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    #[test]
+    fn a_lease_with_no_expiry_does_not_parse() {
+        // The default belongs to the caller that knows its own TTL. A parser
+        // inventing one would report a lease it could not read as one it could.
+        let object =
+            lease_object("land-lock\nholder: a\nnonce: bb\n", 1_700_000_000).expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    #[test]
+    fn an_empty_advisory_field_is_a_reading_rather_than_an_absence() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            nonce: String::from("deadbeefdeadbeef"),
+            ..Body::default()
+        };
+        let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
+        let read = parse_body(&object.body).expect("parse");
+        assert_eq!(read, body);
+        assert!(read.branch.is_empty());
+    }
+
+    #[test]
+    fn a_lease_object_round_trips_through_a_pack() {
+        let object =
+            lease_object("holder: a\nexpires: 1\nnonce: aa\n", 1_700_000_000).expect("mint");
+        let pack = pack_of(std::slice::from_ref(&object)).expect("pack");
+        assert_eq!(objects_in(&pack).expect("unpack"), vec![object]);
+    }
+
+    #[test]
+    fn two_mints_differing_only_in_their_nonce_are_different_objects() {
+        // GIT ADDRESSES BY CONTENT, so two agreeing mints produce one id and the
+        // second push is an "up to date" no-op that reports success — a rejected
+        // claim read as a win. This is the property the nonce exists for, and it
+        // is asserted rather than trusted because the failure is silent.
+        let one = lease_object("holder: a\nexpires: 1\nnonce: aa\n", 1_700_000_000).expect("mint");
+        let two = lease_object("holder: a\nexpires: 1\nnonce: bb\n", 1_700_000_000).expect("mint");
+        assert_ne!(one.id, two.id);
+    }
+
+    #[test]
+    fn a_lease_object_is_parentless_over_the_empty_tree() {
+        // The two structural properties that make every swap a CAS: no parent to
+        // fast-forward from, and no tree anyone could be tempted to merge.
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        let text = String::from_utf8_lossy(&object.body);
+        assert!(!text.contains("parent "), "got: {text}");
+        assert!(
+            text.starts_with("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"),
+            "got: {text}"
+        );
+    }
+
+    /// The live FETCH. Gated like the push, and the discriminating case for D2.
+    ///
+    /// **The pack a real server sends is delta-compressed**, which is exactly what
+    /// the single-`want` lease path never produced: every lease pack carries two
+    /// undeltified objects. So this is the only case that drives `apply_delta` and
+    /// the offset-base decoder over bytes GitHub actually built.
+    #[test]
+    fn a_ref_fetches_and_its_objects_arrive() {
+        if !cfg!(feature = "live-remote") {
+            return;
+        }
+        let reference = std::env::var("BATTEN_LIVE_FETCH_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_FETCH_REF");
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let repo = std::path::Path::new(".");
+        let fetched = fetch(&remote, repo, &reference).expect("fetch");
+        assert_eq!(fetched.head.len(), 40, "the head must be a full sha");
+        // Every object must hash to the id the reader computed for it — the pack
+        // reader derives the id from the bytes, so a delta applied wrongly yields
+        // an id nothing asked for rather than a visible corruption.
+        for object in &fetched.objects {
+            let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, object.kind, &object.body)
+                .expect("hash");
+            assert_eq!(
+                id.to_string(),
+                object.id,
+                "a member must hash to its own id"
+            );
+        }
+        // And the thing asked for has to be in the answer, or the negotiation
+        // agreed on a common ancestor that did not include it.
+        assert!(
+            fetched.objects.is_empty() || fetched.objects.iter().any(|o| o.id == fetched.head),
+            "a non-empty answer must carry the wanted head"
+        );
+    }
+
+    /// The full D2 round trip: fetch, write into the odb, move the ref.
+    ///
+    /// **The half a wire test cannot reach.** Reading objects off the network
+    /// proves the reader; only writing them and finding them again proves the
+    /// engine can USE what it fetched, which is the whole point of the capability.
+    #[test]
+    fn fetched_objects_land_in_the_odb_and_the_ref_moves() {
+        if !cfg!(feature = "live-remote") {
+            return;
+        }
+        let reference = std::env::var("BATTEN_LIVE_ROUNDTRIP_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_ROUNDTRIP_REF");
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let repo = std::path::Path::new(".");
+        let fetched = fetch(&remote, repo, &reference).expect("fetch");
+        let written =
+            crate::gitwrite::write_objects(repo, &fetched.objects).expect("write the objects");
+        // Every object must be findable afterwards, by the id the reader derived.
+        // A write that "succeeded" and left nothing readable is the failure this
+        // case exists for.
+        for object in &fetched.objects {
+            assert!(
+                crate::git::has_object(repo, &object.id),
+                "{} was written and cannot be found",
+                object.id
+            );
+        }
+        // The ref goes somewhere this repository does not otherwise use, so the
+        // case never moves a ref a lap depends on.
+        let landed = "refs/batten-fetch-probe/head";
+        crate::gitwrite::set_ref(repo, landed, &fetched.head).expect("move the ref");
+        assert_eq!(
+            crate::git::resolve_ref(repo, landed).expect("read it back"),
+            Some(fetched.head.clone()),
+            "the ref must read what the fetch landed"
+        );
+        assert!(
+            written <= fetched.objects.len(),
+            "writing cannot invent objects"
+        );
+    }
+
+    /// The live DELETE, gated the same way and for the same reason.
+    ///
+    /// **Do not set this variable in the Batten sandbox**: its git proxy answers
+    /// 403 to a ref deletion, so the case can only fail there. See
+    /// [`delete_ref`]'s own note — the refusal is the environment's, not the
+    /// code's, and the landing loop treats a failed delete as best-effort anyway.
+    #[test]
+    fn a_scratch_ref_deletes_when_asked() {
+        if !cfg!(feature = "live-remote") {
+            return;
+        }
+        let reference = std::env::var("BATTEN_LIVE_DELETE_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_DELETE_REF");
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let outcome = delete_ref(&remote, &reference).expect("delete");
+        assert_eq!(outcome, Outcome::Applied, "the scratch delete must apply");
+    }
+
+    /// The live push, run only when the environment names a scratch ref.
+    ///
+    /// **Not a suite case, and it must not become one.** It writes to a real
+    /// remote, so it is gated on an explicit opt-in rather than on a credential
+    /// being present — a case that fires whenever a token happens to exist is a
+    /// case that pushes from CI.
+    #[test]
+    fn a_branch_pushes_to_a_scratch_ref_when_asked() {
+        if !cfg!(feature = "live-remote") {
+            return;
+        }
+        let reference = std::env::var("BATTEN_LIVE_PUSH_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_PUSH_REF");
+        let repo = std::path::Path::new(".");
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let head = crate::git::head_commit(repo).expect("head");
+        let outcome = push(&remote, repo, &reference, &head, &|_| true).expect("push");
+        assert_eq!(outcome, Outcome::Applied, "the scratch push must apply");
+    }
+
+    #[test]
+    fn a_real_branch_enumerates_more_than_a_handful_of_objects() {
+        // THE SHAPE EVERY LEASE FIXTURE LACKS. A lease pack carries one commit and
+        // one empty tree; a branch push carries commits, trees and blobs in the
+        // hundreds, and the pack writer had never been asked for one. This drives
+        // the enumeration over a branch-shaped commit built here: new blobs under
+        // nested trees, beside a changed one at the root.
+        //
+        // IT USED TO WALK THIS CHECKOUT'S OWN `HEAD~1`, and returned — passing —
+        // wherever that was unreadable, which a shallow clone makes it
+        // (CLOUD-2059). A fixture's delta is also KNOWN, so the count is exact
+        // rather than a floor.
+        let repo = crate::scratch::scratch("lease-branch-shaped");
+        std::fs::create_dir_all(repo.join("src/nested")).expect("the nested trees");
+        std::fs::write(repo.join("README"), "base\n").expect("the base file");
+        crate::gitwrite::commit_paths(&repo, &["README".to_owned()], "base").expect("base");
+        let branch = ["README", "src/lib.rs", "src/nested/mod.rs"];
+        for path in branch {
+            std::fs::write(repo.join(path), format!("{path} on the branch\n")).expect("write");
+        }
+        let branch: Vec<String> = branch.iter().map(|path| (*path).to_owned()).collect();
+        crate::gitwrite::commit_paths(&repo, &branch, "branch").expect("the branch commit");
+        let head = crate::git::head_commit(&repo).expect("the fixture's head");
+        let objects = crate::git::objects_to_send(&repo, Some("HEAD~1"), &head).expect("enumerate");
+        // The commit, three trees (the root, `src`, `src/nested`) and three blobs.
+        // A smaller set is an enumeration that skipped a level, and a larger one
+        // resent what the base already holds.
+        let kinds = |kind| objects.iter().filter(|o| o.kind == kind).count();
+        assert_eq!(kinds(gix::object::Kind::Commit), 1, "the commit itself");
+        assert_eq!(
+            kinds(gix::object::Kind::Tree),
+            3,
+            "every tree the commit changed"
+        );
+        assert_eq!(
+            kinds(gix::object::Kind::Blob),
+            3,
+            "every blob the commit changed"
+        );
+        // And it must round-trip through the pack writer, which is the half the
+        // single-object fixtures never exercised.
+        let packed: Vec<Object> = objects
+            .into_iter()
+            .map(|raw| Object {
+                id: raw.id,
+                kind: raw.kind,
+                body: raw.body,
+            })
+            .collect();
+        let pack = pack_of(&packed).expect("pack a real branch delta");
+        let read = objects_in(&pack).expect("unpack a real branch delta");
+        assert_eq!(read, packed, "every member must survive the round trip");
+    }
+
+    // `the_base_is_subtracted_rather_than_resent` lives in
+    // `tests/it/lease_lifecycle.rs` since CLOUD-2020. Its subject was THIS
+    // checkout's whole history — 22.8 CPU-seconds a run, growing per commit —
+    // where a three-commit fixture carries the same property, and a unit case here
+    // cannot build one without a spawn `policy/spawn-widening.rego` refuses.
+
+    #[test]
+    fn a_pack_carrying_the_commits_closure_still_yields_the_commit() {
+        // MEASURED AGAINST THE REAL REMOTE, not imagined: a `want` for one commit
+        // returns its whole closure, so the answer carries the commit AND the
+        // empty tree it points at. A reader that assumed every member was a
+        // commit refused that while passing every synthetic case, because the
+        // fixture packs it was tested against carried one object each.
+        let commit =
+            lease_object("land-lock\nholder: a\nexpires: 1\n", 1_700_000_000).expect("mint");
+        let tree = Object {
+            id: String::from("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+            kind: gix::object::Kind::Tree,
+            body: Vec::new(),
+        };
+        let pack = pack_of(&[commit.clone(), tree.clone()]).expect("pack");
+        let read = objects_in(&pack).expect("unpack");
+        assert_eq!(read, vec![commit.clone(), tree]);
+        // And the id survives the round trip, which is what `fetch_object`'s
+        // "does this answer carry what was asked for" check turns on.
+        assert!(read.iter().any(|object| object.id == commit.id));
+    }
+
+    /// Fails by: a pack reader that names fewer kinds than the writer packs.
+    #[test]
+    fn every_undeltified_kind_round_trips_through_a_pack() {
+        let objects: Vec<Object> = [
+            gix::object::Kind::Commit,
+            gix::object::Kind::Tree,
+            gix::object::Kind::Blob,
+            gix::object::Kind::Tag,
+        ]
+        .into_iter()
+        .map(|kind| Object {
+            id: String::from("0000000000000000000000000000000000000000"),
+            kind,
+            body: b"payload".to_vec(),
+        })
+        .collect();
+        let pack = pack_of(&objects).expect("pack");
+        let kinds: Vec<_> = objects_in(&pack)
+            .expect("unpack")
+            .into_iter()
+            .map(|object| object.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            objects.iter().map(|object| object.kind).collect::<Vec<_>>()
+        );
+    }
+
+    /// Fails by: a copy length's second byte read at the wrong place value.
+    #[test]
+    fn a_copy_longer_than_one_length_byte_copies_all_of_it() {
+        let base: Vec<u8> = (0..300_u16)
+            .map(|n| u8::try_from(n % 251).unwrap_or(0))
+            .collect();
+        // Base 300 and result 256 as varints, then one copy from offset 0 whose
+        // two length bytes spell 0x0100.
+        let delta = [0xac, 0x02, 0x80, 0x02, 0xb0, 0x00, 0x01];
+        assert_eq!(apply_delta(&base, &delta).expect("apply"), base[..256]);
+    }
+
+    /// Fails by: a pack header exactly as long as the format requires refused,
+    /// or a shorter body read past its end.
+    #[test]
+    fn a_bare_header_is_an_empty_pack_and_less_is_none() {
+        let mut header = Vec::from(*b"PACK");
+        header.extend_from_slice(&PACK_VERSION.to_be_bytes());
+        header.extend_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(objects_in(&header).expect("an empty pack"), Vec::new());
+        assert!(objects_in(b"PACK").is_err());
+        assert!(objects_in(&header[..11]).is_err());
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_pack_is_could_not_look() {
+        // The upload-pack answer's tail is whatever followed the framed section,
+        // so a proxy that returned prose leaves prose here. Reading it as an
+        // empty object set would say "the lease body is unreadable, carry on",
+        // which is the direction that loses the fleet.
+        assert!(objects_in(b"not a pack at all").is_err());
+    }
+
+    /// Fails by: a base64 group, its padding, or a credential header read wrong
+    /// — RFC 4648's own vectors.
+    #[test]
+    fn a_credential_is_carried_as_rfc_4648_base64() {
+        for (raw, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_of(raw), encoded, "{raw:?}");
+        }
+        assert_eq!(
+            headers_for("a/b", Some("c/d"), Some("t")),
+            [
+                ("Accept".to_owned(), "a/b".to_owned()),
+                ("Content-Type".to_owned(), "c/d".to_owned()),
+                (
+                    "Authorization".to_owned(),
+                    "Basic eC1hY2Nlc3MtdG9rZW46dA==".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            headers("a/b", None)[0],
+            ("Accept".to_owned(), "a/b".to_owned())
+        );
+    }
+
+    /// Fails by: a reserved byte surviving into a URL, a path's separator
+    /// escaped, a query value's kept, or a high byte's two hex digits misread.
+    #[test]
+    fn a_url_component_escapes_what_would_re_key_the_request() {
+        assert_eq!(path_value("owner/repo x?#é"), "owner/repo%20x%3F%23%C3%A9");
+        assert_eq!(query_value("a/b c~é"), "a%2Fb%20c~%C3%A9");
+    }
+
+    /// Fails by: an equal, older, unreadable or four-part version read as
+    /// newer, or a newer one in any position not.
+    #[test]
+    fn only_a_strictly_newer_three_part_version_outranks() {
+        for (ours, theirs, newer) in [
+            ("1.2.4", "1.2.3", true),
+            ("1.3.0", "1.2.9", true),
+            ("2.0.0", "1.9.9", true),
+            ("1.2.3-rc.1", "1.2.2", true),
+            ("1.2.3", "1.2.3", false),
+            ("1.2.3", "1.2.4", false),
+            ("1.2.3.4", "1.2.0", false),
+            ("1.2", "1.1.0", false),
+            ("x", "1.0.0", false),
+        ] {
+            assert_eq!(outranks(ours, theirs), newer, "{ours} over {theirs}");
+        }
+    }
+
+    /// Fails by: a stand-down asked of a holder that is not older, already
+    /// asked, or the asker itself.
+    #[test]
+    fn a_stand_down_is_asked_only_of_an_older_unasked_other() {
+        let older = Body {
+            holder: "h".to_owned(),
+            writer: "0.0.0".to_owned(),
+            ..Body::default()
+        };
+        assert!(worth_asking(&older, "a"));
+        assert!(!worth_asking(&older, "h"), "never self-addressed");
+        let asked = Body {
+            stand_down: "b".to_owned(),
+            ..older.clone()
+        };
+        assert!(!worth_asking(&asked, "a"), "already asked");
+        let current = Body {
+            writer: writer_version(),
+            ..older
+        };
+        assert!(!worth_asking(&current, "a"), "not older");
+    }
+
+    /// Fails by: a poison not read back, or a record missing either half read
+    /// as one.
+    #[test]
+    fn a_poison_reads_back_only_whole() {
+        let local = Local {
+            dir: crate::scratch::scratch("lease-poisoned"),
+        };
+        assert_eq!(local.poisoned(), None, "never poisoned");
+        local.poison("refs/heads/main", "abc").expect("poison");
+        assert_eq!(
+            local.poisoned(),
+            Some(("refs/heads/main".to_owned(), "abc".to_owned()))
+        );
+        for malformed in ["abc\n", "\tabc\n", "refs/heads/main\t\n"] {
+            std::fs::write(local.dir.join("poisoned"), malformed).expect("write");
+            assert_eq!(local.poisoned(), None, "{malformed:?}");
+        }
+    }
+
+    /// Fails by: a TTL narrower than one beat kept, a beat that fits its TTL
+    /// moved, or one that does not left.
+    #[test]
+    fn the_ttl_and_the_beat_keep_their_relation() {
+        let bounded = |ttl: i64, beat: i64| {
+            let mut terms = Terms {
+                ttl,
+                beat,
+                ..Terms::default()
+            };
+            bound_the_relation(&mut terms);
+            (terms.ttl, terms.beat)
+        };
+        assert_eq!(bounded(1, 1), (BEATS_PER_TTL, 1));
+        assert_eq!(bounded(BEATS_PER_TTL, 1), (BEATS_PER_TTL, 1));
+        assert_eq!(bounded(8 * BEATS_PER_TTL, 8), (8 * BEATS_PER_TTL, 8));
+        assert_eq!(bounded(8 * BEATS_PER_TTL, 9), (8 * BEATS_PER_TTL, 8));
+        assert_eq!(bounded(BEATS_PER_TTL + 1, 1), (BEATS_PER_TTL + 1, 1));
+    }
+
+    /// One pack member: git's type/size header, `extra` (a delta's base), then
+    /// `inflated` compressed.
+    fn member(number: u8, extra: &[u8], inflated: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut size = inflated.len();
+        let mut out = Vec::new();
+        let mut byte = (number << 4) | u8::try_from(size & 0x0f).expect("four bits");
+        size >>= 4;
+        while size > 0 {
+            out.push(byte | 0x80);
+            byte = u8::try_from(size & 0x7f).expect("seven bits");
+            size >>= 7;
+        }
+        out.push(byte);
+        out.extend_from_slice(extra);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(inflated).expect("compress");
+        out.extend_from_slice(&encoder.finish().expect("compress"));
+        out
+    }
+
+    /// A delta header's little-endian size varint.
+    fn varint(mut value: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let low = u8::try_from(value & 0x7f).expect("seven bits");
+            value >>= 7;
+            if value == 0 {
+                out.push(low);
+                return out;
+            }
+            out.push(low | 0x80);
+        }
+    }
+
+    /// An offset delta's base distance, git's dense big-endian encoding.
+    fn distance(mut value: usize) -> Vec<u8> {
+        let mut out = vec![u8::try_from(value & 0x7f).expect("seven bits")];
+        value >>= 7;
+        while value > 0 {
+            value -= 1;
+            out.push(0x80 | u8::try_from(value & 0x7f).expect("seven bits"));
+            value >>= 7;
+        }
+        out.reverse();
+        out
+    }
+
+    /// Fails by: any octet of a delta's copy offset or length, its 0x10000
+    /// default, an insert, a size varint, an object header past one byte, or
+    /// either delta form's base read wrong — each yields bytes, or an id,
+    /// other than git's.
+    #[test]
+    fn both_delta_forms_resolve_to_the_objects_git_would_read() {
+        let base: Vec<u8> = (0..70_100_usize)
+            .map(|n| u8::try_from(n * 7 % 251).expect("a byte"))
+            .collect();
+        let mut copy = varint(base.len());
+        let produced = 40 + 3 + 0x1_0000 + 50;
+        copy.extend(varint(produced));
+        copy.extend([0x80 | 0x01 | 0x02 | 0x10, 0x02, 0x01, 40]);
+        copy.extend([0x03, b'x', b'y', b'z']);
+        copy.push(0x80);
+        copy.extend([0x80 | 0x01 | 0x02 | 0x04 | 0x10, 0x70, 0x11, 0x01, 50]);
+        let mut want = base[0x102..0x102 + 40].to_vec();
+        want.extend_from_slice(b"xyz");
+        want.extend_from_slice(&base[..0x1_0000]);
+        want.extend_from_slice(&base[70_000..70_050]);
+        assert_eq!(apply_delta(&base, &copy).expect("applies"), want);
+
+        let mut insert = varint(base.len());
+        insert.extend(varint(5));
+        insert.extend([0x05, b'h', b'e', b'l', b'l', b'o']);
+        let id = |body: &[u8]| {
+            gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, body)
+                .expect("hash")
+        };
+        let first = member(3, &[], &base);
+        let ofs = member(OFS_DELTA, &distance(first.len()), &copy);
+        let refd = member(REF_DELTA, id(&base).as_slice(), &insert);
+        let mut pack = Vec::from(*b"PACK");
+        pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
+        pack.extend_from_slice(&3_u32.to_be_bytes());
+        for part in [&first, &ofs, &refd] {
+            pack.extend_from_slice(part);
+        }
+        let unpacked = objects_in(&pack).expect("unpack");
+        let bodies: Vec<&[u8]> = unpacked
+            .iter()
+            .map(|object| object.body.as_slice())
+            .collect();
+        assert_eq!(bodies, [&base[..], &want[..], b"hello"]);
+        for object in &unpacked {
+            assert_eq!(object.kind, gix::object::Kind::Blob);
+            assert_eq!(object.id, id(&object.body).to_string());
+        }
+    }
+
+    /// Fails by: a malformed delta applied rather than refused — the wrong base,
+    /// a zero-length insert, a copy outside the base, or a result of a length
+    /// its header did not declare.
+    #[test]
+    fn a_malformed_delta_is_refused() {
+        let base = b"0123456789";
+        let delta = |declared_base: usize, produced: usize, body: &[u8]| {
+            let mut out = varint(declared_base);
+            out.extend(varint(produced));
+            out.extend_from_slice(body);
+            out
+        };
+        assert_eq!(
+            apply_delta(base, &delta(10, 3, &[0x90, 3])).expect("a copy"),
+            b"012"
+        );
+        assert!(apply_delta(base, &delta(9, 3, &[0x90, 3])).is_err(), "base");
+        assert!(
+            apply_delta(base, &delta(10, 3, &[0x00])).is_err(),
+            "empty insert"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 3, &[0x91, 9, 3])).is_err(),
+            "outside"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 4, &[0x90, 3])).is_err(),
+            "length"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 2, &[0x02, b'a'])).is_err(),
+            "short insert"
+        );
+    }
+
+    #[test]
+    fn a_truncated_pack_member_is_could_not_look_rather_than_a_short_body() {
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        let pack = pack_of(&[object]).expect("pack");
+        assert!(objects_in(&pack[..pack.len() - 24]).is_err());
+    }
+
+    #[test]
+    fn a_pack_section_is_found_after_the_framed_one() {
+        // NOTHING IS FRAMED BETWEEN `NAK` AND THE PACK, which is why the split
+        // has to return a boundary rather than a line list. A reader that stopped
+        // at the first unparseable header without handing back the tail could
+        // never reach the lease body at all.
+        let mut body = framed(&["NAK\n"]);
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        body.extend_from_slice(&pack_of(std::slice::from_ref(&object)).expect("pack"));
+        let (lines, tail) = pkt_split(&body).expect("split");
+        assert_eq!(lines, vec!["NAK\n"]);
+        assert_eq!(objects_in(tail).expect("unpack"), vec![object]);
+    }
+
+    #[test]
+    fn the_request_body_is_commands_then_a_flush_then_the_pack() {
+        let update = Update {
+            old: String::from(ZERO),
+            new: String::from("3333333333333333333333333333333333333333"),
+            name: String::from("refs/heads/batten-land-lock"),
+        };
+        let body = receive_pack_body(&update, b"PACKFAKE").expect("compose");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("refs/heads/batten-land-lock"));
+        assert!(text.ends_with("0000PACKFAKE"), "got: {text}");
+    }
+}
+
+#[cfg(test)]
+// Panicking on a failed assertion is how a test fails loudly.
+#[allow(clippy::expect_used)]
+mod staleness_tests {
+    use super::{Authority, Carries, Guarded, decide, guard};
+
+    /// **THE FAIL-OPEN DIRECTION IS THIS GATE'S WHOLE CORRECTNESS, and it is the
+    /// opposite of every other refusal in this repository.**
+    ///
+    /// A reading the guard could not take would cancel every job in the fleet,
+    /// where waving one matrix through costs one matrix. So the set below runs,
+    /// and only a PROVEN stop stops. Asserted as the whole set because a version
+    /// that ran on everything and one that stopped on everything each satisfy
+    /// any single case.
+    #[test]
+    fn every_reading_it_could_not_take_runs_and_only_a_proven_stop_stops() {
+        let unknown = Carries::Unknown {
+            because: String::from("no landing paths declared"),
+        };
+        for (carries, authority) in [
+            (&unknown, None),
+            (
+                &unknown,
+                Some(Authority::Run(String::from("nobody holds it"))),
+            ),
+            (&Carries::Current, None),
+        ] {
+            let verdict = guard(carries, authority.as_ref());
+            assert!(
+                matches!(verdict, Guarded::Run { .. }),
+                "a could-not-look must spend the matrix: {verdict:?}"
+            );
+        }
+
+        // And the two that DO stop, which is what keeps the above from being a
+        // gate that never fires.
+        assert!(matches!(
+            guard(
+                &Carries::Stale {
+                    wanted: String::from("trunksha")
+                },
+                None
+            ),
+            Guarded::Stop { .. }
+        ));
+        assert!(matches!(
+            guard(
+                &Carries::Current,
+                Some(&Authority::Stop(String::from("somebody else holds it")))
+            ),
+            Guarded::Stop { .. }
+        ));
+    }
+
+    /// **AN UNKNOWN STALENESS READING DOES NOT OUTRANK A LEASE THAT SAYS STOP**,
+    /// and this doc asserted the opposite over a predecessor that says so in the
+    /// other direction (review of #848).
+    ///
+    /// Read at `origin/main:mise-tasks/ci-lease-precondition.sh:163`: the
+    /// unreadable arm is `say "cannot read this head's mise-tasks/land.sh; not
+    /// judging its age"` and sets NOTHING, so `if [[ -z "${stop:-}" ]]` holds and
+    /// the lease table is entered. Only the STALE arm sets `stop=1`. So `Unknown`
+    /// never skipped the lease; the port made it do so, and the case below pinned
+    /// the port rather than the behaviour it claimed to conserve.
+    ///
+    /// What is true, and what this case actually shows, is the STALE half: a head
+    /// that provably does not carry trunk's landing mechanism stops without the
+    /// lease being read at all.
+    #[test]
+    fn a_stale_head_stops_without_the_lease_being_consulted() {
+        // A stop from staleness names the commit the head is missing, so the
+        // remedy is in the annotation rather than in a follow-up read.
+        let verdict = guard(
+            &Carries::Stale {
+                wanted: String::from("abc123"),
+            },
+            Some(&Authority::Run(String::from("nobody holds it"))),
+        );
+        match verdict {
+            Guarded::Stop { why } => {
+                assert!(
+                    why.contains("abc123"),
+                    "the refusal names the commit: {why}"
+                );
+                assert!(
+                    why.contains("Rebase"),
+                    "and the remedy, because a cancelled run has no failed step to read: {why}"
+                );
+            }
+            Guarded::Run { why } => panic!("a stale head must not spend a matrix: {why}"),
+        }
+    }
+
+    /// **AND AN UNJUDGED HEAD STILL ANSWERS TO THE LEASE**, which is the arm the
+    /// case above used to assert away.
+    ///
+    /// With the forge rate-limited or the credential absent, `decide` yields
+    /// `Carries::Unknown`. Returning `Run` there without asking the lease meant a
+    /// rival's live hold was ignored and this job spent a matrix beside it —
+    /// two landers, which is the one thing this module exists to prevent.
+    #[test]
+    fn an_unjudged_head_still_stops_on_a_lease_somebody_else_holds() {
+        let unknown = Carries::Unknown {
+            because: String::from("the forge did not answer"),
+        };
+        let verdict = guard(
+            &unknown,
+            Some(&Authority::Stop(String::from("somebody else holds it"))),
+        );
+        match verdict {
+            Guarded::Stop { why } => {
+                assert!(
+                    why.contains("somebody else holds it"),
+                    "the lease's own reason reaches the reader: {why}"
+                );
+                assert!(
+                    why.contains("not judging this head's age"),
+                    "and so does the reading that could not be taken: {why}"
+                );
+            }
+            Guarded::Run { why } => {
+                panic!("an unjudged head must still answer to the lease: {why}")
+            }
+        }
+    }
+
+    fn paths() -> Vec<String> {
+        vec![String::from("mise-tasks/land.sh")]
+    }
+
+    /// **The discriminating pair: a head carrying trunk's landing commit is
+    /// current, one that does not is stale.**
+    ///
+    /// This is the predicate whose predecessor is about to go SILENTLY dead.
+    /// `ci-lease-precondition.sh:157` greps the head's `mise-tasks/land.sh` for
+    /// `land-lock acquire`; once that file is retired the read fails, the script
+    /// takes its own fail-open path — "not judging this head's age" — and every
+    /// stale head passes. A path SET survives the retirement that killed a grep
+    /// string, because what changes when the mechanism moves is which paths, and
+    /// that is config a retirement edits rather than a literal it invalidates.
+    #[test]
+    fn a_head_carrying_trunks_landing_commit_is_current_and_one_behind_is_stale() {
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(true)),
+            Carries::Current
+        );
+        assert_eq!(
+            decide(&paths(), "headsha", Some("trunksha"), Some(false)),
+            Carries::Stale {
+                wanted: String::from("trunksha")
+            },
+            "the refusal names the commit the head is missing, and nothing else"
+        );
+    }
+
+    /// **EVERY UNKNOWN IS ITS OWN VARIANT, AND NEVER `Stale`.**
+    ///
+    /// This gate is the opposite of every other refusal in the repository: it
+    /// fails OPEN, because a reading it cannot take would cancel every job in
+    /// the fleet where waving one matrix through costs one matrix. Reading a
+    /// could-not-look as stale is the expensive direction; reading it as current
+    /// is how the predecessor's row died. It is neither, and the caller decides.
+    ///
+    /// Asserted as the whole set, because a version that answered `Unknown` for
+    /// everything and one that answered `Current` for everything each satisfy a
+    /// single case.
+    #[test]
+    fn every_reading_that_could_not_be_taken_is_unknown_rather_than_a_verdict() {
+        for (paths, head, wanted, ancestral) in [
+            (Vec::new(), "headsha", Some("trunksha"), Some(false)),
+            (paths(), "", Some("trunksha"), Some(false)),
+            (paths(), "   ", Some("trunksha"), Some(false)),
+            (paths(), "headsha", None, Some(false)),
+            (paths(), "headsha", Some("trunksha"), None),
+        ] {
+            let verdict = decide(&paths, head, wanted, ancestral);
+            assert!(
+                matches!(verdict, Carries::Unknown { .. }),
+                "an unreadable input must not become a verdict: {verdict:?}"
+            );
+        }
+    }
+
+    /// The unknown NAMES what could not be read.
+    ///
+    /// Pointer-only (non-negotiable rule 4): a reason a human can act on, never
+    /// a byte of the response. A stopped run is a cancelled run with no failed
+    /// step of its own, so without this the reader sees a red check and no clue.
+    #[test]
+    fn an_unknown_names_which_reading_was_missing() {
+        let no_paths = decide(&[], "headsha", None, None);
+        let no_head = decide(&paths(), "", None, None);
+        assert_ne!(
+            format!("{no_paths:?}"),
+            format!("{no_head:?}"),
+            "two different could-not-looks must not report the same reason"
+        );
+    }
+}

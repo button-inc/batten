@@ -19,6 +19,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -77,7 +78,7 @@ fn hook(dir: &Path, payload: &str) -> Output {
             .write_all(payload.as_bytes())
             .unwrap();
     }
-    child.wait_with_output().unwrap()
+    child.streamed_wait().unwrap()
 }
 
 /// The deny reason the host would hand the model, if the call was refused.

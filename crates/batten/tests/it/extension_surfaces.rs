@@ -81,7 +81,7 @@ fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, S
         .args(args)
         .current_dir(repo)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten");
     (
         output.status.code().expect("exit code"),
@@ -303,7 +303,8 @@ fn only_exec_claims_a_channel_carrying_codes_batten_did_not_choose() {
     // restated here, the idiom `config.rs`'s
     // `every_typed_config_table_has_a_validation_call_site` already uses: a
     // second verb quietly claiming a passthrough channel fails here.
-    let exit_rs = fs::read_to_string(at_root("crates/batten/src/exit.rs")).expect("read exit.rs");
+    let exit_rs =
+        fs::read_to_string(at_root("crates/batten-base/src/exit.rs")).expect("read exit.rs");
     let section = {
         let start = exit_rs
             .find("## The one verb whose code is not in this table")

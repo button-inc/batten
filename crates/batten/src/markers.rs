@@ -34,72 +34,22 @@
 //! identical tree bytes it returns the identical, sorted hit list.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::error::UsageError;
-use crate::rules;
-
-/// One suppression marker declared in `batten.toml`.
-///
-/// The two fields are deliberately separate axes: `id` is the stable name a
-/// count is reported under and may not change when the spelling does, while
-/// `token` is the literal text scanned for. Collapsing them would make every
-/// re-spelling of a marker look like a brand-new one whose count starts at
-/// zero — the ratchet defeated by a rename.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Marker {
-    /// The stable identifier counts are reported under.
-    pub id: String,
-    /// The literal text that marks a suppression. Matched as a substring, not a
-    /// pattern: a marker is a fixed shape an author types, and admitting a
-    /// regex here would make the count a function of an expression rather than
-    /// of the tree.
-    pub token: String,
-    /// Which files this marker is looked for in, as a `/`-separated glob. Omit
-    /// to scan the whole tree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub glob: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_check::markers::validate;
+pub use crate::config_model::Marker;
 
 impl Marker {
-    /// Reject a marker that cannot honestly be counted.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty `id`, an empty
-    /// `token` — which would match every line of every file — or an empty
-    /// `glob`, which reads as "everywhere" but selects nothing.
-    fn validate(&self) -> Result<()> {
-        if self.id.is_empty() {
-            return Err(UsageError::raise("marker: `id` must not be empty"));
-        }
-        if self.token.is_empty() {
-            return Err(UsageError::raise(format!(
-                "marker {}: `token` must not be empty; an empty token matches every line",
-                self.id
-            )));
-        }
-        if self.glob.as_deref() == Some("") {
-            return Err(UsageError::raise(format!(
-                "marker {}: `glob` must not be empty; omit the key to scan the whole tree",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
     /// Whether this marker looks at `path`.
     fn selects(&self, path: &str) -> bool {
         self.glob
             .as_ref()
-            .is_none_or(|glob| rules::glob_match(glob, path))
+            .is_none_or(|glob| crate::selector::glob_match(glob, path))
     }
 }
 
@@ -153,36 +103,6 @@ fn scannable(read: io::Result<String>, path: &str) -> Result<Option<String>> {
     }
 }
 
-/// Validate a whole table, and refuse a duplicate `id`.
-///
-/// Called at config load ([`crate::config`]), which is the point: before
-/// CLOUD-253 the only caller was [`find`], and `find` had no caller in `src/`,
-/// so every refusal below was a refusal that could not fire. A validator
-/// reachable only from its own tests is prose (non-negotiable rule 2) — the
-/// same defect CLOUD-242 fixed in the verb table, which shipped in the same
-/// commit as this one and was corrected without it.
-///
-/// Two rows under one `id` are refused for the reason the two fields are
-/// separate axes at all: `id` is the name a count is reported under, so a
-/// duplicate makes a count that answers no question — is it one marker
-/// re-spelled, or two the author wanted counted apart?
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for a malformed or duplicated entry.
-pub fn validate(table: &[Marker]) -> Result<()> {
-    for (index, entry) in table.iter().enumerate() {
-        entry.validate()?;
-        if table[..index].iter().any(|prior| prior.id == entry.id) {
-            return Err(UsageError::raise(format!(
-                "marker {}: declared twice; an id is the name one count is reported under",
-                entry.id
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Find every occurrence of every marker under `root`.
 ///
 /// Hits come back sorted by `(path, line, marker)` — the same pointer tuple
@@ -208,7 +128,7 @@ pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
         return Ok(Vec::new());
     }
     let mut hits = Vec::new();
-    for path in rules::tree_files(root)? {
+    for path in crate::git::tree_files(root)? {
         let selecting: Vec<&Marker> = markers
             .iter()
             .filter(|marker| marker.selects(&path))
@@ -216,7 +136,7 @@ pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
         if selecting.is_empty() {
             continue;
         }
-        let Some(text) = scannable(fs::read_to_string(root.join(&path)), &path)? else {
+        let Some(text) = scannable(crate::fsio::read_to_string(root.join(&path)), &path)? else {
             continue;
         };
         for (index, line) in text.lines().enumerate() {
@@ -257,6 +177,8 @@ pub fn counts(markers: &[Marker], hits: &[Hit]) -> BTreeMap<String, u64> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::error::UsageError;
+    use std::fs;
 
     fn marker(id: &str, token: &str) -> Marker {
         Marker {
@@ -392,7 +314,7 @@ mod tests {
         // bits do not bite, the walk reads the file like any other and reports its
         // marker, so the case still says what the walk does with what it can read.
         let found = find(&dir, &[marker("m", "A")]);
-        if fs::read_to_string(&unreadable).is_ok() {
+        if crate::fsio::read_to_string(&unreadable).is_ok() {
             let hits = found.expect("a file the caller can read walks clean");
             assert_eq!(hits.len(), 1, "its one marker is found: {hits:?}");
         } else {

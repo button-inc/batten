@@ -96,7 +96,30 @@ disallowed-types = [
 # is no such bound and the lint is the whole of it. `tests/sleep_ban.rs` asserts
 # the asymmetry in both directions.
 disallowed-methods = [
+  # NO DAEMON (see `zombie_processes = "forbid"` in Cargo.toml): the primitives a
+  # process detaches from the harness with. None is used; any use is the retired
+  # `singleton detach` coming back, and long-running work is a harness task.
+  { path = "libc::fork", reason = "no daemon: a detached process is invisible to the harness and the container is reaped (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "libc::setsid", reason = "no daemon: a new session detaches from the harness (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "libc::daemon", reason = "no daemon (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "nix::unistd::fork", reason = "no daemon (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "nix::unistd::setsid", reason = "no daemon (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "nix::unistd::daemon", reason = "no daemon (#1276); run long work as a harness background task", allow-invalid = true },
+  { path = "rustix::process::setsid", reason = "no daemon (#1276); run long work as a harness background task", allow-invalid = true },
   { path = "tokio::runtime::Builder::new_multi_thread", reason = "the mediated path builds at most one runtime and it is current-thread; a worker per core buys nothing for one call's IO and costs twelve times the overhead at p50 (CLOUD-747, CLOUD-689's 100ms ceiling)", allow-invalid = true },
+  # ONE STREAM IMPLEMENTATION (#1276): a child's output is pumped chunk by
+  # chunk with backpressure through `crate::stream`, never read to the end
+  # behind `std`'s private loop. Migrated by the `stream-capture` recipe
+  # (`crates/batten-codemods`), which left no call site.
+  { path = "std::process::Command::output", reason = "every child stream goes through `batten::stream` (#1276): call `Streamed::streamed_output`, or pump the pipes yourself with `stream::spawn_pump`" },
+  { path = "std::process::Child::wait_with_output", reason = "every child stream goes through `batten::stream` (#1276): call `StreamedChild::streamed_wait`" },
+  { path = "std::io::copy", reason = "the one copy loop is `batten::stream::pump` (#1276): it flushes each chunk to every sink before the next read, which `io::copy` does not" },
   { path = "std::thread::sleep", reason = "a delay is an inventory row (CLOUD-1177): a poll bounded by a real terminal state is legitimate, a timer standing in for an exit condition is not. Annotate the site with #[expect(clippy::disallowed_methods, reason = \"...\")] naming the bound the delay comes from, in backticks" },
   { path = "tokio::time::sleep", reason = "the async half of the same inventory (CLOUD-1177); it RESOLVES today, because the workspace tokio entry enables `time`" },
+  # compio's timers resolve since the disk watcher enabled its `time` feature
+  # (CLOUD-2782); the one use is `pr_watch::clock`, the crate's one clock.
+  { path = "compio::time::sleep", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::sleep_until", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::interval", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
+  { path = "compio::time::interval_at", reason = "the compio half of the same inventory (CLOUD-1177, CLOUD-2782): wait on `pr_watch::clock`, the crate's one clock" },
 ]

@@ -104,6 +104,10 @@ no_fix_reason = "class 3 (a person's choice of side): resolving a conflict is a 
 #   singleton          a second copy of a task that runs once per clone
 #   history            a change to a `[[rule]]` row by a context that has not read
 #                      why the row exists (`batten policy explain '<id>' --history`)
+#   detach             a `&` job the same call does not wait on, where the host has a
+#                      background option to use instead
+#   commit-subject     a `git commit` whose message subject `[commit].subject_pattern`
+#                      refuses; armed only where `[commit]` is declared
 #
 # Only this file grades them: `batten.local.toml` may not carry a `native` row.
 [[rule]]
@@ -129,6 +133,22 @@ gate = "history"
 scope = "mediated_call"
 severity = "deny"
 no_fix_reason = "class 3 (a call refused before it runs): read the row's history with the command the refusal names, then edit"
+
+[[rule]]
+id = "detach"
+kind = "native"
+gate = "detach"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "class 3 (a call refused before it runs): run it with the host's background option, or wait on the job in the same call"
+
+[[rule]]
+id = "commit-subject"
+kind = "native"
+gate = "commit-subject"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "class 3 (a call refused before it runs): reword the subject to match `[commit].subject_pattern`"
 
 # The governing config surface: the files whose bytes `batten config epoch` hashes
 # into one attributable value, so two records carrying the same epoch were

@@ -29,7 +29,77 @@
       ]
     }
   ],
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
   "BeforeAgent": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "Notification": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "PreCompress": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "BeforeModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "AfterModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "BeforeToolSelection": [
     {
       "hooks": [
         {

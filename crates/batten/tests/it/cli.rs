@@ -8,6 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -150,7 +151,7 @@ fn run_hook_in_promoted(
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// `batten hook` with named environment variables set, for the per-row hatches
@@ -186,7 +187,7 @@ fn run_hook_with_env(
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// `batten -v hook`, for the ladder-gated notes a default run withholds.
@@ -206,7 +207,7 @@ fn run_hook_verbose(dir: &std::path::Path, harness: &str, payload: &str) -> Outp
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// A Claude Code `PreToolUse` payload wrapping one Bash command.
@@ -1200,7 +1201,7 @@ fn check_clean_repo_exits_success() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty(), "clean run reports nothing");
@@ -1229,7 +1230,7 @@ fn a_clean_check_says_nothing_at_all_when_its_channels_are_piped() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
 
     assert_eq!(output.status.code(), Some(0));
@@ -1255,7 +1256,7 @@ fn check_violation_exits_two_with_pointer_only_output() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(2), "a finding is a violation");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1278,12 +1279,12 @@ fn check_output_is_byte_stable_across_runs() {
     let first = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run 1");
     let second = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run 2");
     assert_eq!(first.stdout, second.stdout);
 }
@@ -1300,12 +1301,12 @@ fn enforce_runs_the_same_static_rules_as_check() {
     let check = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run check");
     let enforce = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run enforce");
     assert_eq!(check.status.code(), Some(2));
     assert_eq!(enforce.status.code(), Some(2));
@@ -1316,7 +1317,10 @@ fn enforce_runs_the_same_static_rules_as_check() {
 fn spec_marks_enforce_unclassified_and_check_read() {
     // The emitted spec is what a mediator reads (§11), so the split must be
     // visible there — not only in the internal table.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
     let subs = value["subcommands"].as_array().expect("subcommands array");
@@ -1343,7 +1347,7 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -1380,7 +1384,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -1404,7 +1408,7 @@ fn enforce_passes_when_the_command_exits_zero() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
@@ -1420,7 +1424,7 @@ fn enforce_missing_binary_is_a_usage_error() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -1441,7 +1445,7 @@ fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1460,7 +1464,7 @@ fn the_retired_run_key_is_refused_by_name_pointing_at_check() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -1490,7 +1494,7 @@ fn a_reserved_fix_loads_and_is_refused_rather_than_silently_ignored() {
     let shown = batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert_eq!(
         shown.status.code(),
@@ -1501,7 +1505,7 @@ fn a_reserved_fix_loads_and_is_refused_rather_than_silently_ignored() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -1535,7 +1539,7 @@ fn check_unknown_rule_key_costs_its_row_and_doctor_refuses() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -1547,7 +1551,7 @@ fn check_unknown_rule_key_costs_its_row_and_doctor_refuses() {
     let doctor = batten()
         .arg("doctor")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     assert!(
         String::from_utf8_lossy(&doctor.stdout).contains("config failed config-rows-dropped"),
@@ -1560,7 +1564,7 @@ fn check_unknown_rule_key_costs_its_row_and_doctor_refuses() {
 fn version_flag_succeeds() {
     let output = batten()
         .arg("--version")
-        .output()
+        .streamed_output()
         .expect("run batten --version");
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("batten"));
@@ -1568,7 +1572,10 @@ fn version_flag_succeeds() {
 
 #[test]
 fn spec_emits_parseable_json_on_stdout() {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert!(output.status.success());
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
@@ -1590,7 +1597,10 @@ fn spec_emits_the_derived_read_only_allowlist() {
     // a second implementation of a filter whose failure mode is advertising a
     // write-bearing verb as agent-safe. Asserted over the binary's stdout
     // because that is the artifact the agent actually reads.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert!(output.status.success());
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
@@ -1638,17 +1648,26 @@ fn spec_emits_the_derived_read_only_allowlist() {
 #[test]
 fn spec_json_is_byte_stable_across_runs() {
     // §6: identical input yields identical bytes — no timestamps or ordering drift.
-    let first = batten().arg("spec").output().expect("run batten spec");
-    let second = batten().arg("spec").output().expect("run batten spec");
+    let first = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
+    let second = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(first.stdout, second.stdout);
 }
 
 #[test]
 fn spec_default_format_matches_explicit_json() {
-    let bare = batten().arg("spec").output().expect("run batten spec");
+    let bare = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let explicit = batten()
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .expect("run batten spec --format json");
     assert_eq!(bare.stdout, explicit.stdout);
 }
@@ -1662,7 +1681,7 @@ fn config_show_prints_the_effective_config() {
     let output = batten()
         .args(["config", "show", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert!(output.status.success());
     let value: serde_json::Value =
@@ -1685,7 +1704,7 @@ fn config_show_reports_the_layer_that_won_each_key() {
     let output = batten()
         .args(["config", "show", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
@@ -1708,7 +1727,7 @@ fn config_precedence_runs_flag_over_env_over_local_over_repo() {
             // Inherited from the test runner's environment otherwise.
             None => command.env_remove("BATTEN_STRICTNESS"),
         };
-        let output = command.output().expect("run batten config show");
+        let output = command.streamed_output().expect("run batten config show");
         let code = output.status.code().expect("exit code");
         let value = serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
         (code, value)
@@ -1746,7 +1765,7 @@ fn a_local_override_that_weakens_a_gate_is_rejected() {
     let output = batten()
         .args(["config", "show", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1776,7 +1795,7 @@ fn an_env_or_flag_override_that_weakens_a_gate_is_rejected() {
             Some(value) => command.env("BATTEN_STRICTNESS", value),
             None => command.env_remove("BATTEN_STRICTNESS"),
         };
-        let output = command.output().expect("run batten config show");
+        let output = command.streamed_output().expect("run batten config show");
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -1799,7 +1818,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(2), "the added rule must fire");
     assert_eq!(
@@ -1815,7 +1834,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(1));
     assert!(
@@ -2328,7 +2347,7 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
 #[test]
 fn policy_explain_answers_a_rule_a_class_and_a_native() {
     let root = common::at_root("");
-    let names = ["tool select other", "tool run loose", "program-unknown"];
+    let names = ["cargo run loose", "tool run loose", "program-unknown"];
     let mut args = vec!["policy", "explain"];
     args.extend(names);
     let explained = batten_with(&root, &args, &[]);
@@ -2360,8 +2379,8 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     );
 
     // `policy rule` is `explain` with one name, byte for byte.
-    let rule = batten_with(&root, &["policy", "rule", "tool select other"], &[]);
-    let one = batten_with(&root, &["policy", "explain", "tool select other"], &[]);
+    let rule = batten_with(&root, &["policy", "rule", "cargo run loose"], &[]);
+    let one = batten_with(&root, &["policy", "explain", "cargo run loose"], &[]);
     assert_eq!(rule.stdout, one.stdout, "one projection, two spellings");
     assert_eq!(rule.status.code(), Some(0));
 
@@ -2372,6 +2391,25 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     assert_eq!(
         document[0]["name"], "tool run loose",
         "each section names what was asked: {document}"
+    );
+}
+
+/// A module's finding id explains as the `[[rule]]` row binding that module
+/// (CLOUD-1638): `test cover unseen` is `policy/cfg-gated-test.rego`'s
+/// finding, and the committed row binding the module is `test cover missing`.
+/// No row is named `test cover unseen`, so only the module hop reaches it.
+///
+/// Fails by: the hop from finding id to owning row answering nothing, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_modules_finding_id_explains_as_the_row_that_binds_it() {
+    let root = common::at_root(".");
+    let explained = batten_with(&root, &["policy", "explain", "test cover unseen"], &[]);
+    let out = String::from_utf8_lossy(&explained.stdout);
+    assert_eq!(explained.status.code(), Some(0), "{out}");
+    assert!(
+        out.contains("test cover missing"),
+        "the owning row is the answer: {out}"
     );
 }
 
@@ -2535,6 +2573,187 @@ const EVENTS: &[EventRow] = &[
         state_decided: false,
     },
     EventRow {
+        event: batten::hook::Event::PostToolFailure,
+        spelling: "PostToolUseFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Notification,
+        spelling: "Notification",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::UserPromptExpansion,
+        spelling: "UserPromptExpansion",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SessionEnd,
+        spelling: "SessionEnd",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::StopFailure,
+        spelling: "StopFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStart,
+        spelling: "SubagentStart",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStop,
+        spelling: "SubagentStop",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreCompact,
+        spelling: "PreCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostCompact,
+        spelling: "PostCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreModelSwitch,
+        spelling: "PreModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostModelSwitch,
+        spelling: "PostModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionRequest,
+        spelling: "PermissionRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionDenied,
+        spelling: "PermissionDenied",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Setup,
+        spelling: "Setup",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TeammateIdle,
+        spelling: "TeammateIdle",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TaskCreated,
+        spelling: "TaskCreated",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Elicitation,
+        spelling: "Elicitation",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ElicitationResult,
+        spelling: "ElicitationResult",
+        adjudicated: false,
+        state_decided: false,
+    },
+    // CLOUD-2581's worktree pair answers the host's request natively, and the
+    // census sends no `name` / `worktree_path`, so on claude-code the action
+    // refuses before any write (exit 2) and elsewhere the event is undeclared
+    // (exit 0). `state_decided` is the arm that admits both and still holds
+    // that the answer never names the payload's command.
+    EventRow {
+        event: batten::hook::Event::WorktreeCreate,
+        spelling: "WorktreeCreate",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::WorktreeRemove,
+        spelling: "WorktreeRemove",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::InstructionsLoaded,
+        spelling: "InstructionsLoaded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::CwdChanged,
+        spelling: "CwdChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::FileChanged,
+        spelling: "FileChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::DirectoryAdded,
+        spelling: "DirectoryAdded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::MessageDisplay,
+        spelling: "MessageDisplay",
+        adjudicated: false,
+        state_decided: false,
+    },
+    // CLOUD-2700: Codex's and Copilot's PascalCase names, which the converged
+    // decoder reads.
+    EventRow {
+        event: batten::hook::Event::ModelRequest,
+        spelling: "PreModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ModelResponse,
+        spelling: "PostModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Interrupt,
+        spelling: "Interrupt",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ErrorOccurred,
+        spelling: "ErrorOccurred",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
         adjudicated: false,
@@ -2617,15 +2836,132 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
     }
 }
 
+/// The events only one host spells (CLOUD-2700): no converged name exists, so
+/// each is fed through its own host's decoder rather than `Event::normalize`,
+/// which keeps host vocabulary out of the harness-blind core.
+const HOST_EVENTS: &[(batten::hook::Harness, batten::hook::Event, &str)] = &[
+    (
+        batten::hook::Harness::GeminiCli,
+        batten::hook::Event::ToolSelection,
+        "BeforeToolSelection",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentResponse,
+        "afterAgentResponse",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentThought,
+        "afterAgentThought",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::WorkspaceOpen,
+        "workspaceOpen",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileRead,
+        "beforeTabFileRead",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileEdit,
+        "afterTabFileEdit",
+    ),
+];
+
+#[test]
+fn a_host_only_event_passes_through_undecided() {
+    // Each row normalizes on its own host, and a banned command in its payload
+    // is neither denied nor answered with a decision document: no rule selects
+    // for these moments yet.
+    let dir = repo_with_gh_policy("host-event-census");
+    for (harness, event, spelling) in HOST_EVENTS {
+        assert_eq!(
+            batten::hook::normalize_event(*harness, spelling),
+            *event,
+            "{spelling} normalizes on {}",
+            harness.as_str()
+        );
+        let output = run_hook_in(
+            &dir,
+            harness.as_str(),
+            &payload_at(spelling, "gh pr merge 42"),
+        );
+        let at = format!("{}/{spelling}", harness.as_str());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{at}: {}",
+            common::stderr(&output)
+        );
+        let raw = String::from_utf8_lossy(&output.stdout);
+        assert!(!raw.contains("\"deny\""), "{at}: {raw}");
+    }
+}
+
+#[test]
+fn a_named_event_decodes_a_payload_that_names_none() {
+    // Copilot's camelCase dialect sends no `hook_event_name` (CLOUD-2700). With
+    // no name the decoder assumes pre-tool, so a banned command is refused at a
+    // moment that is not a tool call. The registration's `--event` names the
+    // moment instead, and the payload's own name still wins when present.
+    let dir = repo_with_gh_policy("named-event");
+    let nameless = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr merge 42" },
+    })
+    .to_string();
+    let run = |args: &[&str], payload: &str| common::run_with_stdin(&dir, args, payload);
+    let assumed = run(&["adjudicate", "--harness", "copilot-cli"], &nameless);
+    assert_eq!(
+        assumed.status.code(),
+        Some(2),
+        "no name is assumed pre-tool"
+    );
+    for event in ["subagentStart", "userPromptTransformed"] {
+        let named = run(
+            &["adjudicate", "--harness", "copilot-cli", "--event", event],
+            &nameless,
+        );
+        assert_eq!(
+            named.status.code(),
+            Some(0),
+            "{event}: {}",
+            common::stderr(&named)
+        );
+    }
+    let own = run(
+        &[
+            "adjudicate",
+            "--harness",
+            "copilot-cli",
+            "--event",
+            "subagentStart",
+        ],
+        &payload_at("PreToolUse", "gh pr merge 42"),
+    );
+    assert_eq!(own.status.code(), Some(2), "the payload's own name wins");
+}
+
 #[test]
 fn the_census_covers_every_normalized_event() {
     // Total, or the golden set is coverage rather than a contract: a variant
     // added to `Event::ALL` with no row would ship with its decision unpinned.
-    let mut covered: Vec<&str> = EVENTS.iter().map(|row| row.event.as_str()).collect();
+    let mut covered: Vec<&str> = EVENTS
+        .iter()
+        .map(|row| row.event.as_str())
+        .chain(HOST_EVENTS.iter().map(|(_, event, _)| event.as_str()))
+        .collect();
     covered.sort_unstable();
     covered.dedup();
+    // A row is fed to a host as `hook_event_name`, and no host spells a forge
+    // event, so `host_emitted` exempts it; `forge_events.rs` pins its decision.
     let mut required: Vec<&str> = batten::hook::Event::ALL
         .iter()
+        .filter(|event| event.host_emitted())
         .map(|event| event.as_str())
         .collect();
     required.sort_unstable();
@@ -2781,7 +3117,11 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
             .args(["adjudicate", "--harness", token])
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::exec::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("run batten hook");
         let code = output.status.code();
         assert_eq!(code, Some(1), "harness {token:?}: usage error");
@@ -2880,7 +3220,7 @@ fn shape_scope_parses_independently_of_severity() {
     // Acceptance (d). The two keys are separate axes, and a shape row proves it
     // over the binary: `mediated_call` × each severity all load, and neither
     // key's vocabulary is accepted in the other's slot.
-    for severity in ["deny", "warn", "allow"] {
+    for severity in ["deny", "advise", "record", "allow"] {
         let dir = repo_with_config(
             &format!("shape-severity-{severity}"),
             &format!(
@@ -2892,7 +3232,7 @@ fn shape_scope_parses_independently_of_severity() {
         let output = batten()
             .args(["config", "show", "--json"])
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run config show");
         assert_eq!(
             output.status.code(),
@@ -2920,7 +3260,7 @@ fn shape_scope_parses_independently_of_severity() {
             batten()
                 .arg("check")
                 .current_dir(&dir)
-                .output()
+                .streamed_output()
                 .expect("run batten check")
                 .status
                 .code(),
@@ -3094,7 +3434,7 @@ fn refuse_in(name: &str, extra: Option<(&str, &str)>) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 #[test]
@@ -3712,7 +4052,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     let promoted_rows: std::collections::BTreeSet<&str> = parsed
         .rules
         .iter()
-        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Warn)
+        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Advise)
         .map(|rule| rule.id.as_str())
         .collect();
     for case in SHAPE_CENSUS {
@@ -3816,7 +4156,12 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // is unchanged and still worth pinning: `mise run` is not blanket-refused
     // here. A rule that denied it outright would take the backgrounded form too,
     // and this is where that would surface.
-    for command in ["mise exec -- cargo test -p batten", "mise run test:cargo"] {
+    // A FILTERED run and a task that reaches no land stage (step 14): the whole
+    // suite and `test:cargo` are `gate run twice`'s, refused in any posture.
+    for command in [
+        "mise exec -- cargo test -p batten forced_push",
+        "mise run lint:clippy",
+    ] {
         let output = run_hook_in(&root, "exit-code", &claude_payload_backgrounded(command));
         assert_eq!(
             output.status.code(),
@@ -4479,7 +4824,7 @@ fn bare_invocation_lists_subcommands() {
     // action. clap renders the listing on its error path — stderr, exit 1, a
     // usage error — so a script can never mistake the listing for a successful
     // run's answer, nor a bare invocation for a policy verdict.
-    let output = batten().output().expect("run batten");
+    let output = batten().streamed_output().expect("run batten");
     assert_eq!(output.status.code(), Some(1));
     let listing = String::from_utf8_lossy(&output.stderr);
     for verb in ["check", "enforce", "config", "spec", "receipt"] {
@@ -4500,7 +4845,7 @@ fn batten_with(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) -> Ou
     for (key, value) in env {
         command.env(key, value);
     }
-    command.output().expect("run batten")
+    command.streamed_output().expect("run batten")
 }
 
 /// A scratch directory carrying this repository's own `batten.toml`, for the
@@ -4762,7 +5107,7 @@ fn exec_cmd(name: &str, args: &[&str]) -> (Output, PathBuf) {
     let output = batten()
         .args(args)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     (output, home)
 }
@@ -4783,6 +5128,11 @@ fn captures_in(home: &std::path::Path) -> Vec<String> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            // A view is a derived reading of a capture, rewritten from it on
+            // demand, never a capture of its own.
+            if path.is_dir() && path.file_name().is_some_and(|name| name == "views") {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -4833,7 +5183,7 @@ fn exec_passes_through_a_code_outside_the_table() {
                 script.to_str().expect("utf-8"),
                 &code.to_string(),
             ])
-            .output()
+            .streamed_output()
             .expect("run batten exec");
         assert_eq!(
             output.status.code(),
@@ -4891,7 +5241,7 @@ fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
             "--strictness",
             "strict",
         ])
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
@@ -5073,11 +5423,16 @@ fn every_format_is_byte_stable_over_the_same_run() {
         for style in ["interleave", "timed", "keep-order"] {
             let mut seen = Vec::new();
             for run in 0..2 {
-                let (output, _) = exec_cmd(
+                let (output, home) = exec_cmd(
                     &format!("exec-stable-{format}-{style}-{run}-home"),
                     &["exec", "--format", format, "--style", style, "--", &program],
                 );
-                seen.push(String::from_utf8_lossy(&output.stderr).into_owned());
+                // Each run has its own state home, so the view the pointer
+                // names sits under a different directory; the rest is the run.
+                seen.push(
+                    String::from_utf8_lossy(&output.stderr)
+                        .replace(&home.display().to_string(), "<home>"),
+                );
             }
             assert_eq!(
                 seen[0], seen[1],
@@ -5217,7 +5572,7 @@ fn a_capture_is_content_addressed_so_an_identical_rerun_adds_nothing() {
         batten()
             .args(argv)
             .state_home(&home)
-            .output()
+            .streamed_output()
             .expect("run batten exec")
     };
 
@@ -5247,7 +5602,7 @@ fn different_output_is_a_different_capture() {
         batten()
             .args(["exec", "--", script.to_str().expect("utf-8")])
             .state_home(&home)
-            .output()
+            .streamed_output()
             .expect("run batten exec");
     }
     let stored = captures_in(&home);
@@ -5372,7 +5727,7 @@ fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Out
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten exec")
 }
 
@@ -5481,7 +5836,7 @@ fn exec_still_runs_where_no_authority_is_configured() {
         .args(["exec", "--tee", "--", "sh", "-c", "echo fine"])
         .current_dir(&elsewhere)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "fine\n");
@@ -5769,7 +6124,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         ])
         .current_dir(&repo)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("seed a capture");
     assert_eq!(
         seeded.status.code(),
@@ -5780,7 +6135,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         .args(["capture", "list", "--stream", "stdout"])
         .current_dir(&repo)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("list the census capture");
     let handle = stdout(&listed)
         .split_whitespace()
@@ -5836,9 +6191,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         .expect("piped stdin")
         .write_all(envelope.as_bytes())
         .expect("write the census response");
-    let recorded = child
-        .wait_with_output()
-        .expect("record the census response");
+    let recorded = child.streamed_wait().expect("record the census response");
     assert_eq!(
         recorded.status.code(),
         Some(0),
@@ -6278,8 +6631,8 @@ fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> 
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .output()
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+        .streamed_output()
         .expect("run batten receipt")
 }
 
@@ -6877,7 +7230,7 @@ fn the_committed_repo_config_gates_a_repository() {
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -6910,7 +7263,7 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -6962,7 +7315,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7053,9 +7406,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 
     // A stale fixture from a prior run would add findings and break the byte
     // equality below — `repo_with_config` does not clear the directory itself.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-dirty"));
     let dirty = repo_with_config("config-agnostic-dirty", &contents);
 
     // Both a Rust file and a non-Rust one, because that is what discriminates
@@ -7094,7 +7445,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7121,9 +7472,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // The other half of the discriminator: the same rules must stay silent on a
     // tree that carries none of the shapes. A rule that fired on everything
     // would pass the case above and still be useless.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-clean"));
     let clean = repo_with_config("config-agnostic-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -7138,7 +7487,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7175,9 +7524,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-dirty"));
     let dirty = repo_with_config("config-portability-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -7241,7 +7588,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7264,9 +7611,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // one in-place form BSD accepts, a `read` loop replaces `mapfile`, bare
     // `xargs` replaces the short flag, and a plain `branch main` off an explicitly
     // named branch replaces the force.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-clean"));
     let clean = repo_with_config("config-portability-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -7302,7 +7647,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7327,7 +7672,7 @@ fn the_committed_example_config_loads_over_the_binary() {
         .args(["config", "show", "--json"])
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert_eq!(output.status.code(), Some(0), "the example must load");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
@@ -7344,7 +7689,7 @@ fn the_committed_example_config_loads_over_the_binary() {
         .arg("enforce")
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -7370,7 +7715,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
         .args(["config", "show", "--json"])
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     assert_eq!(output.status.code(), Some(0), "the starter must load");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
@@ -7399,7 +7744,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
         .arg("check")
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -7435,7 +7780,7 @@ fn a_rule_omitting_severity_is_refused_with_a_named_key() {
         let output = batten()
             .args(args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten");
         assert_eq!(
             output.status.code(),
@@ -7468,7 +7813,7 @@ fn conflating_scope_and_severity_is_refused_in_both_directions() {
         let output = batten()
             .args(["config", "show", "--json"])
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten config show");
         assert_eq!(
             output.status.code(),
@@ -7488,7 +7833,7 @@ fn warn_findings_report_without_failing_the_run() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -7515,7 +7860,7 @@ fn an_allow_rule_is_configured_off() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -7532,21 +7877,21 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     // per-field-pinned default resolves explicitly rather than vanishing.
     let dir = repo_with_config(
         "severity-byte-stable",
-        &severity_fixture("severity = \"warn\"\n"),
+        &severity_fixture("severity = \"advise\"\n"),
     );
     let run = || {
         batten()
             .args(["config", "show", "--json"])
             .current_dir(&dir)
             .env_remove("BATTEN_STRICTNESS")
-            .output()
+            .streamed_output()
             .expect("run batten config show")
     };
     let first = run();
     assert_eq!(first.status.code(), Some(0));
     let value: serde_json::Value =
         serde_json::from_slice(&first.stdout).expect("config show stdout is JSON");
-    assert_eq!(value["rule"]["value"][0]["severity"], "warn");
+    assert_eq!(value["rule"]["value"][0]["severity"], "advise");
     assert_eq!(value["rule"]["value"][0]["scope"], "tree");
     assert_eq!(
         first.stdout,
@@ -7598,7 +7943,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
             .args(["config", "show", "--json"])
             .current_dir(&dir)
             .env_remove("BATTEN_STRICTNESS")
-            .output()
+            .streamed_output()
             .expect("run batten config show");
         assert_eq!(output.status.code(), Some(0), "{label} must load");
         let value: serde_json::Value =
@@ -7606,7 +7951,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
         for rule in value["rule"]["value"].as_array().expect("rules in output") {
             let severity = rule["severity"].as_str().expect("severity token");
             assert!(
-                ["allow", "warn", "deny"].contains(&severity),
+                ["allow", "record", "advise", "ask", "deny"].contains(&severity),
                 "{label}: severity {severity:?} outside the vocabulary"
             );
             // Derived from the vocabulary rather than pinned to `tree`: the
@@ -8149,6 +8494,88 @@ fn worktree_status(dir: &std::path::Path) -> Output {
     common::run(dir, &["worktree", "status"])
 }
 
+/// A `--depth 1` clone of a repository whose `branch` has two commits, so the
+/// clone's history stops at a boundary with a missing parent (CLOUD-2655). The
+/// origin declares `must_land_on = target`; the clone then commits once more.
+fn shallow_clone(name: &str, target: &str, branch: &str) -> PathBuf {
+    let origin = worktree_repo(&format!("{name}-origin"), target);
+    if branch != "main" {
+        git_in(&origin, &["checkout", "-q", "-b", branch]);
+    }
+    commit_file(&origin, "second.txt", "two\n", "second");
+    let parent = common::scratch(name);
+    let url = format!("file://{}", origin.display());
+    git_in(
+        &parent,
+        &[
+            "clone", "-q", "--depth", "1", "--branch", branch, &url, "clone",
+        ],
+    );
+    let clone = parent.join("clone");
+    assert_eq!(
+        git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    git_in(&clone, &["config", "user.name", "Fixture Author"]);
+    git_in(&clone, &["config", "user.email", "fixture@example.com"]);
+    clone
+}
+
+/// The repro: a new local branch in a shallow clone. Could-not-look, naming the
+/// unshallow, never exit 3 (CLOUD-2655).
+#[test]
+fn a_shallow_clone_reports_could_not_look_and_names_the_unshallow() {
+    let clone = shallow_clone("worktree-shallow", "origin/main", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(
+        text.contains("unlanded: not-computable (the clone is shallow; `git fetch --unshallow`"),
+        "{text}"
+    );
+}
+
+/// A tracking branch in a shallow clone: whether its work is upstream could not
+/// be computed, and that is never read as pushed (CLOUD-2655).
+#[test]
+fn a_shallow_upstream_is_not_computable_never_pushed() {
+    let clone = shallow_clone("worktree-shallow-upstream", "origin/feat", "feat");
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(text.contains("unpushed: not-computable"), "{text}");
+}
+
+/// An unresolvable target is a config error on a shallow clone too: only a
+/// failed walk is could-not-look (CLOUD-2655).
+#[test]
+fn a_shallow_clone_with_an_unresolvable_target_is_still_a_usage_error() {
+    let clone = shallow_clone("worktree-shallow-nope", "origin/nope", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{} {}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+}
+
 #[test]
 fn a_dirty_tree_is_at_risk_and_names_the_count_not_the_paths() {
     let dir = worktree_repo("worktree-dirty", "main");
@@ -8442,8 +8869,8 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .output()
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+        .streamed_output()
         .expect("run batten state")
 }
 
@@ -9128,7 +9555,7 @@ fn session_cmd(
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION", session);
     match parent {
         Some(parent) => command.env("BATTEN_SESSION_PARENT", parent),
@@ -9136,7 +9563,9 @@ fn session_cmd(
         // parent from whatever environment the suite happens to run in.
         None => command.env_remove("BATTEN_SESSION_PARENT"),
     };
-    command.output().expect("run batten with a session")
+    command
+        .streamed_output()
+        .expect("run batten with a session")
 }
 
 /// The session records the store holds, as `(parent, holder -> seqno)` per file.
@@ -9417,7 +9846,7 @@ fn a_configured_transcript_parses_to_pointer_only_counts() {
     let output = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     let document: serde_json::Value =
@@ -9442,12 +9871,12 @@ fn the_transcript_report_is_byte_identical_across_two_runs() {
     let once = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run once");
     let twice = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run twice");
     assert_eq!(
         once.stdout, twice.stdout,
@@ -9463,7 +9892,7 @@ fn an_absent_transcript_is_reported_and_exits_zero() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -9483,7 +9912,7 @@ fn the_absent_report_survives_silent_because_it_rides_the_data_channel() {
     let output = batten()
         .args(["--silent", "check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -9504,7 +9933,7 @@ fn an_unconfigured_transcript_reports_nothing_at_all() {
     let output = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stderr).is_empty());
@@ -9539,7 +9968,7 @@ fn an_undecodable_transcript_is_reported_and_does_not_veto_the_verb() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -9574,7 +10003,7 @@ fn an_undecodable_transcript_is_named_unreadable_rather_than_absent() {
     let output = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check -J");
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("one pure JSON document");
@@ -9615,7 +10044,7 @@ fn a_torn_transcript_does_not_suppress_an_unrelated_finding() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
@@ -9640,7 +10069,7 @@ fn no_transcript_text_reaches_any_output_stream() {
         let output = batten()
             .args(&args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten check");
         let both = format!(
             "{}{}",
@@ -9684,7 +10113,7 @@ fn self_write_view(dir: &std::path::Path) -> Option<serde_json::Value> {
     let output = batten()
         .args(["check", "-J"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("-J is a JSON document");
@@ -9762,7 +10191,7 @@ fn the_scan_never_blocks_the_run() {
         let output = batten()
             .args(&args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten check");
         assert_eq!(
             output.status.code(),
@@ -9778,12 +10207,12 @@ fn the_scan_is_byte_identical_across_two_runs() {
     let once = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run once");
     let twice = batten()
         .args(["check", "-J"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run twice");
     assert_eq!(once.stdout, twice.stdout, "the scan is a pure function");
 }
@@ -9802,7 +10231,7 @@ fn no_memory_key_path_or_content_reaches_any_output_stream() {
         let output = batten()
             .args(&args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten check");
         let both = format!(
             "{}{}",
@@ -9858,7 +10287,7 @@ fn run_lint_brief(case: &str, name: &str, extra: &[&str]) -> Output {
     command
         .arg(brief_fixture(name))
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten lint brief")
 }
 
@@ -9918,7 +10347,7 @@ fn an_unreadable_brief_is_a_usage_error_and_never_a_deny() {
     let output = batten()
         .args(["lint", "brief", "no-such-brief.md"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten lint brief");
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -9943,7 +10372,7 @@ fn a_brief_arrives_on_stdin_when_no_path_is_given() {
         .expect("stdin is piped")
         .write_all(brief.as_bytes())
         .expect("write the brief");
-    let output = child.wait_with_output().expect("wait for batten");
+    let output = child.streamed_wait().expect("wait for batten");
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
@@ -9985,7 +10414,7 @@ fn no_byte_of_the_brief_reaches_any_output_stream() {
             .args(&extra)
             .arg(&path)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten lint brief");
         let both = format!("{}{}", stdout(&output), stderr(&output));
         assert!(
@@ -10000,7 +10429,10 @@ fn lint_brief_declares_itself_read_in_the_spec() {
     // The derived read-only allowlist is built from this classification, so a
     // misdeclared row would put a text-reading verb in the wrong effect class —
     // or keep an honest one out of the allowlist a mediating harness consults.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(output.status.code(), Some(0));
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let lint = spec["subcommands"]
@@ -10071,9 +10503,11 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
 
 #[test]
 fn a_host_without_the_capability_fires_nothing_and_still_answers() {
-    // Acceptance (b). `task-completed` is Claude-only, so the neutral exit-code
-    // adapter must spawn nothing — and must still answer its contract, because
-    // an absent capability is a fact about the host, never an error.
+    // Acceptance (b). `task-completed` is Claude-only among the surveyed hosts,
+    // so `codex-cli` must spawn nothing — and must still answer its contract,
+    // because an absent capability is a fact about the host, never an error.
+    // Not exit-code: that is Batten's own envelope and carries every moment
+    // (CLOUD-2674).
     let dir = action_repo(
         "action-uncapable",
         "task-completed",
@@ -10081,7 +10515,7 @@ fn a_host_without_the_capability_fires_nothing_and_still_answers() {
     );
     let output = run_hook_in(
         &dir,
-        "exit-code",
+        "codex-cli",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
     );
     assert_eq!(output.status.code(), Some(0), "allow, never an error");
@@ -10200,7 +10634,7 @@ fn an_unknown_key_in_an_action_row_costs_the_row_and_is_reported() {
     let shown = common::batten()
         .args(["config", "show"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten config show");
     let said = format!("{}{}", common::stdout(&shown), common::stderr(&shown));
     assert!(
@@ -10421,7 +10855,7 @@ fn the_at_risk_fact_is_still_computed_and_still_a_pointer() {
     let output = batten()
         .args(["worktree", "status"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten worktree status");
     let report = format!("{}{}", common::stdout(&output), common::stderr(&output));
     assert!(
@@ -10817,7 +11251,7 @@ fn an_event_no_handler_selects_for_dispatches_nothing() {
 fn generated_wiring(harness: &str) -> Output {
     batten()
         .args(["generate", "hooks", "--harness", harness])
-        .output()
+        .streamed_output()
         .expect("run batten generate hooks")
 }
 
@@ -11201,7 +11635,7 @@ fn run_counted(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten exec")
 }
 
@@ -11218,7 +11652,7 @@ fn run_capture(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
         .args(args)
         .current_dir(repo)
         .state_home(home)
-        .output()
+        .streamed_output()
         .expect("run batten capture")
 }
 
@@ -11254,6 +11688,23 @@ fn capture_only_reports_handles_instead_of_the_childs_bytes() {
     assert!(
         !report.contains("bravo warning here"),
         "the handle report echoed the payload: {report}"
+    );
+    // THE ONE POINTER EVERY STORED OUTPUT TAKES (CLOUD-2284): a view read in
+    // one hop, never a handle that needs a second call to reach the words.
+    let pointer = report
+        .lines()
+        .find(|line| line.contains("output point now at /"))
+        .unwrap_or_else(|| panic!("the capture is pointed at: {report}"));
+    assert!(pointer.contains("T)"), "{pointer}");
+    let view = pointer.rsplit_once("; read ").map_or_else(
+        || panic!("the pointer names its view: {pointer}"),
+        |(_, path)| path.trim(),
+    );
+    assert!(
+        std::fs::read_to_string(view)
+            .unwrap_or_default()
+            .contains("bravo warning here"),
+        "the view holds the stream: {view}"
     );
 }
 
@@ -11431,7 +11882,10 @@ fn a_capture_listing_is_byte_stable_across_runs() {
 fn the_navigation_verbs_declare_themselves_read_in_the_spec() {
     // The derived allowlist is built from this classification: `show` and `list`
     // must be on it, and the `capture` noun must not — its subtree removes.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let capture = spec["subcommands"]
         .as_array()
@@ -11476,7 +11930,7 @@ fn run_raw_bytes(repo: &std::path::Path, home: &std::path::Path, escaped: &str) 
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten exec")
 }
 
@@ -11746,7 +12200,7 @@ fn run_payload_field(name: &str, payload: &str) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten payload field")
+    child.streamed_wait().expect("run batten payload field")
 }
 
 /// A `Task` spawn envelope, the shape `fanout-guard` is wired to (CLOUD-287).
@@ -12009,7 +12463,7 @@ fn run_hook_state(
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Every file under `root`, recursively, whose contents carry `needle`.
@@ -12127,7 +12581,7 @@ fn no_byte_of_the_result_buffer_reaches_stdout_stderr_a_json_document_or_a_recei
     let mut doctor = batten();
     doctor.args(["doctor", "-J"]).current_dir(&dir);
     common::state_home(&mut doctor, &home);
-    let doctored = doctor.output().expect("run batten doctor");
+    let doctored = doctor.streamed_output().expect("run batten doctor");
     assert!(!String::from_utf8_lossy(&doctored.stdout).contains(secret));
 
     // ...and nowhere the recording wrote. The fact record carries a COUNT, and the
@@ -12552,9 +13006,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // The prescription, spelled the way the hook spells it. Line 2, so the
     // pointer proves the finding is anchored rather than reported file-wide.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-dirty"));
     let dirty = repo_with_config("denied-identity-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -12589,7 +13041,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -12605,9 +13057,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     // The discriminator. Stating the precedence rather than the command is what
     // the rule leaves room for — otherwise the row would forbid the very prose
     // AGENTS.md rule 8 and `rules/commits.md` are made of.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-clean"));
     let clean = repo_with_config("denied-identity-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -12627,7 +13077,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
@@ -12837,7 +13287,7 @@ fn record_response(dir: &Path, home: &Path, tool: &str, document: &serde_json::V
         .expect("piped stdin")
         .write_all(post_tool_result(tool, document).as_bytes())
         .expect("write payload");
-    let done = child.wait_with_output().expect("run batten hook");
+    let done = child.streamed_wait().expect("run batten hook");
     assert!(
         done.status.success(),
         "recording a post-tool response must not fail: {}",
@@ -12853,7 +13303,7 @@ fn find_in_repo(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .args(["capture", "find"])
         .args(args)
         .state_home(home)
-        .output()
+        .streamed_output()
         .expect("run batten capture find")
 }
 
@@ -13440,7 +13890,7 @@ fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
         .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(repo)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -13452,7 +13902,7 @@ fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
         .expect("hook stdin")
         .write_all(claude_payload(command).as_bytes())
         .expect("write the payload");
-    child.wait_with_output().expect("batten hook")
+    child.streamed_wait().expect("batten hook")
 }
 
 #[test]
@@ -13610,7 +14060,7 @@ fn a_rule_selection_accepts_every_spelling_of_a_declared_id() {
         let output = batten()
             .current_dir(common::at_root("."))
             .args(["check", "--rule", spelling])
-            .output()
+            .streamed_output()
             .expect("run batten check");
         assert!(
             output.status.success(),
@@ -13647,7 +14097,7 @@ scope = "tree"
     let output = batten()
         .current_dir(&repo)
         .args(["check", "--rule", "no-hardcoded-banner"])
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert!(
         output.status.success(),
@@ -13667,7 +14117,7 @@ fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
     let output = batten()
         .current_dir(common::at_root("."))
         .args(["check", "--rule", "branch-write-unsaef"])
-        .output()
+        .streamed_output()
         .expect("run batten check");
     assert!(
         !output.status.success(),
@@ -13700,7 +14150,7 @@ fn json_capture(name: &str) -> (PathBuf, PathBuf, String) {
         ])
         .current_dir(&repo)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let handle = stdout_handle(&repo, &home);
@@ -13777,7 +14227,11 @@ fn a_reader_that_hangs_up_ends_the_run_without_a_diagnosis() {
         .env("RUST_BACKTRACE", "1")
         .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
-        .output()
+        .streamed_output_keeping(batten::exec::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        })
         .expect("run batten");
     assert_eq!(output.status.code(), Some(3));
     assert!(

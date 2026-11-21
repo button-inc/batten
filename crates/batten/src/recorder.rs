@@ -52,8 +52,14 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
+pub use crate::config_check::recorder::validate;
+#[allow(unused_imports)]
+pub(crate) use crate::config_check::recorder::{
+    validate_shape, validate_status_table, validate_value,
+};
+pub use crate::config_model::{
+    Ask, Column, Program, Read, RecordKey, Recorded, RecorderDeclared as Declared, Value,
+};
 
 /// The token every unresolvable value renders as.
 ///
@@ -63,376 +69,6 @@ use serde::{Deserialize, Serialize};
 /// *looked and found nothing*. Collapsing those is the CLOUD-251 shape every
 /// record here is careful to avoid.
 pub const ABSENT: &str = "-";
-
-/// How a record is filed.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum RecordKey {
-    /// Filed under the current branch, so every commit on it continues to serve
-    /// the same record.
-    Branch,
-}
-
-/// One recorder this repository declares.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Declared {
-    /// What this row is called. Unique across the table, and never the file — a
-    /// record is written by SEVERAL rows (one per tool, and one per create/groom
-    /// path), so keying uniqueness on the file would make the natural
-    /// declaration unwritable.
-    pub name: String,
-    /// The record this row appends to — the file, and the file the rule that
-    /// reads it names.
-    ///
-    /// Deliberately many-to-one. The censused record carries a line per board
-    /// write whatever tool made it, so the rows that write it differ in their
-    /// selector and their columns while naming one destination.
-    pub record: String,
-    /// Which tool's result records, matched by [`crate::rules::selects_tool_name`].
-    ///
-    /// A tool name, never a field shape, for [`crate::mint::Declared::tool`]'s
-    /// measured reason: a connector is exposed under more than one name over its
-    /// lifetime (CLOUD-178), and a write response and a read payload are
-    /// shape-identical across the fields either carries.
-    pub tool: String,
-    /// What the record is filed under.
-    pub key: RecordKey,
-    /// Paths into the RESULT that must resolve for anything to be written.
-    ///
-    /// The success predicate, exactly as [`crate::mint::satisfied`] is: a result
-    /// that does not carry these is a call that did not do the thing, and
-    /// recording it would put a row in the journal for work nobody did.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<String>,
-    /// Paths into the INPUT that must NOT resolve for anything to be written.
-    ///
-    /// The censused use is telling a create from an update: an update carries an
-    /// id the create cannot, so a recorder that only wants creates declares the
-    /// id here rather than needing a negation operator in the expression
-    /// language.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub refused_when_input: Vec<String>,
-    /// Paths into the RESULT that must NOT resolve for anything to be written
-    /// (CLOUD-2214).
-    ///
-    /// The censused use is a backgrounded runner call: its result carries
-    /// `backgroundTaskId`, and its `stdout` is the host's placeholder rather than
-    /// the command's output, so reading it records a measurement of nothing — a
-    /// `closes 0` over a PR body nobody saw.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub refused_when_result: Vec<String>,
-    /// Input paths whose value must MATCH a declared pattern, by pattern id.
-    ///
-    /// **The selector a tool name cannot express.** [`Declared::tool`] narrows to
-    /// a tool, which is enough while the tool's identity is the whole question —
-    /// a board write is any `save_issue` at all. It is not enough for a general
-    /// runner: every shell call arrives as one tool, so a row wanting *the
-    /// command that fetched the pull request body* has a tool name that matches
-    /// every command in the session and a result shape identical for all of them.
-    ///
-    /// The value is a `[[pattern]]` id rather than an inline regex, for the
-    /// reason `rules/policy-modules.md` gives for a module: one concept,
-    /// one spelling, refused at load rather than duplicated at leisure. An
-    /// undeclared id fails the load and says which recorder named it.
-    ///
-    /// Reads the INPUT, never the result, and that is the safe direction here
-    /// even though [`Value::Input`] is the forgeable half elsewhere: this decides
-    /// only WHETHER to record, and the columns still take their values from what
-    /// the far end returned. A caller who spoofs the command string buys a record
-    /// of a call whose own result is what gets written down.
-    ///
-    /// A path that does not resolve to a scalar refuses the row, on the
-    /// could-not-look rule the rest of this module keeps: a selector that cannot
-    /// read its subject has not matched it.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub requires_input_matching: BTreeMap<String, String>,
-    /// Write only when the record ALREADY carries a line whose column
-    /// `column` equals this expression's value.
-    ///
-    /// **The narrow exception that keeps a remedy reachable.** A gate that
-    /// refuses a subject recorded in a bad state has to tell the author how to
-    /// clear it, and "fix the subject and re-run" only works if the fix is
-    /// recorded too. But recording every later write would let a row this branch
-    /// never filed be re-judged on its own say-so — so the exception is bounded
-    /// to subjects this record already names, which is exactly the set this
-    /// branch is answerable for.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires_recorded: Option<Recorded>,
-    /// The columns, in order, space-joined into one line.
-    ///
-    /// **Every column renders exactly one whitespace-free token.** A record a
-    /// positional reader can parse cannot have a variable-width field before its
-    /// last, and the shell recorder this replaces learned that the hard way — its
-    /// fifth column swallowed the sixth until the join moved to write time. So
-    /// [`render_column`] folds whitespace rather than trusting a template not to
-    /// produce any.
-    pub columns: Vec<Column>,
-}
-
-/// A precondition on what the record already holds.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Recorded {
-    /// Every column that must match, keyed by position from zero.
-    ///
-    /// **A map rather than one column, and the reason is measured.** The
-    /// censused record carries a line per board write whatever KIND it was, so a
-    /// precondition on the subject alone matches a comment line about that
-    /// subject — and a comment is not this branch having filed the row. The
-    /// retired shell anchored on the kind and the whole id field together; this
-    /// is that anchor, generalised.
-    pub matches: BTreeMap<usize, Value>,
-}
-
-/// One column of a record.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Column {
-    /// What this column is called. Never read by the engine — it is what makes
-    /// the config legible and what a finding can point at.
-    pub name: String,
-    /// The expression whose value this column carries.
-    pub value: Value,
-    /// Remove, from this column's whitespace-separated tokens, every token the
-    /// named expression yields.
-    ///
-    /// The censused use is *"the rows the stored body cites that the caller
-    /// passed as no relation"* — a set difference between what a program emitted
-    /// and what the input carried. Expressed as a column operation rather than a
-    /// [`Value`] variant because it is about the rendered tokens, not about the
-    /// JSON.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub minus: Option<Value>,
-    /// Drop this token if it equals the value of the named expression.
-    ///
-    /// The row's own key is not an edge to anywhere; without this the censused
-    /// column counts every row as citing itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub without: Option<Value>,
-    /// Render as `<count><separator><joined>` rather than as the tokens alone.
-    ///
-    /// **A count and a pointer, never the payload** (non-negotiable rule 4). The
-    /// separator is the consumer's because the reader of the record is the
-    /// consumer's too.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub counted_with: Option<String>,
-    /// Render `0` rather than [`ABSENT`] when the expression resolved and yielded
-    /// no tokens.
-    ///
-    /// **Zero is a count; `-` is could-not-look.** Collapsing the two is the one
-    /// mistake this record shape cannot afford, because a gate downstream passes
-    /// on `-` by design and would then pass on a real measurement of nothing.
-    #[serde(default)]
-    pub zero_is_a_count: bool,
-}
-
-/// An expression over the tool envelope and the programs this repository owns.
-///
-/// **Closed, for [`crate::mint::Piece`]'s reason**: an unrecognised form is a
-/// load error, never a value that silently renders as itself and writes a record
-/// nobody can read.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub enum Value {
-    /// A constant the consumer wrote. What a `kind` column is made of.
-    Literal(String),
-    /// The branch this record is being written on (CLOUD-1280).
-    ///
-    /// **The record is already branch-keyed and this exposes what the writer
-    /// holds** — [`crate::lib`]'s `write_records` resolves the branch to choose
-    /// the record's own path and, until this variant, never handed it to an
-    /// expression. So a column could name what the LEASE says and nothing it
-    /// could compare that against.
-    ///
-    /// The measured need is one row of a port rather than a general convenience.
-    /// `land-lock status` grades the lease against the CLONE (`mine`), which is
-    /// the question a developer's checkout asks; `authorises` grades it against
-    /// the BRANCH and admits one case `status` cannot — the successor a rival
-    /// reserved behind the holder (CLOUD-369). A predicate without this variant
-    /// therefore refuses a reserved successor that the bash it replaces allows,
-    /// which is a fail-CLOSED deviation and exactly the laundering CLOUD-1269
-    /// forbids: *"a port that quietly makes it fail closed has laundered a
-    /// stop-the-world into a gate."*
-    ///
-    /// **Could-not-look is a real answer here and is spelled `None`**: a detached
-    /// HEAD has no branch, which is a state rather than an error, and rendering
-    /// some placeholder would let a comparison against it succeed by accident.
-    ///
-    /// Names nothing (non-negotiable rule 1): it yields whatever ref the clone is
-    /// standing on, so a consumer's trunk name never reaches the crate.
-    Branch,
-    /// The scalar at a dotted path into the tool RESULT.
-    Result(String),
-    /// The scalar at a dotted path into the tool INPUT.
-    ///
-    /// Separate from [`Value::Result`] rather than one path with a prefix,
-    /// because the two differ in TRUST and the difference is the whole reason the
-    /// censused recorder is unforgeable: the result is what the far end stored,
-    /// the input is what the caller asked for. A consumer choosing between them
-    /// is choosing whose word to take, and that choice should be spelled.
-    Input(String),
-    /// A JSON object built from named sub-expressions.
-    Object(BTreeMap<String, Value>),
-    /// Every string the named iterating INPUT paths yield, space-joined.
-    ///
-    /// [`Value::Wrap`]'s plain sibling, and both are needed rather than one
-    /// being a special case of the other. `Wrap` builds the OBJECT shape a
-    /// program reads on stdin; this builds the TOKEN list a column operation
-    /// compares against. Using `Wrap` for a `minus` compares against
-    /// `{"id":"X"}` and removes nothing — measured, and silently, because a set
-    /// difference that subtracts nothing looks exactly like one with nothing to
-    /// subtract.
-    ///
-    /// A list rather than one path because the censused use unions three
-    /// relation directions, and a union spelled as three columns would be three
-    /// columns nobody wanted.
-    Inputs(Vec<String>),
-    /// Each string an iterating INPUT path yields, wrapped as `{<key>: value}`.
-    ///
-    /// The shape a relation list takes in the payload the censused verdict
-    /// program reads. Generic because the key is the consumer's.
-    Wrap {
-        /// The iterating input path, e.g. `blockedBy[]`.
-        from: String,
-        /// The object key each element is filed under.
-        key: String,
-    },
-    /// The lines of another expression's value from a label matching `select`
-    /// until the next label matching `label`.
-    ///
-    /// **Both patterns are `[[pattern]]` ids, never inline regexes**, which is the
-    /// same load-time refusal `rules/policy-modules.md` records for a
-    /// policy module and for the same measured reason: one concept, one spelling.
-    /// The censused use narrows a body to one clause of a structured block, and
-    /// that block's grammar already has exactly one definition elsewhere.
-    Section {
-        /// The expression whose text is narrowed.
-        from: Box<Value>,
-        /// The pattern id every label matches — what ENDS a span.
-        label: String,
-        /// The pattern id the wanted label matches — what STARTS the span.
-        select: String,
-    },
-    /// What a declared program said about another expression's value.
-    ///
-    /// The id field is `run` rather than `program`, which is not cosmetic: this
-    /// enum is externally tagged, so the variant's own key is already `program`
-    /// and a field of the same name nests one inside the other for a reader.
-    Program {
-        /// The program id, resolved through the consumer's `[program]` table.
-        run: String,
-        /// The expression whose rendered value is handed to the program on stdin.
-        stdin: Box<Value>,
-        /// What to read back.
-        read: Read,
-    },
-    /// What a **compiled** authority said about another expression's value
-    /// (CLOUD-1100).
-    ///
-    /// [`Value::Program`]'s in-process twin, and deliberately its twin rather
-    /// than its replacement: a `[program]` row names a path the CONSUMER owns, an
-    /// authority names a predicate the CRATE owns. Switching a column from one to
-    /// the other buys the same verdict without a spawn, which is what lets a
-    /// grammar the crate already parses stop being resolved by executing a shell
-    /// program on every board write.
-    ///
-    /// **[`Read`] is reused unchanged, and that is the whole compatibility
-    /// story.** The authority answers in the spawned program's own status
-    /// contract (see [`crate::ready::adjudicate`], which documents the inversion
-    /// CLOUD-909 records), so a column switching `program` for `authority` keeps
-    /// its `read` table byte-for-byte and keeps recording the same tokens.
-    Authority {
-        /// Which compiled authority decides.
-        ask: Ask,
-        /// The expression whose value the authority judges. Handed over as JSON
-        /// rather than as text: nothing is being written to a pipe, so the
-        /// serialize-and-reparse round trip a spawn needs would only be a second
-        /// place for the shape to change.
-        stdin: Box<Value>,
-        /// What to read back.
-        read: Read,
-    },
-}
-
-/// A compiled authority a recorder column may ask.
-///
-/// **Closed, and a name rather than a path**, which is what keeps rule 1 intact:
-/// this enum's one variant says *the Definition-of-Ready grammar* and nothing
-/// here names a tracker, a tool or a board. [`crate::mint::Authority`] is its
-/// twin on the template side and the two resolve the same names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub enum Ask {
-    /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
-    Ready,
-    /// [`crate::lease::Asked::Status`] — does the landing lease authorise this
-    /// clone right now? Answers in the engine's exit table, so the consumer's
-    /// `status` map reads `0` authorising / `2` held elsewhere and leaves `3`
-    /// unmapped, which is where the lease's fail-open asymmetry lives.
-    ///
-    /// **Named for the practice rather than for a program** (non-negotiable rule
-    /// 1): "a landing lease" is a word about trunk-based landing, where
-    /// `land-lock` was one repository's file name.
-    LeaseStatus,
-    /// [`crate::lease::Asked::Successor`] — which branch the live holder
-    /// admitted behind it, on stdout, or nothing where no reservation stands.
-    LeaseSuccessor,
-    /// [`crate::ready::named_paths`] — which tracked paths an issue body names.
-    ///
-    /// **Named for the question rather than for the retired program** (rule 1):
-    /// "the paths this row names" is a statement about a tracker body, where
-    /// `board-diff-overlap` was one repository's file name for a sensor that
-    /// also had a second mode nothing reached.
-    NamedPaths,
-    /// The keys a text names in CLOSING form, one per line on stdout — the
-    /// grammar's own [`crate::ready::Grammar::keys_closed_in`] (CLOUD-1717).
-    ///
-    /// **It replaces a spawn of the program whose `--list` mode was the only
-    /// home of the closing-verb regex.** That program is retired, and a second
-    /// copy of the verb set here would be one concept with two spellings; the
-    /// grammar already owns it, including the disclaimer a regex never saw
-    /// (`does not close CLOUD-1` names the key and closes nothing).
-    ClosingKeys,
-}
-
-/// What a recorder reads back from a program it ran.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub enum Read {
-    /// The exit status, mapped through a table the consumer wrote.
-    ///
-    /// **An unmapped status is [`ABSENT`], never a default verdict**, and the
-    /// censused reason is exact: the program this replaces exits `0` for pass,
-    /// `1` for a judgement and `2` for *could not judge*, so folding anything
-    /// non-zero into the refusal would record a verdict about the ENVIRONMENT
-    /// wearing the mask of a verdict about the subject.
-    Status(BTreeMap<String, String>),
-    /// Standard output, whole.
-    Stdout,
-    /// The remainder of the first stdout line carrying this prefix.
-    ///
-    /// **Absent is could-not-look; present-and-empty is the honest zero.** The
-    /// censused producer emits its line BEFORE it branches on a verdict, so a
-    /// missing line means it never got that far, and a present empty one means it
-    /// looked and found nothing.
-    StdoutLine(String),
-}
-
-/// One program a recorder may run.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Program {
-    /// The path, repo-relative. Resolved against the repository root rather than
-    /// the cwd for [`crate::lib`]'s measured reason: a hook inherits the cwd of
-    /// the tool call, which is not required to be inside this project.
-    pub path: String,
-    /// Arguments, before stdin is written.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-}
 
 /// What one recorder row made of this call: not its subject, its subject but
 /// unanswerable, or a row that applies (CLOUD-1126).
@@ -513,7 +149,6 @@ pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
 /// which tool names are runners, and that is a consumer fact — a core carrying
 /// the list would violate rule 1. The declaration a consumer CAN make is
 /// `requires_input_matching`, and every row here over a runner carries one.
-//MUTANT background-result-recorded|s@^            .refused_when_result$@            .refused_when_input@|a_backgrounded_result_is_not_recorded
 #[must_use]
 pub fn outcome(declared: &Declared, context: &Context<'_>) -> Outcome {
     let selected = declared
@@ -878,238 +513,6 @@ pub fn render(declared: &Declared, context: &Context<'_>) -> Option<String> {
     )
 }
 
-/// Refuse, at LOAD, every recorder that could not have written what it claims.
-///
-/// The refusals below are all of the same kind and it is the kind this repository
-/// keeps choosing: a declaration naming something the tree does not carry is a
-/// gate that runs, resolves nothing, and reports clean. A recorder is worse than
-/// a rule that way, because it has no verdict at all — a column that silently
-/// renders `-` forever looks exactly like a column that looked and could not see.
-///
-/// # Errors
-///
-/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the recorder, the
-/// column and the missing id.
-pub fn validate(
-    recorders: &[Declared],
-    programs: &BTreeMap<String, Program>,
-    patterns: &std::collections::BTreeSet<String>,
-) -> Result<()> {
-    let mut seen = std::collections::BTreeSet::new();
-    for recorder in recorders {
-        validate_shape(recorder, &mut seen, patterns)?;
-        if let Some(recorded) = &recorder.requires_recorded {
-            for value in recorded.matches.values() {
-                validate_value(
-                    &recorder.name,
-                    "requires-recorded",
-                    value,
-                    programs,
-                    patterns,
-                )?;
-            }
-        }
-        for column in &recorder.columns {
-            for value in [
-                Some(&column.value),
-                column.minus.as_ref(),
-                column.without.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                validate_value(&recorder.name, &column.name, value, programs, patterns)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The shape refusals, split out of [`validate`] when it hit its own line
-/// ceiling. The seam is the one the function already had: everything here is a
-/// property of the ROW — its name, its selectors, its column count — and
-/// everything left behind walks the expressions inside a column.
-fn validate_shape(
-    recorder: &Declared,
-    seen: &mut std::collections::BTreeSet<String>,
-    patterns: &std::collections::BTreeSet<String>,
-) -> Result<()> {
-    if recorder.name.trim().is_empty() {
-        return Err(crate::error::UsageError::raise(
-            "a `[[recorder]]` row carries an empty `name`, so nothing can point at it",
-        ));
-    }
-    if recorder.record.trim().is_empty() {
-        return Err(crate::error::UsageError::raise(format!(
-            "recorder {:?} names no `record`, so it would write nowhere",
-            recorder.name
-        )));
-    }
-    if !seen.insert(recorder.name.clone()) {
-        return Err(crate::error::UsageError::raise(format!(
-            "two `[[recorder]]` rows are named {:?}, so a finding could not say \
-             which one wrote a line",
-            recorder.name
-        )));
-    }
-    if recorder.tool.trim().is_empty() {
-        return Err(crate::error::UsageError::raise(format!(
-            "recorder {:?} selects on an empty `tool`, which matches nothing",
-            recorder.name
-        )));
-    }
-    // A SELECTOR IS NOT A GLOB, and a row that thinks it is fails SILENTLY.
-    //
-    // `rules::selects_tool_name` matches the whole name or its final
-    // `__`-delimited segment (CLOUD-178, so a connector renamed over its
-    // lifetime still matches). A `*save_issue` written by habit from a shell
-    // `case` pattern therefore matches nothing at all — and a recorder that
-    // never fires is byte-identical, on every surface, to a tool nobody
-    // called. Measured here: the whole table was dead and only the cases
-    // asserting a row WAS written could see it, because the ones asserting
-    // none passed vacuously.
-    //
-    // Refused at load for that asymmetry: the failure has no loud direction
-    // at runtime, so the only place it can be caught is before the run.
-    if let Some(found) = recorder
-        .tool
-        .find(['*', '?', '['])
-        .and_then(|at| recorder.tool.get(at..=at))
-    {
-        return Err(crate::error::UsageError::raise(format!(
-            "recorder {:?} selects on tool {:?}, which carries {found:?} — a tool \
-             selector is matched whole or by its final `__`-delimited segment, \
-             never as a glob, so this row would match nothing and record silently",
-            recorder.name, recorder.tool
-        )));
-    }
-    for (path, pattern) in &recorder.requires_input_matching {
-        if path.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} matches on an empty input path, which reads nothing \
-                 and so never selects",
-                recorder.name
-            )));
-        }
-        if !patterns.contains(pattern) {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} selects on input {path:?} matching pattern {pattern:?}, \
-                 which no `[[pattern]]` row declares — the row would never fire and \
-                 a recorder that never fires is indistinguishable from a tool nobody \
-                 called",
-                recorder.name
-            )));
-        }
-    }
-    if recorder.columns.is_empty() {
-        return Err(crate::error::UsageError::raise(format!(
-            "recorder {:?} declares no columns, so it would append blank lines",
-            recorder.name
-        )));
-    }
-    if let Some(recorded) = &recorder.requires_recorded {
-        if recorded.matches.is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} gates on an empty `requires-recorded`, which every \
-                 existing line satisfies — a precondition matching anything is not one",
-                recorder.name
-            )));
-        }
-        for column in recorded.matches.keys() {
-            if *column >= recorder.columns.len() {
-                return Err(crate::error::UsageError::raise(format!(
-                    "recorder {:?} gates on column {column} of an existing line, but \
-                     it declares only {} column(s) — the comparison could never hold",
-                    recorder.name,
-                    recorder.columns.len()
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Every id one expression names, checked against what the config declares.
-fn validate_value(
-    recorder: &str,
-    column: &str,
-    value: &Value,
-    programs: &BTreeMap<String, Program>,
-    patterns: &std::collections::BTreeSet<String>,
-) -> Result<()> {
-    match value {
-        Value::Literal(_)
-        | Value::Branch
-        | Value::Result(_)
-        | Value::Input(_)
-        | Value::Inputs(_)
-        | Value::Wrap { .. } => Ok(()),
-        Value::Object(fields) => fields
-            .values()
-            .try_for_each(|value| validate_value(recorder, column, value, programs, patterns)),
-        Value::Section {
-            from,
-            label,
-            select,
-        } => {
-            for id in [label, select] {
-                if !patterns.contains(id) {
-                    return Err(crate::error::UsageError::raise(format!(
-                        "recorder {recorder:?} column {column:?} narrows on pattern {id:?}, \
-                         which no `[[pattern]]` row declares — an inline regex is refused here \
-                         for the reason a policy module's is, so the id must exist"
-                    )));
-                }
-            }
-            validate_value(recorder, column, from, programs, patterns)
-        }
-        Value::Program { run, stdin, read } => {
-            if !programs.contains_key(run) {
-                return Err(crate::error::UsageError::raise(format!(
-                    "recorder {recorder:?} column {column:?} runs program {run:?}, \
-                     which no `[program]` row declares"
-                )));
-            }
-            validate_status_table(recorder, column, run, read)?;
-            validate_value(recorder, column, stdin, programs, patterns)
-        }
-        // NO ID TO RESOLVE, and that is the point of the variant rather than a
-        // gap in this function: `ask` is a closed enum, so serde has already
-        // refused an authority no build carries. What still needs checking is the
-        // status table, which is the consumer's either way.
-        Value::Authority { ask, stdin, read } => {
-            validate_status_table(recorder, column, &format!("{ask:?}").to_lowercase(), read)?;
-            validate_value(recorder, column, stdin, programs, patterns)
-        }
-    }
-}
-
-/// A `read = { status = … }` table that can actually decide something.
-///
-/// Shared by the spawning and the compiled arms: an empty table records
-/// could-not-look for every status, and a key that is not an exit code can never
-/// match one.
-fn validate_status_table(recorder: &str, column: &str, source: &str, read: &Read) -> Result<()> {
-    let Read::Status(map) = read else {
-        return Ok(());
-    };
-    if map.is_empty() {
-        return Err(crate::error::UsageError::raise(format!(
-            "recorder {recorder:?} column {column:?} reads {source:?}'s status through an empty \
-             table, so every status would record as could-not-look"
-        )));
-    }
-    for status in map.keys() {
-        if status.parse::<i32>().is_err() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {recorder:?} column {column:?} maps status {status:?}, which is not an \
-                 exit code"
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Append every record this result earns, and report how many were written.
 ///
 /// **`git_dir`, never the cwd**, which is a measured defect rather than a style
@@ -1151,7 +554,7 @@ pub fn append_all(
         if !snapshots.contains_key(&recorder.record) {
             snapshots.insert(
                 recorder.record.clone(),
-                std::fs::read_to_string(&path).unwrap_or_default(),
+                crate::fsio::read_to_string(&path).unwrap_or_default(),
             );
         }
         if let Some(recorded) = &recorder.requires_recorded
@@ -1197,12 +600,42 @@ pub fn append_all(
 /// of what the call produced.
 #[must_use]
 pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(receipt_name("recorder-blocked", branch, claim))
+}
+
+/// The longest receipt name written whole (CLOUD-2706), well under the
+/// 255-byte component limit every filesystem here has.
+const MAX_RECEIPT_NAME: usize = 200;
+
+/// `<record>.<branch>.<claim>`, or `<record>.<branch>` for an unclaimed branch.
+///
+/// **A CLAIM TOO LONG FOR A FILE NAME IS DIGESTED (CLOUD-2706).** The claim joins
+/// every key the branch claimed, and one PR carrying a bundle of rows is the
+/// shape the workflow prescribes: 34 keys passed the 255-byte limit and every
+/// claim-keyed write exited 3. The digest is deterministic, so writers and
+/// readers agree, and the name keeps its `<record>.<branch>.` prefix, which is
+/// what `land`'s branch sweep matches. A name within the limit is unchanged.
+fn receipt_name(record: &str, branch: &str, claim: Option<&str>) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
     let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
-        None => format!("recorder-blocked.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    match claim {
+        Some(claim) => {
+            let whole = format!("{record}.{branch}.{claim}");
+            if whole.len() <= MAX_RECEIPT_NAME {
+                return whole;
+            }
+            let digest = sha2::Sha256::digest(claim.as_bytes());
+            let hex = digest.iter().take(8).fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+            format!("{record}.{branch}.claim-{hex}")
+        }
+        None => format!("{record}.{branch}"),
+    }
 }
 
 /// Where a branch-keyed record lives.
@@ -1229,12 +662,9 @@ pub fn record_path(
     branch: &str,
     claim: Option<&str>,
 ) -> std::path::PathBuf {
-    let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("{record}.{branch}.{claim}"),
-        None => format!("{record}.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    git_dir
+        .join("batten-receipts")
+        .join(receipt_name(record, branch, claim))
 }
 
 /// Whether the snapshot already carries a line matching EVERY named column.
@@ -1282,6 +712,30 @@ fn append(path: &Path, line: &str) -> Option<()> {
 )]
 mod outcome_tests {
     use super::*;
+
+    /// A claim of a whole bundle of keys stays a legal file name (CLOUD-2706).
+    #[test]
+    fn a_claim_too_long_for_a_file_name_is_digested() {
+        let keys: Vec<String> = (1560..1594).map(|n| format!("CLOUD-{n}")).collect();
+        let claim = keys.join("-");
+        let name = |claim: &str| {
+            record_path(
+                Path::new("/g"),
+                "pr-unsubscribed",
+                "claude/bundle",
+                Some(claim),
+            )
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+        };
+        let long = name(&claim);
+        assert!(long.len() <= MAX_RECEIPT_NAME, "{long}");
+        assert!(long.starts_with("pr-unsubscribed.claude-bundle."), "{long}");
+        assert_eq!(long, name(&claim), "the same claim names the same file");
+        assert_ne!(long, name(&format!("{claim}-CLOUD-9999")));
+        assert_eq!(name("CLOUD-1"), "pr-unsubscribed.claude-bundle.CLOUD-1");
+    }
 
     fn declared(requires: &[&str], matching: &[(&str, &str)]) -> Declared {
         Declared {
@@ -1716,7 +1170,7 @@ mod outcome_tests {
             append_all(&rows, &git_dir, "main", &context, selects, "Bash"),
             1
         );
-        assert_eq!(std::fs::read_to_string(&path).expect("record"), "one\n");
+        assert_eq!(crate::fsio::read_to_string(&path).expect("record"), "one\n");
 
         // Now the snapshot carries `one`, so both earn a line.
         assert_eq!(
@@ -1724,7 +1178,7 @@ mod outcome_tests {
             2
         );
         assert_eq!(
-            std::fs::read_to_string(&path).expect("record"),
+            crate::fsio::read_to_string(&path).expect("record"),
             "one\none\ntwo\n"
         );
     }

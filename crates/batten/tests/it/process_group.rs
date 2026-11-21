@@ -22,6 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt as _;
@@ -341,7 +342,7 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     );
     signal(batten.id(), "TERM");
 
-    let output = batten.wait_with_output().expect("batten exits");
+    let output = batten.streamed_wait().expect("batten exits");
     assert!(
         await_death(grandchild),
         "the tree must still die whole on the escalation"
@@ -815,7 +816,7 @@ fn a_surviving_grandchild_cannot_hang_exec() {
     // Returning at all is the first half: without the drain deadline this never
     // does, because the grandchild holds both pipes for its 300s.
     let output = batten
-        .wait_with_output()
+        .streamed_wait()
         .expect("batten exits rather than hanging");
     signal(u32::try_from(holder).expect("a positive pid"), "KILL");
 

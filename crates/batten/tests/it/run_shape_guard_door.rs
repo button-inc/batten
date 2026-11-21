@@ -46,6 +46,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -322,7 +323,7 @@ fn the_bypass_reaches_the_handler_through_the_door() {
                 .as_mut()
                 .expect("stdin is piped")
                 .write_all(payload.as_bytes())?;
-            child.wait_with_output()
+            child.streamed_wait()
         })
         .expect("the binary runs");
     let answer = Door {

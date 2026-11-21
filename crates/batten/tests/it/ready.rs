@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -1520,9 +1521,9 @@ fn a_deny_gate_owes_a_replay_and_a_warn_gate_does_not() {
     // fires often stops the fleet, which is why the obligation attaches to `deny`
     // alone.
     //
-    // PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD: judging an
-    // acceptable false-positive rate is a model verdict. The author reports; the
-    // reader decides.
+    // PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD: a Ready block
+    // declares no threshold to compare it with. The author reports; the reader
+    // decides.
     let dir = pre_release("ready-replay");
 
     let unmeasured =
@@ -2068,7 +2069,7 @@ fn seed_response(dir: &Path, home: &Path, document: &serde_json::Value) {
         .expect("piped stdin")
         .write_all(envelope.as_bytes())
         .expect("write the response");
-    let recorded = child.wait_with_output().expect("record the response");
+    let recorded = child.streamed_wait().expect("record the response");
     assert_eq!(
         recorded.status.code(),
         Some(0),
@@ -2146,7 +2147,7 @@ fn run_piped(command: &mut std::process::Command, input: &str) -> Output {
         .expect("piped stdin")
         .write_all(input.as_bytes())
         .expect("write stdin");
-    child.wait_with_output().expect("collect batten's output")
+    child.streamed_wait().expect("collect batten's output")
 }
 
 /// A clause label that lost its emphasis is STILL A CLAUSE (CLOUD-1330).

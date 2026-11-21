@@ -58,10 +58,12 @@
 //! a step's command, its glob, its matched files, or a dump of either plan. The
 //! report is what a reader follows to the two files; it is not a copy of them.
 
+use crate::capture::Streamed as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::config_model::PlanQuery;
 use crate::facts::Look;
 
 /// The program this module adopts.
@@ -576,7 +578,11 @@ fn version(root: &Path) -> Look<String> {
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .streamed_output_keeping(crate::capture::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        });
     let Ok(output) = spawned else {
         return Look::CouldNotLook;
     };
@@ -595,8 +601,6 @@ fn version(root: &Path) -> Look<String> {
 // THE PROFILE WORDS REACH THE RUNNER (CLOUD-843): dropped, the fast plan is the
 // full plan, the slow tier reads empty, and `tier list empty` refuses a
 // correctly wired gate.
-//MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
-//MUTANT profile-words-dropped|s@^    for profile in profiles {$@    for profile in profiles.iter().take(0) {@|this_repositorys_two_tier_gate_is_wired_today
 fn profile_words(profiles: &[String]) -> Vec<String> {
     let mut words = Vec::with_capacity(profiles.len() * 2);
     for profile in profiles {
@@ -626,7 +630,11 @@ fn plan(root: &Path, surface: &[&str], extra: &[String]) -> Look<serde_json::Val
         // never shaped onto Batten's own.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .streamed_output_keeping(crate::capture::Keep {
+            stdin: false,
+            stdout: true,
+            stderr: true,
+        });
     let Ok(output) = spawned else {
         return Look::CouldNotLook;
     };
@@ -689,42 +697,6 @@ pub fn resolve(root: &Path) -> Look<Contract> {
 // make the engine a second authority on which files a step runs over — the
 // disagreement class `.claude/rules/rust.md` records, in the one place where the
 // other authority is a program somebody else maintains.
-
-/// One declared plan query: which surface to ask about, and what a module needs
-/// to decide over the answer.
-///
-/// **`required` and `prohibited_profiles` are CONSUMER facts** and live in the
-/// row rather than in this crate (non-negotiable rule 1). They are projected
-/// alongside the acquired plan so the module compares two halves of one document
-/// rather than reaching for a second source — the same shape a `[[rule.tools]]`
-/// row's `id` gives its module.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct PlanQuery {
-    /// The key this plan is projected under in `input.tree.plan`.
-    pub id: String,
-    /// Which surface to ask about: a hook name the contract also covers.
-    pub hook: String,
-    /// The steps this consumer requires the plan to include.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required: Vec<String>,
-    /// Profiles whose presence makes the plan unusable for this consumer.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prohibited_profiles: Vec<String>,
-    /// Profiles to ask the runner about, each passed as `--profile <p>`
-    /// (CLOUD-843).
-    ///
-    /// **The runner's own grammar, including its negation** (`!slow`), so a
-    /// consumer can ask what the gate plans with a tier switched OFF — the only
-    /// reading that shows which steps declare that tier, since a step excluded
-    /// for a missing profile is by construction a step that declared it. The
-    /// answer stays hk's: this passes the words and parses nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub profile: Vec<String>,
-}
 
 impl PlanQuery {
     /// Whether this row names a surface the contract does not cover.
@@ -884,7 +856,6 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
 /// Every reason's KIND token on one plan entry, in the runner's order; a reason
 /// carrying no kind contributes nothing, since a kind is the only field a
 /// decision may read (rule 4).
-//MUTANT later-reasons-dropped|s@^    for reason in reasons {$@    for reason in reasons.iter().take(1) {@|a_step_whose_profile_is_not_its_first_reason_is_still_in_the_tier
 fn reason_kinds(entry: &serde_json::Value) -> Vec<String> {
     let Some(reasons) = entry.get("reasons").and_then(serde_json::Value::as_array) else {
         return Vec::new();
@@ -924,7 +895,7 @@ pub fn fingerprint(root: &Path) -> Look<String> {
     for path in &changed {
         material.push_str(path);
         material.push(' ');
-        match std::fs::read(root.join(path)) {
+        match crate::fsio::read(root.join(path)) {
             Ok(bytes) => material.push_str(&crate::tools::digest(&bytes)),
             Err(_) => material.push('-'),
         }
@@ -993,7 +964,7 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
         // ABSENT rather than could-not-look: a repository that has not committed
         // a contract can still ask what its gate would run, and refusing the whole
         // fact would make this row depend on the other one being adopted first.
-        contract_digest: std::fs::read(root.join(ARTIFACT))
+        contract_digest: crate::fsio::read(root.join(ARTIFACT))
             .ok()
             .map(|bytes| crate::tools::digest(&bytes)),
         input_fingerprint: fingerprint,
@@ -1119,7 +1090,7 @@ pub fn observation_path(git_dir: &Path, session: &str, contract_digest: &str) ->
 #[must_use]
 pub fn observed(git_dir: &Path, session: &str, contract_digest: &str) -> Look<Observation> {
     let path = observation_path(git_dir, session, contract_digest);
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Look::CouldNotLook;
     };
     match serde_json::from_str::<Observation>(&text) {
@@ -1196,7 +1167,7 @@ pub fn observe(
     // The digest is the cache key, so it is read BEFORE anything is probed. An
     // absent contract still has a key -- a stable literal -- because a session
     // that observed "there is no contract" has observed something.
-    let contract_digest = std::fs::read(root.join(ARTIFACT)).map_or_else(
+    let contract_digest = crate::fsio::read(root.join(ARTIFACT)).map_or_else(
         |_| "no-contract".to_owned(),
         |bytes| crate::tools::digest(&bytes),
     );
@@ -1204,7 +1175,7 @@ pub fn observe(
         return Ok(Look::Is(already));
     }
 
-    let committed = std::fs::read_to_string(root.join(ARTIFACT))
+    let committed = crate::fsio::read_to_string(root.join(ARTIFACT))
         .ok()
         .and_then(|text| Contract::parse(&text).ok());
     let current = match resolve(root) {

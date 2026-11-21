@@ -110,7 +110,7 @@ fn allowed_backgrounded(command: &str) {
 #[test]
 fn a_local_step_skip_is_refused() {
     // The measured command, as it was actually run on this branch.
-    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
+    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
     denied_by_this_row("HK_SKIP_STEPS=batten-check,test:cargo git commit --amend --no-edit");
 }
 
@@ -119,8 +119,8 @@ fn a_step_skip_behind_a_compound_command_is_still_reached() {
     // `input.call.segments`, not the first word of the line (CLOUD-857). A real
     // agent command is compound most of the time, and `git add -A && <skip> git
     // commit` is the exact shape this session ran.
-    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
-    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'x'");
+    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
+    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'fix: x'");
 }
 
 #[test]
@@ -129,26 +129,28 @@ fn the_retired_carve_is_refused_like_any_other() {
     // (CLOUD-843), so an exemption for it would be dead policy surface. The
     // mutant `skip-pattern-unread` names this case: with the pattern unread,
     // nothing here is refused.
-    denied_by_this_row("HK_SKIP_STEPS=test:bats mise run ci");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats mise run lint:clippy");
     // The `ci` job's current carve, typed by an agent rather than set in the
-    // workflow's `env:`, is the incident this row was filed from.
-    denied_by_this_row("HK_SKIP_STEPS=batten-check mise run ci");
+    // workflow's `env:`, is the incident this row was filed from. Spelled before
+    // a task that reaches no land stage: `mise run ci` reaches `test:cargo`, so
+    // `gate run twice` answers it first (step 14).
+    denied_by_this_row("HK_SKIP_STEPS=batten-check mise run lint:clippy");
 }
 
 #[test]
 fn the_carve_with_a_step_appended_is_refused() {
     // Find the line in a workflow, add "just one more" step to it.
-    denied_by_this_row("HK_SKIP_STEPS=test:bats,batten-check mise run ci");
-    denied_by_this_row("HK_SKIP_STEPS=test:bats,hooks-wiring-check mise run verify");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats,batten-check mise run lint:clippy");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats,hooks-wiring-check mise run lint:clippy");
 }
 
 #[test]
 fn an_ordinary_command_is_allowed() {
     // ANTI-VACUITY. Without these the denies above are satisfied by a build that
     // refuses every command, which would name this row every time.
-    allowed("git commit -m 'an ordinary commit'");
-    allowed_backgrounded("mise run ci");
-    allowed("RUST_LOG=debug git commit -m 'another variable is not this one'");
+    allowed("git commit -m 'fix: an ordinary commit'");
+    allowed_backgrounded("mise run lint:clippy");
+    allowed("RUST_LOG=debug git commit -m 'fix: another variable is not this one'");
 }
 
 #[test]

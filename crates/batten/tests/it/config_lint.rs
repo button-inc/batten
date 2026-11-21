@@ -97,8 +97,8 @@
 //! no command surface — `config lint --host-rules` already shipped — so both are
 //! `kind:mechanism`.
 //!
-// carried: mise-tasks/ci-drift.sh crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
-// carried: tests/ci-drift.bats crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: mise-tasks/ci-drift.sh crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/ci-drift.bats crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
 //!
 //! ## CARRIED — the decision half, which this file already covered
 //!
@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -615,6 +616,41 @@ fn a_rule_switched_off_is_a_smell() {
 }
 
 #[test]
+fn a_pin_below_another_key_is_invalid_and_still_loads() {
+    // The pin heads the file, after only `version`: below any other key the file
+    // is refused by name and line, never by a load error, so the engine that
+    // must read the pin to follow it still can.
+    let pin = format!(
+        "engine = {{ release = \"v{}\" }}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let dir = repo_with_config(
+        "lint-pin-buried",
+        &format!("version = 1\nunlanded = [\"x\"]\n{pin}"),
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:3 engine-pin-out-of-order\nconfig-lint: 1 smell(s)\n"
+    );
+    let show = common::run(&dir, &["config", "show"]);
+    assert!(
+        show.status.success(),
+        "a buried pin still loads: {}",
+        stdout(&show)
+    );
+    let headed = repo_with_config(
+        "lint-pin-headed",
+        &format!("version = 1\n{pin}unlanded = [\"x\"]\n"),
+    );
+    assert!(
+        !stdout(&lint(&headed, &[])).contains("engine-pin-out-of-order"),
+        "a pin under `version` is in order"
+    );
+}
+
+#[test]
 fn every_empty_set_is_reported_and_the_output_is_byte_stable() {
     let dir = repo_with_config(
         "lint-all-empty",
@@ -831,7 +867,7 @@ fn the_smell_ids_are_the_same_names_the_check_delta_uses() {
     let checked = batten()
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let checked = String::from_utf8_lossy(&checked.stdout);
     assert!(
@@ -1079,7 +1115,10 @@ fn an_unknown_base_ref_is_a_usage_error() {
 fn config_lint_is_declared_read_in_the_spec() {
     // §5: the derived agent allowlist is `filter(effect == read)`, so a lint that
     // only inspects must say so or it is needlessly excluded.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let config = spec["subcommands"]
         .as_array()
@@ -1105,7 +1144,7 @@ fn this_repositorys_own_config_is_clean() {
         .args(["config", "lint"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config lint");
     assert_eq!(
         output.status.code(),
@@ -1161,7 +1200,7 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let check_out = String::from_utf8_lossy(&check.stdout).into_owned();
 
@@ -1734,7 +1773,7 @@ fn the_drift_report_is_byte_stable_and_reads_stdin() {
             payload.as_bytes(),
         )
         .expect("write payload");
-        child.wait_with_output().expect("run batten")
+        child.streamed_wait().expect("run batten")
     };
 
     let first = piped(&["-J"]);

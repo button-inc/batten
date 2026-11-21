@@ -43,6 +43,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -60,9 +61,11 @@ const TOKEN_ENV: &str = "CLAUDE_SESSION_INGRESS_TOKEN_FILE";
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run = parsed["tasks"]["pr-unsubscribed"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run = crate::common::rendered(
+        parsed["tasks"]["pr-unsubscribed"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
     let (_, argv) = run
         .split_once(" -- ")
         .expect("the task runs the engine with `cargo run ... --`");
@@ -183,7 +186,7 @@ fn task(dir: &Path, verb: &str, pr: &str, stdin: &str, host: &HostEnv<'_>) -> Ou
         .take()
         .expect("stdin")
         .write_all(stdin.as_bytes());
-    child.wait_with_output().expect("run the verb")
+    child.streamed_wait().expect("run the verb")
 }
 
 fn in_session(session: &str) -> HostEnv<'_> {

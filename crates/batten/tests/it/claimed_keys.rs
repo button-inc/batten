@@ -28,8 +28,8 @@
 // ported: "a failed gather is could-not-look, never a short sweep" crates/batten/tests/it/claimed_keys.rs subject:mise.toml
 // carried: mise-tasks/claimed-keys.sh crates/batten/src/race.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+keys
 // carried: tests/claimed-keys.bats crates/batten/src/race.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs
-// carried: mise-tasks/merged-pr-keys.sh crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+merged
-// carried: tests/merged-pr-keys.bats crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs
+// carried: mise-tasks/merged-pr-keys.sh crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+merged
+// carried: tests/merged-pr-keys.bats crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs
 
 // --- claimed-keys.bats, case by case ---------------------------------------
 // carried: "a branch naming one issue is an unambiguous claim" crates/batten/src/race.rs kind:mechanism
@@ -67,20 +67,20 @@
 // changed: "the two narrowing flags are mutually exclusive" crates/batten/src/race.rs kind:mechanism carried as a decision and re-coded: `run_claim_merged`'s sibling `run_claim_keys` refuses both flags at Usage (1), not the shell's 2
 
 // --- merged-pr-keys.bats, case by case --------------------------------------
-// carried: "a closing keyword in a merged body emits one row" crates/batten/src/forge.rs kind:mechanism
-// carried: "Fixes and Resolves are claims too" crates/batten/src/forge.rs kind:mechanism
-// carried: "a Refs: trailer is a mention and emits nothing" crates/batten/src/forge.rs kind:mechanism
-// carried: "a bare citation in prose emits nothing" crates/batten/src/forge.rs kind:mechanism
-// carried: "several keys in one body emit several rows, all keyed to that PR" crates/batten/src/forge.rs kind:mechanism
-// carried: "a null body is data, not a crash" crates/batten/src/forge.rs kind:mechanism
-// carried: "two runs over the same reading are byte-identical" crates/batten/src/forge.rs kind:mechanism
-// carried: "a reading at the fetch limit is refused as truncated, not returned short" crates/batten/src/forge.rs kind:mechanism
-// carried: "a reading below the fetch limit is answered" crates/batten/src/forge.rs kind:mechanism
-// carried: "an empty forge answer is could-not-look, never an empty evidence file" crates/batten/src/forge.rs kind:mechanism
-// carried: "output carries no PR body" crates/batten/src/forge.rs kind:mechanism
-// changed: "an unreadable source is exit 2" crates/batten/src/forge.rs kind:mechanism the `MERGED_PR_KEYS_SOURCE` file seam is gone: the transport is `forge::window`, whose test seam is an injected `Transport` rather than a saved payload path. An unreadable forge is `Window::CouldNotLook` and exits 3 — fail loud, do not block — where the shell used its own 2
-// changed: "a source that is not a JSON array is exit 2" crates/batten/src/forge.rs kind:mechanism same seam. A body that will not parse is `Window::CouldNotLook`, exit 3; the decision (unparseable is could-not-look, never an empty collection) is carried verbatim
-// changed: "a non-numeric limit is a caller bug, not a default" crates/batten/src/forge.rs kind:mechanism carried as a decision at a different code: `--limit` that is not a positive number is Usage (1), never silently the default
+// carried: "a closing keyword in a merged body emits one row" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "Fixes and Resolves are claims too" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "a Refs: trailer is a mention and emits nothing" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "a bare citation in prose emits nothing" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "several keys in one body emit several rows, all keyed to that PR" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "a null body is data, not a crash" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "two runs over the same reading are byte-identical" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "a reading at the fetch limit is refused as truncated, not returned short" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "a reading below the fetch limit is answered" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "an empty forge answer is could-not-look, never an empty evidence file" crates/batten-base/src/forge.rs kind:mechanism
+// carried: "output carries no PR body" crates/batten-base/src/forge.rs kind:mechanism
+// changed: "an unreadable source is exit 2" crates/batten-base/src/forge.rs kind:mechanism the `MERGED_PR_KEYS_SOURCE` file seam is gone: the transport is `forge::window`, whose test seam is an injected `Transport` rather than a saved payload path. An unreadable forge is `Window::CouldNotLook` and exits 3 — fail loud, do not block — where the shell used its own 2
+// changed: "a source that is not a JSON array is exit 2" crates/batten-base/src/forge.rs kind:mechanism same seam. A body that will not parse is `Window::CouldNotLook`, exit 3; the decision (unparseable is could-not-look, never an empty collection) is carried verbatim
+// changed: "a non-numeric limit is a caller bug, not a default" crates/batten-base/src/forge.rs kind:mechanism carried as a decision at a different code: `--limit` that is not a positive number is Usage (1), never silently the default
 
 //! # Why these cases
 //!

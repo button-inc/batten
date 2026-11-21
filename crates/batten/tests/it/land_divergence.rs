@@ -87,9 +87,9 @@
 // carried: "a summary missing the per-job count exits 2 rather than reading it as zero" crates/batten/src/policy/presets/ci-signal/landing-stays-linear.rego `queue_job_p90` is in `window_columns`, so its absence is torn — spelled separately for the reason the retired suite gave
 // changed: "a clean per-job figure passes, and the success line reports it" crates/batten/src/policy/presets/ci-signal/landing-stays-linear.rego the pass is kept and the success line is not: a module emits findings, and non-negotiable rule 4 makes output a pointer rather than a report. The numbers a reader wanted from that line are in the record the producer writes and echoes to the step summary, which is where `land-divergence.yml` publishes them
 // carried: "a linear window measures one graded run against one landing" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/land_divergence.rs
-// carried: "the conditional request actually sends If-None-Match once an ETag is cached" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
-// carried: "land-divergence.bats::A 304 KEEPS THE PREVIOUS READING rather than reading as an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
-// carried: "land-divergence.bats::a 304 with no cached body is unreadable, never an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "the conditional request actually sends If-None-Match once an ETag is cached" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "land-divergence.bats::A 304 KEEPS THE PREVIOUS READING rather than reading as an empty window" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "land-divergence.bats::a 304 with no cached body is unreadable, never an empty window" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
 // carried: "TRUNCATION IS CAUGHT BY total_count, not by running out of pages" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/land_divergence.rs
 // changed: "a truncated window makes the decider refuse, rather than judge a prefix" crates/batten/src/policy/presets/ci-signal/landing-stays-linear.rego kept as `lane read partial`, which fires on any non-zero `unreadable` whatever the other numbers are — the arm the truncation guard above exists to feed, and the one case in this retirement where could-not-look stays a finding rather than becoming silence
 // carried: "runs after a PR merged are not attributed to it" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/land_divergence.rs
@@ -105,7 +105,7 @@
 // changed: "the scheduled workflow declares a concurrency group, like every other" .github/workflows/land-divergence.yml unchanged in substance and kept in the workflow it is about; the scheduled job still declares its group, and what moved is only which task its judge step runs
 // changed: "the merged-PR list is one unpaginated page" crates/batten/src/ci_signal.rs kind:verb the retired body read one page of 100 and silently lost landings on a busier day; the verb pages and stops at the first PR updated before the window, which `the_merged_pr_list_is_paged_until_it_leaves_the_window` holds
 // changed: "a could-not-look run exits 1 and records nothing" crates/batten/src/ci_signal.rs kind:verb the exit is now the engine's 3 for could-not-look, and the verb REMOVES a stale record rather than only declining to write, so yesterday's window cannot answer as today's
-// changed: "the ETag cache lives under .git/batten-divergence" crates/batten/src/forge.rs kind:mechanism one validator store for every forge producer, `.git/batten-forge-validators`, keyed by the whole URL as the private cache was
+// changed: "the ETag cache lives under .git/batten-divergence" crates/batten-base/src/forge.rs kind:mechanism one validator store for every forge producer, `.git/batten-forge-validators`, keyed by the whole URL as the private cache was
 // changed: "BATTEN_DIVERGENCE_MAX_PAGES bounds the walk" crates/batten/src/ci_signal.rs kind:verb the bound is the `--max-pages` flag; the variable had one reader, the retired suite
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -438,7 +438,7 @@ fn measure(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Outp
         .env("GH_REPO", SLUG)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -786,7 +786,7 @@ fn the_environment_names_the_window_when_no_flag_does() {
         .env("GH_REPO", SLUG)
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert_eq!(String::from_utf8_lossy(&measured.stdout), JOINED);
@@ -807,7 +807,7 @@ fn a_workflow_named_nowhere_is_a_usage_refusal() {
         .env_remove("LAND_CI_WORKFLOW")
         .env("GH_REPO", SLUG)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(refused.status.code(), Some(0), "{}", said(&refused));
     assert_ne!(refused.status.code(), Some(3), "{}", said(&refused));

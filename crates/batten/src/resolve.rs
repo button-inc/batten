@@ -70,8 +70,8 @@ use clap::ValueEnum;
 use serde::{Serialize, Serializer};
 
 use crate::config::{self, Strictness};
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
-use crate::rules::{Rule, RuleKind};
 
 /// The git-ignored local override file, read from the same directory as the
 /// committed authority. Optional: absent simply means "no local override".
@@ -505,7 +505,7 @@ pub struct Resolved {
     pub protected: Vec<String>,
     /// The refinement gate's thresholds (CLOUD-472), from the committed
     /// authority alone. `None` is could-not-look and asks for no ratchet.
-    pub ready: Option<crate::config::Ready>,
+    pub ready: Option<crate::config_model::Ready>,
     /// This board's column vocabulary (CLOUD-1623), from the **committed
     /// authority alone**.
     ///
@@ -518,7 +518,7 @@ pub struct Resolved {
     /// **committed authority alone**. `None` accepts nothing, which is the only
     /// safe reading: a local layer that could add an exemption would be a
     /// weakening, and §8 admits raise-only overrides.
-    pub perf: Option<crate::config::Perf>,
+    pub perf: Option<crate::config_model::Perf>,
     /// Programs that only read their operands, so naming a protected path is not
     /// a mutation (CLOUD-1141).
     ///
@@ -609,7 +609,7 @@ pub struct Resolved {
     /// authority rather than through [`Tables`], so the restriction is structural
     /// rather than a rule someone has to remember.
     #[serde(rename = "recorder")]
-    pub recorders: Vec<crate::recorder::Declared>,
+    pub recorders: Vec<crate::config_model::RecorderDeclared>,
     /// The verb-written record families (CLOUD-1810), from the **committed
     /// authority alone**.
     ///
@@ -618,7 +618,7 @@ pub struct Resolved {
     /// lost by refusing an override here — while a layer that could REMOVE one
     /// would disarm every rule reading that store, which is the weakening §8
     /// admits no route for. `board`'s structural guarantee, for `epoch`'s reason.
-    pub records: Vec<crate::record::Declared>,
+    pub records: Vec<crate::config_model::RecordDeclared>,
     /// The programs a recorder may run, authority-only for the same reason and
     /// separately, because the indirection is the sharper half: repointing an id
     /// here changes what every column reading it records while the recorder rows
@@ -667,6 +667,9 @@ pub struct Resolved {
     /// The ref work must land on (CLOUD-51), as the authority states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// Who takes the last step (CLOUD-2656), as the authority states it, else
+    /// the agent.
+    pub landed_by: crate::config_model::LandedBy,
     /// The hook actions (CLOUD-91), as the authority states it. Not layered,
     /// and the one key where that is a security property rather than a
     /// consistency one: an action is a command, so a local file able to add one
@@ -990,7 +993,7 @@ pub fn authority_violations(
 /// [`Layered::raise`] refuses an **invocation**, which is exit `1`, where this
 /// refuses what the **repository** resolved to — the statement exit `2` is for.
 ///
-/// [`Denial`]: crate::error::Denial
+/// [`Denial`]: crate::refusal::Denial
 #[must_use]
 pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Error> {
     let first = violations.first()?;
@@ -1009,7 +1012,7 @@ pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Er
         &subjects,
         crate::refusal::Fix::None,
     );
-    Some(crate::error::Denial::raise(
+    Some(crate::refusal::Denial::raise(
         &refusal,
         crate::refusal::Arm::Full,
     ))
@@ -1803,6 +1806,7 @@ fn assemble(
         refusal: repo.refusal.clone(),
         hook_output: repo.hook_output.clone(),
         must_land_on: repo.must_land_on.clone(),
+        landed_by: repo.landed_by.unwrap_or_default(),
         hook: repo.hook.clone(),
         startup: repo.startup.clone(),
         wiring: repo.wiring.clone(),
@@ -1952,6 +1956,7 @@ fn attribution(
         // the weakening the committed-bytes comparison exists to catch.
         ("hook_output", authority_set(repo.hook_output.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
+        ("landed_by", authority_set(repo.landed_by.is_some())),
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
         ("attribution", authority_set(repo.attribution.is_some())),

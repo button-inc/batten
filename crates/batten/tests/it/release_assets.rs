@@ -268,7 +268,7 @@ fn against(dir: &Path, forge: &Path, args: &[&str]) -> Output {
         .env("GH_REPO", REPO)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -930,7 +930,11 @@ fn the_names_the_module_demands_are_the_names_the_producers_write() {
             .args(args)
             .current_dir(&crate_dir)
             .stdin(Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::exec::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the producer runs");
         assert!(out.status.success(), "{args:?}: {}", said(&out));
         String::from_utf8_lossy(&out.stdout).into_owned()

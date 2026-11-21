@@ -57,14 +57,9 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
-//MUTANT echoed-column-undeclared|s@"verdict...class",@@|no_verb_emits_content_it_merely_read
-//MUTANT echo-arm-unreached|s@args: &\["no-canary-command"]@args: \&["cargo run loose"]@|no_verb_emits_content_it_merely_read
-//MUTANT echo-column-unresolved|s@"fact...command"]@"fact[].command", "rule[].nonesuch"]@|every_echo_declaration_resolves_to_capped_config_leaves
-//MUTANT prose-column-unseeded|s@columns: &\["waiver...reason"]@columns: \&[]@|the_corpus_seeds_every_prose_column
-//MUTANT redirect-arm-undeclared|s@"redirect...read",@@|the_protected_mutation_arm_echoes_only_its_declared_columns
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -179,6 +174,13 @@ const CONTENT: &[Canary] = &[
         // emit is a path, a line, a unit's declared name and a count; this is the
         // byte that decides it.
         source: "a shell line inside a manifest body or a workflow step the census counts",
+        columns: &[],
+    },
+    Canary {
+        tag: "modsource",
+        // CLOUD-2789. `modules cycle` reads every source file under its root to
+        // draw the graph; it may print one count, and this is the byte it read.
+        source: "a comment inside a Rust module the module graph reads",
         columns: &[],
     },
 ];
@@ -576,6 +578,15 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // A two-module crate `modules cycle` reads (CLOUD-2789): `a` and `b`
+            // reach each other, so the answer is a live count of 2, and the
+            // comment it read past is a content canary it must never print.
+            .file("crate/src/lib.rs", "mod a;\nmod b;\n")
+            .file(
+                "crate/src/a.rs",
+                &format!("// {}\nuse crate::b::B;\npub struct A;\n", canary("modsource")),
+            )
+            .file("crate/src/b.rs", "use crate::a::A;\npub struct B;\n")
             // `doctor toolchain`'s manifest (CLOUD-1683). The declared key is a
             // PLAIN name, deliberately: the verdict names a missing declared key
             // as its subject, which `Check::subjects` licenses — an identifier
@@ -954,6 +965,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // either the trunk commit or the comparison — which is the could-not-look
     // this gate is built to fail open on.
     "lease carries",
+    // `step cover` (CLOUD-2788) reads the CI roster from the task runner's
+    // environment, where the consumer declares it (rule 1), and this corpus is
+    // run with no roster: could-not-look, exit 3, is its honest answer. What it
+    // emits then is the variable's name, held to the pointer-only law below.
+    "step cover",
     // `claim merged` joins it for `lease carries`' reason exactly: it reaches
     // the FORGE to read merged pull request bodies, and a corpus with no
     // credential can read none of them. It is also the one verb here whose
@@ -1242,6 +1258,14 @@ const CENSUS: &[Verb] = &[
     // could-not-look and needs no entry in the set above.
     Verb {
         path: "land verify",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land placed` (CLOUD-2707) prints at most one line naming a short sha and
+    // the next step, on stderr. No field it renders can carry a payload.
+    Verb {
+        path: "land placed",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -2088,6 +2112,41 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `step graph run` (CLOUD-2785) names a group and the rows' own codes, never
+    // a byte a row printed: each row's output is the row's, teed by `exec`.
+    Verb {
+        path: "step graph run",
+        args: &["a-group"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step base` (CLOUD-2787) answers object ids at the merge base, one per
+    // path it was handed: a pointer to the bytes, never the bytes.
+    Verb {
+        path: "step base",
+        args: &["--ref", "main", "--", "."],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step cover` (CLOUD-2788) names roster checks and the variable that maps
+    // them; it reads no file a canary is seeded in, only the pass records.
+    Verb {
+        path: "step cover",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step env` (CLOUD-2786) prints the declared variables' values, which ARE
+    // the key the step cache compares: a relay of the caller's own environment.
+    Verb {
+        path: "step env",
+        args: &["--", "HOME"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "it prints the values of the variables the caller declared, which are the step \
+             key's own input — the other way to see them is the caller's environment itself",
+        ),
+    },
     Verb {
         path: "step record",
         args: &["a-step"],
@@ -2097,6 +2156,28 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "step run",
         args: &["a-step", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules cycle` (CLOUD-2789) prints one count of modules; it reads source
+    // files only to draw their edges, and never prints a byte of one.
+    Verb {
+        path: "modules cycle",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules impls` and `modules shims` (CLOUD-2792) print one count line
+    // each over the same crate, and never a byte of a source they read.
+    Verb {
+        path: "modules impls",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "modules shims",
+        args: &["--root", "crate/src"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2243,6 +2324,24 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "test replay",
         args: &["--base", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2690: with nothing on stdin there is no event, so the verb names
+    // the fault and dispatches nothing; a dispatched event's output is the
+    // exit-code adapter's own pointer.
+    Verb {
+        path: "forge intake",
+        args: &["--event", "pull_request"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2693: a zero interval is a usage error, named and dispatching
+    // nothing. (With no `[[forge.source]]` the round would be could-not-look,
+    // exit 3, which this corpus reads as proving nothing.)
+    Verb {
+        path: "forge poll",
+        args: &["--every", "0"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2482,6 +2581,13 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "mutate sweep",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // A refusal naming the undeclared per-job cost, before anything is spawned.
+    Verb {
+        path: "mutate cargo",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -2935,25 +3041,6 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
-    // declares, which refuses before anything is announced or started — a
-    // corpus run must not leave a detached copy behind.
-    Verb {
-        path: "singleton detach",
-        args: &[
-            "census-detach",
-            "--marker",
-            "detach.marker",
-            "--log",
-            "detach.log",
-            "--pattern",
-            "no-such-pattern-row",
-            "--",
-            "true",
-        ],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
     // -- THE PORTS THIS CAMPAIGN ADDED (CLOUD-1716, CLOUD-1753) ---------------
     //
     // Every one is `PointerOnly`, which is the default disposition and not a
@@ -3165,7 +3252,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
     {
         panic!("write stdin: {error:?}");
     }
-    let output = child.wait_with_output().expect("await batten");
+    let output = child.streamed_wait().expect("await batten");
     Run {
         code: output.status.code(),
         stdout: output.stdout,
@@ -3463,7 +3550,7 @@ fn no_verb_emits_content_it_merely_read() {
 /// Every column an `Echoes` verb declares, and every column a canary is seeded
 /// in, is a capped string leaf of the derived config schema (CLOUD-1643).
 ///
-/// `#MUTANT echo-column-unresolved` reddens here: an invented column has no
+/// A mutant leaving an echoed column unresolved reddens here: an invented column has no
 /// leaf, so the case consults the schema rather than accepting any string.
 #[test]
 fn every_echo_declaration_resolves_to_capped_config_leaves() {
@@ -3517,7 +3604,7 @@ fn every_echo_declaration_resolves_to_capped_config_leaves() {
 
 /// The corpus seeds every `TEXT_CENSUS` path, or names why not (CLOUD-1643).
 ///
-/// `#MUTANT prose-column-unseeded` reddens here.
+/// A mutant leaving a prose column unseeded reddens here.
 #[test]
 fn the_corpus_seeds_every_prose_column() {
     use std::collections::BTreeSet;
@@ -3550,7 +3637,7 @@ fn the_corpus_seeds_every_prose_column() {
 /// The protected-mutation arm of `policy explain`, which the sweep's single
 /// census entry never reaches (CLOUD-1643).
 ///
-/// `#MUTANT redirect-arm-undeclared` reddens here.
+/// A mutant leaving the redirect arm undeclared reddens here.
 #[test]
 fn the_protected_mutation_arm_echoes_only_its_declared_columns() {
     let corpus = Corpus::build("pointer-only-protected-mutation-arm", false);

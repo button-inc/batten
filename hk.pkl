@@ -129,6 +129,10 @@ local gate = new Mapping<String, Step> {
         "mise.toml",
         "hk.pkl",
         "batten.toml",
+        // cargo-mutants' own configuration and the nextest profile it runs
+        // under: a change to either changes every mutant's verdict.
+        ".cargo/mutants.toml",
+        ".config/nextest.toml",
       )
     check = "mise run mutant:changed"
   }
@@ -306,24 +310,24 @@ local gate = new Mapping<String, Step> {
         // CLOUD-1623: `Board` derives `JsonSchema` here rather than in
         // `config.rs`, so this file is a schema input now. The census test
         // named it the moment the type moved.
-        "crates/batten/src/board.rs",
+        "crates/batten-base/src/board.rs",
         "crates/batten/src/bot.rs",
         "crates/batten/src/budget.rs",
         "crates/batten/src/capture.rs",
         "crates/batten/src/census.rs",
         "crates/batten/src/sbom.rs",
         "crates/batten/src/hk.rs",
-        "crates/batten/src/outcome.rs",
+        "crates/batten-base/src/outcome.rs",
         "crates/batten/src/hookcost.rs",
-        "crates/batten/src/ci.rs",
+        "crates/batten-base/src/ci.rs",
         "crates/batten/src/commit.rs",
         "crates/batten/src/config.rs",
         "crates/batten/src/defects.rs",
-        "crates/batten/src/deferral.rs",
+        "crates/batten-base/src/deferral.rs",
         "crates/batten/src/design.rs",
-        "crates/batten/src/doc.rs",
+        "crates/batten-base/src/doc.rs",
         "crates/batten/src/drain.rs",
-        "crates/batten/src/effect.rs",
+        "crates/batten-base/src/effect.rs",
         "crates/batten/src/engine.rs",
         "crates/batten/src/exec.rs",
         "crates/batten/src/facts.rs",
@@ -334,7 +338,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/mcp.rs",
         "crates/batten/src/mint.rs",
         "crates/batten/src/outputs.rs",
-        "crates/batten/src/pattern.rs",
+        "crates/batten-base/src/pattern.rs",
         "crates/batten/src/provision.rs",
         "crates/batten/src/prune.rs",
         "crates/batten/src/record.rs",
@@ -342,15 +346,15 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/redirect.rs",
         "crates/batten/src/refusal.rs",
         "crates/batten/src/register.rs",
-        "crates/batten/src/rest.rs",
+        "crates/batten-base/src/rest.rs",
         "crates/batten/src/rules.rs",
-        "crates/batten/src/severity.rs",
+        "crates/batten-core/src/severity.rs",
         "crates/batten/src/startup.rs",
-        "crates/batten/src/step_table.rs",
-        "crates/batten/src/task.rs",
+        "crates/batten-core/src/step_table.rs",
+        "crates/batten-base/src/task.rs",
         "crates/batten/src/transcript.rs",
-        "crates/batten/src/traversal.rs",
-        "crates/batten/src/verbs.rs",
+        "crates/batten-base/src/traversal.rs",
+        "crates/batten-base/src/verbs.rs",
         "crates/batten/src/verdict.rs",
         "crates/batten/src/waiver.rs",
         "crates/batten/src/wiring.rs",
@@ -463,7 +467,7 @@ local gate = new Mapping<String, Step> {
         ".claude/skills/**",
         "crates/batten/tests/it/skill_contract.rs",
         "crates/batten/src/surface.rs",
-        "crates/batten/src/exit.rs",
+        "crates/batten-base/src/exit.rs",
       )
     check = "mise run test:skill-contract"
   }
@@ -1094,13 +1098,41 @@ hooks {
       }
     }
   }
+  // THE COMMIT, NOT `verify`, IS WHERE A WEAKENING IS JUDGED. Measured on #1276:
+  // a waiver written into `batten.toml`, three `#[cfg(unix)]` cases and a
+  // `Revert "…"` subject each reached `verify` before anything refused them,
+  // because the two gates that judge them (`config lint`, `test cover missing`)
+  // sat in the `slow` profile for one reason — `cargo run` would make every
+  // commit pay a compile (CLOUD-1397). The PINNED engine pays none: these steps
+  // call it directly, as `filed-here:guard` does before every write, so the
+  // refusal lands on the commit that introduced the weakening.
   ["pre-commit"] {
     // Check only what is staged, and never let a fixer clobber unstaged work:
     // hk stashes the working tree, runs the steps, then restores it via
     // three-way merge. patch-file is faster than `git stash` and sidesteps
     // index-lock races. See https://hk.jdx.dev/environment_variables.
     stash = "patch-file"
-    steps = gate
+    steps = (gate) {
+      ["config-lint-pinned"] {
+        glob = List("batten.toml", ".batten/asked.jsonl")
+        check = "batten config lint"
+      }
+      ["cfg-gated-test-pinned"] {
+        glob = List("**/*.rs")
+        check = "batten check --rule 'test cover missing'"
+      }
+    }
+  }
+  // `git revert` and `git cherry-pick` commit through the sequencer, which runs
+  // no `commit-msg` hook, so a `Revert "…"` subject reached `verify` unjudged
+  // (b67a1ae6). The push is the last local point every commit passes, whatever
+  // made it, so the subjects of the whole branch are judged there.
+  ["pre-push"] {
+    steps {
+      ["commit-subjects"] {
+        check = "batten commit check origin/main..HEAD"
+      }
+    }
   }
   // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
   //

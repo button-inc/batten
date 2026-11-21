@@ -1,0 +1,1389 @@
+//! One HTTPS request, in process (CLOUD-745).
+//!
+//! The client this crate uses is **hyper plus hyper-rustls**, not `reqwest`
+//! which CLOUD-745 names. That substitution is a measurement rather than a
+//! preference, and the numbers are in `Cargo.toml` beside the dependency: every
+//! `reqwest` configuration hits one of the two chokepoints CLOUD-320 died at,
+//! because it selects the verifier and the crypto provider through FEATURES,
+//! and feature unification then puts `ring` or `security-framework` in the
+//! graph from a crate this workspace does not control. Below `reqwest` both are
+//! constructor arguments, which is the whole of why this links on a macOS build
+//! with no SDK.
+//!
+//! ## What a link gate cannot ask, and this module therefore states
+//!
+//! With no provider in the graph the binary links perfectly and fails at the
+//! first handshake. [`provider`] is what makes the provider a compile-time fact
+//! rather than a hope — and the measurement that made this paragraph necessary
+//! is recorded on CLOUD-745: three of four false passes on the way here were
+//! invisible to `cargo metadata`, and the fourth resolved and did not compile.
+//!
+//! ## Bounds this module keeps, from CLOUD-745's hardening items
+//!
+//! * **Explicit connect AND total timeouts.** The `curl` invocation being
+//!   replaced sets neither, so a hung server hangs the caller forever today. In
+//!   process that sharpens, because a hung future is harder to interrupt than a
+//!   hung child.
+//! * **Buffer, then hand back.** The body is read to a `Vec` and returned; this
+//!   module never writes a file. That keeps `provision`'s verify-before-write
+//!   order available to its caller, which the obvious streaming idiom destroys
+//!   silently.
+//! * **A scoped runtime, never `#[tokio::main]`.** One current-thread runtime is
+//!   built for the request and dropped with it, so no verb carries a runtime it
+//!   did not ask for and the mediated path constructs none at all — CLOUD-689's
+//!   100 ms per-call ceiling is untouched because `hook` never reaches here.
+//! * **A status is a typed value.** `curl` reports a 404 body as a successful
+//!   fetch, which then digests as a checksum *mismatch* — reporting a tampered
+//!   artifact for a missing one. A status code that travels as a number cannot
+//!   make that mistake.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use http_body_util::BodyExt as _;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+
+use crate::Result;
+use crate::error::UsageError;
+
+/// How long to wait for the whole exchange, connect included.
+///
+/// A constant rather than a caller's choice, because every caller in this crate
+/// wants the same thing — a bound that is generous for a release artifact and
+/// finite for a server that accepts and never answers.
+const TOTAL_TIMEOUT: Duration = Duration::from_mins(1);
+
+/// How long to wait for the connection alone.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long the runtime is given to wind down once the verdict is in.
+///
+/// Short on purpose: by the time this runs the answer is already decided, and
+/// what is being waited on is a connection pool tidying up after a request
+/// nobody is reading any more.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The one variable that moves the two bounds above, and what it is for.
+///
+/// **It exists so the total bound is testable over the compiled binary**, which
+/// is the shape CLOUD-745's §7 asks for. The bound fires on a server that
+/// accepts and never answers, and the only hermetic fixture for that is a
+/// listener which never completes the TLS handshake — a *trusted* local
+/// certificate is unreachable by construction, because the roots are vendored
+/// and nothing signs a loopback CA. At the default the case would cost a minute
+/// of every run.
+///
+/// **It is not a bypass, and the distinction is the whole reason it is
+/// admissible.** CLOUD-1051 removed two environment variables because they let
+/// anyone spend a refusal without articulating anything. This one cannot reach
+/// a verdict at all: it changes how long a wait waits, so every value still
+/// ends in the same three answers, and the shortest value is the *strictest*.
+/// Nothing it can be set to admits a fetch that would otherwise be refused.
+const TIMEOUT_OVERRIDE: &str = "BATTEN_FETCH_TIMEOUT_MS";
+
+/// The bounds this run uses.
+///
+/// An unparseable or zero value is IGNORED rather than refused: this reads the
+/// ambient environment on a path whose job is to fetch one artifact, and a
+/// usage error about a timeout knob would turn a typo somewhere in an
+/// operator's shell into a failed provision.
+fn bounds() -> (Duration, Duration) {
+    bounds_from(std::env::var(TIMEOUT_OVERRIDE).ok().as_deref())
+}
+
+/// The decision [`bounds`] makes, over a value rather than over the process
+/// environment — so the cases below pin the reading without a test mutating
+/// state every other case in the binary shares.
+fn bounds_from(raw: Option<&str>) -> (Duration, Duration) {
+    let Some(millis) = raw
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+    else {
+        return (CONNECT_TIMEOUT, TOTAL_TIMEOUT);
+    };
+    let bound = Duration::from_millis(millis);
+    // The same value for both: a caller shrinking the total bound to make a
+    // hang observable wants the connect bound shrunk with it, and two knobs
+    // would be two things to keep consistent for one question.
+    (bound, bound)
+}
+
+/// What a fetch returned: the status, and the body it buffered.
+///
+/// The status is a number rather than a success boolean, which is the
+/// distinction `--fail` existed to protect: a missing artifact and a tampered
+/// one are different answers and must reach different exit codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Response {
+    /// The HTTP status.
+    pub status: u16,
+    /// The buffered body.
+    pub body: Vec<u8>,
+    /// The response headers, names lowercased, in the order the server sent
+    /// them.
+    ///
+    /// Carried rather than dropped because a session-bearing protocol above this
+    /// transport establishes its session in a header and must send it back on
+    /// every later request (CLOUD-1260). Names are lowercased here so a caller
+    /// never has to know which casing a particular server chose; HTTP field
+    /// names are case-insensitive and a caller matching one exactly is a bug
+    /// waiting for a server that spells it differently.
+    pub headers: Vec<(String, String)>,
+}
+
+impl Response {
+    /// The first value sent under `name`, which must already be lowercase.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(sent, _)| sent == name)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// The crypto provider, installed explicitly.
+///
+/// Pure Rust and links-free, which is what keeps `ring` and `aws-lc-rs` — both
+/// of which declare a `links` key — out of a graph that has to link on a macOS
+/// build with no SDK.
+fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls_graviola::default_provider())
+}
+
+/// Where an operator names a CA this build would otherwise not trust.
+///
+/// **This is the acceptance clause `curl` used to satisfy**, and dropping it was
+/// the defect that made `batten check` unable to provision at all: a
+/// re-terminating proxy presents a certificate signed by a CA only the host
+/// knows about, so a build whose roots are purely vendored cannot reach
+/// anything through one. `curl` read `CURL_CA_BUNDLE`; the generic spelling of
+/// the same thing is OpenSSL's, and it is what a proxied environment sets
+/// beside every other tool's variable.
+///
+/// It **adds** to the vendored roots and never replaces them, so naming a
+/// bundle cannot quietly narrow what is trusted to one certificate.
+const CA_BUNDLE: &str = "SSL_CERT_FILE";
+
+/// The TLS configuration: vendored roots, the host's extra CA, explicit
+/// provider, no platform store.
+///
+/// The platform store is still absent, and that is the distinction worth
+/// keeping: the roots are a compiled-in bundle plus whatever an operator names
+/// on purpose, which is reproducible across hosts in a way the platform store
+/// is not — and it is the reason this graph links with no macOS SDK.
+///
+/// # Errors
+///
+/// An internal error (→ exit `3`) when the provider cannot supply the default
+/// protocol versions, or when [`CA_BUNDLE`] names a file that will not read or
+/// parse. That last one is deliberately fatal rather than ignored: an operator
+/// who named a bundle is telling us the fetch needs it, and carrying on with
+/// the vendored roots alone would fail later with a certificate error that says
+/// nothing about the typo.
+fn tls_config() -> Result<rustls::ClientConfig> {
+    let mut roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    if let Some(path) = std::env::var(CA_BUNDLE)
+        .ok()
+        .filter(|at| !at.trim().is_empty())
+    {
+        use rustls_pki_types::pem::PemObject as _;
+
+        for certificate in
+            rustls_pki_types::CertificateDer::pem_file_iter(&path).map_err(|err| {
+                anyhow::anyhow!("fetch: cannot read the CA bundle {CA_BUNDLE} names: {err}")
+            })?
+        {
+            let certificate = certificate.map_err(|err| {
+                anyhow::anyhow!("fetch: the CA bundle {CA_BUNDLE} names will not parse: {err}")
+            })?;
+            roots.add(certificate).map_err(|err| {
+                anyhow::anyhow!("fetch: the CA bundle {CA_BUNDLE} names is not usable: {err}")
+            })?;
+        }
+    }
+    rustls::ClientConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "fetch: the vendored crypto provider does not support the default TLS \
+                 versions — the build is misconfigured"
+            )
+        })
+        .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
+}
+
+/// Fetch one URL, returning its status and buffered body.
+///
+/// **HTTPS only**, by construction rather than by checking the scheme: the
+/// connector is built `https_only`, so a plain-HTTP URL is refused by the
+/// transport instead of by a predicate somebody could forget.
+///
+/// # Errors
+///
+/// **Two classes, and the split is the exit contract rather than tidiness.** A
+/// URL that will not parse is a [`UsageError`] (→ exit `1`): the caller asked
+/// for something malformed, which is the same answer `provision` gives an
+/// unsupported scheme. Everything else — the TLS stack, the exchange, a
+/// timeout — is an internal error (→ exit `3`), because the fetch could not
+/// COMPLETE, which is a different claim from one it made and refused.
+///
+/// Collapsing the two is not cosmetic: a server that accepts and never answers
+/// would report as a usage error, telling an operator to fix their manifest
+/// about a network that hung.
+///
+/// A non-2xx **status is not an error** at all — it travels in
+/// [`Response::status`], because the caller is the one that knows whether a 404
+/// is fatal.
+pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
+    spend(&[Call {
+        url,
+        headers,
+        body: None,
+        direct: false,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?
+    .pop()
+    .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
+}
+
+/// [`get`], refusing a proxy even where the environment names one.
+///
+/// The one caller is the credential probe, and [`Call::direct`] carries why: a
+/// question about a credential cannot be asked over a route that answers with
+/// somebody else's.
+///
+/// # Errors
+///
+/// [`get`]'s, and one more in practice — a host the fence would not reach at
+/// all fails to connect here rather than being carried. That failure is the
+/// honest answer to "would this credential work once the proxy is gone".
+pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
+    spend(&[Call {
+        url,
+        headers,
+        body: None,
+        direct: true,
+        patch: false,
+        delete: false,
+        credentials: &[],
+    }])?
+    .pop()
+    .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
+}
+
+/// One request in a [`spend`] sequence.
+///
+/// A body of `None` is a GET; `Some` is a POST carrying those bytes. The pair is
+/// deliberately not two functions: a session-bearing protocol above this
+/// transport sends several requests that should share one connection pool and one
+/// runtime, and a per-request `get`/`post` would build both per hop (CLOUD-1260).
+#[derive(Clone, Copy)]
+pub struct Call<'a> {
+    /// Where to send it. HTTPS only, enforced by the connector.
+    pub url: &'a str,
+    /// Headers to set, in the order given.
+    pub headers: &'a [(String, String)],
+    /// The request body, or `None` for a GET.
+    pub body: Option<&'a [u8]>,
+    /// Send a present body as `PATCH` rather than `POST`.
+    ///
+    /// A flag on the body-carrying arm rather than a free method, for the reason
+    /// the method follows the body at all: a caller still cannot ask for a GET
+    /// carrying bytes. Added for the bot lane's pull-request body rewrite, which
+    /// the forge takes only as a `PATCH` (CLOUD-1924).
+    pub patch: bool,
+    /// Send a bodiless call as `DELETE` rather than `GET` — `patch`'s twin on
+    /// the empty arm, so a caller still cannot ask for a GET carrying bytes.
+    /// Added for `release discard`, which deletes a draft and its tag
+    /// (CLOUD-2033).
+    pub delete: bool,
+    /// Refuse a proxy for this call even where the environment names one.
+    ///
+    /// **A ROUTE IS PART OF A CALL, NOT PART OF THE PROCESS.** Every other
+    /// caller in this crate wants the ambient answer and sets `false`, which is
+    /// what [`is_direct`] and [`proxy_for`] read. One caller cannot: a probe
+    /// asking whether a CREDENTIAL authenticates has no answer on a route that
+    /// substitutes its own, and on this container that route answers `200` to a
+    /// token of zeroes. Asking it over the proxy measures the proxy.
+    ///
+    /// So the probe declares the route the fence it is deciding about WOULD
+    /// install, rather than the one currently configured — which is the only
+    /// ordering that terminates: the fence is the thing being proven, so it
+    /// cannot also be its own precondition.
+    pub direct: bool,
+    /// The names of headers in `headers` the caller declares credentials,
+    /// beyond the fixed names [`is_credential`] already knows.
+    ///
+    /// An MCP server's `Credential.header` may name its own header (an
+    /// `X-Session-Token`), and its session lives in `Mcp-Session-Id`; nothing in
+    /// either NAME says it carries a secret. Declaring them here is what lets a
+    /// cross-origin redirect drop them and this type's `Debug` redact them, the
+    /// same as `Authorization` (CLOUD-2543).
+    pub credentials: &'a [&'a str],
+}
+
+/// **HAND-WRITTEN, BECAUSE THE DERIVE PRINTED CREDENTIALS.** `headers` carries
+/// whatever a caller attached, and both callers in this crate attach
+/// `Authorization: Bearer <token>` — `lease::headers` for the landing lease and
+/// `provision::probe_credential` for the credential probe. So `{call:?}` was a
+/// credential in a log, and `lease.rs`'s own comment — "a token in a struct is a
+/// token in that struct's `Debug`" — was describing a rule this type broke.
+///
+/// The VALUE is redacted and the NAME is kept, which is what leaves the shape
+/// debuggable: a report still says the request carried an `Authorization`
+/// header, which is the fact a reader needs, and never what it carried. That is
+/// non-negotiable rule 4 in the type rather than at each call site.
+///
+/// The body is a count for the same reason: a POST body here is a git-protocol
+/// pack or an MCP payload, neither of which belongs in a report.
+impl std::fmt::Debug for Call<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Call")
+            .field("url", &self.url)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.as_str(),
+                            if is_credential(name, self.credentials) {
+                                crate::secret::REDACTED
+                            } else {
+                                value.as_str()
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .field("body-bytes", &self.body.map(<[u8]>::len))
+            .field("direct", &self.direct)
+            .finish()
+    }
+}
+
+/// Whether a header's VALUE is a credential: one of the four fixed names, or
+/// one the caller declared ([`Call::credentials`]).
+///
+/// A denylist, and the direction is deliberate: a header nobody thought about
+/// renders, because an over-redacted report is unreadable and gets switched off,
+/// while these four names cover every credential-bearing header this crate
+/// sends or is likely to. A header named anything else is a credential only
+/// when its caller says so. Matched case-insensitively, since HTTP field names
+/// are.
+fn is_credential(name: &str, declared: &[&str]) -> bool {
+    const SENSITIVE: [&str; 4] = [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+    ];
+    SENSITIVE
+        .iter()
+        .chain(declared)
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+/// Run a sequence of calls on **one** runtime and one connection pool.
+///
+/// The answers come back in the order the calls were given, and the sequence
+/// stops at the first failure — a session whose handshake failed has nothing to
+/// say about the call that would have followed it.
+///
+/// **A one-call sequence is a legitimate use and is what [`get`] is.** The
+/// batching is an economy for a caller that has several requests IN HAND, not a
+/// requirement: a protocol whose later requests depend on an earlier answer has
+/// to split at that dependency, and `mcp::dispatch` does — one exchange to mint
+/// the session, then the rest together.
+///
+/// # Errors
+///
+/// As [`get`]: a URL that will not parse is a [`UsageError`] (→ exit `1`), and
+/// everything else is could-not-complete (→ exit `3`).
+pub fn spend(calls: &[Call<'_>]) -> Result<Vec<Response>> {
+    // A CASE'S REMOTE ANSWERS FIRST, where one stands (CLOUD-2509). Compiled
+    // for tests alone, so a release build goes straight to the network.
+    #[cfg(any(test, feature = "seam"))]
+    if let Some(answers) = STAND_IN.with(|slot| slot.borrow().as_ref().map(|remote| remote(calls)))
+    {
+        return answers;
+    }
+    // ONE runtime, current-thread, built here and dropped with the request.
+    // `clippy.toml` refuses the multi-thread builder outright (CLOUD-747), and
+    // an async `main` would put a runtime under every verb in the binary.
+    //
+    // ONE runtime for the whole SEQUENCE, which is what makes an MCP session
+    // affordable: `initialize`, the initialized notification and the call itself
+    // are three requests, and building a runtime per request would pay the
+    // construction cost three times for one logical exchange.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| anyhow::anyhow!("fetch: cannot start a runtime: {err}"))?;
+    let answer = runtime.block_on(async {
+        let mut answers = Vec::with_capacity(calls.len());
+        for call in calls {
+            answers.push(exchange(call).await?);
+        }
+        Ok(answers)
+    });
+    // BOUNDED TEARDOWN, never a bare drop (CLOUD-745 item 4). `Runtime::drop`
+    // blocks until blocking tasks finish, and a client's connection pool holds
+    // background work — so a fetch abandoned by the total bound above could
+    // otherwise hang the process at exit, after the verdict was already
+    // decided. What licenses cutting it short is `provision`'s own invariant:
+    // this module writes no file and takes no lock, so there is nothing a
+    // half-finished task could leave behind.
+    runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+    answer
+}
+
+/// A remote standing in for the network: what it answers a sequence of calls.
+#[cfg(any(test, feature = "seam"))]
+pub type StandIn = Box<dyn Fn(&[Call<'_>]) -> Result<Vec<Response>>>;
+
+#[cfg(any(test, feature = "seam"))]
+thread_local! {
+    /// The remote a case stands up on its own thread, if any.
+    static STAND_IN: std::cell::RefCell<Option<StandIn>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Answer this thread's calls from `remote` until another replaces it.
+///
+/// **ONE DOOR, SO A CASE CAN STAND A REMOTE UP.** Every smart-HTTP and MCP
+/// exchange in the crate goes through [`spend`], and with the network as its
+/// only answerer the decisions over what came back (a status, an advertised
+/// ref, a session header, a refused notification) were reachable only against
+/// a live remote. It, the slot and the check in [`spend`] are compiled for
+/// tests alone.
+#[cfg(any(test, feature = "seam"))]
+pub fn stand_in(remote: StandIn) {
+    STAND_IN.with(|slot| slot.replace(Some(remote)));
+}
+
+/// How many redirects are followed before the fetch gives up.
+///
+/// A bound rather than a count somebody tunes: a release URL redirects once or
+/// twice, and a chain longer than this is a loop or a misconfiguration.
+const MAX_REDIRECTS: u8 = 10;
+
+/// The proxy this fetch goes through, if any.
+///
+/// **Dropping this was the defect that made `batten check` unable to
+/// provision.** `curl` reads these variables, so the shell-out honoured a
+/// proxied environment for free, and an in-process client that ignores them
+/// cannot reach anything at all where one is required — which is not a corner
+/// case: it is how this repository's own CI sandbox is wired.
+///
+/// Lower case first, then upper, which is the order every other client in this
+/// class resolves them in.
+fn proxy_for(host: &str) -> Option<hyper::Uri> {
+    let no_proxy = ["no_proxy", "NO_PROXY"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok());
+    if bypassed(host, no_proxy.as_deref()) {
+        return None;
+    }
+    ["https_proxy", "HTTPS_PROXY"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .filter(|raw| !raw.trim().is_empty())
+        .and_then(|raw| raw.trim().parse().ok())
+}
+
+/// Whether a fetch to `host` would go straight out, given this process's own
+/// environment.
+///
+/// **The one authority, asked rather than re-derived** (CLOUD-1399).
+/// `doctor egress` needs to know whether the agent proxy would carry a request,
+/// and the honest way to answer that is to ask the code that will actually carry
+/// it. A second reader of `NO_PROXY` — in Rust or in Rego — is a second
+/// authority, and the two can disagree over a wildcard or a suffix neither
+/// author had in mind, which is the class `rules/policy-modules.md`
+/// records for the shell tokenizer one layer over.
+///
+/// Pure: [`bypassed`] resolves loopback and the list by string, and
+/// [`proxy_for`] parses a URI. **Nothing is looked up and nothing is dialled**,
+/// so a caller may probe a reserved name to ask "is anything at all proxied?"
+/// without a packet leaving the process.
+#[must_use]
+pub fn is_direct(host: &str) -> bool {
+    proxy_for(host).is_none()
+}
+
+/// Whether `host` is reached directly rather than through a proxy.
+///
+/// Two rules, and the first is not read from the environment at all: a loopback
+/// destination is **always** direct. That is what keeps this module's own
+/// fixtures hermetic — a suite standing up a listener on `127.0.0.1` must not
+/// have its connection routed through whatever the ambient environment names,
+/// and relying on `NO_PROXY` to say so makes the suite a function of the box it
+/// runs on.
+///
+/// The second is the `NO_PROXY` list, matched the way it is conventionally
+/// written: `*` for everything, an exact host, or a `.suffix`/`suffix` domain
+/// match. CIDR entries are **not** matched, and that is a stated bound rather
+/// than an oversight — a literal address that needs bypassing is either
+/// loopback, which rule one already covers, or something this fetch has no
+/// business reaching.
+///
+/// The list arrives as a VALUE rather than being read here, for `bounds_from`'s
+/// reason and one more: the workspace forbids `unsafe`, and mutating the
+/// process environment is `unsafe` since the 2024 edition — so a case that set
+/// `NO_PROXY` to test this could not be written at all.
+fn bypassed(host: &str, no_proxy: Option<&str>) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    if host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|at| at.is_loopback())
+        || host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|at| at.is_loopback())
+    {
+        return true;
+    }
+    let Some(list) = no_proxy else {
+        return false;
+    };
+    list.split(',').map(str::trim).any(|entry| {
+        if entry == "*" {
+            return true;
+        }
+        let entry = entry.trim_start_matches('.');
+        !entry.is_empty()
+            && (host.eq_ignore_ascii_case(entry)
+                || host
+                    .len()
+                    .checked_sub(entry.len())
+                    .and_then(|at| at.checked_sub(1))
+                    .is_some_and(|at| {
+                        host.as_bytes()[at] == b'.' && host[at + 1..].eq_ignore_ascii_case(entry)
+                    }))
+    })
+}
+
+/// A TCP connector that opens a `CONNECT` tunnel when a proxy applies.
+///
+/// **A tunnel, never a rewrite**, and that distinction is the security
+/// property: the proxy is asked to carry bytes to `host:port` and the TLS
+/// handshake then happens end to end inside it, so the transport above this is
+/// unchanged and `https_only` still means what it says. Where the proxy
+/// re-terminates anyway, it presents its own certificate and [`CA_BUNDLE`] is
+/// what makes that verifiable — an operator's explicit decision rather than
+/// something this connector waves through.
+#[derive(Clone)]
+struct Tunnelled {
+    inner: hyper_util::client::legacy::connect::HttpConnector,
+    proxy: Option<hyper::Uri>,
+}
+
+impl tower_service::Service<hyper::Uri> for Tunnelled {
+    type Response = hyper_util::rt::TokioIo<tokio::net::TcpStream>;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Future = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<Self::Response, Self::Error>>
+                + Send,
+        >,
+    >;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        tower_service::Service::poll_ready(&mut self.inner, cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, destination: hyper::Uri) -> Self::Future {
+        let Some(proxy) = self.proxy.clone() else {
+            let connecting = tower_service::Service::call(&mut self.inner, destination);
+            return Box::pin(async move { connecting.await.map_err(Into::into) });
+        };
+        // Read the destination BEFORE dialing, so a URL with no host fails as a
+        // request rather than as a tunnel the proxy refuses.
+        let authority = destination
+            .host()
+            .map(|host| format!("{host}:{}", destination.port_u16().unwrap_or(443)));
+        let connecting = tower_service::Service::call(&mut self.inner, proxy);
+        Box::pin(async move {
+            let authority = authority
+                .ok_or_else(|| -> Self::Error { "fetch: the URL names no host".into() })?;
+            let stream = connecting.await?;
+            tunnel(stream.into_inner(), &authority).await
+        })
+    }
+}
+
+/// Ask an open proxy connection to carry bytes to `authority`.
+async fn tunnel(
+    mut stream: tokio::net::TcpStream,
+    authority: &str,
+) -> std::result::Result<
+    hyper_util::rt::TokioIo<tokio::net::TcpStream>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    stream
+        .write_all(format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n").as_bytes())
+        .await?;
+
+    // ONE BYTE AT A TIME, and it is not an oversight. The bytes after the blank
+    // line belong to the TLS handshake above this, so a buffered read that
+    // over-ran the header would swallow the first record and the handshake would
+    // fail with something that looks nothing like its cause.
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() > PROXY_HEAD_LIMIT {
+            return Err("fetch: the proxy sent no usable CONNECT response".into());
+        }
+        if stream.read(&mut byte).await? == 0 {
+            return Err("fetch: the proxy closed the connection during CONNECT".into());
+        }
+        head.push(byte[0]);
+    }
+
+    // Pointer-only: the status the proxy gave, never its body. A proxy refusal
+    // page is content from something the operator did not choose.
+    let status = String::from_utf8_lossy(&head)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1).map(str::to_owned));
+    if status.as_deref() != Some("200") {
+        return Err(format!(
+            "fetch: the proxy refused CONNECT with status {}",
+            status.as_deref().unwrap_or("(unreadable)")
+        )
+        .into());
+    }
+    Ok(hyper_util::rt::TokioIo::new(stream))
+}
+
+/// How much of a proxy's CONNECT response is read before giving up on it.
+const PROXY_HEAD_LIMIT: usize = 8192;
+
+/// Follow the request to its answer, through at most [`MAX_REDIRECTS`] hops.
+///
+/// `--location` was a load-bearing `curl` flag with a one-line reason —
+/// *"release URLs redirect, routinely"* — and `--proto-redir '=https'` was the
+/// bound on it. Both are here rather than in the transport, because a redirect
+/// is the one place the transport's `https_only` cannot speak: it refuses the
+/// URL it is HANDED, and a 302 hands it a new one.
+async fn exchange(call: &Call<'_>) -> Result<Response> {
+    let mut target = call.url.to_owned();
+    // **THE HEADERS NARROW WHEN THE ORIGIN CHANGES** (review of #848). This replayed
+    // `call.headers` verbatim on every hop, and `redirect_target` constrains only
+    // the SCHEME — so a `Location` naming another origin received whatever the
+    // caller attached, `Authorization: Bearer <token>` included. `curl`, the
+    // client this transport replaced, strips credentials on a redirect off the
+    // original host and port unless `--location-trusted` is passed; the port
+    // kept the redirect-following and dropped that protection silently.
+    //
+    // Each hop is judged against the ORIGINAL url, and the narrowing is
+    // CUMULATIVE: once a hop leaves that origin, no later hop gets the
+    // credential back, even one that returns to it. Re-sending on return would
+    // let the host in between choose which path on the origin receives an
+    // authenticated request (CLOUD-2543's review). A chain that needs its
+    // credential after a detour fails honestly with the server's 401.
+    //
+    // Latent rather than live today — no current call site reaches a redirecting
+    // endpoint — which is exactly why it is worth closing now: the next asset or
+    // download endpoint added here would leak the credential to a CDN host with
+    // nothing in the code saying it could.
+    let mut path: Vec<String> = Vec::new();
+    for _hop in 0..=MAX_REDIRECTS {
+        let carried = carried_to(call.headers, call.url, &path, call.credentials);
+        let (answer, location) = one_exchange(
+            &target,
+            &carried,
+            call.body,
+            call.direct,
+            (call.patch, call.delete),
+        )
+        .await?;
+        let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
+            return Ok(answer);
+        };
+        path.push(next.clone());
+        target = next;
+    }
+    Err(anyhow::anyhow!(
+        "fetch: more than {MAX_REDIRECTS} redirects"
+    ))
+}
+
+/// The headers a request carries after following `path`, the redirect targets
+/// so far: every one while every hop has stayed on the `origin` the call was
+/// made to, and every one but the credentials once any hop has left it.
+///
+/// A credential is whatever [`is_credential`] names, the one predicate `Debug`
+/// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
+/// plus the headers the caller declared. Dropping `Authorization` alone let the
+/// rest reach the redirect target (CLOUD-2543).
+///
+/// Apart from the exchange so the narrowing tests without a live HTTPS
+/// redirect, which the `https_only` transport gives a loopback no way to stage
+/// (CLOUD-2509).
+fn carried_to(
+    headers: &[(String, String)],
+    origin: &str,
+    path: &[String],
+    declared: &[&str],
+) -> Vec<(String, String)> {
+    if path.iter().all(|hop| same_origin(origin, hop)) {
+        return headers.to_vec();
+    }
+    headers
+        .iter()
+        .filter(|(name, _)| !is_credential(name, declared))
+        .cloned()
+        .collect()
+}
+
+/// The method a request goes out as: its body decides, unless `patch` (a body)
+/// or `delete` (none) overrides it.
+///
+/// The METHOD follows the body rather than being a second argument, so a
+/// caller cannot ask for a GET carrying bytes or a POST carrying none — two
+/// shapes a server answers differently and neither of which any caller here
+/// wants.
+///
+/// Every case is an arm of its own rather than a guard, so no arm can be
+/// dropped without the match failing to compile (CLOUD-2509).
+fn method_for(body: Option<&[u8]>, (patch, delete): (bool, bool)) -> hyper::Method {
+    match (body.is_some(), patch, delete) {
+        (true, true, _) => hyper::Method::PATCH,
+        (true, false, _) => hyper::Method::POST,
+        (false, _, true) => hyper::Method::DELETE,
+        (false, _, false) => hyper::Method::GET,
+    }
+}
+
+/// The headers a request is sent with: the caller's, after a default
+/// `User-Agent` unless the caller sent its own.
+///
+/// A DEFAULT `User-Agent`, BECAUSE SOME SERVERS REFUSE A REQUEST WITHOUT ONE
+/// AND SAY SO AS AN AUTHORIZATION FAILURE. Measured 2026-09-06 against
+/// `api.github.com`: a valid credential with no `User-Agent` answers **403**,
+/// byte-indistinguishable from a revoked token — so a caller probing a
+/// credential over this transport got a confident wrong answer about the
+/// credential rather than about its own request. The git-http endpoints
+/// `lease.rs` speaks to tolerate the omission, which is why nothing here had
+/// needed one before.
+///
+/// A caller's own header WINS: this is a floor, not a policy, and a consumer
+/// that must present a particular identity still can.
+fn sent_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut sent = Vec::with_capacity(headers.len() + 1);
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        sent.push((
+            hyper::header::USER_AGENT.as_str().to_owned(),
+            concat!("batten/", env!("CARGO_PKG_VERSION")).to_owned(),
+        ));
+    }
+    sent.extend_from_slice(headers);
+    sent
+}
+
+/// Do two URLs name the same origin, so a credential may follow?
+///
+/// **AN ORIGIN COMPARISON: scheme, host and effective port** (CLOUD-2543). This
+/// compared the host alone, on the reasoning that the port is not what a
+/// credential is scoped to; but a different port is a different server, and
+/// `curl`, the client this transport replaced, compares host and port. A port
+/// the URL leaves out is its scheme's default, so `:443` on `https` is the same
+/// origin as no port at all.
+///
+/// The scheme half is defence in depth: [`redirect_target`] already refuses a
+/// non-`https` target. A URL that will not parse, or that names no scheme or
+/// host, answers `false` — a redirect this cannot reason about is one the
+/// credential does not follow.
+fn same_origin(from: &str, to: &str) -> bool {
+    origin_of(from).is_some_and(|from| origin_of(to) == Some(from))
+}
+
+/// A URL's scheme, host and effective port, case-folded, or `None` when it
+/// names no scheme or host, or a scheme with no known default port and no
+/// explicit one.
+fn origin_of(raw: &str) -> Option<(String, String, u16)> {
+    let uri = raw.parse::<hyper::Uri>().ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let host = uri.host()?.to_ascii_lowercase();
+    let port = match (uri.port_u16(), scheme.as_str()) {
+        (Some(port), _) => port,
+        (None, "https") => 443,
+        (None, "http") => 80,
+        (None, _) => return None,
+    };
+    Some((scheme, host, port))
+}
+
+/// Where a redirect points, or `None` when the answer is the answer.
+///
+/// # Errors
+///
+/// An internal error when a 3xx carries no usable `Location`, or when it points
+/// somewhere that is not HTTPS. **That refusal is `--proto-redir '=https'`**: a
+/// redirect must not downgrade the transport that was the whole point of
+/// choosing the scheme, and the connector cannot catch it because by then the
+/// scheme is the server's choice rather than the caller's.
+fn redirect_target(from: &str, status: u16, location: Option<&str>) -> Result<Option<String>> {
+    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return Ok(None);
+    }
+    let Some(location) = location else {
+        return Err(anyhow::anyhow!(
+            "fetch: HTTP {status} with no Location to follow"
+        ));
+    };
+    let base: hyper::Uri = from
+        .parse()
+        .map_err(|_| anyhow::anyhow!("fetch: the URL being redirected will not parse"))?;
+    let next = resolve(&base, location)?;
+    if !next.starts_with("https://") {
+        // Pointer-only: the status and the scheme decision, never the location,
+        // which is a string a server chose.
+        return Err(anyhow::anyhow!(
+            "fetch: HTTP {status} redirects away from https, which is refused"
+        ));
+    }
+    Ok(Some(next))
+}
+
+/// A `Location` resolved against the URL that produced it.
+///
+/// Absolute, root-relative and path-relative are the three shapes a server
+/// actually sends; anything else parses as absolute or fails.
+fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
+    if location.contains("://") {
+        return Ok(location.to_owned());
+    }
+    let authority = base
+        .authority()
+        .ok_or_else(|| anyhow::anyhow!("fetch: the URL being redirected names no host"))?;
+    let scheme = base.scheme_str().unwrap_or("https");
+    if location.starts_with('/') {
+        return Ok(format!("{scheme}://{authority}{location}"));
+    }
+    let path = base.path();
+    let dir = path.rfind('/').map_or("/", |at| &path[..=at]);
+    Ok(format!("{scheme}://{authority}{dir}{location}"))
+}
+
+/// One request, with no redirect following: the status, the buffered body, and
+/// the `Location` header if there was one.
+///
+/// The total bound's expiry is RECORDED as its own cause, which is what lets a
+/// case prove the bound ended the request by reading the cause rather than by
+/// timing the process (CLOUD-2059).
+async fn one_exchange(
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+    direct: bool,
+    (patch, delete): (bool, bool),
+) -> Result<(Response, Option<String>)> {
+    let (connect_timeout, total_timeout) = bounds();
+    let uri: hyper::Uri = url
+        .parse()
+        .map_err(|_| UsageError::raise("fetch: the URL will not parse".to_owned()))?;
+    let mut connector = hyper_util::client::legacy::connect::HttpConnector::new();
+    connector.enforce_http(false);
+    connector.set_connect_timeout(Some(connect_timeout));
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls_config()?)
+        .https_only()
+        .enable_http1()
+        .enable_http2()
+        .wrap_connector(Tunnelled {
+            inner: connector,
+            // A DECLARED DIRECT CALL IS NOT AN OVERRIDE OF `NO_PROXY` — it is a
+            // call whose subject is the route. `proxy_for` stays the one
+            // authority for every caller that wants the ambient answer.
+            proxy: if direct {
+                None
+            } else {
+                proxy_for(uri.host().unwrap_or_default())
+            },
+        });
+    let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
+        Client::builder(TokioExecutor::new()).build(https);
+
+    let mut request = hyper::Request::builder()
+        .uri(uri)
+        .method(method_for(body, (patch, delete)));
+    for (name, value) in sent_headers(headers) {
+        request = request.header(name, value);
+    }
+    let request = request
+        .body(http_body_util::Full::new(
+            hyper::body::Bytes::copy_from_slice(body.unwrap_or_default()),
+        ))
+        .map_err(|_| anyhow::anyhow!("fetch: the request will not build"))?;
+
+    // The TOTAL bound, over connect plus exchange plus body. The connect timeout
+    // above bounds only the first of the three, and a server that accepts and
+    // then says nothing is exactly the case this one exists for.
+    let answer = tokio::time::timeout(total_timeout, client.request(request))
+        .await
+        .map_err(|_| anyhow::anyhow!("fetch: timed out"))?
+        .map_err(|err| anyhow::anyhow!("fetch: the request failed: {err}"))?;
+
+    let location = answer
+        .headers()
+        .get(hyper::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let status = answer.status().as_u16();
+    // A header whose value is not valid UTF-8 is DROPPED rather than lossily
+    // decoded: a caller matching on a mangled value would be matching on
+    // something the server did not send.
+    let headers = answer
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_lowercase(), value.to_owned()))
+        })
+        .collect();
+    let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
+        .await
+        .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
+        .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
+        .to_bytes()
+        .to_vec();
+    Ok((
+        Response {
+            status,
+            body,
+            headers,
+        },
+        location,
+    ))
+}
+
+#[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly —
+// the same carve-out `provision::tests` takes, at the same scope.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn pairs(raw: &[(&str, &str)]) -> Vec<(String, String)> {
+        raw.iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    /// Every credential stays on its origin: the fixed names `is_credential`
+    /// knows, `Cookie` and `Proxy-Authorization` among them, and the headers the
+    /// caller declared (CLOUD-2543). Everything else follows anywhere.
+    #[test]
+    fn a_credential_follows_a_redirect_only_on_the_same_origin() {
+        let headers = pairs(&[
+            ("Authorization", "Bearer t"),
+            ("Cookie", "c"),
+            ("Proxy-Authorization", "Basic p"),
+            ("X-Session-Token", "s"),
+            ("Mcp-Session-Id", "m"),
+            ("Accept", "a"),
+        ]);
+        let declared = ["x-session-token", "mcp-session-id"];
+        let origin = "https://h.example/a";
+        let path = |hops: &[&str]| hops.iter().map(|hop| (*hop).to_owned()).collect::<Vec<_>>();
+        let stripped = pairs(&[("Accept", "a")]);
+        assert_eq!(carried_to(&headers, origin, &[], &declared), headers);
+        assert_eq!(
+            carried_to(&headers, origin, &path(&["https://H.example/b"]), &declared),
+            headers
+        );
+        assert_eq!(
+            carried_to(
+                &headers,
+                origin,
+                &path(&["https://cdn.example/b"]),
+                &declared
+            ),
+            stripped
+        );
+        // A chain that leaves the origin and comes back does not get the
+        // credential back: the host in between would choose where it goes.
+        assert_eq!(
+            carried_to(
+                &headers,
+                origin,
+                &path(&["https://cdn.example/b", "https://h.example/c"]),
+                &declared
+            ),
+            stripped
+        );
+        // Undeclared, a header is not a credential by its name alone.
+        assert_eq!(
+            carried_to(&headers, origin, &path(&["https://cdn.example/b"]), &[]),
+            pairs(&[
+                ("X-Session-Token", "s"),
+                ("Mcp-Session-Id", "m"),
+                ("Accept", "a")
+            ])
+        );
+    }
+
+    #[test]
+    fn the_method_follows_the_body_unless_an_override_fits_it() {
+        let body: Option<&[u8]> = Some(b"{}");
+        assert_eq!(method_for(body, (true, false)), hyper::Method::PATCH);
+        assert_eq!(method_for(body, (false, true)), hyper::Method::POST);
+        assert_eq!(method_for(body, (false, false)), hyper::Method::POST);
+        assert_eq!(method_for(None, (false, true)), hyper::Method::DELETE);
+        assert_eq!(method_for(None, (true, false)), hyper::Method::GET);
+        assert_eq!(method_for(None, (false, false)), hyper::Method::GET);
+    }
+
+    #[test]
+    fn a_default_user_agent_is_sent_unless_the_caller_sent_one() {
+        let sent = sent_headers(&pairs(&[("Accept", "a")]));
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, "user-agent");
+        assert!(sent[0].1.starts_with("batten/"), "{sent:?}");
+        assert_eq!(sent[1], (String::from("Accept"), String::from("a")));
+        let own = pairs(&[("User-Agent", "mine/1")]);
+        assert_eq!(sent_headers(&own), own);
+    }
+
+    #[test]
+    fn the_vendored_provider_supports_the_default_protocol_versions() {
+        // THE ASSERTION A LINK GATE CANNOT MAKE. With no provider in the graph
+        // the binary links clean and fails at the first handshake, which is one
+        // of the four false passes CLOUD-745's probe recorded. This is the
+        // cheapest thing that would go red if the provider were dropped or
+        // swapped for one that cannot serve TLS 1.2 and 1.3.
+        assert!(
+            tls_config().is_ok(),
+            "the vendored provider must serve the default TLS versions"
+        );
+    }
+
+    /// Run [`tunnel`] against a loopback proxy that reads the CONNECT and
+    /// answers `reply`, then hangs up.
+    fn through_proxy(reply: Vec<u8>) -> std::result::Result<(), String> {
+        use std::io::{Read as _, Write as _};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind: {err}"));
+        let at = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("address: {err}"));
+        let proxy = std::thread::spawn(move || {
+            let (mut conn, _) = listener
+                .accept()
+                .unwrap_or_else(|err| panic!("accept: {err}"));
+            let (mut asked, mut byte) = (Vec::new(), [0_u8; 1]);
+            while !asked.ends_with(b"\r\n\r\n") && conn.read(&mut byte).unwrap_or(0) == 1 {
+                asked.push(byte[0]);
+            }
+            let _ = conn.write_all(&reply);
+            asked
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|err| panic!("runtime: {err}"));
+        let outcome = runtime.block_on(async {
+            let stream = tokio::net::TcpStream::connect(at)
+                .await
+                .unwrap_or_else(|err| panic!("connect: {err}"));
+            tunnel(stream, "example.com:443")
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        });
+        let asked = proxy
+            .join()
+            .unwrap_or_else(|_| panic!("the proxy panicked"));
+        assert!(asked.starts_with(b"CONNECT example.com:443 HTTP/1.1\r\n"));
+        outcome
+    }
+
+    /// A head of exactly `len` bytes answering `status`.
+    fn head_of(status: &str, len: usize) -> Vec<u8> {
+        let open = format!("HTTP/1.1 {status} OK\r\nX-Pad: ");
+        let pad = len - open.len() - 4;
+        format!("{open}{}\r\n\r\n", "a".repeat(pad)).into_bytes()
+    }
+
+    /// A tunnel opens on a 200 alone, and a proxy that refuses, hangs up, or
+    /// sends a head past the limit is an error naming which.
+    #[test]
+    fn a_tunnel_opens_only_on_a_bounded_200() {
+        assert_eq!(through_proxy(head_of("200", 40)), Ok(()));
+        let refused = through_proxy(head_of("403", 40)).unwrap_err();
+        assert!(refused.contains("status 403"), "{refused}");
+        let closed = through_proxy(b"HTTP/1.1 200".to_vec()).unwrap_err();
+        assert!(closed.contains("closed"), "{closed}");
+        assert_eq!(through_proxy(head_of("200", PROXY_HEAD_LIMIT + 1)), Ok(()));
+        let long = through_proxy(head_of("200", PROXY_HEAD_LIMIT + 2)).unwrap_err();
+        assert!(long.contains("no usable"), "{long}");
+    }
+
+    #[test]
+    fn a_header_is_the_first_value_sent_under_its_name() {
+        let response = Response {
+            status: 200,
+            body: Vec::new(),
+            headers: vec![
+                (String::from("etag"), String::from("\"a\"")),
+                (String::from("link"), String::from("first")),
+                (String::from("link"), String::from("second")),
+            ],
+        };
+        assert_eq!(response.header("link"), Some("first"));
+        assert_eq!(response.header("etag"), Some("\"a\""));
+        assert_eq!(response.header("absent"), None);
+    }
+
+    /// Scheme, host and effective port decide, case-insensitively; an
+    /// unparseable side, or a scheme with no default port, is never the same
+    /// origin (CLOUD-2543).
+    #[test]
+    fn a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree() {
+        for (from, to, same) in [
+            ("https://API.example/a", "https://api.example/b", true),
+            ("HTTPS://api.example/a", "https://api.example:443/b", true),
+            ("http://api.example/a", "http://api.example:80/b", true),
+            (
+                "https://api.example:8443/a",
+                "https://api.example:8443/b",
+                true,
+            ),
+            ("https://api.example/a", "https://storage.example/a", false),
+            ("https://api.example/a", "https://api.example:8443/a", false),
+            ("https://api.example/a", "http://api.example/a", false),
+            ("https://api.example:80/a", "http://api.example/a", false),
+            ("ftp://api.example/a", "ftp://api.example/a", false),
+            ("not a url", "https://api.example/a", false),
+            ("https://api.example/a", "not a url", false),
+        ] {
+            assert_eq!(same_origin(from, to), same, "{from} -> {to}");
+        }
+    }
+
+    #[test]
+    fn a_credential_bearing_header_is_redacted_from_a_call_s_debug() {
+        assert!(is_credential("Authorization", &[]));
+        assert!(is_credential("set-cookie", &[]));
+        assert!(!is_credential("accept", &[]));
+        assert!(is_credential("X-Session-Token", &["x-session-token"]));
+        let headers = [
+            (
+                String::from("Authorization"),
+                String::from("Bearer secret-token"),
+            ),
+            (
+                String::from("X-Session-Token"),
+                String::from("declared-token"),
+            ),
+            (String::from("accept"), String::from("application/json")),
+        ];
+        let call = Call {
+            url: "https://api.example/a",
+            headers: &headers,
+            body: None,
+            patch: false,
+            delete: false,
+            direct: false,
+            credentials: &["x-session-token"],
+        };
+        let shown = format!("{call:?}");
+        assert!(!shown.contains("secret-token"), "{shown}");
+        assert!(!shown.contains("declared-token"), "{shown}");
+        assert!(
+            shown.contains("application/json") && shown.contains("api.example"),
+            "{shown}"
+        );
+    }
+
+    /// A loopback destination is always direct, whatever the environment says.
+    #[test]
+    fn a_loopback_destination_is_always_direct() {
+        assert!(is_direct("127.0.0.1"));
+        assert!(proxy_for("localhost").is_none());
+    }
+
+    #[test]
+    fn a_url_that_will_not_parse_is_a_usage_error_rather_than_a_panic() {
+        let answer = get("not a url", &[]);
+        assert!(answer.is_err(), "an unparseable URL must be reported");
+    }
+
+    #[test]
+    fn a_malformed_url_is_the_only_class_that_reaches_exit_1() {
+        // THE SPLIT, asserted rather than described. A malformed URL is the
+        // caller's mistake and exits 1; everything else here is "could not
+        // complete" and exits 3, which is a different claim. Collapsing them
+        // would tell an operator to fix their manifest about a network that
+        // hung — and it did, until this case was written: every arm of this
+        // module raised `UsageError`, so a timed-out fetch reported as usage.
+        let malformed = get("not a url", &[]).expect_err("an unparseable URL is refused");
+        assert!(
+            malformed.downcast_ref::<UsageError>().is_some(),
+            "a malformed URL is the caller's, so it is a UsageError"
+        );
+
+        // The other side of the split, over the one non-transport arm a unit
+        // test can reach without a listener. A build whose provider cannot
+        // serve TLS is not the caller's mistake.
+        let scheme = get("ftp://example.invalid/x", &[]).expect_err("a non-HTTPS URL is refused");
+        assert!(
+            scheme.downcast_ref::<UsageError>().is_none(),
+            "a transport refusal is could-not-complete, never a usage error"
+        );
+    }
+
+    #[test]
+    fn an_unset_override_leaves_the_declared_bounds_in_place() {
+        // The default arm, asserted rather than assumed: the seam exists for a
+        // test fixture, so the case that matters most is the one where no
+        // fixture set it. Read through a guard rather than by mutating the
+        // process environment, which every other case in this binary shares.
+        assert_eq!(
+            bounds_from(None),
+            (CONNECT_TIMEOUT, TOTAL_TIMEOUT),
+            "with nothing set, the constants are the bounds"
+        );
+    }
+
+    #[test]
+    fn a_shorter_override_is_the_only_direction_that_matters() {
+        assert_eq!(
+            bounds_from(Some("250")),
+            (Duration::from_millis(250), Duration::from_millis(250)),
+            "a numeric override moves both bounds together"
+        );
+    }
+
+    #[test]
+    fn a_loopback_destination_never_goes_through_a_proxy() {
+        // NOT read from the environment, and that is the point: this module's
+        // own fixtures stand up a listener on 127.0.0.1, and routing those
+        // through whatever the ambient environment names would make the suite a
+        // function of the box it runs on. `NO_PROXY` happens to list loopback
+        // in this container; a case relying on that would pass here and fail in
+        // CI for a reason nobody would connect to this line.
+        for host in [
+            "localhost",
+            "LOCALHOST",
+            "127.0.0.1",
+            "127.9.9.9",
+            "::1",
+            "[::1]",
+        ] {
+            assert!(
+                bypassed(host, None),
+                "{host} must be reached directly with no list at all"
+            );
+            assert!(
+                bypassed(host, Some("github.com")),
+                "{host} must be reached directly whatever the list says"
+            );
+        }
+    }
+
+    #[test]
+    fn a_no_proxy_entry_matches_a_host_or_its_subdomains_and_not_a_lookalike() {
+        // The allow half is what makes this discriminate: a matcher that
+        // returned true for everything would satisfy the case above and every
+        // bypass assertion here, and would silently stop proxying entirely.
+        assert!(!bypassed("github.com", None), "an unlisted host is proxied");
+
+        // The suffix rule must be anchored on a dot. `notgithub.com` ends with
+        // `github.com` as a STRING, and a naive `ends_with` would bypass it —
+        // sending a request meant for the proxy straight out instead.
+        for (list, host, expected) in [
+            ("github.com", "github.com", true),
+            ("github.com", "api.github.com", true),
+            ("github.com", "notgithub.com", false),
+            (".github.com", "api.github.com", true),
+            ("example.org,github.com", "github.com", true),
+            ("example.org, github.com", "github.com", true),
+            ("*", "anything.invalid", true),
+            ("", "github.com", false),
+            ("github.com", "github.com.evil.invalid", false),
+        ] {
+            assert_eq!(
+                bypassed(host, Some(list)),
+                expected,
+                "NO_PROXY={list:?} against {host:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redirect_is_followed_only_while_it_stays_on_https() {
+        // `--location` and `--proto-redir '=https'`, which were two curl flags
+        // and are one decision here. The transport cannot make it: `https_only`
+        // refuses the URL it is HANDED, and a 302 hands it a new one.
+        let base = "https://example.invalid/a/b";
+        assert_eq!(
+            redirect_target(base, 302, Some("https://cdn.invalid/x")).unwrap(),
+            Some("https://cdn.invalid/x".to_owned())
+        );
+        assert_eq!(
+            redirect_target(base, 302, Some("/root")).unwrap(),
+            Some("https://example.invalid/root".to_owned()),
+            "a root-relative Location resolves against the authority"
+        );
+        assert_eq!(
+            redirect_target(base, 302, Some("c")).unwrap(),
+            Some("https://example.invalid/a/c".to_owned()),
+            "a path-relative Location resolves against the directory"
+        );
+
+        // A DOWNGRADE IS REFUSED, which is the half that is a security property
+        // rather than a convenience.
+        assert!(
+            redirect_target(base, 302, Some("http://example.invalid/x")).is_err(),
+            "a redirect must not downgrade the transport"
+        );
+        // And a 3xx with nowhere to go is a failure, never a silent 302 body
+        // handed back to a caller that would digest it.
+        assert!(redirect_target(base, 302, None).is_err());
+        // The stop condition: a real answer is not a redirect.
+        assert_eq!(redirect_target(base, 200, None).unwrap(), None);
+        assert_eq!(
+            redirect_target(base, 404, Some("https://elsewhere.invalid/")).unwrap(),
+            None,
+            "only a 3xx follows a Location, whatever else carries the header"
+        );
+    }
+
+    #[test]
+    fn an_unusable_override_is_ignored_rather_than_refused() {
+        // Three shapes, one answer. This reads the ambient environment on a
+        // path whose job is to fetch an artifact, so a typo in an operator's
+        // shell must not become a failed provision — and zero is refused with
+        // the rest, because a zero bound would time every fetch out instantly
+        // and read as the network being down.
+        for raw in ["", "soon", "0"] {
+            assert_eq!(
+                bounds_from(Some(raw)),
+                (CONNECT_TIMEOUT, TOTAL_TIMEOUT),
+                "{raw:?} must fall back to the declared bounds"
+            );
+        }
+    }
+}

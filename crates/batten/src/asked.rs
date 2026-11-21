@@ -106,14 +106,58 @@ impl Entry {
     /// Three conjuncts and each is load-bearing: the pair is NAMED (an answer
     /// about something else admits nothing), the answer IS a presented option
     /// (free text is recorded, never a selection), and that option SAYS it admits.
+    ///
+    /// A MULTI-SELECT ANSWER IS THE OPTIONS IT JOINS. The host reports one as
+    /// the selected labels joined by `", "`; read as one label it matched none,
+    /// so a question `admit-ask` let through was recorded and admitted nothing —
+    /// the re-ask loop that module exists to stop (#1276, seven pairs answered
+    /// Admit and refused). The answer must decompose wholly into presented
+    /// labels ([`Entry::selected`]), so typed text still admits nothing; and
+    /// where some option's label names `pair`, that option must be among those
+    /// selected, so selecting one pair's Admit admits no sibling.
     #[must_use]
     pub fn admits(&self, pair: &str) -> bool {
-        self.names(pair)
-            && self.answer.starts_with(ADMIT)
-            && self
-                .options
+        let Some(selected) = self.selected() else {
+            return false;
+        };
+        if !self.names(pair) {
+            return false;
+        }
+        if self
+            .options
+            .iter()
+            .any(|option| option.label.contains(pair))
+        {
+            return selected
                 .iter()
-                .any(|option| option.label == self.answer)
+                .any(|label| label.contains(pair) && label.starts_with(ADMIT));
+        }
+        !selected.is_empty() && selected.iter().all(|label| label.starts_with(ADMIT))
+    }
+
+    /// The presented labels the answer selects: the one label it equals, or the
+    /// labels a multi-select answer joins with `", "`, in order. `None` when
+    /// the answer is anything else — typed text is recorded, never a selection.
+    #[must_use]
+    pub fn selected(&self) -> Option<Vec<&str>> {
+        fn split<'a>(rest: &str, options: &'a [Choice]) -> Option<Vec<&'a str>> {
+            for option in options {
+                let label = option.label.as_str();
+                if rest == label {
+                    return Some(vec![label]);
+                }
+                if let Some(tail) = rest
+                    .strip_prefix(label)
+                    .and_then(|after| after.strip_prefix(", "))
+                    && let Some(mut more) = split(tail, options)
+                {
+                    more.insert(0, label);
+                    return Some(more);
+                }
+            }
+            None
+        }
+        split(&self.answer, &self.options)
     }
 }
 
@@ -183,7 +227,7 @@ pub fn entries(result: &serde_json::Value, at: u64, head: Option<&str>) -> Vec<E
 #[must_use]
 pub fn ledger_roots(anchor: &Path) -> Vec<std::path::PathBuf> {
     let checkout = |dir: &Path| {
-        dir.join(crate::config::CONFIG_FILE).is_file() || crate::git::repo_root(dir).is_ok()
+        dir.join(crate::config_model::CONFIG_FILE).is_file() || crate::git::repo_root(dir).is_ok()
     };
     if checkout(anchor) {
         return vec![anchor.to_path_buf()];
@@ -194,7 +238,8 @@ pub fn ledger_roots(anchor: &Path) -> Vec<std::path::PathBuf> {
     let mut roots: Vec<std::path::PathBuf> = children
         .filter_map(|child| Some(child.ok()?.path()))
         .filter(|dir| {
-            dir.join(crate::config::CONFIG_FILE).is_file() && crate::git::repo_root(dir).is_ok()
+            dir.join(crate::config_model::CONFIG_FILE).is_file()
+                && crate::git::repo_root(dir).is_ok()
         })
         .collect();
     roots.sort();
@@ -285,7 +330,7 @@ pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
             text.clone_into(&mut base_text);
         }
     })?;
-    let head_text = std::fs::read_to_string(root.join(LEDGER)).unwrap_or_default();
+    let head_text = crate::fsio::read_to_string(root.join(LEDGER)).unwrap_or_default();
     Ok(compare(&base_text, &head_text))
 }
 
@@ -345,6 +390,55 @@ mod tests {
         let entry = only("Admit it, and also the other one");
         assert_eq!(entry.answer, "Admit it, and also the other one");
         assert!(!entry.admits(PAIR));
+    }
+
+    /// A multi-select question, one option per pair, answered as the host
+    /// reports it: the selected labels joined by `", "`.
+    fn multi(answer: &str) -> Entry {
+        let question = "Pairs: rule-predicate-changed rule[a].glob; \
+                        rule-predicate-changed rule[b].glob. Which do you admit?";
+        let value = serde_json::json!({
+            "questions": [{
+                "question": question,
+                "header": "Widen",
+                "multiSelect": true,
+                "options": [
+                    {"label": "Admit rule-predicate-changed rule[a].glob", "description": ""},
+                    {"label": "Admit rule-predicate-changed rule[b].glob", "description": ""},
+                    {"label": "Refuse both", "description": ""}
+                ]
+            }],
+            "answers": {question: answer}
+        });
+        entries(&value, 7, None).remove(0)
+    }
+
+    /// Fails by: reading a multi-select answer as one label (the #1276 loop).
+    #[test]
+    fn a_multi_select_answer_admits_each_selected_pair() {
+        let entry = multi(
+            "Admit rule-predicate-changed rule[a].glob, Admit rule-predicate-changed rule[b].glob",
+        );
+        assert!(entry.admits("rule-predicate-changed rule[a].glob"));
+        assert!(entry.admits("rule-predicate-changed rule[b].glob"));
+    }
+
+    /// Fails by: one selected Admit admitting a sibling pair whose own option
+    /// was left unselected.
+    #[test]
+    fn a_multi_select_answer_admits_only_the_pairs_it_selected() {
+        let entry = multi("Admit rule-predicate-changed rule[a].glob");
+        assert!(entry.admits("rule-predicate-changed rule[a].glob"));
+        assert!(!entry.admits("rule-predicate-changed rule[b].glob"));
+        assert!(!multi("Refuse both").admits("rule-predicate-changed rule[a].glob"));
+    }
+
+    /// Fails by: a joined answer with a typed segment counting as a selection.
+    #[test]
+    fn a_joined_answer_with_typed_text_selects_nothing() {
+        let entry = multi("Admit rule-predicate-changed rule[a].glob, and b too");
+        assert_eq!(entry.selected(), None);
+        assert!(!entry.admits("rule-predicate-changed rule[a].glob"));
     }
 
     #[test]
@@ -417,7 +511,7 @@ mod tests {
         let root = crate::scratch::scratch("asked-record");
         assert_eq!(record(&root, &result("Admit it"), 7).unwrap(), 1);
         assert_eq!(record(&root, &result("Refuse"), 8).unwrap(), 1);
-        let text = std::fs::read_to_string(root.join(LEDGER)).unwrap();
+        let text = crate::fsio::read_to_string(root.join(LEDGER)).unwrap();
         assert_eq!(text.lines().count(), 2);
         let mut unanswered = result("Admit it");
         unanswered["answers"] = serde_json::json!({});

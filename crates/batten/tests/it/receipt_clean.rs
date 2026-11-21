@@ -91,7 +91,7 @@ fn clean(dir: &Path) -> Output {
         .arg("receipt")
         .arg("clean")
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt clean")
 }
 
@@ -230,7 +230,7 @@ fn a_dirty_tree_cannot_have_a_receipt_written_for_it_at_all() {
         .arg("record")
         .arg("verify")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert_ne!(output.status.code(), Some(0), "{output:?}");
     assert!(

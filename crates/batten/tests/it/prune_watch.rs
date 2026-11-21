@@ -6,18 +6,11 @@
 //! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-#MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-#MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-#MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -118,6 +111,8 @@ fn request<'a>(
         deadline: None,
         wait: false,
         live_since: None,
+        copies: None,
+        fixtures_since: None,
     }
 }
 
@@ -126,6 +121,7 @@ fn request<'a>(
 fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask.fixtures_since = ask.live_since;
     ask
 }
 
@@ -149,7 +145,7 @@ fn aged_dir(dir: &Path, age: u64) {
 /// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
 /// `incremental` sat outside every pass while 865 units freed 159MB. A stale
 /// crate cache goes; one written inside the working set — the edit loop's own —
-/// stays while a live build has used it. `#MUTANT incremental-unranked` leaves both.
+/// stays while a live build has used it. A mutant that skips ranking it leaves both.
 #[test]
 fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     let root = common::scratch("collect-incremental");
@@ -178,8 +174,8 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
 
 /// TEST SCRATCH IS RANKED TOO: cargo's `CARGO_TARGET_TMPDIR` held 4.1GB of
 /// fixtures on #1132 that nothing removed until the next run's setup. A stale
-/// fixture goes; a running suite's fresh one stays. `#MUTANT scratch-unranked`
-/// leaves both.
+/// fixture goes; a running suite's fresh one stays. A mutant that skips ranking
+/// scratch leaves both.
 #[test]
 fn a_stale_test_scratch_entry_is_collected() {
     let root = common::scratch("collect-scratch");
@@ -193,10 +189,70 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert!(tree.join("tmp/live-fixture").exists());
 }
 
+/// A FIXTURE A FINISHED SUITE WROTE GOES, EVEN INSIDE A LIVE BUILD'S WINDOW
+/// (#1276): the `cargo run` hosting a lap lives as long as the lap, and every
+/// fixture its suites wrote read as live until the mutation stage filled the
+/// volume. With no suite running, nothing roots a fixture.
+///
+/// Fails by: fixtures judged by the build window rather than their own.
+#[test]
+fn a_fixture_no_running_suite_wrote_is_collected_inside_a_builds_window() {
+    let root = common::scratch("collect-finished-suite");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/finished-suite-fixture"), 1);
+    let trees = [tree.clone()];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.fixtures_since = None;
+    let units = batten::collect::collect(&ask).removed;
+    assert_eq!(
+        units, 1,
+        "the finished suite's fixture is outside every window"
+    );
+    assert!(!tree.join("tmp/finished-suite-fixture").exists());
+}
+
+/// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
+/// SWEEP'S IS NOT (#1276). cargo-mutants removes its copy only on a clean exit,
+/// and a lap began 4.5GB down beside its own live 12GB copy on a volume whose
+/// every ranked tree was under the checkout.
+///
+/// THE LIVE COPY IS WRITTEN TWO LEVELS DOWN AND NOWHERE ELSE, because that is how
+/// a sweep writes: a shallow date reads it as idle since it was staged.
+///
+/// Fails by: no copies read; any directory in the temp directory taken; a copy
+/// dated shallow, which collects the live one.
+#[test]
+fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
+    let root = common::scratch("collect-mutant-copies");
+    let temp = root.join("temp");
+    let stale = temp.join("cargo-mutants-batten-AAAAAA.tmp");
+    aged_dir(&stale.join("target/debug"), 7200);
+    aged_dir(&stale.join("target"), 7200);
+    aged_dir(&stale, 7200);
+    let live = temp.join("cargo-mutants-batten-BBBBBB.tmp");
+    aged_dir(&live.join("src/deep"), 1);
+    aged_dir(&live.join("src"), 7200);
+    aged_dir(&live, 7200);
+    let other = temp.join("somebody-elses.tmp");
+    aged_dir(&other, 7200);
+    let tree = root.join("target");
+    std::fs::create_dir_all(&tree).unwrap();
+    let trees = [tree];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.copies = Some(&temp);
+    let _ = batten::collect::collect(&ask);
+    assert!(!stale.exists(), "a copy no live sweep writes goes");
+    assert!(
+        live.exists(),
+        "a copy written since the live build began stays"
+    );
+    assert!(other.exists(), "only cargo-mutants' own copies are taken");
+}
+
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
 /// a suite's fixture tree under `tmp/` carries units of any age, and the entry
-/// that holds them is what a live build's root judges. `#MUTANT scratch-unit-ranked`
-/// collects the nested unit.
+/// that holds them is what a live build's root judges. A mutant ranking the unit
+/// itself collects the nested unit.
 #[test]
 fn a_build_inside_fresh_scratch_is_never_collected() {
     let root = common::scratch("collect-nested-scratch");
@@ -214,8 +270,8 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
 
 /// A NESTED BUILD TREE'S SCRATCH IS RANKED LIKE THE CHECKOUT'S (CLOUD-2286):
 /// measured on #1132, `target/replay/tmp` held 555 MB of fixtures that no pass
-/// could see, because only `target/tmp` was scratch. `#MUTANT
-/// nested-scratch-unseen` leaves the stale fixture.
+/// could see, because only `target/tmp` was scratch. A mutant that misses nested
+/// scratch leaves the stale fixture.
 #[test]
 fn a_nested_build_trees_stale_scratch_is_collected() {
     let root = common::scratch("collect-nested-build-scratch");
@@ -245,8 +301,8 @@ fn a_nested_build_trees_stale_scratch_is_collected() {
 /// measured on #1132, `target/mutate` held 511 MB idle since the day before
 /// while a lap removed the dependencies of the profiles the next lap built.
 /// An idle copy goes before a built profile's older-looking unit; a copy a
-/// running sweep just wrote stays whole. `#MUTANT staged-copy-unranked` takes
-/// the dependency instead.
+/// running sweep just wrote stays whole. A mutant that skips ranking the copy
+/// takes the dependency instead.
 #[test]
 fn an_idle_staged_copy_goes_before_a_built_profiles_units() {
     let root = common::scratch("collect-staged-copy");
@@ -734,6 +790,7 @@ fn the_arm_watches_past_the_gate() {
             )
         }),
         kept: Vec::new(),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         // THE FIRST STEP: the volume is fine while it runs, and it returns.
@@ -799,6 +856,7 @@ fn watched(
             ))
         }),
         kept: Vec::new(),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
@@ -817,7 +875,13 @@ fn a_sample_at_the_minimum_collects_nothing() {
     // reads `stop`, and `around` joins any collection it started.
     let lines = watched(&repo, &config, |_| 10, |taken| taken >= 1);
     assert!(present(&profile, "stale", STALE), "{lines:?}");
-    assert!(lines.is_empty(), "{lines:?}");
+    // Only the watcher's armed line (CLOUD-2782): no collection ran.
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("disk-watch-armed ")),
+        "{lines:?}"
+    );
 }
 
 /// The FIRST sample below the minimum collects, when no collection is already
@@ -900,6 +964,7 @@ fn an_undeclared_band_watches_at_the_default() {
                 Ok(free)
             }),
             kept: Vec::new(),
+            record: None,
         };
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
             wait_for(|| {
@@ -978,7 +1043,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
         .take()
         .expect("stdin is piped")
         .write_all(payload.as_bytes());
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 #[test]
@@ -1053,7 +1118,11 @@ fn a_step_run_build_is_watched() {
         .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::exec::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     let said = common::stderr(&ran);
     assert_eq!(
@@ -1096,7 +1165,11 @@ fn a_wrapped_compile_collects_under_pressure() {
             .arg(&out_dir)
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::exec::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs");
         let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
         (dir, ran, seen)
@@ -1161,7 +1234,11 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         .arg(dir.join("target/debug/deps"))
         .env("TARGET_PRUNE_FREE_MB", "5000")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::exec::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
     assert!(
@@ -1177,7 +1254,11 @@ fn the_wrapper_probe_answers_with_this_binary() {
     let probed = common::batten()
         .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::exec::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(probed.status.code(), Some(0), "{}", common::stderr(&probed));
     let path = String::from_utf8_lossy(&probed.stdout).trim().to_owned();
@@ -1194,7 +1275,11 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::exec::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs")
     };
     let stopped = sweep("5");
@@ -1225,7 +1310,7 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     let stopped = verify("5");
@@ -1248,8 +1333,8 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
 /// refused. Here the case holds `target/debug/.cargo-lock` and a live process
 /// (this one) holds a singleton: the step blocks on the build lock, the case
 /// lets go once the first pass has reported, and the second pass admits. With
-/// no singleton the same volume refuses as before. `#MUTANT singleton-unwaited`
-/// refuses both.
+/// no singleton the same volume refuses as before. A mutant that does not wait
+/// on the singleton refuses both.
 #[test]
 fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     use std::io::BufRead as _;
@@ -1272,7 +1357,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         command
     };
 
-    let alone = verify().output().expect("the binary runs");
+    let alone = verify().streamed_output().expect("the binary runs");
     let said = common::stderr(&alone);
     assert_eq!(alone.status.code(), Some(2), "{said}");
     assert!(!said.contains("disk-waited"), "{said}");

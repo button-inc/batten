@@ -304,9 +304,17 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
         }})
         .to_string(),
     ];
+    // EVERY MODULE'S OWN CASE INPUTS, NOT ONLY THE FIXED CALLS ABOVE (#1276).
+    // The fixed calls never reached the input that split the two evaluators
+    // over an undefined helper (CLOUD-2696); a module's cases are the inputs
+    // its author proved decisions over, so they are the ones both must agree on.
+    let mut corpus = 0;
     for (left, right) in interpreted.iter().zip(&compiled) {
         assert_eq!(left.id(), right.id());
-        for input in &calls {
+        let cases = policy::case_inputs(left)
+            .unwrap_or_else(|| panic!("{}: its case inputs are readable", left.id()));
+        corpus += cases.len();
+        for input in calls.iter().chain(&cases) {
             assert_eq!(
                 decided(right, input),
                 decided(left, input),
@@ -315,4 +323,11 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
             );
         }
     }
+    // A corpus that collected nothing compares nothing, so a collector that
+    // silently stopped reading `with input as` fails here rather than passing.
+    // 283 measured on #1276; the floor sits just under it.
+    assert!(
+        corpus >= 250,
+        "the cases' inputs reach the comparison: {corpus}"
+    );
 }

@@ -24,6 +24,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -255,7 +256,7 @@ fn adjudicate(dir: &Path, home: &Path, envelope: &serde_json::Value) -> std::pro
         sink.write_all(envelope.as_bytes())
             .expect("write the envelope");
     }
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Both channels of one run, as one pair.
@@ -439,13 +440,18 @@ fn calls(tools: &[&str]) -> String {
 
 /// Drive one plan-mode presentation through `batten adjudicate`.
 fn present(dir: &Path, home: &Path, transcript: Option<&Path>) -> String {
+    call_in_plan(dir, home, transcript, "ExitPlanMode")
+}
+
+/// Drive one plan-mode call of `tool` through `batten adjudicate`.
+fn call_in_plan(dir: &Path, home: &Path, transcript: Option<&Path>, tool: &str) -> String {
     let outcome = adjudicate(
         dir,
         home,
         &serde_json::json!({
             "hook_event_name": "PreToolUse",
             "permission_mode": "plan",
-            "tool_name": "ExitPlanMode",
+            "tool_name": tool,
             "tool_input": {},
             "transcript_path": transcript.map(|path| path.display().to_string()),
         }),
@@ -503,5 +509,13 @@ fn plan_exits_counts_only_exit_plan_mode_calls() {
     assert!(
         said.contains("plan check first"),
         "calls to other tools must not move the count\n{said}"
+    );
+    // AND ONLY A PRESENTATION IS REFUSED: another tool, in a session with no plan
+    // exit at all, is not this class's business.
+    let (dir, home, transcript) = plan_fixture("only-other", Some(&calls(&["Read"])));
+    let read = call_in_plan(&dir, &home, transcript.as_deref(), "Read");
+    assert!(
+        !read.contains("plan check first"),
+        "a call that presents no plan must never be refused as one\n{read}"
     );
 }

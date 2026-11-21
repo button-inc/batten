@@ -71,7 +71,7 @@ impl Clone {
             .args(args)
             .current_dir(&self.repo)
             .env("BATTEN_BOOT_TIME", boot)
-            .output()
+            .streamed_output()
             .expect("run the census");
         (
             out.status.code(),
@@ -289,7 +289,7 @@ fn a_sensor_never_kills_what_it_observes() {
         .args(["record", "census", "note", "h"])
         .current_dir(&outside)
         .env("BATTEN_BOOT_TIME", THIS_BOOT)
-        .output()
+        .streamed_output()
         .expect("run the census");
     assert_eq!(out.status.code(), Some(0));
 }

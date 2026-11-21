@@ -157,7 +157,7 @@ fn record(dir: &Path) -> Output {
         .args(["record", "suites"])
         .env("NEXTEST_PROFILE", "default")
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten record suites")
 }
 

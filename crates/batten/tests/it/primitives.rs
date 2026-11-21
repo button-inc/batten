@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::Streamed as _;
 
 use std::cell::Cell;
 use std::fs;
@@ -60,7 +61,7 @@ impl Repo {
     /// fails loudly instead of quietly answering about the real batten
     /// checkout — which lives above this directory.
     fn git(&self, args: &[&str]) -> String {
-        let output = self.raw(args).output().expect("run git");
+        let output = self.raw(args).streamed_output().expect("run git");
         assert!(
             output.status.success(),
             "git {args:?} failed in {}: {}",
@@ -1239,10 +1240,11 @@ fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
     // the same defect one target further on — it never ran on Windows, because
     // cargo stopped at the `--lib` failure before reaching the integration
     // tests.
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/identity.rs"))
-            .expect("read identity.rs")
-            .replace("\r\n", "\n");
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../batten-facts/src/identity.rs"),
+    )
+    .expect("read identity.rs")
+    .replace("\r\n", "\n");
     for name in [
         "pub fn code_fingerprint",
         "pub fn log_fingerprint",
@@ -2091,6 +2093,40 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
 // directly: a repository, with the identity the template bakes into its config.
 // A fallback that forked `init` alone would pass `is_template` and still hand
 // every fixture an unset identity, so the identity is asserted, not assumed.
+// A COPY DATES THE TEMPLATE AS IN USE (#1276). The disk collector keeps a
+// `target/tmp` entry only if it was written since the earliest live test
+// process started, and the template is otherwise written once and read ever
+// after: lap 9's collector removed it under a live sweep. So the template is
+// first dated far in the past, then one copy has to bring its newest write
+// forward. A sibling's copy in between only moves it further forward, so the
+// shared state this touches cannot flip the verdict.
+#[test]
+fn a_fixture_copy_marks_the_shared_template_in_use() {
+    // A host where no template can be established forks `git init` per fixture
+    // and shares nothing a collector could remove, so the case fails there
+    // rather than passing having asserted nothing.
+    let template = common::git_init_template().expect("this host establishes the shared template");
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(template.join("HEAD"))
+        .and_then(|head| head.set_modified(old))
+        .expect("date the template's HEAD in the past");
+    let dir = common::scratch("template-in-use").join("repo");
+    fs::create_dir_all(&dir).expect("create the fixture directory");
+
+    common::init_repo(&dir);
+
+    let after = fs::metadata(template.join("HEAD"))
+        .and_then(|meta| meta.modified())
+        .expect("read the template's HEAD mtime");
+    assert!(
+        after > old,
+        "a copy has to date the shared template as written now, or the disk \
+         collector removes it under a live suite"
+    );
+}
+
 #[test]
 fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_would_have() {
     let dir = common::scratch("template-fallback").join("repo");

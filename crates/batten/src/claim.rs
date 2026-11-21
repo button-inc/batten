@@ -221,6 +221,15 @@ pub struct Request {
     /// "I refined this story in my own session, on purpose" — the one way a
     /// human clears the sequence rules, and it says so in the receipt.
     pub bypass_sequence: bool,
+    /// The number of THIS branch's open pull request, as the forge answered it.
+    ///
+    /// A bundle's draft PR names every row it closes, and the forge's own
+    /// automation then moves each to In Progress, assigned, with that PR attached
+    /// — before the bundle has pulled any but the first (CLOUD-2697, measured on
+    /// #1276). Those rows are this branch's claim, not a competitor's, so a row
+    /// whose live PR is this one is judged past the competitor rules. `None` when
+    /// the forge was not asked or did not answer, which changes nothing.
+    pub own_pr: Option<String>,
 }
 
 /// What the gate decided.
@@ -285,33 +294,40 @@ pub fn judge(
     let mut verdict = Verdict::default();
     for issue in issues {
         let before = verdict.refusals.len();
+        // THIS BRANCH'S OWN CLAIM: its only live PR is this branch's open one.
+        // The column, the assignee and the PR are the forge recording that claim,
+        // so none of them is a competitor; the readiness and sequence rules below
+        // still decide.
+        let own = issue.live_pr.is_some() && issue.live_pr == request.own_pr;
 
-        if issue.status != ready_column {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                // The token carries the consumer's word for the queue, so a
-                // reader is told which column their row failed to be in.
-                rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
-                kind: Kind::Competitor,
-            });
-            continue;
-        }
-        if issue.assigned {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: "assigned".to_owned(),
-                kind: Kind::Competitor,
-            });
-        }
-        if let Some(number) = &issue.live_pr {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: format!(
-                    "has-pr ({number}) — if it is merged or closed, say so on the attachment \
-                     (\"state\": \"merged\") and re-run"
-                ),
-                kind: Kind::Competitor,
-            });
+        if !own {
+            if issue.status != ready_column {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    // The token carries the consumer's word for the queue, so a
+                    // reader is told which column their row failed to be in.
+                    rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
+                    kind: Kind::Competitor,
+                });
+                continue;
+            }
+            if issue.assigned {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: "assigned".to_owned(),
+                    kind: Kind::Competitor,
+                });
+            }
+            if let Some(number) = &issue.live_pr {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: format!(
+                        "has-pr ({number}) — if it is merged or closed, say so on the attachment \
+                         (\"state\": \"merged\") and re-run"
+                    ),
+                    kind: Kind::Competitor,
+                });
+            }
         }
 
         // Skipped wholesale under the bypass: both rules below are about the
@@ -468,7 +484,7 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
 ///
 /// [`UsageError`] when the receipt or the store exists and will not read.
 fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(receipt) {
+    match crate::fsio::read_to_string(receipt) {
         Ok(text) => Ok(text
             .lines()
             .next()
@@ -620,7 +636,7 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
 /// and two unresolvable bases are not evidence of the same branch.
 fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String> {
     let base = base?;
-    let existing = std::fs::read_to_string(receipt).ok()?;
+    let existing = crate::fsio::read_to_string(receipt).ok()?;
     existing
         .lines()
         .filter_map(|line| line.strip_prefix("base "))
@@ -651,7 +667,7 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
 /// partition, so a branch with no claim behaves exactly as it did before.
 #[must_use]
 pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
-    let body = std::fs::read_to_string(receipts.join(receipt_name(branch))).ok()?;
+    let body = crate::fsio::read_to_string(receipts.join(receipt_name(branch))).ok()?;
     // LINE 1 IS THE ID LIST and `mint` says so in as many words, so this reads the
     // documented position rather than scanning for a shape.
     let ids = body.lines().next()?.trim();
@@ -836,7 +852,7 @@ pub fn adopt(
         if !name.starts_with("claim.") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         // Read by KEY, never by line number: line 1 is the id list every existing
@@ -885,7 +901,7 @@ pub fn adopt(
     // bypass wearing a better name — the same reason the takeover names the
     // refusals it overrode. `branch` is rewritten so the receipt keeps describing
     // where it lives, and `adopted-from` keeps where it came from.
-    let Ok(text) = std::fs::read_to_string(&orphan.path) else {
+    let Ok(text) = crate::fsio::read_to_string(&orphan.path) else {
         return Err(UsageError::raise(
             "claim: the orphaned receipt could not be re-read to adopt it".to_owned(),
         ));
@@ -1007,7 +1023,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        std::fs::read_to_string(dest).unwrap()
+        crate::fsio::read_to_string(dest).unwrap()
     }
 
     /// ONE BRANCH, MANY ISSUES (CLOUD-472). The receipt's first line has always
@@ -1125,6 +1141,7 @@ mod tests {
         let takeover = Request {
             takeover: true,
             bypass_sequence: false,
+            own_pr: None,
         };
         assert!(
             !verdict.pullable(&takeover),
@@ -1161,6 +1178,49 @@ mod tests {
         };
         assert_eq!(verdict.refusals.len(), 1);
         assert!(verdict.refusals[0].rule.starts_with("not-todo"));
+    }
+
+    /// CLOUD-2697: a bundle's draft PR moves every row it closes to In Progress,
+    /// assigned, with that PR attached. Fails by: that row refused as held by
+    /// another when the PR is this branch's own, or a DIFFERENT PR let through.
+    #[test]
+    fn a_row_held_only_by_this_branchs_own_pr_is_its_claim() {
+        let held = Issue {
+            assigned: true,
+            live_pr: Some(String::from("1276")),
+            ..issue("CLOUD-1", "In Progress")
+        };
+        let grammar = crate::ready::Grammar::committed();
+        let judged = |own: Option<&str>| {
+            let request = Request {
+                own_pr: own.map(str::to_owned),
+                ..Request::default()
+            };
+            judge(
+                &grammar,
+                &test_columns(),
+                std::slice::from_ref(&held),
+                &request,
+                Path::new("."),
+                None,
+            )
+        };
+        // Its own: past every competitor rule, so the body is what decides — and
+        // this one carries none, which is the readiness rule asking for it.
+        assert!(
+            judged(Some("1276")).is_err(),
+            "this branch's own row reaches the readiness rule"
+        );
+        // Another PR is still a competitor, column first.
+        let Ok(other) = judged(Some("1300")) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(other.refusals[0].rule.starts_with("not-todo"));
+        // And no answer from the forge changes nothing.
+        let Ok(unknown) = judged(None) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(unknown.refusals[0].rule.starts_with("not-todo"));
     }
 
     #[test]
@@ -1298,7 +1358,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        let body = std::fs::read_to_string(dest).unwrap();
+        let body = crate::fsio::read_to_string(dest).unwrap();
         assert!(
             body.contains("takeover 1 refusal(s) overridden: CLOUD-1 assigned\n"),
             "{body}"
@@ -1324,7 +1384,7 @@ mod tests {
         let orphan = adopt(&receipts, "new", Some("old"), &|_| false).unwrap();
         assert_eq!(orphan.recorded, "old");
         assert_eq!(
-            std::fs::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
+            crate::fsio::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
             "CLOUD-1\nbranch new\nadopted-from old\n"
         );
         assert!(!receipts.join(receipt_name("old")).exists());

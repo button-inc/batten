@@ -57,13 +57,13 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::resolve::Overrides;
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Conformance, SbomDeclared as Declared};
 
 /// `sbom`'s options, filled by `lib.rs` from `cli::Options`.
 ///
@@ -91,33 +91,8 @@ pub struct Options {
 // the Rust that replaced it, plus the arms the verb added. The normaliser and the
 // enrichment are where it can silently stop doing its job, so removing each pass
 // is what shows the tier discriminates.
-//MUTANT-SUITE crates/batten/tests/it/sbom_producer.rs
-//MUTANT sbom-skips-spdx-normalization|s@^    let mut spdx_doc = normalise_spdx.spdx_doc.;$@    let mut spdx_doc = spdx_doc;@|one_action_referenced_twice_yields_one_component
-//MUTANT sbom-skips-cdx-normalization|s@^    let mut cdx_doc = normalise_cdx.cdx_doc.;$@    let mut cdx_doc = cdx_doc;@|the_cyclonedx_graph_is_rewritten_too
-//MUTANT sbom-dedupes-the-subject|s@^            if id.is_empty.. .. Some.id. == subject.as_str.. .$@            if id.is_empty() {@|the_guard_the_document_still_describes_its_subject
-//MUTANT sbom-skips-entity-enrichment|s@^    enrich_spdx.&mut spdx_doc, &entities.;$@@|the_documents_own_subject_carries_the_workspace_supplier
-//MUTANT sbom-drops-the-originator|s@^    format!."Organization: .name.".$@    String::from(NOASSERTION)@|a_crate_with_authors_gets_both_and_the_originator_is_the_author
-//MUTANT sbom-copyright-residue-is-noassertion|s@^                _ => NONE.to_owned..,$@                _ => NOASSERTION.to_owned(),@|the_boilerplate_trap_an_apache_license_yields_none
-//MUTANT sbom-tolerates-an-absent-source|s@^    if missing != 0 .$@    if false {@|a_lockfile_package_absent_from_the_cache_is_a_hard_failure
-//MUTANT sbom-keeps-the-slash-license-form|s@^    slash.replace_all.raw, " OR ".\.into_owned..$@    raw.to_owned()@|the_deprecated_slash_spelling_is_rewritten_to_or
-//MUTANT sbom-invents-a-missing-license|s@^        return NOASSERTION.to_owned..;$@        return "Apache-2.0".to_owned();@|honest_absence_an_empty_manifest_license_leaves_noassertion
-//MUTANT sbom-skips-the-actions-table|s@^        actions_spdx.&mut spdx_doc, actions.;$@@|a_mapped_action_carries_its_license_and_copyright
-//MUTANT sbom-reads-a-short-action-row|s@^        if fields.len.. < 3 .$@        if fields.len() < 2 {@|the_producer_reads_only_whole_pinned_rows
-//MUTANT sbom-reads-a-short-pin|s@^        let whole_pin = pin.len.. == 40;$@        let whole_pin = !pin.is_empty();@|the_producer_reads_only_whole_pinned_rows
-//MUTANT sbom-drift-reads-stable|s@^        stable_form.&spdx_one. == stable_form.&spdx_two.,$@        true,@|two_scans_that_differ_record_an_unstable_inventory
-//MUTANT-SUITE crates/batten/tests/it/sbom_binary.rs
-//MUTANT sbom-binary-counts-every-artifact|s@^    text.artifact, "type". == "rust-crate"$@    true@|the_count_is_filtered_to_rust_crate_so_a_self_artifact_cannot_pad_it
-//MUTANT sbom-binary-stale-record-survives|s@^        Mode::Binary . .. . => Some.BINARY_FAMILY.,$@        Mode::Binary { .. } => None,@|a_scan_that_cannot_look_removes_the_previous_record
-//MUTANT-SUITE crates/batten/tests/it/ntia.rs
-//MUTANT conformance-exit-code-dropped|s@^        let code = spawn_code@        let code = 0 * spawn_code@|a_nonconformant_document_fails
 // The five `[sbom]` keys that decide, as `config lint --config-from` compares
 // them: each comparison removed must leave its key unreported.
-//MUTANT-SUITE crates/batten/tests/it/config_trust.rs
-//MUTANT sbom-actions-removal-unreported|s@^    if base.actions.is_some.. && working@    if false \&\& working@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-checker-swap-unreported|s@^    if checker != base.checker .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-standard-removal-unreported|s@^        if !asked.contains.&standard.as_str... .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-inventory-rename-unreported|s@^        if named != declared .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-record-rename-unreported|s@^    if record != base.record .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
 
 /// The verb, as its diagnostics name it.
 const VERB: &str = "sbom";
@@ -143,51 +118,6 @@ const NONE: &str = "NONE";
 
 /// The file-name prefixes a copyright statement is looked for in first.
 const LICENSE_PREFIXES: [&str; 4] = ["LICENSE", "COPYING", "COPYRIGHT", "NOTICE"];
-
-/// The `[sbom]` table (CLOUD-843).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(rename = "SbomDeclared")]
-#[non_exhaustive]
-pub struct Declared {
-    /// The subject's name: the documents' source name, and the stem both the
-    /// tree's documents and a binary's asset are named from.
-    pub subject: String,
-    /// Where the tree's two documents are written, relative to the repository
-    /// root unless absolute.
-    pub out_dir: String,
-    /// Where a binary's asset is written, relative to the repository root unless
-    /// absolute.
-    pub binary_out_dir: String,
-    /// Paths the tree scan skips, passed to the scanner verbatim.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-    /// The pinned-actions licence table, repository-relative. Absent skips the
-    /// actions pass; declared and unreadable is could-not-look.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actions: Option<String>,
-    /// The `[[rule.tools]]` row `--record` keys its reduction under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inventory: Option<String>,
-    /// What `--conformance` runs and where it records.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conformance: Option<Conformance>,
-}
-
-/// The `[sbom.conformance]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(rename = "SbomConformance")]
-#[non_exhaustive]
-pub struct Conformance {
-    /// The record family the checker's answers are written under.
-    pub record: String,
-    /// The checker program, run as `<checker> <document> --comply <standard>
-    /// --output json --output-file <report>`.
-    pub checker: String,
-    /// The standards asked, in order. Never empty.
-    pub standards: Vec<String>,
-}
 
 impl Declared {
     /// Refuse a table the verb could not act on, naming the key.
@@ -523,7 +453,7 @@ fn first_quoted(text: &str, prefix: &str) -> Option<String> {
 
 /// The manifest's version: the first `version = "…"` line.
 fn manifest_version(root: &Path) -> Result<String> {
-    let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "version = \"") {
         Some(version) if !version.is_empty() => Ok(version),
         _ => unseen("could not read a version from Cargo.toml"),
@@ -547,7 +477,7 @@ fn manifest_version_for_binary(root: &Path, binary: &str) -> Result<String> {
 
 /// `Organization: <first author>` of the manifest, or NOASSERTION.
 fn workspace_supplier(root: &Path) -> String {
-    let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "authors = [") {
         Some(author) if !author.is_empty() => organization(&author),
         _ => NOASSERTION.to_owned(),
@@ -584,7 +514,7 @@ fn holder_lines(text: &str) -> Vec<String> {
 
 /// A file's text, or nothing for one a line scan would call binary.
 fn scannable(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     if bytes.contains(&0) {
         return None;
     }
@@ -1127,7 +1057,7 @@ fn spawn(program: &str, args: &[&str], root: &Path, capture: bool) -> Option<(bo
 
 /// Read and parse one JSON document.
 fn read_json(path: &Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    serde_json::from_str(&crate::fsio::read_to_string(path).ok()?).ok()
 }
 
 /// Write one JSON document in place through a temporary, so a failed write never
@@ -1237,7 +1167,7 @@ fn derive_tree_inner(declared: &Declared, root: &Path, spdx: &Path, cdx: &Path) 
     let own_copyright = workspace_copyright(root);
     let actions = match &declared.actions {
         None => None,
-        Some(table) => match std::fs::read_to_string(root.join(table)) {
+        Some(table) => match crate::fsio::read_to_string(root.join(table)) {
             Ok(text) => Some(actions_table(&text)),
             Err(_) => {
                 return unseen(format!(

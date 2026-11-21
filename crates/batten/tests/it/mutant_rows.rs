@@ -1,151 +1,120 @@
-//! A Rust `//MUTANT` row sits at column 0, or it is not a row (CLOUD-2067).
+//! The Rust tier is cargo-mutants' alone (CLOUD-2253): the tree-level half.
 //!
-//! `mutate`'s marker reader matches at the START of a line, deliberately: a
-//! declaration is a statement about the whole file, and an indented marker could
-//! be fixture text inside a nested block. But `rustfmt` re-indents a comment
-//! inside a function body to the block's level, so a row written beside the line
-//! it mutates was silently no row at all. There were 36 of them on `main`, each a
-//! gate whose red-proof had never run, and nothing said so. The reader's rule
-//! stands; what changes is that breaking it is refused here rather than read as
-//! nothing.
-//!
-//! RUST'S OWN OPENER ONLY. A `#MUTANT` inside a `.rs` file is another language's
-//! row carried as fixture text, such as `mutate.rs`'s own cases, and indenting
-//! one is how a string literal holds it.
+//! The marker and argv refusals are the build's (`build.rs` over
+//! `batten::mutation_markers`), so nothing compiles that carries one. These are
+//! the facts about the tree a build of one crate cannot see: every tracked `.rs`
+//! is owned by cargo-mutants under the registry `mise.toml` declares, and the
+//! `preset-overlay` feature is enabled by the sweep alone.
 
 use std::path::Path;
 
 use crate::common;
 
-const OPENER: &str = "//MUTANT";
-
-/// Every tracked `.rs` line under `root` carrying an indented Rust mutation
-/// marker, as `path:line`.
-//MUTANT-SUITE crates/batten/tests/it/mutant_rows.rs
-//MUTANT indented-row-unread|s@^            let indented = indent > 0 \&\& line\[indent..\].starts_with(OPENER);$@            let indented = false;@|an_indented_row_in_a_tracked_source_is_found
-fn indented_rows(root: &Path) -> Vec<String> {
-    let tracked = batten::git::tracked_paths(root).expect("the tracked set");
-    let mut found = Vec::new();
-    // Exactly `rs`, as rustc reads it: a `.RS` file is no source of rows.
-    let sources = tracked
+/// EVERY TRACKED RUST SOURCE IS CARGO-MUTANTS', by the registry `mise.toml`
+/// declares, so the sweep refuses a hand-written row in any of them
+/// (`runner-owned`) wherever it is written. Fails by: a glob that leaves a `.rs`
+/// file (a bench, an example, a new crate) to the declared runner, which would
+/// quietly accept rows there.
+#[test]
+fn every_tracked_rust_source_is_owned_by_cargo_mutants() {
+    let root = common::at_root(".");
+    let manifest = std::fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
+    let declared = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("MUTANT_RUNNERS = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("mise.toml declares the runner registry in [env]");
+    let registry = batten::mutate::Registry::parse(declared).expect("the registry parses");
+    let tracked = batten::git::tracked_paths(&root).expect("the tracked set");
+    let unowned: Vec<&String> = tracked
         .iter()
-        .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "rs"));
-    for path in sources {
-        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-            continue;
-        };
-        for (at, line) in text.lines().enumerate() {
-            let indent = line.len() - line.trim_start().len();
-            let indented = indent > 0 && line[indent..].starts_with(OPENER);
-            if indented {
-                found.push(format!("{path}:{}", at + 1));
-            }
-        }
-    }
+        .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| registry.owner(path).ok() != Some(batten::mutate::RunnerKind::CargoMutants))
+        .collect();
+    assert!(
+        unowned.is_empty(),
+        "every Rust source is cargo-mutants' alone: {unowned:?}"
+    );
+}
+
+/// The tracked files under `root` whose text contains `needle`, sorted.
+fn files_naming(root: &Path, needle: &str) -> Vec<String> {
+    let tracked = batten::git::tracked_paths(root).expect("the tracked set");
+    let mut found: Vec<String> = tracked
+        .into_iter()
+        .filter(|path| {
+            std::fs::read_to_string(root.join(path)).is_ok_and(|text| text.contains(needle))
+        })
+        .collect();
+    found.sort();
     found
 }
 
-/// Every tracked `//MUTANT` row sits at column 0, where `mutate` reads it.
+/// THE OVERLAY VARIABLE REACHES THE `batten` A SUITE SPAWNS. A suite judges a
+/// preset row through a child `batten`, and that child reads the mutant only
+/// through the overlay variable. Fails by: the test harness scrubbing it, which
+/// judged every preset row against the embedded text — 85 false survivors.
 #[test]
-fn no_rust_mutation_row_is_indented() {
-    let found = indented_rows(&common::at_root("."));
+fn the_overlay_reaches_the_batten_a_suite_spawns() {
+    // The variable the sweep declares as its overlay, read from the task, so a
+    // rename cannot leave this case asserting about a name nothing sets.
+    let tasks = std::fs::read_to_string(common::at_root("mise.toml")).expect("reads");
+    let Some(name) = tasks.lines().find_map(|line| {
+        let rest = line.split("MUTANT_OVERLAY_ENV = \"").nth(1)?;
+        rest.split('"').next()
+    }) else {
+        panic!("mise.toml declares MUTANT_OVERLAY_ENV");
+    };
+    let command = common::batten();
+    let removed = command
+        .get_envs()
+        .any(|(key, value)| key == name && value.is_none());
     assert!(
-        found.is_empty(),
-        "`mutate` reads a row only at column 0, and rustfmt indents a comment \
-         inside a block, so these are not rows: move each above its item, at \
-         column 0: {}",
-        found.join(", ")
+        !removed,
+        "`common::batten` strips {name}, so every suite judges the embedded preset, never the mutant"
     );
 }
 
-/// Every tracked column-0 Rust mutation row under `root` whose body does not
-/// split into `mutate`'s three `|` fields, as `path:line`.
-//MUTANT row-field-count-unread|s@^            if fields.len() != 3 {$@            if false {@|a_row_carrying_a_bare_pipe_is_found
-fn malformed_rows(root: &Path) -> Vec<String> {
-    let tracked = batten::git::tracked_paths(root).expect("the tracked set");
-    let mut found = Vec::new();
-    let sources = tracked
+/// `preset-overlay` NEVER SHIPS: it lets a file replace a shipped rule, so only
+/// the mutation sweep's suite build enables it. Fails by: the feature reaching a
+/// default feature set, a release workflow, a dist config or any task but the
+/// sweep's.
+#[test]
+fn the_preset_overlay_is_enabled_by_the_sweep_alone() {
+    let root = common::at_root(".");
+    let allowed = [
+        // The asked ledger records what was said, never what is enabled.
+        ".batten/asked.jsonl",
+        "crates/batten/Cargo.toml",
+        "crates/batten/src/mutate.rs",
+        "crates/batten/src/preset.rs",
+        "crates/batten/tests/it/mutant_rows.rs",
+        "mise.toml",
+    ];
+    let naming = files_naming(&root, "preset-overlay");
+    let stray: Vec<&String> = naming
         .iter()
-        .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "rs"));
-    for path in sources {
-        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-            continue;
-        };
-        for (at, line) in text.lines().enumerate() {
-            let Some(body) = line.strip_prefix("//MUTANT ") else {
-                continue;
-            };
-            let fields: Vec<&str> = body.split('|').collect();
-            if fields.len() != 3 {
-                found.push(format!("{path}:{}", at + 1));
-                continue;
-            }
-            // A row that reads but changes nothing in its own file is inert —
-            // the sweep would compile the unchanged source and call it covered.
-            // An address script (`/re/{…}`) is the sweep's own to apply; only a
-            // bare `s` script is checked here.
-            let Some(script) = fields.get(1).filter(|script| script.starts_with('s')) else {
-                continue;
-            };
-            let applied = batten::mutate::substitute(&text, script);
-            // Marker lines excluded, as the sweep excludes them: a pattern that
-            // matches only its own declaration changes no source.
-            let source_changed = applied.as_deref().is_some_and(|mutated| {
-                text.lines()
-                    .zip(mutated.lines())
-                    .any(|(before, after)| !before.starts_with("//MUTANT") && before != after)
-            });
-            if !source_changed {
-                found.push(format!("{path}:{} (inert)", at + 1));
-            }
-        }
-    }
-    found
-}
-
-/// A row is `slug|script|test`, split on EVERY `|` (CLOUD-2315). A script
-/// carrying a pipe — `\|` included, which a sed basic regex also reads as
-/// alternation — is not three fields, so the sweep cannot read the row at all.
-/// Six rows carried one and nothing said so; a literal pipe is spelled `\x7c`.
-#[test]
-fn every_rust_mutation_row_is_three_fields() {
-    let found = malformed_rows(&common::at_root("."));
+        .filter(|path| !allowed.contains(&path.as_str()))
+        .collect();
     assert!(
-        found.is_empty(),
-        "a row is `slug|script|test` split on every `|`, so a pipe inside the \
-         script (`\\|` included) breaks it; spell a literal pipe `\\x7c`: {}",
-        found.join(", ")
+        stray.is_empty(),
+        "preset-overlay named outside the sweep: {stray:?}"
     );
-}
-
-/// The anti-vacuity half of the case above.
-#[test]
-fn a_row_carrying_a_bare_pipe_is_found() {
-    let repo = common::scratch_repo("mutant-rows-pipe");
-    common::write(
-        &repo,
-        "src/a.rs",
-        "//MUTANT ok|s/a\\x7cb/c/|case\n//MUTANT piped|s/a\\|b/c/|case\n//MUTANT inert|s/nowhere/c/|case\nfn f() -> &'static str {\n    \"a|b\"\n}\n",
+    let manifest = std::fs::read_to_string(root.join("crates/batten/Cargo.toml")).expect("reads");
+    assert!(
+        !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("default") && line.contains("preset-overlay")),
+        "preset-overlay in the default feature set"
     );
-    common::git_in(&repo, &["add", "-A"]);
-    assert_eq!(
-        malformed_rows(&repo),
-        vec!["src/a.rs:2".to_owned(), "src/a.rs:3 (inert)".to_owned()]
+    let tasks = std::fs::read_to_string(root.join("mise.toml")).expect("reads");
+    let enabling: Vec<&str> = tasks
+        .lines()
+        .filter(|line| line.contains("preset-overlay") && !line.trim_start().starts_with('#'))
+        .collect();
+    assert_eq!(enabling.len(), 1, "one task enables it: {enabling:?}");
+    assert!(
+        enabling[0].contains("MUTANT_OVERLAY_FEATURES"),
+        "and it is the sweep's: {enabling:?}"
     );
-}
-
-/// THE ANTI-VACUITY HALF. A reader that found nothing would pass the case above
-/// over a tree full of dead rows, so the predicate is shown finding one, and
-/// passing the column-0 row and the other language's indented marker beside it.
-#[test]
-fn an_indented_row_in_a_tracked_source_is_found() {
-    let repo = common::scratch_repo("mutant-rows-indented");
-    common::write(
-        &repo,
-        "src/a.rs",
-        "//MUTANT top|s/a/b/|case\nfn f() {\n    //MUTANT nested|s/a/b/|case\n    \
-         let fixture = \"\n    #MUTANT rego|s/a/b/|case\n\";\n}\n",
-    );
-    common::git_in(&repo, &["add", "-A"]);
-    assert_eq!(indented_rows(&repo), vec!["src/a.rs:3".to_owned()]);
 }

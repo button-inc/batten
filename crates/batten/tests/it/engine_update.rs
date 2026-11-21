@@ -26,6 +26,7 @@
 #![cfg(unix)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -61,7 +62,7 @@ fn private_binary(dir: &Path) -> PathBuf {
 ///
 /// The test binary is ~137 MiB and this file wants it in five places, so
 /// copying would write most of a gigabyte per run — and these cases carry
-/// `//MUTANT-SUITE` rows, so a sweep replays them. A link is enough because
+/// mutants of their own, so a sweep replays them. A link is enough because
 /// nothing here writes THROUGH the file: a stamp is a sibling
 /// (`engine::stamp_path`) and `durable::replace` renames over the directory
 /// entry, leaving the shared inode untouched. `scratch_outside_tree` can land
@@ -234,7 +235,7 @@ fn run_from(
         .unwrap()
         .write_all(stdin.as_bytes())
         .unwrap();
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
@@ -317,10 +318,9 @@ fn bash_envelope(session: &str, command: &str) -> String {
 /// would spawn the crash twice to learn the same thing.
 ///
 /// The two arms are separate cases, and the split is about the mutation sweep
-/// rather than taste: `mutate` replays a Rust suite as `cargo test -- <case>`,
-/// so three `//MUTANT` rows naming ONE function each paid for the other arm's
-/// spawns and both floor invocations, none of which can redden the mutant
-/// under test.
+/// rather than taste: a mutant of one arm replaying ONE function would pay for
+/// the other arm's spawns and both floor invocations, none of which can redden
+/// it.
 #[test]
 fn a_crashing_followed_build_never_fails_the_hook_open() {
     // Through `follow_pin`: the installed engine stands IN the checkout.

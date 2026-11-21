@@ -21,7 +21,7 @@
 //!
 //! It does **not** assert the prose is a good explanation, and it cannot: that
 //! is a judgement, and non-negotiable rule 3 says a gate resolves to a command
-//! and an exit code, never a model verdict. It catches the specific, checkable
+//! and an exit code, never a gated-model verdict. It catches the specific, checkable
 //! thing that went wrong — a description naming a narrower command than the one
 //! that runs.
 

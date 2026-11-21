@@ -48,62 +48,16 @@
 
 use std::collections::BTreeMap;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 use crate::transcript::{Event, Stream};
 
-/// The `[hook_output]` table: what this repository's hooks may cost one session.
-///
-/// **Absent means unenforced**, on `[budget]`'s reading — a threshold nobody
-/// declared is not a threshold of zero — so a consumer that has not adopted the
-/// table measures exactly as it did before and refuses nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Ceiling {
-    /// The ceiling on estimated tokens of hook output across the whole session.
-    /// The boundary is `<=`, matching `[budget]`, `[refusal]` and `[advisory]`
-    /// so the four thresholds in this tree do not disagree about their own edge.
-    pub max_tokens: usize,
-    /// How many times one hook may emit byte-identical text in one session.
-    ///
-    /// **The floor is 1, not 0.** Saying a thing once is the report; saying it
-    /// again is the copy. A ceiling of 0 would refuse the first emission, which
-    /// is a hook switched off rather than a hook made quiet — and this row puts
-    /// "removing any hook, or weakening what it detects" explicitly out of scope.
-    pub max_repeats: usize,
-}
-
-/// Refuse a ceiling nothing could satisfy.
-///
-/// # Errors
-///
-/// When `max_tokens` is zero — no hook could speak at all — or when
-/// `max_repeats` is zero, which refuses a hook's FIRST emission and so silences
-/// the finding rather than its restatement.
-pub fn validate(ceiling: Option<&Ceiling>) -> Result<(), String> {
-    let Some(declared) = ceiling else {
-        return Ok(());
-    };
-    if declared.max_tokens == 0 {
-        return Err(
-            "`[hook_output] max_tokens = 0` refuses every hook that speaks at all — remove the \
-             table to leave hook output unbounded, or name a ceiling a session can fit inside"
-                .to_owned(),
-        );
-    }
-    if declared.max_repeats == 0 {
-        return Err(
-            "`[hook_output] max_repeats = 0` refuses a hook's FIRST emission, which silences the \
-             finding rather than its restatement; 1 is the floor — say it once"
-                .to_owned(),
-        );
-    }
-    Ok(())
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_check::hookcost::validate;
+pub use crate::config_model::HookCeiling as Ceiling;
 
 /// One producer's cost over the session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -219,8 +173,6 @@ pub const REPEAT_RULE: &str = "hook-repeat-pointer";
 /// findings is judged per finding: a full arm counts per `(segment, key)`, and a
 /// pointer arm never counts, since pointing is what a repeat is meant to do.
 /// Unlabelled output keeps the `(segment, hook, digest)` key.
-//MUTANT-SUITE crates/batten/src/hookcost.rs
-//MUTANT segment-not-reset|s@^            segment += 1;$@            segment += 0;@|a_full_arm_after_a_session_start_is_not_a_repeat_and_a_pointer_arm_never_is
 #[must_use]
 pub fn measure(stream: &Stream) -> Reading {
     let mut per_hook: BTreeMap<String, Cost> = BTreeMap::new();
@@ -466,7 +418,6 @@ fn takes(route: &str, name: &str, command: &str) -> bool {
 }
 
 /// The bucket a refusal of `call` falls in, given the call after it.
-//MUTANT offered-routes-unread|s@^    if offered.iter().any(\x7croute\x7c takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
 fn follow(
     findings: &[(String, crate::refusal::Arm)],
     offered: &[String],
@@ -514,8 +465,6 @@ fn follow(
 /// binary must not link a tokenizer, so tokens are the transcript's own
 /// estimate. `routes` maps a class token to its declared command targets — the
 /// registry declares routes per class only.
-//MUTANT segment-key-not-reset|s@^                keys.clear();$@                let _ = keys.len();@|a_window_census_reports_distinct_gates_per_segment
-//MUTANT deny-follow-misbucketed|s@^            \.nth(1)$@            .nth(0)@|a_deny_is_bucketed_by_the_call_that_follows_it
 #[must_use]
 pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windows {
     let calls: BTreeMap<&str, (&str, &serde_json::Value)> = stream
@@ -635,7 +584,6 @@ fn remember(
 /// A refusal's findings and routes with each ADDRESS filled in from what its
 /// gate's full arm told the window: the class into its key, its routes into the
 /// offered set. A gate the window never saw in full is left as it is.
-//MUTANT address-recall-skipped|s@^        let Some((class, earlier)) = told.get(gate_name(key)) else {$@        let Some((class, earlier)) = None::<\&(String, Vec<String>)> else {@|a_repeat_is_bucketed_by_what_its_full_arm_offered
 fn recalled(
     told: &BTreeMap<String, (String, Vec<String>)>,
     findings: &[(String, crate::refusal::Arm)],

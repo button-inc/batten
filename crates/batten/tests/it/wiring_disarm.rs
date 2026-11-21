@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::Streamed as _;
 
 use std::path::PathBuf;
 
@@ -70,7 +71,7 @@ impl Bench {
             .args(args)
             .at_home(&self.home)
             .env("BATTEN_ENVIRONMENT", environment)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     }
 }
@@ -154,7 +155,11 @@ fn an_armed_script_is_replaced_by_a_shim_that_exits_zero() {
     )]
     let run = std::process::Command::new(bench.script("stop.sh"))
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::exec::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the shim runs");
     assert_eq!(run.status.code(), Some(0));
     assert!(run.stdout.is_empty() && run.stderr.is_empty());

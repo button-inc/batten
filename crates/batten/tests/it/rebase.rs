@@ -61,7 +61,7 @@
 //! test file.
 //!
 //! **Both placements are refused by something, which is why this one is chosen.**
-//! Declared in `crates/batten/src/gitwrite.rs` the sed would be right and
+//! Declared in `crates/batten-core/src/gitwrite.rs` the sed would be right and
 //! `obligations-bound` could not see it — `test name undefined`'s `line_sources`
 //! do not cover `crates/batten/src/**` — so the promise would read as unbound and
 //! deny. Declared here the promise binds and the sweep does not exercise it. The
@@ -70,16 +70,6 @@
 //! So each kill below was demonstrated BY HAND at implementation — the expression
 //! applied to the engine file, the named case observed red, the file restored.
 //! Nothing in CI re-derives that, and this paragraph is the only record of it.
-
-/*
-#MUTANT-SUITE crates/batten/tests/it/rebase.rs
-#MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
-#MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::git::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
-#MUTANT conflict-stop-names-no-route|s@    subjects.extend(named.iter().map@    subjects.extend(named.iter().take(1).map@|the_conflict_stop_names_every_path_and_the_route_out
-#MUTANT merge-range-refused|s@    replay_range(dir, branch, onto, onto, resolutions, None, true)@    replay_range(dir, branch, onto, onto, resolutions, None, false)@|a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge
-#MUTANT merge-conflict-taken|s@    if let Settled::Conflicted(paths, candidates) = settled {@    if let Settled::Conflicted(paths, candidates) = Settled::Clean(Vec::new()) {@|a_merge_carrying_branch_that_conflicts_with_trunk_moves_nothing
-#MUTANT merge-path-open-to-every-caller|s@    replay_range(dir, branch, upstream, onto, &\[\], None, false)@    replay_range(dir, branch, upstream, onto, \&[], None, true)@|a_plain_rebase_still_refuses_a_merge_carrying_range
-*/
 
 #![cfg(unix)]
 
@@ -1425,7 +1415,10 @@ fn assert_flat(dir: &Path, trunk: gix::ObjectId, head: &str) {
     let repo = gix::open(dir).expect("reopen");
     let head: gix::ObjectId = head.parse().expect("head is a sha");
     assert_eq!(
-        repo.merge_base(trunk, head).expect("merge base").detach(),
+        repo.merge_base(trunk, head)
+            .expect("merge base")
+            .expect("a shared history")
+            .detach(),
         trunk,
         "the head descends from the trunk"
     );
@@ -1650,6 +1643,10 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
     point(&dir, "refs/heads/main", base);
     point(&dir, "refs/heads/master", base);
     materialise(&dir, &[("shared.txt", "base\n")]);
+    // AN INDEX, AS EVERY LAP'S CHECKOUT HAS (CLOUD-2781): `verify` compares the
+    // tree's dirty count at the gate's start and return, and a status nobody can
+    // read is a move, never a clean answer. The other cases here never read it.
+    common::git_in(&dir, &["reset", "-q"]);
 
     // A gate that passes only when the variable carries the expected value. The
     // gate is the assertion, so a dropped pair reddens the case rather than
@@ -1675,12 +1672,11 @@ fn a_published_bet_reaches_the_gate_and_an_absent_one_publishes_nothing() {
         batten::speculation::PUBLISHED_AS.to_owned(),
         String::from("speculated-base"),
     )];
+    let verified =
+        batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate");
     assert!(
-        matches!(
-            batten::land::verify(&dir, "work", &command, &published, &[]).expect("run the gate"),
-            batten::land::Verified::Clean(_)
-        ),
-        "the published pair did not reach the gate"
+        matches!(verified, batten::land::Verified::Clean(_)),
+        "the published pair did not reach the gate: {verified:?}"
     );
 
     // THE MIRROR, and it is not hygiene: without it the case passes over a

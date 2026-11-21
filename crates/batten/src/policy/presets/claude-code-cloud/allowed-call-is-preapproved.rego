@@ -49,37 +49,53 @@ lifecycle(program) if program.name == "cd"
 # `mise run <task>` for a task the consumer declares as its lifecycle: the
 # `preapproved-task` `[[pattern]]` row. No row, no grant — the crate names no
 # task of its own (rule 1).
+#
+# THE TASKS ARE THE ENGINE'S `tasks` READING (step 14), and EVERY one must be
+# declared. This read `arguments[0] == "run"` and the first bare word after it,
+# a Rego copy of the engine's own task reading that disagreed with it twice:
+# `mise run -E dev land` named `dev`, and `mise run land ::: other` was granted
+# on `land` alone while it also started `other`.
 lifecycle(program) if {
 	program.name == "mise"
-	program.arguments[0] == "run"
-	regex.match(data.batten.patterns["preapproved-task"], task_named(program.arguments))
+	is_array(program.tasks)
+	count(program.tasks) > 0
+	every task in program.tasks {
+		regex.match(data.batten.patterns["preapproved-task"], task)
+	}
 }
 
-task_named(arguments) := [word | some i, word in arguments; i > 0; not startswith(word, "-")][0]
-
-mise_call(arguments) := {"call": {
+# The engine's reading is handed in as `tasks`, as the boundary resolves it.
+mise_call(arguments, tasks) := {"call": {
 	"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
 	"command": concat(" ", array.concat(["mise"], arguments)),
 	"segments": [{"words": array.concat(["mise"], arguments)}],
-	"programs": [{"name": "mise", "arguments": arguments, "batten-effect": null}],
+	"programs": [{"name": "mise", "arguments": arguments, "tasks": tasks, "batten-effect": null}],
 }}
 
 declared := {"preapproved-task": "^(land|verify)$"}
 
 test_a_declared_lifecycle_task_is_granted if {
-	"call grant now" in preapprove with input as mise_call(["run", "land"]) with data.batten.patterns as declared
+	"call grant now" in preapprove with input as mise_call(["run", "land"], ["land"]) with data.batten.patterns as declared
 }
 
 test_a_flag_before_the_task_is_still_that_task if {
-	"call grant now" in preapprove with input as mise_call(["run", "--quiet", "verify"]) with data.batten.patterns as declared
+	"call grant now" in preapprove with input as mise_call(["run", "--quiet", "verify"], ["verify"]) with data.batten.patterns as declared
 }
 
 test_an_undeclared_task_is_not if {
-	count(preapprove) == 0 with input as mise_call(["run", "land:x"]) with data.batten.patterns as declared
+	count(preapprove) == 0 with input as mise_call(["run", "land:x"], ["land:x"]) with data.batten.patterns as declared
 }
 
 test_no_declaration_grants_no_task if {
-	count(preapprove) == 0 with input as mise_call(["run", "land"]) with data.batten.patterns as {}
+	count(preapprove) == 0 with input as mise_call(["run", "land"], ["land"]) with data.batten.patterns as {}
+}
+
+test_a_second_undeclared_task_is_not if {
+	count(preapprove) == 0 with input as mise_call(["run", "land", ":::", "other"], ["land", "other"]) with data.batten.patterns as declared
+}
+
+test_a_mise_that_starts_no_task_is_not if {
+	count(preapprove) == 0 with input as mise_call(["exec", "--", "land"], null) with data.batten.patterns as declared
 }
 
 test_cd_then_a_declared_task_is_granted if {
@@ -89,7 +105,7 @@ test_cd_then_a_declared_task_is_granted if {
 		"segments": [{"words": ["cd", "/x"]}, {"words": ["mise", "run", "land"]}],
 		"programs": [
 			{"name": "cd", "arguments": ["/x"], "batten-effect": null},
-			{"name": "mise", "arguments": ["run", "land"], "batten-effect": null},
+			{"name": "mise", "arguments": ["run", "land"], "tasks": ["land"], "batten-effect": null},
 		],
 	}}
 		with data.batten.patterns as declared

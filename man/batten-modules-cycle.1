@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-modules-cycle 1  batten 
+.SH NAME
+batten\-modules\-cycle \- Print how many modules the largest cycle of the module graph holds, refusing more than \-\-max
+.SH SYNOPSIS
+\fBbatten modules cycle\fR [\fB\-\-max\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-root\fR> 
+.SH DESCRIPTION
+Print how many modules the largest cycle of the module graph holds, refusing more than \-\-max
+.SH OPTIONS
+.TP
+\fB\-\-root\fR \fI<root>\fR
+The crate\*(Aqs source root, the directory holding lib.rs
+.TP
+\fB\-\-max\fR \fI<max>\fR
+Refuse when the largest cycle holds more than this many modules (a non\-negative integer)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

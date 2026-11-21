@@ -51,6 +51,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common::{batten, git_in, scratch, stderr, stdout, write};
+use batten::exec::Streamed as _;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -108,7 +110,7 @@ fn record(dir: &Path, input: &str) -> Output {
             );
         }
     }
-    child.wait_with_output().expect("run batten perf record")
+    child.streamed_wait().expect("run batten perf record")
 }
 
 /// The note this repository carries for HEAD, or `None`.
@@ -125,7 +127,7 @@ fn note(dir: &Path) -> Option<String> {
         std::process::Command::new("git")
             .current_dir(dir)
             .args(["rev-parse", "HEAD"])
-            .output()
+            .streamed_output()
             .expect("rev-parse")
             .stdout,
     )
@@ -133,7 +135,7 @@ fn note(dir: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .current_dir(dir)
         .args(["notes", "--ref=perf", "show", head.trim()])
-        .output()
+        .streamed_output()
         .expect("git notes show");
     out.status
         .success()
@@ -245,7 +247,7 @@ fn the_metric_and_runner_are_stamped_into_the_record() {
             .write_all(RECORDS.as_bytes())
             .expect("write");
     }
-    let outcome = child.wait_with_output().expect("run");
+    let outcome = child.streamed_wait().expect("run");
     assert_eq!(outcome.status.code(), Some(0), "{}", stderr(&outcome));
 
     let stored = note(&dir).expect("a note on HEAD");
@@ -270,7 +272,7 @@ fn the_series_is_not_written_to_the_default_notes_ref() {
     let default = std::process::Command::new("git")
         .current_dir(&dir)
         .args(["notes", "show", "HEAD"])
-        .output()
+        .streamed_output()
         .expect("git notes show");
     assert!(!default.status.success(), "refs/notes/commits is untouched");
 }

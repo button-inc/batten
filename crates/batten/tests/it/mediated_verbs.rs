@@ -51,7 +51,10 @@ fn root() -> PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     // Per PROCESS: nextest runs each case in its own, and a shared name races.
     ROOT.get_or_init(|| {
-        common::committed_fixture_with_protected(&format!("mediated-verbs-{}", std::process::id()))
+        common::committed_fixture_with_substitution(&format!(
+            "mediated-verbs-{}",
+            std::process::id()
+        ))
     })
     .clone()
 }
@@ -415,10 +418,10 @@ fn a_command_describing_a_shape_is_not_that_shape() {
     // this hold, and it is worth pinning at this surface because every one of
     // these strings is something this repository's own commits legitimately say.
     assert_allowed(&format!(
-        "git commit -m \"explain why cp x {GUARDED} is refused\""
+        "git commit -m \"docs: explain why cp x {GUARDED} is refused\""
     ));
     assert_allowed(&format!(
-        "git commit -m \"note that sed -i over {GUARDED} denies\""
+        "git commit -m \"docs: note that sed -i over {GUARDED} denies\""
     ));
 }
 
@@ -860,13 +863,21 @@ fn an_unknown_program_on_a_later_line_is_still_refused() {
 
 #[test]
 fn a_newline_did_not_become_a_separator() {
-    // THE BOUND, asserted rather than assumed. Promoting a newline in
-    // `segments` would have changed every landed `pipeline` verdict, so the case
-    // that would notice is a discard shape written across lines: it is still ONE
-    // segment, so the pager still discards the verdict and the call is still
-    // refused. A newline-as-separator would have made these two commands and
-    // allowed the first.
+    // THE BOUND, asserted rather than assumed. bash runs `mise run verify` on
+    // its own and then fails on `| tail -1` (measured: `bash -c $'echo
+    // ran\n| tail -1'` prints `ran`, exits 2), so the call's status is the
+    // syntax error's, never the gate's, and the call is refused. Since `rable`
+    // 0.2.2 rejects the whole string, what is judged is the prefix bash runs.
     assert_denied("mise run verify\n| tail -1");
+}
+
+#[test]
+fn a_line_bash_runs_before_a_syntax_error_is_judged() {
+    // CLOUD-2707's suite: a parse failure on a LATER line abstained on the whole
+    // call, while bash executed every complete line before it. A protected
+    // mutation followed by any unparseable line walked around every gate.
+    assert_denied(&format!("rm {GUARDED}\n| tail -1"));
+    assert_denied(&format!("echo ok\nrm {GUARDED}\n)("));
 }
 
 // --- CLOUD-1109: clause 3 resolves against the caller's cwd -------------------

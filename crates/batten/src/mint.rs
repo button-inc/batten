@@ -49,190 +49,13 @@
 //! selector, a key, a required projection and a body template, and `batten.toml`
 //! says which strings fill them.
 
-use serde::{Deserialize, Serialize};
-
-/// What a mint's receipt is filed under.
-///
-/// The two keyings the censused receipts actually use, and a closed enum rather
-/// than a free string for [`crate::rules::SinkKey`]'s reason: a key a config
-/// could spell arbitrarily is a filename a config could point anywhere, and the
-/// store lives under `$GIT_DIR`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum MintKey {
-    /// Filed under a subject the RESULT names — one row of somebody's board.
-    /// The subject comes from [`Declared::key_from`].
-    Named,
-    /// Filed under the current branch, so every commit on it continues to serve
-    /// the same record.
-    Branch,
-    /// Filed under the identity of the branch's whole CHANGE against
-    /// [`Declared::key_base`] (CLOUD-1484).
-    ///
-    /// **The third keying, and it exists because neither of the two above can
-    /// key a receipt to the bytes a review actually read.** [`MintKey::Named`]
-    /// takes its subject from the tool result, which knows nothing about the
-    /// repository; [`MintKey::Branch`] takes a name that outlives every commit
-    /// under it, which is the staleness defeat
-    /// [`crate::receipt::branch_validity`] already had to be written to patch
-    /// around (CLOUD-516).
-    ///
-    /// The identity is [`crate::git::branch_patch_id`], so it moves when the
-    /// change moves and does NOT move when a rebase merely relocates it. Both
-    /// halves are load-bearing: without the first a receipt would outlive the
-    /// code it attests to, and without the second the landing loop would re-buy
-    /// the attested work on every lap, which is the shape that gets a gate
-    /// switched off rather than satisfied.
-    Delta,
-}
-
-/// Whether a mint replaces its record or appends to it.
-///
-/// The distinction is the censused one and it is not cosmetic. A read receipt
-/// answers *how old is the newest read*, so the freshest must overwrite the
-/// stalest; a search receipt accumulates what the author has seen, so it appends.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum MintMode {
-    /// Truncate and write. The freshest answer is the only answer.
-    Replace,
-    /// Append a line. The record is a journal of what was seen.
-    Append,
-    /// Remove the record (CLOUD-2083). The call this row selects ENDS what a
-    /// sibling row of the same name recorded: a marker minted when a pull request
-    /// opened is gone once it is closed unmerged, where only the landed path used
-    /// to sweep it. Nothing is written, so the body is rendered only to prove the
-    /// row's `requires` held.
-    Clear,
-}
-
-/// One receipt this repository mints from a tool result.
-///
-/// Every column is a consumer's string or a closed enum; nothing here names a
-/// tracker, a tool or a field (non-negotiable rule 1).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Declared {
-    /// The receipt namespace — the same token a `receipt` rule's `checks` list
-    /// names, so the file this writes is the file that rule reads.
-    pub name: String,
-    /// Which tool's result mints it, matched by [`crate::rules::selects_tool_name`].
-    ///
-    /// **A tool name, never a field shape.** A write response and a read payload
-    /// are shape-identical across the fields either carries, so duck-typing lets
-    /// the later, poorer payload win; and the match is on the whole name or its
-    /// whole final `__`-delimited segment because a connector is exposed under
-    /// more than one name over its lifetime (CLOUD-178).
-    pub tool: String,
-    /// What the record is filed under.
-    pub key: MintKey,
-    /// The path whose value is the subject, for [`MintKey::Named`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_from: Option<String>,
-    /// The INPUT path whose value is the subject, for [`MintKey::Named`]
-    /// (CLOUD-2294): the alternative to [`Declared::key_from`], exactly one of
-    /// which a `named` row declares.
-    ///
-    /// A dispatch names its subject in its ARGUMENTS — the row a skill was asked
-    /// to groom — and answers with prose, so a result path has nothing to read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_from_input: Option<String>,
-    /// A pattern the subject must match, or the row mints nothing (CLOUD-2294).
-    ///
-    /// [`crate::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits
-    /// a space, so free-text arguments ("groom M2 to ready") would file under
-    /// themselves. What a row key looks like is the consumer's fact (rule 1), so
-    /// it is declared here, read exactly as a `receipt` rule's `key_shape` is:
-    /// unanchored, so the author writes `^…$`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_shape: Option<String>,
-    /// The base ref the change is measured against, for [`MintKey::Delta`].
-    ///
-    /// Declared rather than defaulted: which ref a branch is *a change against*
-    /// is the consumer's fact, and an engine that assumed one would be naming a
-    /// branch in a repo-agnostic core (non-negotiable rule 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_base: Option<String>,
-    /// The path whose value must equal [`Declared::selects`] for this row to
-    /// mint at all (CLOUD-1484).
-    ///
-    /// # Why presence could not do this job
-    ///
-    /// [`Declared::requires`] asserts a path is present and non-null, which is
-    /// the right shape for a SUCCESS predicate and the wrong one for a
-    /// SELECTION. A harness that dispatches every one of its skills, agents or
-    /// commands through one tool name gives [`Declared::tool`] nothing to
-    /// discriminate on: the row would mint on every invocation of that tool and
-    /// the receipt would attest that *something* ran. That is a false green in
-    /// the one direction a dispatch gate exists to refuse, and no amount of
-    /// `requires` reaches it, because the field is present either way — it just
-    /// holds another value.
-    ///
-    /// **The shape is adopted, not invented.** [`crate::capture`] already
-    /// resolves a stored response by `key_at`/`key` through [`scalar`], the same
-    /// selector this uses, so a path spelled here means what it means there.
-    ///
-    /// Absent leaves the row judged exactly as it was before this column
-    /// existed: [`Declared::tool`] alone decides, which is every landed row's
-    /// behaviour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selects_at: Option<String>,
-    /// The value [`Declared::selects_at`] must hold. Compared for EQUALITY,
-    /// never as a substring: a prefix match would let a longer name a consumer
-    /// never declared mint under a shorter one's row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selects: Option<String>,
-    /// Paths that must be present and non-null in the result for anything to be
-    /// written. **This is the success predicate** — see the module doc.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<String>,
-    /// A receipt that must already be on file UNDER THE SAME KEY for this row to
-    /// mint at all (CLOUD-2261): the name of another declared writer row.
-    ///
-    /// # Why a dispatch could not attest a completion
-    ///
-    /// A host that answers a skill dispatch with `Launching skill: <name>` has
-    /// said only that the ask happened. A receipt minted there attests the
-    /// review was ASKED FOR over these bytes, and a gate reading it lets a change
-    /// through that nobody finished reviewing. The completion is a DIFFERENT
-    /// call — the one the skill ends with — and that call names no change and no
-    /// skill, so on its own it would attest that *some* review finished over
-    /// *something*.
-    ///
-    /// The two halves together are the attestation: the dispatch row selects
-    /// which review over which change, and the completion row mints the receipt
-    /// a gate reads only when that dispatch is on file under the identity the
-    /// completion resolves now. A change committed between the two moves the key,
-    /// so the earlier dispatch no longer answers and the completion mints nothing.
-    ///
-    /// Absent leaves the row judged exactly as before the column existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<String>,
-    /// Whether the record is replaced or appended.
-    pub mode: MintMode,
-    /// The record's bytes, as a template over the closed placeholder vocabulary
-    /// [`Piece`] documents.
-    pub body: String,
-}
-
-/// A compiled authority a template may ask for a value.
-///
-/// **Closed, and this is the axis that makes CLOUD-1100's renderer repo-agnostic**
-/// (`[[recorder]]`'s [`crate::recorder::Ask`] is its twin). A `[program]` row
-/// names a path the consumer owns and the engine spawns; an authority names a
-/// predicate the CRATE owns and answers in-process. Consumers get the second
-/// without the engine learning a tracker's vocabulary: this enum's one variant
-/// says *the Definition-of-Ready grammar*, and nothing here says which tool,
-/// which field or which board.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Authority {
-    /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
-    Ready,
-}
+pub(crate) use crate::config_check::mint::Authority;
+pub use crate::config_check::mint::validate;
+#[allow(unused_imports)]
+pub(crate) use crate::config_check::mint::{
+    Piece, parse, piece_for, validate_across, validate_subject,
+};
+pub use crate::config_model::{AfterMode, MintDeclared as Declared, MintKey, MintMode};
 
 impl Authority {
     /// The authority this name selects, or `None` for a name no authority
@@ -244,39 +67,6 @@ impl Authority {
             _ => None,
         }
     }
-}
-
-/// One element of a body template.
-///
-/// A **closed** vocabulary: seven forms, each an engine primitive over a
-/// consumer-supplied path. Closed rather than open for the reason every other
-/// axis in this crate is — an unrecognised placeholder is a load error, never a
-/// value that silently renders as itself and writes a receipt nobody can read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Piece {
-    /// Text outside any placeholder, verbatim.
-    Literal(String),
-    /// `{path}` — the scalar at that path.
-    Path(String),
-    /// `{now}` — seconds since the epoch, read at the boundary.
-    Now,
-    /// `{digest:path}` — the git blob hash of the string there.
-    Digest(String),
-    /// `{slug:path}` — lowercased with non-alphanumeric runs folded to `-`.
-    Slug(String),
-    /// `{join:path}` — the values an iterating path yields, space-joined.
-    Join(String),
-    /// `{git:ref}` — what that ref resolves to in this checkout.
-    Git(String),
-    /// `{authority:name}` — the verdict a compiled authority gives the whole
-    /// result, as a token.
-    ///
-    /// **The whole result, never a path into it**, and that is the difference
-    /// from every form above. An authority is a predicate over the DOCUMENT: the
-    /// Ready grammar reads the body and the relation set together, and a template
-    /// naming one field of it would hand the predicate a payload it could not
-    /// judge while looking exactly like one it could.
-    Authority(Authority),
 }
 
 /// The token an absent optional records.
@@ -314,114 +104,9 @@ impl Piece {
     }
 }
 
-/// Split a body template into its pieces, or name the first thing wrong with it.
-///
-/// Shared by [`validate`] and [`render`] so a template that loads is a template
-/// that renders: a second parser would be a second thing to drift, and the
-/// drift's shape would be a rule that passes validation and writes nothing.
-fn parse(body: &str) -> Result<Vec<Piece>, String> {
-    let mut pieces = Vec::new();
-    let mut literal = String::new();
-    let mut rest = body;
-    while let Some(open) = rest.find('{') {
-        literal.push_str(&rest[..open]);
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else {
-            return Err(format!("`{body}` has an unclosed `{{`"));
-        };
-        let token = &after[..close];
-        rest = &after[close + 1..];
-        if !literal.is_empty() {
-            pieces.push(Piece::Literal(std::mem::take(&mut literal)));
-        }
-        pieces.push(piece_for(token)?);
-    }
-    literal.push_str(rest);
-    if !literal.is_empty() {
-        pieces.push(Piece::Literal(literal));
-    }
-    Ok(pieces)
-}
-
-/// One placeholder's meaning, or a refusal naming it.
-fn piece_for(token: &str) -> Result<Piece, String> {
-    if token == "now" {
-        return Ok(Piece::Now);
-    }
-    let Some((verb, argument)) = token.split_once(':') else {
-        if token.is_empty() {
-            return Err(String::from("`{}` names no path"));
-        }
-        return Ok(Piece::Path(token.to_owned()));
-    };
-    if argument.is_empty() {
-        return Err(format!("`{{{token}}}` names an empty argument"));
-    }
-    match verb {
-        "digest" => Ok(Piece::Digest(argument.to_owned())),
-        "slug" => Ok(Piece::Slug(argument.to_owned())),
-        "join" => Ok(Piece::Join(argument.to_owned())),
-        "git" => Ok(Piece::Git(argument.to_owned())),
-        "authority" => Authority::named(argument)
-            .map(Piece::Authority)
-            .ok_or_else(|| {
-                format!("`{{{token}}}` names `{argument}`, which is not a compiled authority")
-            }),
-        other => Err(format!(
-            "`{{{token}}}` names `{other}`, which is not one of `digest`, `slug`, `join`, `git` or \
-             `authority`"
-        )),
-    }
-}
-
-/// Every value a path selects, or `None` where the path does not resolve.
-///
-/// The grammar is dotted segments, where a segment ending `[]` iterates the array
-/// there. `None` and an EMPTY vector are different answers and the difference is
-/// what makes a zero-hit search still mint: a path that does not resolve is a
-/// payload this mint cannot read, while a path resolving to no elements is a real
-/// reading of nothing.
-///
-/// A `null` at the end of a path is `None` rather than a value, because every
-/// caller here is asking whether the result actually said something.
-/// `pub(crate)` since CLOUD-690: `facts::counted` walks a declared path over a
-/// tool result, and it is the SAME question this module already answers. A second
-/// walker would be a second path grammar — one accepting `[]` where the other
-/// does not, one treating an absent segment as null where the other refuses — and
-/// a config path meaning two things depending on which column it appears in is
-/// the drift this crate keeps recording.
-pub(crate) fn select<'a>(
-    value: &'a serde_json::Value,
-    path: &str,
-) -> Option<Vec<&'a serde_json::Value>> {
-    let mut current = vec![value];
-    for segment in path.split('.') {
-        let (name, iterate) = match segment.strip_suffix("[]") {
-            Some(name) => (name, true),
-            None => (segment, false),
-        };
-        let mut next = Vec::new();
-        for value in current {
-            // An empty name is the top-level array's spelling (`[].id`), so the
-            // value is already the thing to iterate.
-            let value = if name.is_empty() {
-                value
-            } else {
-                value.get(name)?
-            };
-            if iterate {
-                next.extend(value.as_array()?);
-            } else {
-                next.push(value);
-            }
-        }
-        current = next;
-    }
-    if current.iter().any(|value| value.is_null()) {
-        return None;
-    }
-    Some(current)
-}
+// Housed in `crate::facts` (CLOUD-2789), which walks the same paths; the path
+// here is unchanged.
+pub(crate) use crate::facts::select;
 
 /// The single scalar a path selects, rendered as a bare string.
 ///
@@ -515,7 +200,7 @@ pub fn subject(
     {
         return None;
     }
-    crate::receipt::safe_subject(&subject).then_some(subject)
+    crate::config_check::receipt::safe_subject(&subject).then_some(subject)
 }
 
 /// The git blob id of `text`, byte-identical to `git hash-object --stdin`.
@@ -652,261 +337,7 @@ pub fn render(
     Some(out)
 }
 
-/// The subject columns of one row (CLOUD-2294): where a `named` row reads its
-/// subject from, and that no other keying declares a column only it reads.
-fn validate_subject(mint: &Declared) -> anyhow::Result<()> {
-    // A `named` row takes its subject from EXACTLY ONE source: none files
-    // nothing, and two would be a precedence nobody declared.
-    if mint.key == MintKey::Named && mint.key_from.is_some() == mint.key_from_input.is_some() {
-        return Err(crate::error::UsageError::raise(format!(
-            "`[[mint]]` `{}` is keyed `named` and must declare exactly one of `key_from` \
-             (a result path) and `key_from_input` (an input path)",
-            mint.name
-        )));
-    }
-    // THE SYMMETRIC CASE to the `key_base` arm. A `key_from` on a row keyed
-    // `delta` or `branch` is read by nothing exactly as a `key_base` on a
-    // `named` one is — the same inert declaration, and refusing one while
-    // ignoring the other is the half-coverage `validate` exists to refuse. The
-    // same holds for `key_from_input` and `key_shape`.
-    if mint.key != MintKey::Named
-        && let Some(column) = [
-            ("key_from", mint.key_from.is_some()),
-            ("key_from_input", mint.key_from_input.is_some()),
-            ("key_shape", mint.key_shape.is_some()),
-        ]
-        .into_iter()
-        .find_map(|(column, declared)| declared.then_some(column))
-    {
-        return Err(crate::error::UsageError::raise(format!(
-            "`[[mint]]` `{}` declares a `{column}` and is not keyed `named`, so the \
-             projection would be read by nothing",
-            mint.name
-        )));
-    }
-    // A SHAPE IS JUDGED ONLY WHERE IT IS READ, after the arm above, so a stray
-    // one is told to go rather than to be fixed; and only as a `receipt` rule's
-    // `key_shape` is, so one pattern loads on both rows.
-    if let Some(shape) = mint.key_shape.as_deref()
-        && let Err(problem) = regex::Regex::new(shape)
-    {
-        return Err(crate::error::UsageError::raise(format!(
-            "`[[mint]]` `{}`: `key_shape` is not a valid regular expression: {problem}",
-            mint.name
-        )));
-    }
-    Ok(())
-}
-
-/// Refuse a malformed `[[mint]]` table.
-///
-/// Each refusal below is a row that would parse, read as configured, and mint
-/// nothing — CLOUD-253's inert-coverage shape, which is why a table nothing
-/// validates is itself refused. Refused at LOAD rather than skipped at run time,
-/// because a skip is invisible: the call succeeds, the receipt simply is not
-/// there, and the gate that reads it denies forever with no way to see why.
-///
-/// # Errors
-///
-/// Returns a [`crate::error::UsageError`] (-> exit `1`) naming the offending row.
-/// Pointer-only: the mint's NAME and the malformed placeholder, never a value.
-pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
-    let mut seen: std::collections::BTreeSet<(&str, bool)> = std::collections::BTreeSet::new();
-    for mint in mints {
-        if mint.name.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(
-                "a `[[mint]]` row declares an empty `name`, so the receipt it writes could not be \
-                 the one any `checks` entry reads",
-            ));
-        }
-        if mint.tool.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares an empty `tool`: an empty selector matches the empty \
-                 final segment of any name ending `__`, so the row would mint from calls nobody \
-                 named",
-                mint.name
-            )));
-        }
-        if mint.key == MintKey::Delta && mint.key_base.is_none() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` is keyed `delta` and declares no `key_base`, so nothing says \
-                 which base the change is measured against and no receipt could be filed",
-                mint.name
-            )));
-        }
-        // A `key_base` on a row keyed any other way is refused rather than
-        // ignored: an ignored declaration reads as configured and decides
-        // nothing, which is the inert-coverage shape this whole function exists
-        // to refuse.
-        if mint.key != MintKey::Delta && mint.key_base.is_some() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares a `key_base` and is not keyed `delta`, so the base \
-                 would be read by nothing",
-                mint.name
-            )));
-        }
-        validate_subject(mint)?;
-        // HALF A SELECTOR IS THE DANGEROUS HALF. `selects_at` alone would leave
-        // the row minting on every result its tool matched while LOOKING
-        // narrowed, which is the reading a reviewer takes from the column's
-        // presence; `selects` alone names a value nothing is compared to.
-        if mint.selects_at.is_some() != mint.selects.is_some() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares only one of `selects_at` and `selects`; a selector \
-                 with no value narrows nothing while reading as though it did",
-                mint.name
-            )));
-        }
-        // BOTH HALVES, because only one was checked and the unchecked half is the
-        // one that fails silently: `selects = ""` loads clean, matches no value any
-        // host sends, and the row mints nothing — so its gate denies forever with a
-        // remedy that cannot clear it. A blank `selects_at` at least fails to
-        // resolve loudly.
-        for (column, value) in [
-            ("selects_at", mint.selects_at.as_deref()),
-            ("selects", mint.selects.as_deref()),
-        ] {
-            // TRIMMED-EMPTY *AND* SURROUNDED BY WHITESPACE, because only the first
-            // was checked and the second fails in the same silent direction:
-            // `selects = "code-review "` loads clean, compares against a value no
-            // host sends, and the row mints nothing — so its gate denies forever
-            // with a remedy that cannot clear it. Refusing rather than trimming,
-            // because trimming would decide on the author's behalf which of two
-            // readings they meant.
-            if let Some(text) = value
-                && (text.trim().is_empty() || text.trim() != text)
-            {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[mint]]` `{}` declares a `{column}` that is empty or padded, which can \
-                     never match",
-                    mint.name
-                )));
-            }
-        }
-        if let Err(problem) = parse(&mint.body) {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` has an unreadable `body`: {problem}",
-                mint.name
-            )));
-        }
-        // A `named` row whose subject projection the body never has to render is
-        // still required to name one the ENGINE can read, so the same parser
-        // decides both and a typo cannot reach the filename.
-        for (column, from) in [
-            ("key_from", mint.key_from.as_deref()),
-            ("key_from_input", mint.key_from_input.as_deref()),
-        ] {
-            if from.is_some_and(|path| path.trim().is_empty()) {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[mint]]` `{}` declares an empty `{column}`",
-                    mint.name
-                )));
-            }
-        }
-        // ONE WRITER AND AT MOST ONE CLEAR PER NAME (CLOUD-2083). A `clear` row
-        // shares its writer's name because it is the same record's other end, so
-        // the uniqueness is per mode class: two writers would still let the
-        // sorted-later one silently decide the record.
-        if !seen.insert((mint.name.as_str(), mint.mode == MintMode::Clear)) {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` is declared twice; two rows writing one receipt name would let \
-                 the sorted-later one silently decide the record",
-                mint.name
-            )));
-        }
-    }
-    validate_across(mints)
-}
-
-/// The refusals that read more than one row: a `clear` with no writer, and an
-/// `after` naming no writer keyed the same way.
-///
-/// Each is a row that loads clean and does nothing, the inert-coverage shape
-/// [`validate`] exists to refuse.
-fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
-    // A CLEAR WITH NO WRITER removes a record nothing makes.
-    if let Some(orphan) = mints.iter().find(|clear| {
-        clear.mode == MintMode::Clear
-            && !mints
-                .iter()
-                .any(|writer| writer.mode != MintMode::Clear && writer.name == clear.name)
-    }) {
-        return Err(crate::error::UsageError::raise(format!(
-            "`[[mint]]` `{}` is `mode = \"clear\"` and no row of that name writes the record, \
-             so it would clear nothing",
-            orphan.name
-        )));
-    }
-    // AN `after` NAMING NO WRITER KEYED ALIKE can never be satisfied, so its gate
-    // denies forever with a remedy that cannot clear it (CLOUD-2261). "Alike" is
-    // the same `key` and `key_base`: the prerequisite is looked up under THIS
-    // row's subject, and a writer filing under another identity never wrote one
-    // there.
-    for mint in mints {
-        let Some(after) = mint.after.as_deref() else {
-            continue;
-        };
-        // The name becomes a path component under the receipt store, which the
-        // completion then removes: held to the rule every subject is held to.
-        if !crate::receipt::safe_subject(after) {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares an `after` that is not a single safe path component",
-                mint.name
-            )));
-        }
-        // A CLEAR gated on a prerequisite would end its record only while
-        // another record happened to exist: a shape `after` does not define.
-        if mint.mode == MintMode::Clear {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` is `mode = \"clear\"` and declares `after`; a prerequisite \
-                 gates a record being written, never one being ended",
-                mint.name
-            )));
-        }
-        // ONE ROW PER PREREQUISITE PER CALL: a completion spends the record it
-        // was admitted by, so a second row selecting the SAME call and naming the
-        // same prerequisite would find it gone and never mint, decided by row
-        // order alone. Rows on different tools are alternative completions, of
-        // which the first to arrive spending the dispatch is the design.
-        if mints
-            .iter()
-            .filter(|other| {
-                other.after.as_deref() == Some(after)
-                    && other.tool == mint.tool
-                    && other.key == mint.key
-                    && other.key_base == mint.key_base
-                    // The same path holding different values can never select
-                    // the same call, so those rows cannot race for the record.
-                    && !(other.selects_at == mint.selects_at
-                        && other.selects.is_some()
-                        && mint.selects.is_some()
-                        && other.selects != mint.selects)
-            })
-            .count()
-            > 1
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` names `after = \"{after}\"` on the same tool and key as another \
-                 row; the first to mint spends the record, so the other could never mint",
-                mint.name
-            )));
-        }
-        if !mints.iter().any(|writer| {
-            writer.mode != MintMode::Clear
-                && writer.name == after
-                && writer.name != mint.name
-                && writer.key == mint.key
-                && writer.key_base == mint.key_base
-        }) {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares `after = \"{after}\"` and no other row of that name \
-                 writes a record under the same `key` and `key_base`, so it could never mint",
-                mint.name
-            )));
-        }
-    }
-    Ok(())
-}
+impl Declared {}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -976,6 +407,85 @@ mod tests {
             "a `key_from` a `delta` row never reads is the same inert declaration \
              the `key_base` arm already refuses"
         );
+    }
+
+    /// A row from JSON, for the `after_mode` cases (CLOUD-2680).
+    fn row(value: serde_json::Value) -> Declared {
+        serde_json::from_value(value).expect("shape loads")
+    }
+
+    /// A writer of `gates` keyed on the delta, and a dependent named `name`
+    /// selecting `selects`, in `mode` (`None` for the default).
+    fn bridged(name: &str, tool: &str, selects: &str, mode: Option<&str>) -> Declared {
+        let mut value = serde_json::json!({
+            "name": name, "tool": tool, "key": "delta", "key_base": "origin/main",
+            "selects_at": "skill", "selects": selects, "after": "gates",
+            "mode": "replace", "body": "{now}",
+        });
+        if let Some(mode) = mode {
+            value["after_mode"] = serde_json::json!(mode);
+        }
+        row(value)
+    }
+
+    fn gates() -> Declared {
+        row(serde_json::json!({
+            "name": "gates", "tool": "Bash", "key": "delta", "key_base": "origin/main",
+            "mode": "replace", "body": "{now}",
+        }))
+    }
+
+    /// Two `require` rows on one tool may share a prerequisite; two `spend` rows
+    /// selecting the same call still refuse, since the first spends it.
+    #[test]
+    fn require_rows_share_a_prerequisite_and_spend_rows_still_refuse() {
+        let shared = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "Skill", "x", Some("require")),
+        ];
+        assert!(validate(&shared).is_ok(), "{:?}", validate(&shared));
+        let spent = [
+            gates(),
+            bridged("a", "Skill", "x", None),
+            bridged("b", "Skill", "x", None),
+        ];
+        assert!(validate(&spent).is_err());
+    }
+
+    /// One prerequisite has one mode, on one tool or across two.
+    #[test]
+    fn mixed_after_modes_on_one_prerequisite_refuse() {
+        let same_tool = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "Skill", "y", None),
+        ];
+        assert!(validate(&same_tool).is_err());
+        let across = [
+            gates(),
+            bridged("a", "Skill", "x", Some("require")),
+            bridged("b", "ReportFindings", "y", Some("spend")),
+        ];
+        assert!(validate(&across).is_err());
+    }
+
+    /// An `after_mode` with no `after` modes nothing, in any mode and on a
+    /// `clear` row.
+    #[test]
+    fn an_after_mode_without_an_after_refuses() {
+        for mode in ["spend", "require"] {
+            let orphan = row(serde_json::json!({
+                "name": "r", "tool": "T", "key": "named", "key_from": "id",
+                "after_mode": mode, "mode": "replace", "body": "{id}",
+            }));
+            assert!(validate(&[orphan]).is_err(), "{mode}");
+        }
+        let clear = row(serde_json::json!({
+            "name": "gates", "tool": "T", "key": "delta", "key_base": "origin/main",
+            "after_mode": "require", "mode": "clear", "body": "",
+        }));
+        assert!(validate(&[gates(), clear]).is_err());
     }
 
     /// A row declaring NO selector is judged exactly as it was before the column
@@ -1338,6 +848,7 @@ mod tests {
             selects: None,
             requires: vec!["id".to_owned()],
             after: None,
+            after_mode: None,
             mode: MintMode::Replace,
             body: "{id} {authority:ready}".to_owned(),
         };

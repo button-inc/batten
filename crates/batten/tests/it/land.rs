@@ -24,15 +24,6 @@
 //! binary; what is untested until here is the join between what a lap RECORDS and
 //! what a module READS.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/land.rs
-#MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
-#MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
-#MUTANT dead-end-confirmed-by-a-sibling|s@run\.name == finding\.check \&\& @@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT dead-end-confirmed-by-one-masked-name|s@masked\.iter()\.all(@masked.iter().any(@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
-*/
-
 #![cfg(unix)]
 
 use crate::common;
@@ -190,7 +181,7 @@ fn check(repo: &Path) -> (i32, String, String) {
     let output = batten()
         .args(["check"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     (
         output.status.code().expect("exit code"),
@@ -472,7 +463,7 @@ fn land_verify(repo: &Path, command: &str) -> (i32, String, String) {
         .args(["land", "verify"])
         .env("LAND_VERIFY", command)
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -568,7 +559,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
     let registered = batten()
         .args(["task", "register", "land", task, "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("register the supervising task");
     assert!(registered.status.success(), "{}", stderr(&registered));
     // NO INHERITED GROUP OWNER: under `verify` this suite runs inside a mise
@@ -582,7 +573,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
         .env("LAND_SELF_STALL_BEATS", beats)
         .env("LAND_LOCK_HEARTBEAT", "1")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (output.status.code().expect("exit code"), stdout(&output))
 }
@@ -664,7 +655,7 @@ fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_VERIFY_RECEIPT", "verify")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -678,7 +669,7 @@ fn record_verify_receipt(repo: &Path) {
     let output = batten()
         .args(["receipt", "record", "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -736,7 +727,7 @@ fn a_receipt_for_an_earlier_head_runs_the_gate() {
 /// a two-lap budget, two passes lost to another branch's lease, every one green,
 /// and the landing ended telling the agent to run it again.
 ///
-/// MUTANT `lease-loss-charges-a-lap`: counting lease waits against the budget
+/// MUTANT: counting lease waits against the budget
 /// exhausts it after the second loss, so the first assertion goes red.
 #[test]
 fn a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged() {
@@ -775,7 +766,7 @@ fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_WORKFLOW", "fast-forward.yml")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land lap");
     (
         output.status.code().expect("exit code"),
@@ -819,6 +810,31 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// A lap over a dirty tree stops first, naming the count, before it spends a
+/// fetch or a compile on work it could not push: measured on #1276, a lap that
+/// asked this last stopped on one uncommitted line after two compiles.
+///
+/// Fails by: the dirty-tree question answered "clean" for a dirty tree, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_lap_over_a_dirty_tree_stops_before_anything_else() {
+    let repo = repo("land-lap-dirty");
+    // A REMOTE TO RESOLVE, since the lap names its base before it opens; the
+    // dirty-tree question is then the first one the lap itself asks.
+    let url = repo.display().to_string();
+    common::git_in(&repo, &["remote", "add", "origin", &url]);
+    std::fs::write(repo.join("lib.rs"), "edited\n").unwrap();
+    let (code, out, err) = land_lap(&repo, "3", "true");
+    assert_eq!(
+        code, 2,
+        "a dirty tree is the lap's own refusal: {out} {err}"
+    );
+    assert!(
+        err.contains("differs from HEAD in 1 path(s)"),
+        "the refusal names the count: {err}"
+    );
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()
@@ -829,7 +845,7 @@ fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
         // live pull request would be a test of the forge's availability.
         .env("PATH", "/nonexistent")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land fast-forward");
     (
         output.status.code().expect("exit code"),

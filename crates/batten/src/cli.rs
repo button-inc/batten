@@ -12,12 +12,13 @@
 //! [`tests::every_leaf_verb_dispatches`] fails if a row ever ships without its
 //! arm, so a declared command can never parse into `None` and silently succeed.
 
-use clap::{ArgMatches, ValueEnum};
+use clap::ArgMatches;
 
-use crate::config::Strictness;
-use crate::hook::{Field as HookFieldName, Harness};
-use crate::rules::ReceiptKey;
+use crate::config_model::ReceiptKey;
+use crate::config_model::Strictness;
+use crate::config_model::{Field as HookFieldName, Harness};
 use crate::surface;
+pub use crate::surface_table::{SchemaSurface, SpecFormat};
 
 /// The parsed invocation: the global flags plus the chosen command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,18 @@ pub struct EnforceFlags {
     /// SUBJECT is a `kind = "command"` row, and repeatable since CLOUD-1358.
     /// See `surface::ENFORCE_RULE`.
     pub rule: Vec<String>,
+    /// Judge only one half of the rows (step 13a): the tree half, receipted on
+    /// the index, or the live half, run every time. `None` judges every row.
+    /// See `surface::ENFORCE_HALF`.
+    pub half: Option<crate::surface_table::Half>,
+    /// The refs whose merge base the tree half's receipt keys, which admits a
+    /// `ratchet` row against one of them to the tree half (repeatable). See
+    /// `surface::ENFORCE_KEYED_BASE`.
+    pub keyed_base: Vec<String>,
+    /// Print the digest of the out-of-tree state the tree half reads, and judge
+    /// nothing (step 13a). Only under `--half tree`. See
+    /// `surface::ENFORCE_INPUTS_DIGEST`.
+    pub inputs_digest: bool,
 }
 
 /// The top-level subcommands.
@@ -172,6 +185,12 @@ pub enum Command {
         /// `None` means the boundary reads its own clock, which is what it has
         /// always done, so no committed row changes meaning by this arriving.
         instant: Option<String>,
+        /// `--show-input`: store the exact policy input this call produced and
+        /// print its pointer (CLOUD-2696).
+        show_input: bool,
+        /// `--event <name>`: the host's event name, for a payload that names
+        /// none (CLOUD-2700).
+        event: Option<String>,
     },
     /// Print one allowlisted field of a hook payload read from stdin.
     HookField {
@@ -496,6 +515,71 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// Forge events into the hook surface (CLOUD-2690).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Forge {
+        /// The sub-verb selected.
+        command: ForgeCommand,
+    },
+    /// The crate's module graph (CLOUD-2789): the size of its largest cycle.
+    ///
+    /// APPENDED LAST, for the reason above.
+    Modules {
+        /// The sub-verb selected.
+        command: ModulesCommand,
+    },
+}
+
+/// The `modules` sub-verbs (CLOUD-2789).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ModulesCommand {
+    /// Print the largest strongly connected component of the module graph
+    /// under `root`, refusing a count above `max`.
+    Cycle {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most modules the component may hold, as written; `None` never
+        /// refuses. The verb parses it, so a bad value is its usage error.
+        max: Option<String>,
+    },
+    /// Print how many inherent impls sit away from their type's module
+    /// (CLOUD-2792), refusing a count above `max`.
+    Impls {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most outside-plus-ambiguous impls allowed, as written.
+        max: Option<String>,
+    },
+    /// Print how many re-exports of the crate's own items sit outside its
+    /// root (CLOUD-2792), refusing a count above `max`.
+    Shims {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most re-export leaves allowed, as written.
+        max: Option<String>,
+    },
+}
+
+/// `batten forge`'s sub-verbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForgeCommand {
+    /// One forge event payload on stdin, normalized, deduplicated and run
+    /// through the same handlers and rules as a harness hook (CLOUD-2690).
+    Intake {
+        /// The `X-GitHub-Event` name a webhook body arrived under.
+        event: Option<String>,
+        /// `wake`: stdin is a harness user-prompt-submit payload.
+        from: Option<String>,
+    },
+    /// One round from the first available `[[forge.source]]`, or a loop every
+    /// N seconds registered with `task` (CLOUD-2693).
+    Poll {
+        /// The interval, in whole seconds above 0.
+        every: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -508,6 +592,8 @@ pub enum TestCommand {
         base: String,
         /// Emit the findings as one JSON document.
         json: bool,
+        /// Judge only removed tests, without building (CLOUD-2789).
+        structural: bool,
     },
 }
 
@@ -609,6 +695,35 @@ pub enum StepCommand {
         args: Vec<String>,
         /// The command, verbatim. Never empty — the surface requires it.
         command: Vec<String>,
+    },
+    /// Say whether every required CI check passed locally at `HEAD` or is
+    /// exempt (CLOUD-2788).
+    Cover,
+    /// Print one `base <path> <id>` line per pathspec, read at the merge base
+    /// of `HEAD` and the ref (CLOUD-2787): a two-tree step's base half.
+    Base {
+        /// The ref compared against, unless `ref_env` overrides it.
+        reference: String,
+        /// The variable whose value, when set and non-empty, replaces the ref.
+        ref_env: Option<String>,
+        /// The pathspecs whose content ids at the merge base are printed.
+        paths: Vec<String>,
+    },
+    /// Print the sorted `env` lines a declared environment keys (CLOUD-2786):
+    /// a step's environment half, declared as a `tools` entry.
+    Env {
+        /// Names the patterns match that are never keyed, in the order written.
+        exclude: Vec<String>,
+        /// The names, or `PREFIX*` patterns, whose variables are keyed.
+        patterns: Vec<String>,
+    },
+    /// Run a group's rows as a graph (CLOUD-2785).
+    Graph {
+        /// The group, as the step table names it.
+        group: String,
+        /// At most this many rows at once, as written; `None` is no bound. The
+        /// verb parses it, so a bad value is its usage error with a reason.
+        jobs: Option<String>,
     },
 }
 
@@ -735,8 +850,9 @@ pub enum HkCommand {
 /// No `hold`: this process cannot hold anything, because it exits immediately.
 /// `acquire` and `release` act on the CALLER's behalf and the caller's exit trap
 /// owns the release, exactly as `land-lock`'s verbs act for the `land` that
-/// invoked them. `detach` is the one exception, and it holds through the copy
-/// it starts rather than through itself.
+/// invoked them. There is no `detach`: a process started past the harness is
+/// invisible to it and dies with the container (CLOUD-1731's per-turn run,
+/// retired).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SingletonCommand {
@@ -753,26 +869,6 @@ pub enum SingletonCommand {
     Release {
         /// The task's name.
         task: String,
-    },
-    /// Run a command in the background as this task, and report the previous
-    /// run's failure (CLOUD-1991, retiring `[tasks.cross-turn]`).
-    ///
-    /// The one verb here that HOLDS: not this process, which announces, clears
-    /// and returns, but the attached copy it starts, which takes the lock for
-    /// its own pid, runs the command, and releases.
-    Detach {
-        /// The task's name, which is what the lock is keyed by.
-        task: String,
-        /// Where a failed run's pointers wait for the next invocation.
-        marker: String,
-        /// Where the run's whole output is written.
-        log: String,
-        /// The `[[pattern]]` row selecting a pointer line from the output.
-        pattern: String,
-        /// This invocation IS the background copy: take the lock and run.
-        attached: bool,
-        /// The command, after `--`.
-        command: Vec<String>,
     },
 }
 
@@ -823,6 +919,11 @@ pub enum LandCommand {
     /// A flag would put a second spelling of one name on the surface, and the
     /// two would drift.
     Verify,
+    /// Advise a gate run outside the lap on a committed, pushed head that `land`
+    /// is the next step and reuses this run's receipt (CLOUD-2707). Never
+    /// refuses: verifying without landing is legitimate. A consumer's gate names
+    /// this as an early step.
+    Placed,
     /// Ask the fast-forward bot to land this head, and read the answer keyed to
     /// that request.
     ///
@@ -850,6 +951,9 @@ pub enum LandCommand {
     Lap {
         /// The remote reference this lap lands onto; `None` is the declared trunk.
         reference: Option<String>,
+        /// Stop at the first final verify, never leasing, pushing or readying
+        /// (CLOUD-2783).
+        hold: bool,
     },
     /// Is this head built on the CURRENT tip of the reference, so its pull
     /// request can fast-forward-land (CLOUD-1991)?
@@ -874,6 +978,8 @@ pub enum MutateCommand {
     /// Report every gate that is neither enforced nor carrying a filed
     /// exemption, in both directions.
     Census,
+    /// Run cargo-mutants over the change, on as many jobs as this machine holds.
+    Cargo,
 }
 
 /// Subcommands of `task`.
@@ -1501,17 +1607,23 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
-    /// Link this clone's two commit hooks to a hook body the repository checks
-    /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
+    /// Link every git hook in this clone to the running batten binary
+    /// (CLOUD-2339), or, given a body, the two commit hooks to that hook body
+    /// the repository checks in (CLOUD-1991).
     Gate {
-        /// The hook body, relative to the repository root.
-        body: String,
+        /// The hook body, relative to the repository root; absent links the
+        /// binary itself.
+        body: Option<String>,
+        /// Decide whether a link is owed, and write nothing.
+        check: bool,
     },
     /// Register batten on the session root when a session is rooted above this
     /// repository (CLOUD-2111). Last, so no existing variant's discriminant moves.
     Register {
         /// Decide whether a registration is owed, and write nothing.
         check: bool,
+        /// Also register on every harness's committed surface (CLOUD-2676).
+        all: bool,
     },
 }
 
@@ -2480,52 +2592,8 @@ pub enum GenerateCommand {
     /// Emit one harness's hook registrations (CLOUD-62).
     Hooks {
         /// The harness whose wiring to emit.
-        harness: crate::hook::Harness,
+        harness: crate::config_model::Harness,
     },
-}
-
-/// The formats `batten spec` can emit.
-///
-/// One, deliberately. House-style §2 and §11 advertised `kdl|json`; KDL was
-/// never implemented and never had a consumer, and JSON is the agent-facing
-/// contract (§6). The document is corrected rather than the binary, and
-/// `spec::tests::the_spec_emits_exactly_the_committed_formats` pins the list so
-/// a second format is added to both at once (CLOUD-244).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[non_exhaustive]
-pub enum SpecFormat {
-    /// Byte-stable JSON — the agent-facing contract (§6).
-    Json,
-}
-
-/// The surfaces a schema can describe (CLOUD-239, CLOUD-879).
-///
-/// Two config surfaces, two derivations. `batten.toml` is the committed
-/// authority; `batten.local.toml` is the raise-only override, which accepts a
-/// strict subset and refuses the rest. One schema describing both is what let a
-/// validator green-light keys the loader drops.
-///
-/// **And two POLICY-INPUT surfaces, which is why this is no longer
-/// `ConfigSurface`.** CLOUD-879 derives the documents a Rego module reads as
-/// `input` — one per scope — from the fact model, and neither is a config
-/// surface: naming them under the old type would have made the type's name a lie
-/// about half its variants. Renaming is the smaller lie to fix, and the two
-/// existing flag values are untouched.
-///
-/// A flag on the existing emitter rather than a second sub-verb: CLOUD-244
-/// records that §2 and the landed surface already disagree about where schema
-/// emission lives, and adding a verb would deepen that before it is settled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[non_exhaustive]
-pub enum SchemaSurface {
-    /// The committed authority: `batten.toml`.
-    Authority,
-    /// The raise-only override layer: `batten.local.toml`.
-    Override,
-    /// The `input` document a `scope = "tree"` Rego module reads.
-    PolicyInput,
-    /// The `input` document a `scope = "mediated_call"` Rego module reads.
-    PolicyCall,
 }
 
 /// Parse the process arguments into a [`Cli`].
@@ -2728,6 +2796,7 @@ fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
     match matches.subcommand()? {
         ("sweep", _) => Some(MutateCommand::Sweep),
         ("census", _) => Some(MutateCommand::Census),
+        ("cargo", _) => Some(MutateCommand::Cargo),
         _ => None,
     }
 }
@@ -2769,9 +2838,11 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         }),
         ("register", matches) => Some(WiringCommand::Register {
             check: flag(matches, "check"),
+            all: flag(matches, "all"),
         }),
         ("gate", matches) => Some(WiringCommand::Gate {
-            body: matches.get_one::<String>("body")?.clone(),
+            body: matches.get_one::<String>("body").cloned(),
+            check: flag(matches, "check"),
         }),
         _ => None,
     }
@@ -3023,9 +3094,11 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         }),
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
+        ("placed", _) => Some(LandCommand::Placed),
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
             reference: reference_of(matches),
+            hold: matches.get_flag("hold"),
         }),
         ("linear", matches) => Some(LandCommand::Linear {
             reference: reference_of(matches),
@@ -3157,7 +3230,7 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
         }),
         ("markdown", _) => Some(GenerateCommand::Markdown),
         ("hooks", matches) => matches
-            .get_one::<crate::hook::Harness>("harness")
+            .get_one::<crate::config_model::Harness>("harness")
             .map(|harness| GenerateCommand::Hooks { harness: *harness }),
         ("schema", matches) => Some(GenerateCommand::Schema {
             surface: matches
@@ -3358,17 +3431,6 @@ fn singleton_of(matches: &ArgMatches) -> Option<SingletonCommand> {
         }),
         ("release", matches) => Some(SingletonCommand::Release {
             task: matches.get_one::<String>("task").cloned()?,
-        }),
-        ("detach", matches) => Some(SingletonCommand::Detach {
-            task: matches.get_one::<String>("task").cloned()?,
-            marker: matches.get_one::<String>("marker").cloned()?,
-            log: matches.get_one::<String>("log").cloned()?,
-            pattern: matches.get_one::<String>("pattern").cloned()?,
-            attached: flag(matches, "attached"),
-            command: matches
-                .get_many::<String>("command")?
-                .cloned()
-                .collect::<Vec<_>>(),
         }),
         _ => None,
     }
@@ -3611,6 +3673,32 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
                 .cloned()
                 .collect::<Vec<_>>(),
         }),
+        ("cover", _) => Some(StepCommand::Cover),
+        ("env", matches) => Some(StepCommand::Env {
+            exclude: matches
+                .get_many::<String>("exclude")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            patterns: matches
+                .get_many::<String>("patterns")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        ("base", matches) => Some(StepCommand::Base {
+            reference: matches.get_one::<String>("ref").cloned()?,
+            ref_env: matches.get_one::<String>("ref_env").cloned(),
+            paths: matches
+                .get_many::<String>("paths")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        ("graph", matches) => match matches.subcommand()? {
+            ("run", matches) => Some(StepCommand::Graph {
+                group: matches.get_one::<String>("group").cloned()?,
+                jobs: matches.get_one::<String>("jobs").cloned(),
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -3922,6 +4010,14 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 .get_many::<String>("rule")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
+            half: matches
+                .get_one::<crate::surface_table::Half>("half")
+                .copied(),
+            keyed_base: matches
+                .get_many::<String>("keyed_base")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            inputs_digest: flag(matches, "inputs_digest"),
         })),
         "config" => config_of(matches).map(|command| Command::Config { command }),
         "lint" => lint_of(matches).map(|command| Command::Lint { command }),
@@ -3988,19 +4084,8 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
-        "adjudicate" => matches
-            .get_one::<Harness>("harness")
-            .map(|harness| Command::Hook {
-                harness: *harness,
-                instant: matches.get_one::<String>("instant").cloned(),
-            }),
-        "payload" => match matches.subcommand()? {
-            ("field", inner) => Some(Command::HookField {
-                harness: *inner.get_one::<Harness>("harness")?,
-                field: *inner.get_one::<HookFieldName>("name")?,
-            }),
-            _ => None,
-        },
+        "adjudicate" => adjudicate_of(matches),
+        "payload" => payload_of(matches),
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
         "record" => record_of(matches).map(|command| Command::Record { command }),
@@ -4015,6 +4100,61 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
+        "forge" => forge_of(matches).map(|command| Command::Forge { command }),
+        "modules" => modules_of(matches).map(|command| Command::Modules { command }),
+        _ => None,
+    }
+}
+
+/// The `modules` sub-verb a parse resolved to (CLOUD-2789).
+fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
+    match matches.subcommand()? {
+        ("cycle", matches) => Some(ModulesCommand::Cycle {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
+        ("impls", matches) => Some(ModulesCommand::Impls {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
+        ("shims", matches) => Some(ModulesCommand::Shims {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
+        _ => None,
+    }
+}
+
+fn adjudicate_of(matches: &ArgMatches) -> Option<Command> {
+    matches
+        .get_one::<Harness>("harness")
+        .map(|harness| Command::Hook {
+            harness: *harness,
+            instant: matches.get_one::<String>("instant").cloned(),
+            show_input: flag(matches, "show_input"),
+            event: matches.get_one::<String>("event").cloned(),
+        })
+}
+
+fn payload_of(matches: &ArgMatches) -> Option<Command> {
+    match matches.subcommand()? {
+        ("field", inner) => Some(Command::HookField {
+            harness: *inner.get_one::<Harness>("harness")?,
+            field: *inner.get_one::<HookFieldName>("name")?,
+        }),
+        _ => None,
+    }
+}
+
+fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
+    match matches.subcommand()? {
+        ("intake", matches) => Some(ForgeCommand::Intake {
+            event: matches.get_one::<String>("event").cloned(),
+            from: matches.get_one::<String>("from").cloned(),
+        }),
+        ("poll", matches) => Some(ForgeCommand::Poll {
+            every: matches.get_one::<String>("every").cloned(),
+        }),
         _ => None,
     }
 }
@@ -4024,6 +4164,7 @@ fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
         ("replay", matches) => Some(TestCommand::Replay {
             base: matches.get_one::<String>("base")?.clone(),
             json: matches.get_flag("json"),
+            structural: matches.get_flag("structural"),
         }),
         _ => None,
     }

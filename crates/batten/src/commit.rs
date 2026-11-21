@@ -36,82 +36,13 @@ use std::path::Path;
 
 use anyhow::Result;
 use regex::Regex;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::git;
 use crate::verdict::{Native, Subject as Pointer};
-
-/// The `[commit]` table: what a commit subject must look like here.
-///
-/// Consumer-specific by nature (non-negotiable rule 1): the engine holds the
-/// matcher, this table holds the answer. Which type words a repository admits,
-/// and whether it requires a scope, are that repository's business.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Commit {
-    /// The regular expression every non-merge commit's subject must match.
-    ///
-    /// Required when the table is present: a `[commit]` declaring no pattern is
-    /// the half-change rule 2 refuses — it reads as though a convention is
-    /// recorded when nothing is.
-    pub subject_pattern: String,
-    /// Whether every commit in a judged RANGE must name the tracker row it
-    /// serves, and which commits are exempt (CLOUD-843).
-    ///
-    /// Absent is the reading every consumer had before: a range is judged for
-    /// its subjects and nothing else. Present, `commit check <base>..<head>`
-    /// refuses a commit whose message claims no row — see [`judge_claims`].
-    #[serde(default)]
-    pub claims: Option<Claims>,
-}
-
-/// The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).
-///
-/// # The server-side half of a claim
-///
-/// A claim receipt lives in the clone's own git directory and never leaves it,
-/// so no reviewer and no workflow can see it. What a server CAN see is whether
-/// each commit names the issue it serves — the half of the claim that survives a
-/// fresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in
-/// shell, one `claim keys` spawn per commit; the question is this table's now,
-/// asked in process over the range `commit check` already walks.
-///
-/// "Names a row" is `claim keys`' own reading of the WHOLE message — a closing
-/// keyword first, then the first key of each `Refs:` trailer — through the
-/// consumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).
-/// Claiming is stricter than mentioning: a commit citing a row as evidence has
-/// not thereby become work on it (CLOUD-338/CLOUD-378).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Claims {
-    /// The commits that owe no claim, each a property of the COMMIT rather than
-    /// of its wording: which paths it touched, and who authored it.
-    ///
-    /// Empty by default. An exemption keyed to the file set cannot be claimed by
-    /// a hand-written commit that merely borrows a release's subject, which is why
-    /// the subject is not a column here.
-    #[serde(default)]
-    pub unclaimed: Vec<Unclaimed>,
-}
-
-/// One class of commit that owes no claim.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Unclaimed {
-    /// The row's name, for a reader of the config — never printed per commit.
-    pub id: String,
-    /// A regular expression EVERY path the commit changed must match. A commit
-    /// that changed nothing matches vacuously, as the retired shell's filter did.
-    pub paths: String,
-    /// When set, the commit's AUTHOR address — git's `%ae` — must match this too.
-    ///
-    /// The author rather than the committer, because a forge commits an App's work
-    /// as itself and only the author half names which App wrote it.
-    #[serde(default)]
-    pub author: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Claims, Commit, Unclaimed};
 
 /// One commit's claim evidence, gathered by the caller.
 ///
@@ -213,10 +144,6 @@ fn address_of(identity: &str) -> &str {
 ///
 /// A [`UsageError`] (→ exit `1`) when an exemption's expression does not
 /// compile. Validated at load too, so this keeps the function total.
-//MUTANT-SUITE crates/batten/src/commit.rs
-//MUTANT unclaimed-commit-passes|s@        if commit.claims {@        if true {@|a_commit_naming_no_row_is_pointed_at_by_field
-//MUTANT exemption-ignores-author|s@            Some(author) => author.is_match(address),@            Some(_) => true,@|a_bot_address_is_required_as_well_as_the_bot_paths
-//MUTANT exemption-ignores-paths|s@        if !expression.is_match(path) {@        if false {@|a_release_row_does_not_exempt_a_commit_touching_code
 pub fn judge_claims(commits: &[Claimant], claims: &Claims) -> Result<Vec<Finding>> {
     let rows = claims
         .unclaimed
@@ -307,7 +234,6 @@ where
     serializer.serialize_str(Native::from(*verdict).id())
 }
 
-//MUTANT subject-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_commit_finding_names_its_vendored_class
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>[ <subject>]`,
     /// through the same projection every declared refusal renders with.
@@ -463,7 +389,6 @@ impl Commit {
 /// so it decides identically on a runner that cannot reach the store OR the
 /// config — which is what keeps the range half and the pending half from drifting.
 #[must_use]
-//MUTANT admits-tampered-survives-the-redirect|s/^            } else if claims/            } else if crate::redirect::resolve(redirects, path).is_some() \x7c\x7c claims/|a_tampered_block_on_a_redirected_path_is_still_refused
 pub fn judge_admissions(
     writes: &[crate::git::CommitWrite],
     redirects: &[crate::redirect::Redirect],
@@ -590,7 +515,7 @@ pub struct ArmSequence {
 /// spirit — but that is a review question, and a gate demanding a merge between
 /// the two would be refusing ordinary work. Narrow on purpose.
 ///
-/// # No model verdict reaches the exit code
+/// # No gated-model verdict reaches the exit code
 ///
 /// Both sides are sets of strings the caller read out of the diff and the config.
 /// A line counts as a spend when, trimmed, it STARTS WITH the arm's token — which
@@ -664,7 +589,7 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Subject>> {
 ///
 /// Returns an error when the message file cannot be read — exit `1`, not a pass.
 pub fn read_message(message: &Path) -> Result<Subject> {
-    let body = std::fs::read_to_string(message).map_err(|error| {
+    let body = crate::fsio::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(
             "commit: cannot read the commit message file `{}`: {error}",
             message.display()
@@ -682,7 +607,6 @@ pub fn read_message(message: &Path) -> Result<Subject> {
 
 /// Render a run's findings as pointer lines, one per line.
 #[must_use]
-//MUTANT printed-class-unresolved|s@^        _ = writeln!(rendered, "{}", finding.line());$@        _ = writeln!(rendered, "{} {}", finding.label, finding.field);@|a_refused_commit_msg_line_names_a_class_policy_explain_resolves
 pub fn report(findings: &[Finding]) -> String {
     let mut rendered = String::new();
     for finding in findings {
@@ -828,7 +752,7 @@ mod tests {
         }
     }
 
-    /// `#MUTANT unclaimed-commit-passes` reddens here: a commit naming no row,
+    /// A mutant passing an unclaimed commit reddens here: a commit naming no row,
     /// touching code, by a person, is the finding — as a pointer.
     #[test]
     fn a_commit_naming_no_row_is_pointed_at_by_field() {
@@ -882,7 +806,7 @@ mod tests {
         assert!(found.is_empty(), "{found:?}");
     }
 
-    /// `#MUTANT exemption-ignores-paths` reddens here: the release row is a
+    /// A mutant exempting by author alone reddens here: the release row is a
     /// property of the file set, so a commit touching code is not exempt.
     #[test]
     fn a_release_row_does_not_exempt_a_commit_touching_code() {
@@ -899,7 +823,7 @@ mod tests {
         assert_eq!(report(&found), "commit name missing aaaaaaaa claim\n");
     }
 
-    /// `#MUTANT exemption-ignores-author` reddens here. The bot row is two
+    /// A mutant exempting by paths alone reddens here. The bot row is two
     /// conjuncts: a workflow-only diff is ordinary human work, so a person
     /// touching only workflows still owes a claim (CLOUD-431).
     #[test]
@@ -1013,7 +937,7 @@ mod tests {
         assert_eq!(found.len(), 1);
     }
 
-    /// `#MUTANT subject-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// A mutant dropping a field's class reddens here (CLOUD-1960): every
     /// field this module raises leads its line with its own declared class.
     #[test]
     fn every_commit_finding_names_its_vendored_class() {

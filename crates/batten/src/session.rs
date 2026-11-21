@@ -256,7 +256,7 @@ impl SessionRecord {
 /// is its own root, with no cursor", which re-syncs — the safe direction, since a
 /// half-read cursor would skip findings.
 fn read_record(path: &Path) -> Option<SessionRecord> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let record: SessionRecord = serde_json::from_str(&text).ok()?;
     (record.schema == SESSION_SCHEMA).then_some(record)
 }
@@ -877,5 +877,3 @@ mod tests {
 
 // The host-declared session over the compiled binary: `state record` reads it
 // from the environment the suite hands the child, and records its lineage.
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT declared-session-unread|s@^    declared_with_env(\&\x7cname\x7c std::env::var(name).ok())$@    declared_with_env(\&\x7c_\x7c None)@|a_warm_fork_resumes_from_its_parents_watermark

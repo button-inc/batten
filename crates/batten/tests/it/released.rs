@@ -528,7 +528,7 @@ fn the_reading_carries_no_pr_predicate_and_the_marker_has_one_authority() {
 /// sibling tracker gate does — and carries no shell of its own.
 #[test]
 fn the_committed_task_records_then_checks_the_one_row() {
-    let block = common::task_block("released").expect("[tasks.released]");
+    let block = common::task_block_template("released").expect("[tasks.released]");
     let argv = common::task_value(&block, "run");
     assert!(argv.contains("record derive released"), "{argv}");
     assert!(argv.contains(&format!("check --rule '{ROW}'")), "{argv}");

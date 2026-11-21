@@ -96,7 +96,7 @@ const VENDORED: &str = ".claude/skills";
 fn declared_commands() -> (BTreeSet<String>, BTreeSet<String>) {
     let output = batten()
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .expect("run batten spec --format json");
     assert_eq!(
         output.status.code(),
@@ -133,7 +133,10 @@ fn collect_commands(
 
 /// The exit table as the binary renders it: `  <code>  <meaning>`.
 fn exit_table() -> Vec<(String, String)> {
-    let output = batten().arg("--help").output().expect("run batten --help");
+    let output = batten()
+        .arg("--help")
+        .streamed_output()
+        .expect("run batten --help");
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -397,10 +400,6 @@ fn authored_verb_findings(
 // hand at implementation). It is INERT under the sweep — `mutate` never resolves a
 // gate to a test file (`rebase.rs` records why a row is declared here anyway) —
 // so this block is the binding `obligations-bound` reads, not coverage CI runs.
-/*
-#MUTANT-SUITE crates/batten/tests/it/skill_contract.rs
-#MUTANT authored-skill-verbs-unchecked|s@^    for skill in authored_skills(root) {$@    for skill in authored_skills(root).into_iter().filter(|s| s.ends_with("/batten/SKILL.md")) {@|a_second_authored_skill_naming_a_fictional_verb_is_reported
-*/
 
 // --- fixtures -------------------------------------------------------------------
 
@@ -536,7 +535,6 @@ fn numbered_steps(text: &str, heading: &str) -> Vec<String> {
 /// The workflow contract names `land` as the one step after pushing, never the
 /// `verify` and `linear-check` each of its laps already runs (CLOUD-2240): an
 /// agent following the steps as written ran an hour-long `verify` twice.
-//MUTANT workflow-step-restored|s@^    let steps = numbered_steps(\&text, CONTRACT);$@    let steps = [vec![String::from("2. **`mise run verify` green before readying.**")], numbered_steps(\&text, CONTRACT)].concat();@|the_workflow_contract_lands_without_prescribing_its_parts
 #[test]
 fn the_workflow_contract_lands_without_prescribing_its_parts() {
     const CONTRACT: &str = "## Workflow contract";

@@ -45,23 +45,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 
-/// The `[defects]` table: where the ledger lives and what may be in it.
-///
-/// Both keys are consumer facts. The crate carries neither a path nor a class
-/// token (non-negotiable rule 1) — a taxonomy is a description of one team's
-/// failure modes, not an engine fact.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Defects {
-    /// The repo-relative path of the one JSONL ledger.
-    pub path: String,
-    /// The allowed `class` tokens. A record outside this set is refused.
-    pub classes: Vec<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Defects;
 
 impl Defects {
     /// Validate the table at load.
@@ -285,7 +274,7 @@ fn bases(repo: &Path) -> Result<Vec<String>> {
 /// finding here, not a usage error: `check` must be able to report it beside
 /// everything else it found rather than aborting the whole run on one bad row.
 pub fn gate(repo: &Path, declared: &Defects) -> Result<Vec<Finding>> {
-    let working = std::fs::read_to_string(repo.join(&declared.path)).unwrap_or_default();
+    let working = crate::fsio::read_to_string(repo.join(&declared.path)).unwrap_or_default();
 
     let mut problems = match parse_lines(&working) {
         Ok(records) => validate_records(&records, &declared.classes),

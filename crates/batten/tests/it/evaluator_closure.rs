@@ -21,7 +21,7 @@
 //!
 //! Had the walk gone into the task body they would have become `// changed:` arms
 //! pointing at `mise.toml` with nothing asserting them. It is
-//! `crates/batten/src/cargo_graph.rs` instead, and these cases run it, so all
+//! `crates/batten-base/src/cargo_graph.rs` instead, and these cases run it, so all
 //! eight CARRY. `.py` is outside `under_mise_tasks` (`shell-retirement.rego:159`)
 //! so that file adds no shell rule.
 //!
@@ -42,16 +42,17 @@
 // carried: "the repo's real graph is clean today" policy/evaluator-closure.rego kind:mechanism
 // carried: "an IO crate reachable from the evaluator is refused at exit 2" policy/evaluator-closure.rego kind:mechanism
 // carried: "an IO crate the workspace depends on directly, but the evaluator does not, is not the evaluator's" policy/evaluator-closure.rego kind:mechanism
-// carried: "an unactivated optional IO dependency of the evaluator is not reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
-// carried: "the same optional dependency, activated, IS reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
+// carried: "an unactivated optional IO dependency of the evaluator is not reported" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
+// carried: "the same optional dependency, activated, IS reported" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
 // carried: "no evaluator node at all is could-not-look, not a clean bill" policy/evaluator-closure.rego kind:mechanism
 // carried: "the refusal is pointer-only: the crate name, never the path that reached it" policy/evaluator-closure.rego kind:mechanism
-// carried: "a dev-dependency of the evaluator is not in the built closure" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
+// carried: "a dev-dependency of the evaluator is not in the built closure" crates/batten-base/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::Streamed as _;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
@@ -130,7 +131,7 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// Drive the REAL walk over a `cargo metadata` document, through the REAL verb.
 ///
 /// The activated-edge reachability itself lives in
-/// `crates/batten/src/cargo_graph.rs` and is asserted directly by that module's
+/// `crates/batten-base/src/cargo_graph.rs` and is asserted directly by that module's
 /// own `#[cfg(test)] mod tests` — one walk, shared with `macos-link`, so the two
 /// gates cannot drift apart the way their two copies did.
 ///
@@ -474,7 +475,7 @@ fn the_repos_real_graph_is_clean_today() {
     let metadata = std::process::Command::new("cargo")
         .args(["metadata", "--locked", "--format-version", "1"])
         .current_dir("../..")
-        .output()
+        .streamed_output()
         .expect("cargo metadata runs");
     assert!(metadata.status.success(), "the lockfile is current");
 

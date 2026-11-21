@@ -114,7 +114,7 @@ fn fixture(name: &str, prose: &str) -> PathBuf {
 fn check(repo: &Path) -> Output {
     let mut command = batten();
     command.current_dir(repo).arg("check");
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 fn refuses(name: &str, prose: &str) {

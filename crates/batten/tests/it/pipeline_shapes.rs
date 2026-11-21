@@ -33,7 +33,17 @@ use std::path::PathBuf;
 use common::{run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698): this
+    // suite exercises the `pipeline` kind, which the repository no longer
+    // declares. Per PROCESS, since nextest runs each case in its own.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!(
+            "pipeline-shapes-{}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 fn payload(command: &str) -> String {
@@ -196,7 +206,7 @@ fn a_commit_followed_by_a_newline_has_its_status_replaced() {
 #[test]
 fn a_newline_after_a_query_or_before_a_verdict_is_not_a_discard() {
     // The verdict on the LAST line keeps its status: the compound exits with it.
-    assert_allowed_backgrounded("git status --short\nmise run verify");
+    assert_allowed_backgrounded("git status --short\nmise run lint:clippy");
     // A bare status echo with no verdict before it.
     assert_allowed("echo \"exit=$?\"");
     assert_allowed("git log --oneline -1\necho \"exit=$?\"");
@@ -211,7 +221,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // arithmetic rather than taste: `a && b` short-circuits, so a failure in `a`
     // still exits the list non-zero. There is no false green to stop, and
     // `verify`'s own body is built from guarded chains for that property.
-    assert_allowed_backgrounded("mise run fmt && mise run verify");
+    assert_allowed_backgrounded("mise run fmt && mise run lint:clippy");
     // THE GIT-FAMILY ARM, AND ITS OPERAND MOVED (CLOUD-1351). This read
     // `git fetch origin main && git rebase origin/main`, and that command is now
     // DENIED — by `patch run loose`, for hand-stepping a step
@@ -226,7 +236,9 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // edited to make a new deny pass is otherwise indistinguishable from a test
     // weakened to fit a change.
     assert_allowed("git fetch origin main && git fetch origin --tags");
-    assert_allowed_backgrounded("mise exec -- cargo build && mise exec -- cargo test");
+    assert_allowed_backgrounded(
+        "mise exec -- cargo build && mise exec -- cargo test -p batten forced_push",
+    );
 }
 
 #[test]
@@ -265,7 +277,7 @@ fn a_redirection_is_not_a_background_ampersand() {
 /// UNPIPED. All three rows agree on it, and it is what these cases pin.
 #[test]
 fn the_prescribed_form_is_backgrounded_and_keeps_its_own_output() {
-    assert_allowed_backgrounded("mise run verify");
+    assert_allowed_backgrounded("mise run lint:clippy");
     // NOT `land`, and for CLOUD-438's reason rather than by preference: this
     // case adjudicates against the LIVE root, `land.sh` is the one task that
     // takes a singleton, and the singleton row refuses a second start while a
@@ -274,7 +286,7 @@ fn the_prescribed_form_is_backgrounded_and_keeps_its_own_output() {
     // this case is about. `gh_guard.rs` records the same swap after measuring
     // the failure.
     assert_allowed_backgrounded("mise run fmt");
-    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
+    assert_allowed_backgrounded("mise exec -- cargo test -p batten forced_push");
 }
 
 #[test]
@@ -288,8 +300,8 @@ fn the_retired_redirect_form_is_refused_from_both_sides() {
 
 #[test]
 fn a_verdict_alone_in_the_call_is_the_prescribed_form() {
-    assert_allowed_backgrounded("mise run verify");
-    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
+    assert_allowed_backgrounded("mise run lint:clippy");
+    assert_allowed_backgrounded("mise exec -- cargo test -p batten forced_push");
     assert_allowed("git push origin branch");
     assert_allowed("bats tests/land.bats");
 }
@@ -308,8 +320,8 @@ fn a_command_describing_the_shape_is_not_the_shape() {
     // A commit message, an issue body, or documentation naming one of these
     // shapes is prose. The parser's quote handling is what makes this hold, and
     // it is pinned here because this repository's own commits say these things.
-    assert_allowed("git commit -m \"never run mise run verify | tail -6\"");
-    assert_allowed("git commit -m \"the nohup mise run land & shape is refused\"");
+    assert_allowed("git commit -m \"docs: never run mise run verify | tail -6\"");
+    assert_allowed("git commit -m \"docs: the nohup mise run land & shape is refused\"");
     assert_allowed("echo \"mise run verify | tail\" > /tmp/notes.md");
 }
 
@@ -328,7 +340,7 @@ fn a_pager_on_an_earlier_query_does_not_condemn_a_later_command() {
     // form both rows agree on — backgrounded, unredirected — and pinning THAT
     // here is the point: this case's subject is the per-segment judging, so it
     // must carry a second element that is genuinely correct today.
-    assert_allowed_backgrounded("git log --oneline | head -3 && mise run verify");
+    assert_allowed_backgrounded("git log --oneline | head -3 && mise run lint:clippy");
     // And the direction that matters: a write must not be excused by a read.
     assert_denied("git log --oneline | head -3 && mise run verify | tail -2");
 }
@@ -615,4 +627,26 @@ fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
     // tool for it, so excluding `*` along with the regex metacharacters would
     // have opened the hole this row exists to close.
     assert_denied("ls mise-tasks/*.sh");
+}
+
+/// A verdict program's own leading options do not hide its subcommand
+/// (CLOUD-2666). Dropping every `-`-prefixed token left `-C`'s value as the
+/// subcommand, so each of these four matched no verdict row and was allowed.
+/// The cause class is asserted, not the exit code alone: no push gate refuses
+/// these, so only the verdict row can name them.
+#[test]
+fn a_verdict_behind_a_global_option_is_still_refused() {
+    for command in [
+        "git -C /tmp push origin x 2>&1 | tail",
+        "git -c core.pager=cat push | tail",
+        "gh -R o/r pr comment 1 -b x | tail",
+        "gh pr -R o/r comment 1 -b x | tail",
+    ] {
+        let cause = cause_backgrounded(command);
+        assert!(cause.contains("verdict read dropped"), "{command}: {cause}");
+    }
+    // Queries stay allowed, so the case discriminates against a matcher that
+    // refuses every `-C` or `-R`.
+    assert_allowed("git -C /tmp log | tail");
+    assert_allowed("gh -R o/r pr view 42 | tail -3");
 }

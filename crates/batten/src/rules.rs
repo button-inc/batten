@@ -45,16 +45,29 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use clap::ValueEnum;
 use regex::Regex;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub(crate) use crate::config_check::rules::Declared;
+pub use crate::config_check::rules::{COLUMN_CENSUS, ColumnCensus, Declares, TreeOnlyColumn};
+#[allow(unused_imports)]
+pub(crate) use crate::config_check::rules::{
+    Located, pointer_for, validate_composition, validate_rows,
+};
+pub use crate::config_check::rules::{validate, validate_in, validate_keying};
+#[cfg(test)]
+use crate::config_model::preset_name_schema;
+pub use crate::config_model::{
+    CallEvent, CeilingUnit, Conserves, Direction, FieldBound, GitRead, NativeGate, ReceiptKey,
+    ReceiptTrigger, RequireVia, Rewrite, Rule, RuleKind, RuleScope, VerdictProgram,
+};
 use crate::error::UsageError;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
 use crate::refusal::{Fix, Refusal};
-use crate::severity::{self, AdvisoryTier, ReportLevel, RuleSeverity};
+pub use crate::selector::glob_match;
+use crate::severity::{self, ReportLevel, RuleSeverity};
+pub use crate::surface_table::Half;
 
 /// The columns a [`RuleKind::Pipeline`] row may carry — both predicate families
 /// plus the shared remedy (CLOUD-864).
@@ -78,60 +91,6 @@ const PIPELINE_PERMITS: &[&str] = &[
     "severity",
     "no_retry_reason",
 ];
-
-/// One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling
-/// (CLOUD-925).
-///
-/// Both fields are the **consumer's**. A shorthand a repository writes in its own
-/// prompts to name its own files is a property of that repository, so naming
-/// either half in `crates/batten` would be the consumer-specific identifier
-/// non-negotiable rule 1 forbids — the same split
-/// [`crate::budget::EmbeddedDecl`] already makes for a config key it counts.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Rewrite {
-    /// The reference shape, as a regular expression over one candidate token.
-    /// Capture groups are available to `path`.
-    pub reference: String,
-    /// The repository-relative path the reference names, with `$1`-style
-    /// references to `reference`'s capture groups.
-    pub path: String,
-}
-
-/// What a [`Rule::max`] ceiling counts over its declared projection (CLOUD-925).
-///
-/// Two units rather than one, because `fanout-guard`'s two conjuncts measure the
-/// same bytes and differ in the *subject* of the cap: the prompt's own size, and
-/// how many tracked artifacts it names. A single unit would have forced one of
-/// them into a second rule kind.
-///
-/// **The unit cannot be inferred from the projection**, which is why this is a
-/// column rather than a derivation: one prompt has both a token count and a
-/// manifest count, and a row has to say which one it is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum CeilingUnit {
-    /// Estimated tokens over the projection, via [`crate::budget::estimate_tokens`].
-    ///
-    /// **The same estimator the file-set budget uses**, not a second one: CLOUD-925
-    /// §1 requires one authority for what a ceiling is, so a per-call cap must not
-    /// arrive with its own arithmetic. `free` — the bytes are already decoded.
-    Tokens,
-    /// How many **tracked** repository artifacts the projection names.
-    ///
-    /// The reading manifest: path-shaped tokens intersected with the tracked set,
-    /// plus resolvable memory references. Tracked is the whole of it — a spawn
-    /// naming a path this repository does not carry is naming nothing it can be
-    /// made to read, so it does not count, and a URL or a branch name drops out
-    /// by construction rather than by an allowlist somebody has to tune.
-    ///
-    /// **This unit is the one that acquires.** It needs the tracked set, which is
-    /// a property of a checkout and not of the envelope, so it is resolved at the
-    /// boundary and reaches [`crate::hook::adjudicate`] as a fact — never opened
-    /// from inside the decision, which stays pure.
-    TrackedArtifacts,
-}
 
 /// The columns a [`RuleKind::Shape`] row may carry.
 ///
@@ -168,6 +127,12 @@ const SHAPE_PERMITS: &[&str] = &[
     // precondition row, where the same bytes would silently stop demanding a
     // receipt.
     "unless_contains",
+    // CLOUD-2669: one whole argv word, by anchored expression. `unless_word`
+    // switches a deny off, so it is `shape` only for `unless_contains`'s reason.
+    "word",
+    "unless_word",
+    // CLOUD-2662: an event the engine resolves on every route it knows.
+    "on",
     "require_via",
     "requires_key",
     "base",
@@ -187,6 +152,8 @@ const SHAPE_PERMITS: &[&str] = &[
 const RECEIPT_PERMITS: &[&str] = &[
     "pattern",
     "tool",
+    // CLOUD-2662: the third selector, an event rather than a spelling.
+    "on",
     "checks",
     "checks_any",
     "key",
@@ -220,241 +187,6 @@ const RECEIPT_PERMITS: &[&str] = &[
     "no_retry_reason",
 ];
 
-/// The kind of predicate a [`Rule`] applies to its matched files.
-///
-/// Serialized as a lowercase `kind = "..."` token in `batten.toml`. Marked
-/// `#[non_exhaustive]` because the engine is designed to grow kinds (the dynamic
-/// `command` kind is CLOUD-89) without that being a breaking change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum RuleKind {
-    /// A static banned shape, one line at a time. Every line of a matched file
-    /// that carries the banned shape is a finding, unless `exclude` takes it
-    /// back out. The check is inspection-only.
-    ///
-    /// The shape is either the literal `pattern` or the expression `regex` —
-    /// exactly one, never both (CLOUD-283). The literal is the common case and
-    /// the readable one; the expression is for a predicate that genuinely is a
-    /// shape, such as a flag cluster judged by its letters.
-    Forbid,
-    /// A dynamic check: run the `check` template and treat its exit code as the
-    /// predicate — `0` passes, non-zero is a violation. The sanctioned escape
-    /// hatch for rules no static shape can express.
-    ///
-    /// The kind carries house style §9's **`check`/`fix` duality**: `check` is
-    /// the inspection-only gate and the only side enforcement ever runs, `fix`
-    /// is the optional mutating half. The duality is a contract with the config
-    /// author that Batten cannot verify — an arbitrary command declared as a
-    /// check may still write — so it governs how a rule is *authored* and never
-    /// licenses the verb that runs it to claim `read`.
-    ///
-    /// It is an **exit-code predicate, not a judge** (CLOUD-93): the command's
-    /// output is never parsed for meaning. Because it executes a process
-    /// declared in `batten.toml`, it runs only on the non-`read` surface (§5,
-    /// CLOUD-170).
-    Command,
-    /// A banned **command shape**: the mediated call `batten hook` is
-    /// adjudicating matches `pattern` read as an effective program plus the
-    /// adjacent words that must follow it.
-    ///
-    /// Distinct from [`RuleKind::Command`], which *runs* a declared command.
-    /// This one runs nothing — it is a string match over a command line the
-    /// host handed us, so it cannot spawn and stays on the read-safe surface.
-    Shape,
-    /// A **count that may only move one way** (CLOUD-55): the total occurrences
-    /// of `pattern` across files matching `glob`, compared between a base rev
-    /// and the working tree, must not move in the banned `direction`.
-    ///
-    /// The counted shape is `pattern` or `regex`, exactly one, as for
-    /// [`RuleKind::Forbid`]. The expression is for a token one literal cannot
-    /// spell: an attribute is counted wherever it is indented and in every form
-    /// it takes, while a prose mention of it is not (CLOUD-2059).
-    ///
-    /// The kind exists because the property worth gating on a test suite is not
-    /// immutability — tests are edited every day, so a protected path would
-    /// block writing them — but *direction of change*. That is the same shape
-    /// `trust.rs` already encodes for config: which way is weakening is a
-    /// property of the key.
-    ///
-    /// Counted in **aggregate per rule**, never per file: a test moved between
-    /// two files matching the glob changes nothing, so renames and
-    /// consolidations that preserve the suite are clean with no rename tracking.
-    /// The price is that the finding names counts rather than locations, and
-    /// `git diff` answers *where*.
-    Ratchet,
-    /// A mediated call that requires a **verification receipt** to be valid
-    /// before it is allowed (CLOUD-312, over CLOUD-203's receipt store).
-    ///
-    /// Distinct from [`RuleKind::Shape`], which refuses a command outright:
-    /// this one refuses a command *whose precondition has not been proved*, and
-    /// the same command is allowed the moment the receipt exists. The predicate
-    /// is [`crate::receipt::validity`] — already total and fail-closed — so this
-    /// kind adds a trigger and a refusal, never a second opinion about what a
-    /// valid receipt is.
-    ///
-    /// The verdicts are resolved at the hook's boundary and handed to the
-    /// adjudicator as data, because adjudication is contractually pure. That is
-    /// the same split the bypass hatch already uses.
-    Receipt,
-    /// A mediated call whose **exit status is discarded by the structure it sits
-    /// in** (CLOUD-443).
-    ///
-    /// Distinct from [`RuleKind::Shape`] by what it reads, not by severity. A
-    /// shape row matches a program and its adjacent words; this one is about what
-    /// SURROUNDS the command — what its status is handed to (a pipe), what
-    /// replaces it (a following `;` or `||` element), and whether it was detached
-    /// (`nohup`, a trailing `&`). Those are properties of the operators between
-    /// segments, which the parser used to discard, so no amount of word matching
-    /// could express them.
-    ///
-    /// Every shape it denies **fails green** — exit 0 with plausible output —
-    /// which is why noticing them repeatedly did not stop them. `&&` is
-    /// deliberately not among them: it short-circuits, so a failure still
-    /// propagates and there is no false green to refuse.
-    ///
-    /// The row carries the two tables the predicate is defined over: which
-    /// programs are verdict-bearing (`verdict`) and which stages substitute
-    /// output for status (`filters`). Both are the consumer's — one repository's
-    /// build command is another's irrelevance — so the crate names neither.
-    Pipeline,
-    /// A **model-validated** rule (CLOUD-56): hand the row's `criteria` and the
-    /// admitted classes of its matched files to the command in `[judge].run`,
-    /// and read that command's exit code.
-    ///
-    /// The kind exists for the predicates no static shape can express — "this
-    /// test asserts behaviour, not a tautology" — and it is the one kind whose
-    /// outcome is **advisory-only and structurally unable to block** (house
-    /// style §0.3; the 2026-08-07 evidence base measured model judges at AUROC
-    /// ≤0.65 on false-success detection, so a judge verdict may inform and never
-    /// gate).
-    ///
-    /// "Structurally" is literal, and it is why this variant looks unfinished
-    /// next to the others: a judge outcome **never becomes a [`Finding`]**.
-    /// `run_rule` cannot produce one — the row is `allow`, which that walker
-    /// already skips — so [`any_blocking`] and `--fail-on-warning` have nothing
-    /// to see. Blocking is not forbidden here, it is unrepresentable.
-    ///
-    /// Distinct from [`RuleKind::Command`], which also runs something and reads
-    /// an exit code: that one is an *exit-code predicate* whose command is a
-    /// gate, and its findings deny. This one's command consults a model, and its
-    /// findings advise. The gate/judge line (CLOUD-93) is exactly this pair.
-    Judge,
-    /// A **credential in the tree** (CLOUD-59): run the pinned secret scanner
-    /// over the matched paths and turn each match into a pointer.
-    ///
-    /// The kind exists because [`RuleKind::Forbid`] bans literals named in
-    /// advance, and a credential is the banned shape nobody can enumerate — so a
-    /// committed secret passes every other gate this engine has. Detection is
-    /// adopted prior art; what this kind owns is **containment**, in
-    /// [`crate::secrets`].
-    ///
-    /// Distinct from [`RuleKind::Command`], which could run the same binary and
-    /// could not express this: a command rule's contract is the exit code alone,
-    /// with both child streams nulled, so it yields one batch verdict per glob —
-    /// no per-secret `path:line`, no per-secret identity, and nothing to key.
-    /// Reading the scanner's output is precisely what makes this kind different,
-    /// and precisely what makes it dangerous: the scanner prints the byte it
-    /// matched. Every span is opaque from the parse boundary onward
-    /// ([`crate::identity::SecretSpan`]), and [`Finding`] has no field one could
-    /// occupy, so pointer-only output is structural rather than a property of
-    /// the renderer.
-    Secrets,
-    /// Address a node in a structured document and compare it to a literal
-    /// (CLOUD-772).
-    ///
-    /// The kind that turns a parsed document into policy. It reads a file the
-    /// `glob` selects, parses it as the declared `format`, walks to `node`, and
-    /// reports when the value there is not `pattern`. What it never does is name
-    /// an artifact: `format` and `node` are the consumer's, so a rule over a
-    /// workflow file and a rule over a package manifest are the same code
-    /// (non-negotiable rule 1).
-    ///
-    /// Three-valued (CLOUD-757), which is the whole reason it exists. A file
-    /// that does not parse is **could not look** and is reported, never silently
-    /// clean — an extraction that returns nothing reading as agreement is the
-    /// live failure mode of every hand-rolled reader this replaces.
-    Document,
-    /// A **registered policy module** evaluated over the resolved fact set
-    /// (CLOUD-647, CLOUD-689): the module contributes denials, and decides
-    /// nothing else.
-    ///
-    /// The kind exists because the rule table is a flat loop — no row consumes
-    /// another's verdict — so a predicate over *relationships* between facts is
-    /// not expressible as a row at all. The layer this engine is absorbing shows
-    /// what that costs: 57 of 126 tasks compose over a sibling's exit code, a
-    /// three-state channel that forces every consumer to re-derive the
-    /// producer's structure.
-    ///
-    /// **Admitted to [`RuleScope::MediatedCall`], which is the whole point**, and
-    /// admitted on [`Authority::Supplied`] rather than by exception. A
-    /// [`RuleKind::Command`] row spawns a process that can read any file and
-    /// reach the network; a module evaluated over `Facts` sees the fields the
-    /// boundary resolved and acquires nothing. The fact set *is* the bound, which
-    /// is why it had to exist before this kind could (CLOUD-763).
-    ///
-    /// **Deny-only, and that is structural.** Only the module's `deny` set is
-    /// read; there is no spelling for an allow that overrides a TOML deny. That
-    /// preserves §8's raise-only invariant *and* removes the allow/deny
-    /// contradiction class by construction, leaving nothing for a consumer to
-    /// get wrong in the direction that weakens a gate.
-    ///
-    /// The module is **registered**, never discovered: `module` names it in the
-    /// one committed authority. §8 forbids the upward directory walk and the
-    /// `conf.d` merge — that is, implicit discovery — and naming each module in
-    /// the authority is the opposite of both. Globbing a policy directory would
-    /// be the thing §8 refuses.
-    Policy,
-    /// **Every cited token resolves to a key of a declared `[[register]]`**
-    /// (CLOUD-2005): the predicate a consumer otherwise hand-writes per citation
-    /// shape, measured at 94.6 s for one policy row whose joins rescanned every
-    /// register row per row.
-    ///
-    /// The join is the engine's, in [`crate::register::resolve`]: a map probe per
-    /// citation, never a rescan, so the cost is linear in citations plus keys.
-    /// The row's [`Rule::cites`] names the register and the citer; the citer's
-    /// paths come from the row's `glob` unless it cites another register.
-    ///
-    /// Deny-only and pointer-only: rule id, citer `path:line` or path, and the
-    /// register id. A register that could not be built is could-not-look and is
-    /// reported as such, never as an empty set.
-    Reference,
-    /// **One of the engine's compiled mediated-call gates, enabled and graded by
-    /// a row** (CLOUD-2291): [`Rule::gate`] names which.
-    ///
-    /// The predicate is the engine's, never the row's — the row says only
-    /// whether the gate runs and at what severity. The verdict strings are the
-    /// gate's own and do not change, so every route, waiver and `policy explain`
-    /// that names one keeps working; the row `id` is the rule id only.
-    ///
-    /// **A gate with no row runs at `deny`**, and only `severity = "allow"`
-    /// switches one off. A config predating the kind keeps its gates, and no
-    /// added row can lower a gate it does not name; a row grading one below
-    /// `deny` is a weakening `config lint` reports, and only the committed
-    /// authority may carry one.
-    Native,
-}
-
-// Declared through `token_enum!` (CLOUD-2442). `ALL`'s order is the order the
-// mediated chain runs the gates.
-token_enum! {
-    serde
-    /// The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-    )]
-    #[non_exhaustive]
-    pub enum NativeGate by as_str {
-        /// A `git reset` that would discard commits no ref holds (CLOUD-462).
-        DestructiveReset => "destructive-reset",
-        /// A second copy of a one-per-clone task (CLOUD-438).
-        Singleton => "singleton",
-        /// A config row changed by a context that has not read its history
-        /// (CLOUD-2144).
-        History => "history",
-    }
-}
-
 /// The severity `rules` grade `gate` at (CLOUD-2291): the strongest `native` row
 /// naming it, or `deny` where none does.
 ///
@@ -470,7 +202,19 @@ pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
         .filter(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
         .map(Rule::severity)
         .max()
-        .unwrap_or(RuleSeverity::Deny)
+        .unwrap_or(absent_grade(gate))
+}
+
+/// The grade of a gate no row names: `deny`, so no addition lowers a gate it
+/// does not name, EXCEPT `repository-reach` (CLOUD-2672), which is `allow` until
+/// a row arms it. A session spanning several repositories is the ordinary case
+/// on every host that documents one, so a default-on gate would refuse it in
+/// every consumer.
+fn absent_grade(gate: NativeGate) -> RuleSeverity {
+    match gate {
+        NativeGate::RepositoryReach => RuleSeverity::Allow,
+        _ => RuleSeverity::Deny,
+    }
 }
 
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
@@ -994,6 +738,12 @@ impl RuleKind {
                 // trees — see the column's own doc for why that asymmetry is
                 // forced rather than chosen.
                 "admits_with",
+                // CLOUD-2663: the token measure `policy budget` uses, as the
+                // counted unit in place of `pattern` or `regex`; exactly one of the
+                // three is refused in `validate_forbid_predicate`.
+                "counts",
+                // CLOUD-2663: each matched file judged against its own base count.
+                "per_file",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -1256,38 +1006,6 @@ impl RuleKind {
     }
 }
 
-/// Which file domain a rule evaluates over — *where a rule looks*, never what a
-/// match does (CLOUD-61).
-///
-/// Scope and severity are two independent keys on a [`Rule`], deliberately: the
-/// question "which files does this gate watch" and the question "what happens
-/// when it matches" ([`RuleSeverity`]) are different axes, and conflating them
-/// is the config bug this type makes inexpressible. Neither vocabulary
-/// deserializes as the other, so a severity token in the `scope` key (or the
-/// reverse) is a usage error (exit `1`), never a silent reinterpretation.
-///
-/// Marked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected
-/// / unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a
-/// breaking change. The default is pinned as data —
-/// [`tests::scope_default_is_pinned`] asserts it — so it is an explicit,
-/// per-field default rather than an implicit fallback buried in code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum RuleScope {
-    /// The whole working tree: every file the walk yields. The pinned default.
-    #[default]
-    Tree,
-    /// The single command `batten hook` is adjudicating — not a file domain at
-    /// all, which is why a rule declaring it reads no `glob`.
-    ///
-    /// Spelled `mediated_call` rather than `command` on purpose: `command` is
-    /// already a [`RuleKind`] token meaning "run this", and one word meaning two
-    /// unrelated things across two keys is the cross-vocabulary confusion
-    /// [`tests::severity_and_scope_vocabularies_do_not_cross`] exists to prevent.
-    MediatedCall,
-}
-
 impl RuleScope {
     /// Every scope the engine knows, so vocabulary tests stay total.
     pub const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
@@ -1302,2019 +1020,21 @@ impl RuleScope {
     }
 }
 
-/// The published schema for [`Rule::preset`]: a string constrained to the
-/// **embedded** preset names (CLOUD-836 §4).
-///
-/// Generated from [`crate::policy::preset_names`] rather than written out, so
-/// the schema and the binary cannot disagree about what may be enabled. A
-/// hand-maintained enum here would be a second authority over the same set, and
-/// the failure mode is the quiet one: an editor accepting a name the loader then
-/// refuses, or refusing one it accepts.
-fn preset_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    let _ = generator;
-    let names: Vec<serde_json::Value> = crate::policy::preset_names()
-        .into_iter()
-        .map(|name| serde_json::Value::String(name.to_owned()))
-        .collect();
-    schemars::json_schema!({
-        "type": ["string", "null"],
-        "enum": names,
-    })
+// A rule's declared output lives in `sink` (CLOUD-2789), so the store reads
+// it without reaching up into `rules`.
+pub use crate::sink::{Sink, SinkKey};
+
+/// Each rule that declares a sink, as its id and that sink: what `sink`'s
+/// store questions take, so the store never needs the whole `Rule`.
+fn declared_sinks(rules: &[Rule]) -> impl Iterator<Item = (&str, &Sink)> {
+    rules
+        .iter()
+        .filter_map(|rule| Some((rule.id.as_str(), rule.produces.as_ref()?)))
 }
 
-/// One declarative rule from `batten.toml`'s `[[rule]]` array.
-///
-/// `deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard
-/// error, never a silently ignored setting that disables a gate. The struct is
-/// flat rather than an enum with `#[serde(flatten)]` precisely so this guarantee
-/// holds — `flatten` silently defeats `deny_unknown_fields`.
-/// `severity` is required by every kind but `judge`, which is refused it
-/// (CLOUD-445). The field is an `Option` so a judge row can omit it, so the
-/// derived `required` list cannot carry it — and a schema that merely dropped it
-/// would stop flagging the missing key on the four kinds that must have one,
-/// moving a check out of the editor with nothing taking its place.
-///
-/// This conditional puts it back, stated once here and derived into both
-/// published schemas. It mirrors [`RuleKind::requires`] and
-/// [`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`
-/// is what keeps the two from drifting.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(extend("allOf" = serde_json::json!([{
-    "if": { "properties": { "kind": { "const": "judge" } }, "required": ["kind"] },
-    "then": { "not": { "required": ["severity"] } },
-    "else": { "required": ["severity"] }
-}])))]
-// `#[non_exhaustive]` for [`crate::facts::Fact`]'s reason, one layer over: every
-// declared-read family adds a COLUMN here, so `constructible_struct_adds_field`
-// made each one an API break. A downstream caller constructs a `Rule` through
-// serde rather than a struct literal — which is what `deny_unknown_fields` and
-// the schema are for — so this closes a break nobody was using.
-#[non_exhaustive]
-pub struct Rule {
-    /// A stable identifier for the rule, surfaced in findings so a violation
-    /// points back at the policy that produced it.
-    pub id: String,
-    /// Which predicate to apply to the matched files.
-    pub kind: RuleKind,
-    /// The glob selecting which files the rule inspects, matched against
-    /// repo-relative paths (`/`-separated). `**` matches any run of path
-    /// segments, `*` and `?` match within a single segment.
-    ///
-    /// Optional at the type level and required per-kind: a file kind cannot load
-    /// without it, and [`RuleKind::Shape`] — which inspects no files — rejects it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub glob: Option<String>,
-    /// What a match does: `deny` fails the run, `warn` reports without failing
-    /// (until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the
-    /// rule off (cargo-deny's model, CLOUD-61).
-    ///
-    /// **Required for every kind but one**, and required *per kind* rather than
-    /// by the type (CLOUD-445). Every committed rule states what a match does
-    /// explicitly, with no implicit fallback — omitting the key is a usage error
-    /// (exit `1`), never a silently assumed level.
-    ///
-    /// The exception is [`RuleKind::Judge`], which is **refused** the column: a
-    /// judge verdict is advisory and must not reach the exit contract by any
-    /// path, so the axis it declares instead is [`Rule::tier`]. Both halves come
-    /// free from the ordinary column census — `severity` is in
-    /// [`RuleKind::requires`] for the other four kinds and absent from
-    /// [`RuleKind::permits`] for this one — which is why this is an `Option`
-    /// rather than a required field with a loader-side exception. A type that
-    /// demanded the key would make a valid judge config undeserializable, and
-    /// the derived JSON Schema would flag the one row that must not carry it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<RuleSeverity>,
-    /// Which file domain the rule evaluates over. Independent of `severity` —
-    /// scope says *where* the rule looks, severity says *what a match does* —
-    /// and neither key's vocabulary parses as the other's. Defaults to
-    /// [`RuleScope::Tree`], the pinned per-field default.
-    #[serde(default)]
-    pub scope: RuleScope,
-    /// The literal shape this rule bans — one meaning, two domains.
-    ///
-    /// For [`RuleKind::Forbid`] it is a substring banned from matched *files*.
-    /// For [`RuleKind::Shape`] it is a banned *command line*: the first word is
-    /// the effective program (matched after wrapper look-through) and the rest
-    /// are the adjacent non-flag words that must follow it, so
-    /// `pattern = "gh pr merge"` reads exactly as a reviewer would say it aloud.
-    /// Required by both kinds, rejected by [`RuleKind::Command`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern: Option<String>,
-    /// The banned shape as a regular expression — [`RuleKind::Forbid`]'s
-    /// **alternative** to `pattern`, never an addition to it (CLOUD-283), and the
-    /// counted token's for [`RuleKind::Ratchet`] on the same terms (CLOUD-2059).
-    ///
-    /// A row carries exactly one of the two, and one carrying both is a load
-    /// error rather than a precedence rule nobody can read. `pattern` stays the
-    /// common case because a literal is the readable one (§9); this is the
-    /// escape for a predicate that genuinely is a *shape* — a flag cluster
-    /// judged by its letters, where `-qxF` must count as `-q` and an enumeration
-    /// of spellings rots.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regex: Option<String>,
-    /// A regex that **un**-matches: a matched line carrying it is not a finding.
-    ///
-    /// [`RuleKind::Forbid`] only, and regex-only with no literal twin — an
-    /// exclusion is inherently shape-based, and the measured one (a whole-line
-    /// comment, `^[[:space:]]*#`) cannot be written as a literal at all.
-    ///
-    /// Comment-awareness lives here, in the consumer's config, rather than as a
-    /// `skip_comments` flag in the engine: per-language comment syntax inside
-    /// `crates/batten` would break non-negotiable rule 1, and it would also be
-    /// wrong — `no-conflict-markers` must still fire inside a comment. What a
-    /// comment looks like is a property of a repository, not of Batten.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclude: Option<String>,
-    /// A regex over the content a write would LAND, for a
-    /// [`RuleKind::Shape`] row on the mediated path (CLOUD-758).
-    ///
-    /// **The first content-keyed predicate on this surface.** Every write-shaped
-    /// gate before it was path-keyed — it could see which file was being touched
-    /// and not what would end up in it, which is CLOUD-736's reported symptom:
-    /// `git rm` on a workflow refused and a `Write` of one permitted.
-    ///
-    /// Regex-only with no literal twin, for [`Rule::exclude`]'s reason: a
-    /// predicate over file content is inherently shape-based, and an enumeration
-    /// of spellings rots.
-    ///
-    /// **Rule 4 is the load-bearing clause.** A row here DECIDES over the
-    /// content and the refusal carries this rule's id and the path — never a
-    /// matched byte. The content reaches the typed predicate and stops: it is
-    /// projected into the policy input as a shape and a count, so no free-form
-    /// consumer message can echo it.
-    ///
-    /// **The predicate runs over the whole prospective content**, so a bare `^`
-    /// anchors to the start of the FILE rather than of a line. A per-line
-    /// predicate wants `(?m)`, and the difference is not academic: without it a
-    /// row catches a marker a write puts on the first byte and misses the same
-    /// marker three lines in.
-    ///
-    /// A tool whose shape carries no content — a shell command, an MCP call —
-    /// yields [`crate::facts::Look::CouldNotLook`], and a row here does not fire
-    /// on it. That is *not* the same as matching an empty file, and collapsing
-    /// the two would make the row fire on every call as though it had looked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    /// The tool a `mediated_call` row is **about** — matched exactly, or as a
-    /// `__`-delimited suffix (CLOUD-924).
-    ///
-    /// **The third way to key a mediated row**, beside [`Rule::pattern`] (a
-    /// command line) and [`Rule::content`] (what a write would land), and the
-    /// only one a *structured* call can satisfy. `adjudicate` returns `Allow`
-    /// the moment `envelope.command` is empty, and an MCP call, a `Read` and a
-    /// `Task` spawn all carry an empty command — so before this column the two
-    /// connector guards had nothing to retire onto, which is CLOUD-312's rows 4
-    /// and 5. It reads [`crate::hook::Envelope::raw_tool`], the host's own word,
-    /// and never the normalized [`crate::hook::Event`] (CLOUD-779's split).
-    ///
-    /// # Why a suffix, and why not a bare one
-    ///
-    /// **The suffix half is not a convenience.** A host mints the prefix of an
-    /// MCP tool name and rotates it: CLOUD-665 and CLOUD-684 are the same
-    /// measured failure twice, a rule naming a server label the host never
-    /// registers under, matching nothing, silently. A consumer that already
-    /// keyed its own hook matchers on a trailing pattern did so for exactly that
-    /// reason. An exact-only selector here would rebuild the defect those two
-    /// rows closed.
-    ///
-    /// **A bare suffix over-matches, so the delimiter is load-bearing.**
-    /// `tool = "Edit"` would select `NotebookEdit`, and `tool = "Read"` any tool
-    /// whose name happens to end in those bytes — a row selecting a neighbouring
-    /// tool nobody named is the widening direction a policy engine may never
-    /// drift in. So a match is the whole name, or the whole final `__`-delimited
-    /// segment of it, which is `board-payloads`' own rule (`endswith("__get_issue")`)
-    /// and carries its reasoning: MCP names are `mcp__<server>__<tool>`, and the
-    /// tool is the last segment. `save_issue` therefore selects
-    /// `mcp__Linear__save_issue` and `mcp__cc451d34-…__save_issue` alike, and
-    /// `Edit` selects `Edit` alone.
-    ///
-    /// Permitted on [`RuleKind::Shape`] and [`RuleKind::Receipt`] — the kinds a
-    /// row can key on a tool with no command in hand. **Not** on
-    /// [`RuleKind::Pipeline`], whose predicate is the operators *between* a
-    /// command's segments: a structured call has none, so the column would load,
-    /// match nothing, and read as coverage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
-    /// Narrow a `mediated_call` row to a call whose named projection is
-    /// **absent** (CLOUD-987).
-    ///
-    /// A MODIFIER, not a selector: the row still selects on its own terms —
-    /// `tool` for a structured call, `pattern` for a shell one — and this decides
-    /// whether that selection refuses. The same shape [`Rule::requires_key`] and
-    /// [`Rule::require_via`] already carry, and it is listed in `permits` rather
-    /// than `requires` for the reason `require_via` gives: a modifier that
-    /// narrowed by DEFAULT would silently change every row that never asked.
-    ///
-    /// **It exists because the absence is the predicate.** CLOUD-312's row 1
-    /// gates *creating* a tracker row and must not gate *editing* one, and the
-    /// two differ only in whether the call named an id. Its own header:
-    /// *"Denying an update would demand a search before every edit to an issue,
-    /// which is absurd and would get the guard switched off within a day."* A row
-    /// that could not say "only when this is absent" would be that guard.
-    ///
-    /// Absent means the projection read `None` — which for
-    /// [`crate::hook::Field`] collapses missing, null, empty and
-    /// wrong-typed, exactly as every other reader of that allowlist sees it. One
-    /// definition of absence, in the decoder, rather than a second one here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when_absent: Option<crate::hook::Field>,
-    /// Which projection supplies the subject for a [`ReceiptKey::Named`] receipt
-    /// (CLOUD-987).
-    ///
-    /// Required by that key and refused without it: a `named` receipt with no
-    /// projection has no subject to file under, and a receipt keyed on nothing
-    /// would read the same file for every call — which is
-    /// [`ReceiptKey::Branch`] wearing a different name, and the exact collapse
-    /// that variant's doc refuses.
-    ///
-    /// A [`crate::hook::Field`] rather than a free-form key, for the reason the
-    /// allowlist exists: the subject of a receipt is about to become a path
-    /// component under `$GIT_DIR`, so which values can reach it must be a closed
-    /// set somebody enumerated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_from: Option<crate::hook::Field>,
-    /// Which ref a [`ReceiptKey::Delta`] receipt's identity is taken against
-    /// (CLOUD-1547) — the read-side twin of [`crate::mint::Declared::key_base`].
-    ///
-    /// Required by that key and refused without it, and refused ON any other:
-    /// the identity is a diff and a diff needs two sides, so a `delta` row with
-    /// no base has no subject, and a base on a `head` row is a column the engine
-    /// would silently never read.
-    ///
-    /// A CONSUMER's ref name, so it lives on the row rather than as a constant in
-    /// the crate (non-negotiable rule 1): which branch a repository lands on is
-    /// that repository's business, and `must_land_on` already answers it for a
-    /// different question rather than for this one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_base: Option<String>,
-    /// Narrow [`Rule::when_present`] from *the key is there* to *the key holds
-    /// THIS value* (CLOUD-312 row 3).
-    ///
-    /// **Presence was not enough, and row 3 is the measured case.** That guard
-    /// gates one transition — a move to In Review — and its header prices the
-    /// alternative in the same terms row 1's does: gating every column "would
-    /// demand a graph-check before every edit, which is how a guard gets switched
-    /// off within a day (CLOUD-199)." A row that could only ask whether the call
-    /// named a state would fire on every edit that named any, so the guard stayed
-    /// bash on a column boundary rather than on a missing projection.
-    ///
-    /// **The comparison is normalised, and the normalisation is generic rather
-    /// than a consumer's.** Case is folded and spaces, underscores and hyphens are
-    /// dropped from both sides, because a tracker's state parameter accepts a
-    /// type, a name or an id, so a column's three spellings are one move. What is normalised is the SHAPE of a comparison; which value matters
-    /// is the consumer's and lives in their `batten.toml` (non-negotiable rule 1).
-    ///
-    /// It qualifies `when_present` rather than standing alone: a value with no
-    /// projection names nothing to read it out of, and that is a load error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when_value: Option<String>,
-    /// The shape a value must have to be a receipt subject at all (CLOUD-312
-    /// row 2).
-    ///
-    /// **A projection can legitimately carry a value that names no subject, and
-    /// reading one as a missing receipt is a false positive rather than a
-    /// finding.** Row 2 is the measured case: the tracker's `id` parameter takes
-    /// an issue key OR a UUID, the receipt namespace is keyed by key, and
-    /// resolving a UUID needs a credential no hook has. The retiring guard calls
-    /// that a genuine cannot-look and ALLOWS, in its own words because denying
-    /// "would refuse a legitimate update over a spelling the agent is entitled to
-    /// use, which is the false-positive rate that gets a guard bypassed and then
-    /// enforces nothing."
-    ///
-    /// Without this the engine would file the UUID as a subject, find no file and
-    /// deny — strictly worse than the bash it replaced, on the call the bash was
-    /// careful about.
-    ///
-    /// So a value the shape does not match resolves the subject to **absent**,
-    /// which [`crate::receipt::verdicts`] already takes to could-not-look and
-    /// therefore to allow. It narrows what counts as a subject; it never denies.
-    ///
-    /// The expression is the CONSUMER's, because what a tracker's identifiers look
-    /// like is a consumer fact (non-negotiable rule 1) — the core knows only that
-    /// a subject may be shape-constrained.
-    ///
-    /// Compiled at load by [`Rule::validate_receipt_columns`], so a bad expression
-    /// is a config error rather than a per-call surprise. That sentence was here
-    /// before the check was, which is the defect review caught on #680: an
-    /// unparseable expression was discarded per call and the row it qualified went
-    /// quietly dead. The direction matters — the failure ALLOWED — and a comment
-    /// asserting an invariant nothing enforces is what stops the next reader
-    /// looking for it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_shape: Option<String>,
-    /// How old a receipt for this row may be, in seconds (CLOUD-988).
-    ///
-    /// **Existence was the whole verdict until this column, and for CLOUD-312's
-    /// row 2 existence is the wrong question.** `issue-read-guard`'s predicate is
-    /// CLOUD-508's bound — not *which* row was read but *how recently* — and a
-    /// receipt that merely exists answers a read of unbounded age, which is the
-    /// defect that issue names. So the row declares the bound and the engine
-    /// compares.
-    ///
-    /// **THE CLOCK IS THE BOUNDARY'S, NEVER `adjudicate`'s.** The comparison
-    /// happens where the receipt is already being read — [`crate::receipt`],
-    /// called from the boundary — and reaches the decision as an ordinary
-    /// [`crate::receipt::Validity`], exactly as staleness does. That is the
-    /// waiver table's precedent: a waiver lapses on a date, and `today()` is
-    /// handed in rather than taken inside, pinned by
-    /// `adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse`. This column
-    /// buys a fourth `Validity` and no clock in the core.
-    ///
-    /// Seconds rather than a duration string, because the output contract is
-    /// byte-stable and a parsed duration is a second spelling of one number.
-    /// Zero is refused: a receipt that is expired the instant it is written
-    /// refuses every call and reads as a bound from the file.
-    ///
-    /// Absent means what it always meant — existence is the verdict — so no
-    /// committed row changes meaning by this column arriving.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_age: Option<u64>,
-    /// What one field of the receipt must say for this row to be satisfied
-    /// (CLOUD-1100).
-    ///
-    /// **Existence and recency are both statements about the READ, and this is
-    /// the first column that is a statement about what was read.** `max_age`
-    /// bounds how old the receipt is; nothing until this asked what it recorded.
-    /// A Todo promotion needs the second question: a row read seconds ago and
-    /// found unready must be refused, and a receipt that merely exists cannot
-    /// distinguish that from a row read seconds ago and found ready.
-    ///
-    /// **Three-valued, and it fails OPEN.** The field says the required value ->
-    /// satisfied. The field says something else -> [`crate::receipt::Validity::
-    /// Refuted`], a deny. The field is **absent** — a shorter receipt, a receipt
-    /// minted by the hand-run task that predates the column, a renderer that
-    /// could not judge and wrote the absent token — -> satisfied, because a
-    /// verdict about the environment must never be spoken as a verdict about the
-    /// subject. That direction is what lets the column be added to a live receipt
-    /// family without invalidating a single receipt already on disk.
-    ///
-    /// Positional, because the receipt body is positional by construction and
-    /// that is already this repository's convention for reading one — the
-    /// censused readers take field 4 and field 5 of `issue-read` today.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires_field: Option<FieldBound>,
-    /// Narrow a `mediated_call` row to a call whose named projection is
-    /// **present** (CLOUD-987).
-    ///
-    /// [`Rule::when_absent`]'s mirror, and the pair is what makes CLOUD-312's
-    /// rows 1 and 3 different rules rather than one with a flag: row 1 gates the
-    /// call that named NO id, row 3 gates the call that DID name a state. Same
-    /// modifier shape, opposite polarity, and neither is the default.
-    ///
-    /// **It exists because "moved" is a fact about the arguments.**
-    /// `board-move-guard` fires only when a call moves a row between columns, and
-    /// a call that merely edits one names no `state`. Without this the row would
-    /// gate every edit — the same over-fire `when_absent` prevents one key over,
-    /// and the reason both directions had to land together.
-    ///
-    /// Present means the projection read `Some` — one definition of presence, in
-    /// the decoder, shared with `when_absent` so the two cannot disagree about
-    /// what `state: ""` means.
-    ///
-    /// A row may carry both, over different projections: row 3 wants *a state was
-    /// named* and, in principle, *an id was named*. Carrying both over the SAME
-    /// projection is refused at load, because it can never fire.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when_present: Option<crate::hook::Field>,
-    /// A branch-keyed marker whose PRESENCE is this row's firing condition
-    /// (CLOUD-1390).
-    ///
-    /// **The third modifier polarity, and the one the other two cannot express.**
-    /// [`Rule::when_absent`] and [`Rule::when_present`] condition on a projection
-    /// of the CALL — what the harness handed over. This conditions on a fact about
-    /// the BRANCH that an earlier turn left behind, which no field of this call
-    /// carries.
-    ///
-    /// **It exists because a punt is the absence of an action.** A gate refuses
-    /// actions, and at the moment a turn ends by offering work instead of doing it
-    /// there is no action to refuse — CLOUD-97 and CLOUD-219 each ruled out making
-    /// the turn's end a deny, because committing and pushing is what survives a
-    /// container reclaim and that path must stay free. So the observation is made
-    /// where the evidence is and the refusal lands where a refusal is allowed: the
-    /// next mediated write. `ready-guard` and `claim read unread` are the same
-    /// shape one surface over.
-    ///
-    /// **Presence, never validity**, and the distinction is what keeps this from
-    /// being a second opinion about receipts. [`crate::receipt::validity`] decides
-    /// whether a receipt PROVES something; this asks only whether a marker file
-    /// exists. A marker is not a proof and carries no conclusion to be stale.
-    ///
-    /// **The spend is deletion, by the sweep that already runs.** A row named here
-    /// must be one of [`crate::land::BRANCH_KEYED_RECEIPTS`], so landing clears it
-    /// and nothing else has to know how it is retired — which is also what stops
-    /// this from becoming a state machine with its own lifecycle.
-    ///
-    /// Absent on every row that predates this column, which then behaves exactly
-    /// as before: the modifiers are additive, and absent means "this row is about
-    /// the selection alone".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub while_marker: Option<String>,
-    /// Fire only while `HEAD` exists in this clone and on no remote-tracking ref
-    /// (CLOUD-843).
-    ///
-    /// **The harm a punt row names, measured rather than proxied.** `turn mint
-    /// ahead` refuses because work "committed nowhere but this container" dies
-    /// with a reclaim, and its remedy says a push is what makes stopping safe —
-    /// but nothing it selected on read a push. Its only lever was a `verify`
-    /// receipt for `HEAD`, and on a tree that compiles only after edits that
-    /// receipt cannot be earned without the writes the row refuses: a deadlock
-    /// whose sole exit, a head-bound admission, every commit voids.
-    ///
-    /// Conjoined with the other modifiers, so a row carrying `while_marker` too
-    /// fires while the marker exists AND `HEAD` is unpushed. Could-not-look
-    /// selects the row, the direction `while_marker`'s own unreadable arms take:
-    /// an unknown answer must not switch a refusal off.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub while_unpushed: bool,
-    /// The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).
-    ///
-    /// A [`crate::hook::Field`], reusing the existing named allowlist rather than
-    /// minting a second vocabulary for the same thing — and inheriting its safety
-    /// argument, which is what makes this admissible at all: the allowlist can
-    /// never name `Envelope::input` wholesale, so a ceiling can only ever be
-    /// pointed at a projection somebody deliberately exposed.
-    ///
-    /// Required with `max` and `counts`, refused without them: a projection named
-    /// with no cap measures something and decides nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub measures: Option<crate::hook::Field>,
-    /// What the [`Rule::max`] ceiling counts over [`Rule::measures`] (CLOUD-925).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub counts: Option<CeilingUnit>,
-    /// The per-CALL ceiling: the largest measurement that still passes
-    /// (CLOUD-925).
-    ///
-    /// **A ceiling whose subject is one call, which `[budget.<name>]` structurally
-    /// cannot express** — that table is a file set, `files` globs plus
-    /// `max_tokens`, evaluated over the tree by `policy budget`. So the bound
-    /// `fanout-guard` carries (count the prompt, count the reading manifest,
-    /// refuse past a cap) had no spelling as a row, and CLOUD-312's row 6 read
-    /// "config" with no mechanism behind it.
-    ///
-    /// **The boundary is `<=`: exactly at the cap passes.** Inherited from
-    /// [`crate::budget::Report::over_budget`] rather than decided again, because
-    /// CLOUD-925 §1 requires one authority for what a ceiling *is* — a second
-    /// comparison semantics for the same word is how the two would drift, and
-    /// which side of the boundary is inclusive is precisely the kind of detail
-    /// that drifts silently.
-    ///
-    /// **A modifier, not a keying column.** The row still selects on its own
-    /// terms — `tool` for a structured call (CLOUD-924), `pattern` for a shell
-    /// one — and this decides whether that selection refuses. Same shape
-    /// [`Rule::requires_key`] already carries, and for the same reason: the
-    /// selection half is unchanged.
-    ///
-    /// Rule 4 holds structurally: a breach reports the measurement, the cap and
-    /// the row id. Never a byte of what was measured — which is the argument
-    /// [`crate::hook::Field::Prompt`] already carries for counting bytes it may
-    /// not echo.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max: Option<usize>,
-    /// How a reference in the measured projection resolves to a repository path,
-    /// for a [`CeilingUnit::TrackedArtifacts`] ceiling (CLOUD-925).
-    ///
-    /// **The consumer's vocabulary, and non-negotiable rule 1 is why it is a
-    /// column.** A repository that writes `mem:core` in a prompt to mean one of
-    /// its own files knows that mapping; `crates/batten` must not. So the engine
-    /// knows only the RELATIONSHIP — a token is rewritten, and the result is
-    /// counted if the tree tracks it — and the shorthand itself is config.
-    ///
-    /// Each entry is a regular expression and a replacement, applied to a
-    /// candidate token before the tracked-set lookup. A token no entry matches is
-    /// looked up as written, so a plain path needs no rewrite at all and the
-    /// column stays absent for every consumer that uses none.
-    ///
-    /// Compiled at load like `regex`, `exclude` and `content`: left to
-    /// adjudication an unparseable expression is skipped on every call, which is
-    /// a ceiling that reads as configured and counts less than it should — the
-    /// permissive direction.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resolves: Vec<Rewrite>,
-    /// An extra literal that must appear in the mediated command **as written**
-    /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
-    ///
-    /// It exists for one real case rather than as a general escape hatch: a
-    /// landing directive lives inside a quoted `--body`, so it is not one of the
-    /// words the shape matches, and without this an ordinary `gh pr comment`
-    /// would be denied alongside the one that carries the directive. Matched
-    /// against the raw text of the same segment, quotes included.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contains: Option<String>,
-    /// A literal whose presence **exempts** the command from a
-    /// [`RuleKind::Shape`] row that would otherwise fire (CLOUD-1477's sibling).
-    ///
-    /// [`Rule::contains`]'s twin in the other polarity, and it exists for the
-    /// same structural reason rather than as a general escape hatch: the operand
-    /// matcher drops flags before comparing, so a row cannot distinguish two
-    /// commands that differ only by a flag. `contains` is how a row DEMANDS one;
-    /// this is how a row EXCLUDES one, and without it the only expressible
-    /// predicate over a flag is "must be present".
-    ///
-    /// **The measured case is `git rebase`.** `patch run loose` bans a
-    /// hand-driven landing lap — `git rebase origin/main` — by asking whether the
-    /// line names `origin/main`. But `git rebase --onto origin/main <upstream>
-    /// <branch>` names it too, and is not a lap at all: `--onto` moves a range
-    /// somewhere else, which is a history edit the landing loop cannot perform,
-    /// so the row refused an operation its own remedy does not offer and declared
-    /// no route to it. A lap never spells itself with `--onto`, because a lap has
-    /// no upstream to name.
-    ///
-    /// Matched against the raw text of the same line as `contains`, quotes
-    /// included, and for the same reason: line one's text must not exempt line
-    /// two's command.
-    ///
-    /// **The permissive direction is the one to fear here**, which is why it is
-    /// `shape` only and a literal rather than a regex. A `contains` that is wrong
-    /// makes a row fire less often than it reads; so does this — but this is the
-    /// column whose whole job is to switch a deny off, so it stays the narrowest
-    /// thing that can do the job and is named in the row's `reason` wherever it
-    /// is used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unless_contains: Option<String>,
-    /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
-    /// **without** the named mediator (CLOUD-271).
-    ///
-    /// The row still selects on the command shape; this decides whether that
-    /// selection refuses. Without it a row keyed on `cargo` denies every route
-    /// to `cargo`, the sanctioned one included — because
-    /// `hook::effective_program` looks *through* `mise exec` by design, so the
-    /// mediated call resolves to the same program as the bare one. The
-    /// objection here is not to the program but to the **toolchain selection**:
-    /// a bare `cargo` compiles against whatever is ambient, and the pin is what
-    /// makes a local green mean anything.
-    ///
-    /// So the mediator is read from the segment **as written**, which is the
-    /// one place the two routes still differ, and a wrapper cannot launder it:
-    /// `env RUSTFLAGS=-Awarnings cargo build` names no mediator and is refused,
-    /// while `env FOO=1 mise exec -- cargo build` names one and is not.
-    ///
-    /// A closed set rather than a free string: an unrecognised mediator would
-    /// be a row that never finds what it is looking for and therefore denies
-    /// everything, which is the loud half of the same silence
-    /// [`validate`] exists to refuse.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_via: Option<RequireVia>,
-    /// Narrow a [`RuleKind::Shape`] deny to work that names **no** tracker key
-    /// (CLOUD-446).
-    ///
-    /// A bare shape row means *this command is banned*. This modifier turns the
-    /// same row into *this command is banned unless the work is keyed*: the row
-    /// still selects on the command shape, and the expression decides whether
-    /// that selection refuses. It is a modifier rather than a kind of its own
-    /// precisely because the selection half is unchanged.
-    ///
-    /// The evidence is the mediated command itself plus, resolved at the
-    /// boundary, the branch name and the commit subjects on
-    /// `<base>..HEAD` — the same fixed VCS-query class [`RuleKind::Receipt`]
-    /// already makes, which is why [`RuleKind::carries_ambient_authority`] stays `false`.
-    /// Requires `base`, since the range has to be named by the consumer rather
-    /// than by a trunk name baked into the crate.
-    ///
-    /// **The vocabulary is the consumer's.** `CLOUD-<n>` is this repository's
-    /// tracker, not Batten's, so what a key looks like is an expression in
-    /// `batten.toml` (non-negotiable rule 1). Compiled at load, like `regex` and
-    /// `exclude`, so a bad one names its row rather than becoming a gate that
-    /// silently allows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires_key: Option<String>,
-    /// Why this rule refuses, and what to do instead — the deny's whole text.
-    ///
-    /// Required by [`RuleKind::Shape`], where the refusal is all a caller gets;
-    /// optional elsewhere, where a `path:line` pointer plus the id already says
-    /// where to look.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// An optional link to the policy this rule enforces, appended to the deny.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy_url: Option<String>,
-    /// The environment variable that suppresses **this row**, named in this
-    /// row's own deny (CLOUD-437).
-    ///
-    /// Absent means no hatch: there is no general one to fall back to, so a row
-    /// without this column is suppressed only by a waiver or an admission, both
-    /// of which leave a record. A row declaring one is declaring that its bypass
-    /// is a *separate decision* from every other row's.
-    ///
-    /// Why a per-row column rather than one global name: the bash guards this
-    /// surface inherited each had their own hatch, so an operator could suppress
-    /// `memory-guard` alone while `ready-guard` stayed live. One global name
-    /// silently widens the blast radius of every bypass — invisibly, because the
-    /// deny text cannot say what else it just switched off.
-    ///
-    /// It is an environment variable rather than a `batten.local.toml` key on
-    /// purpose. A hatch LOWERS policy, and house-style §8's override channel is
-    /// raise-only; an env var is a per-invocation decision, visible in the
-    /// command that took it and gone when the process exits, where a config key
-    /// would make the same lowering persistent and invisible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bypass_env: Option<String>,
-    /// The **inspection-only** command template a [`RuleKind::Command`] rule
-    /// runs as its gate. Required by that kind, rejected by any other.
-    ///
-    /// Split on whitespace into `program` plus arguments and executed
-    /// **directly — never through a shell**, so what runs is exactly what a
-    /// reviewer reads (§9: rules "name a command already on the operator's
-    /// PATH"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the
-    /// matched paths; omit it and the command self-discovers.
-    ///
-    /// Named for the half it is, not for the act of running: §9's duality has
-    /// two commands, and a column called `run` could name either. Enforcement
-    /// is always this one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub check: Option<String>,
-    /// The **mutating** half of §9's duality: the command that repairs what
-    /// `check` condemned. Optional, [`RuleKind::Command`] only.
-    ///
-    /// Parsed today and **executed by nothing**: serialised fix execution is an
-    /// engine capability that does not exist yet. The key is reserved now
-    /// rather than later because §2 declares no back-compatibility surface, so
-    /// a config author who writes one is writing the final spelling.
-    ///
-    /// A row carrying it is refused by [`run_all`] rather than quietly ignored
-    /// — a declared repair that silently never runs is the false green this
-    /// engine exists to refuse.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fix: Option<String>,
-    /// What this rule PRODUCES: the record the boundary writes after the rule has
-    /// decided (CLOUD-851).
-    ///
-    /// The first column on this struct that is not an input selector. Every other
-    /// path-shaped key — `glob`, `documents`, `pattern` — narrows what the rule
-    /// READS; this one names what the run leaves behind, which is the notion the
-    /// model had none of and which eleven bash writers need somewhere to land.
-    ///
-    /// **It does not make the rule impure and it does not make it spawn.** The
-    /// rule stays [`crate::facts::Cost::Read`] and
-    /// [`RuleKind::carries_ambient_authority`] is untouched: a declaration here
-    /// yields a [`crate::sink::Requested`] value, and the boundary performs it.
-    /// `the_two_axes_agree_about_every_kind` still holds, which is the assertion
-    /// that a sink was added as a third axis rather than `Cost::Effect` quietly
-    /// repurposed into meaning "mutates".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub produces: Option<Sink>,
-    /// Path globs this rule's [`Rule::glob`] selects but must NOT judge
-    /// (CLOUD-883).
-    ///
-    /// **`glob` could say "these files" and not "these files except those",** so
-    /// a broad rule and a precise one could not compose over one tree: the broad
-    /// one always double-reported what the narrow one owned. Measured on
-    /// CLOUD-881, whose `forbid` row over `**` reports `Cargo.toml:225` — a
-    /// legitimate dependency pin — because deciding that needs the TOML table the
-    /// line sits in, which is a `policy` row's question and not a literal's.
-    ///
-    /// **Not [`Rule::exclude`], which is a regex over the matched LINE and never
-    /// sees a path.** The two are confused often enough that this column is named
-    /// for what it subtracts rather than for the globs it holds.
-    ///
-    /// # Narrowing is structural here
-    ///
-    /// Selection is a [`PathSet`]: `glob` is the only include and these are the
-    /// excludes, so the selected set is a SUBSET of what `glob` alone selects, by
-    /// construction. `PathSet`'s rule is that an exclude beats an include and the
-    /// outcome does not depend on the order patterns were written in — which is
-    /// what makes this safe where gitignore's last-match-wins is not. There, a
-    /// later positive pattern re-includes, so a negation can WIDEN, and widening
-    /// is the one direction a policy engine may never drift ([`Selector`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude_paths: Vec<String>,
-    /// The retired spelling of [`Rule::check`], present only so the refusal can
-    /// name its replacement.
-    ///
-    /// Carried as a field rather than left to `deny_unknown_fields` for the
-    /// same reason [`crate::config::OverrideConfig::min_batten_version`] is:
-    /// "unknown field `run`" reads as a typo, where this is a rename with one
-    /// specific fix. Every deny points to it (CLOUD-122).
-    ///
-    /// Deliberately absent from [`Rule::columns`]: that census classifies the
-    /// columns a kind may *carry*, and no kind carries this one — it is refused
-    /// outright by [`Rule::validate`], ahead of any per-kind question.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
-    /// Hash the matched span **verbatim** rather than collapsing its whitespace.
-    ///
-    /// For a rule whose subject *is* literal content, where a reformat genuinely
-    /// changes the thing being flagged. The default collapses whitespace on the
-    /// `git patch-id` model, so a formatter reflow does not re-mint an identity;
-    /// a `verbatim` rule trades that for sensitivity to the bytes it is about.
-    /// `Option<bool>` rather than `bool` so the column census can see presence
-    /// (`Rule::columns`), which is what makes a `verbatim` on a kind that hashes
-    /// no span a usage error instead of an ignored key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbatim: Option<bool>,
-    /// A per-rule identity discriminator: split one identity into several.
-    ///
-    /// **Split-only by construction, not by validation.** The default identity
-    /// is hashed as a field of the override's preimage
-    /// ([`crate::identity::override_fingerprint`]), so two spans with different
-    /// default identities cannot collide under any discriminator — this can
-    /// fragment a group and is mathematically unable to merge two. Changing it
-    /// is a deliberate re-mint, not a rename.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity_key: Option<String>,
-    /// Which way a [`RuleKind::Ratchet`] count may move. Required by that kind,
-    /// rejected by every other.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub direction: Option<Direction>,
-    /// The git rev a [`RuleKind::Ratchet`] counts against, and the one a
-    /// `requires_key` shape row reads commit subjects since. Any rev git
-    /// resolves; one it cannot is a usage error naming the rev for the ratchet,
-    /// and "could not look" for the shape row — a tree gate owes an answer where
-    /// a mediated call must not become un-runnable outside a checkout.
-    ///
-    /// One column for both because it is one question — *since where* — and a
-    /// second spelling of it would be the trunk name written twice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<String>,
-    /// The header token a [`RuleKind::Ratchet`]'s files declare their SUBJECT
-    /// with, turning the row into *a decrease is admitted when the subject
-    /// died* (CLOUD-807).
-    ///
-    /// A bare ratchet means *this count may not fall*, and the only hatch for a
-    /// legitimate reduction is a `[[waiver]]` — which expires, and which cannot
-    /// say WHICH reductions are legitimate. This modifier says it. The value is
-    /// the line prefix a matched file writes its subject after; everything to
-    /// the end of that line is read as whitespace-separated paths.
-    ///
-    /// **The vocabulary is the consumer's** (non-negotiable rule 1). `#
-    /// subject:` is one repository's comment syntax, not Batten's, so the token
-    /// is config and this crate never names a specific repo's files. What the
-    /// core knows is the RELATIONSHIP: a file declares paths, and those paths
-    /// dying is what buys its own deletion.
-    ///
-    /// Declaring it has two consequences, and the second is what makes the
-    /// first honest:
-    ///
-    /// 1. **Admission.** A decrease is admitted iff every file whose own count
-    ///    fell declares a subject, and every path that subject names was a blob
-    ///    at `base` and is absent from the working tree.
-    /// 2. **Obligation.** EVERY matched file must carry a resolvable header —
-    ///    not merely the ones a given change touches. Absent, empty, or naming
-    ///    a path that no longer exists is a finding at the row's severity.
-    ///
-    /// Without (2) the admission rests on a header nobody checks, and a suite
-    /// outliving its subject — the header rotted into a lie — reads exactly
-    /// like one that never had a subject at all.
-    ///
-    /// **Headers are read from the BASE tree.** A retired file does not exist
-    /// in the working tree, so base is the only place its subject can be read —
-    /// and it is also the right place: a change cannot rewrite its own
-    /// permission by editing the header in the same commit. The price is that
-    /// widening a too-narrow header before a retirement takes a prior landed
-    /// commit, which is the correct direction for the trade, since a header
-    /// narrower than the truth is a hole and one wider than it is only friction.
-    ///
-    /// Requires `base`, like the ratchet's count itself: the admission is
-    /// decidable from two trees and one of them has to be named.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retires_with: Option<String>,
-    /// How a deletion proves it conserved logic, not merely files (CLOUD-908).
-    ///
-    /// [`Rule::retires_with`] buys a decrease with a dead subject; this obliges
-    /// every named case inside that decrease to be claimed by exactly one arm in
-    /// the head tree. See [`Conserves`] for the three arms and what each owes.
-    ///
-    /// Requires `retires_with`, and therefore `base`: it refines that column's
-    /// admission rather than standing beside it, and a mapping with no admission
-    /// to refine would decide nothing on a rule that never permits a decrease.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conserves: Option<Conserves>,
-    /// How a change declares that a newly added file cannot migrate (CLOUD-929).
-    ///
-    /// [`Rule::retires_with`] admits a DECREASE with a subject that died; this
-    /// admits an INCREASE with a reason the author writes down. Both let a
-    /// ratchet permit the movement it exists to refuse, so both are the same
-    /// shape — a line prefix, read for a declaration — and neither is a waiver:
-    /// the permit lives in the rule rather than in a row that expires.
-    ///
-    /// **It is read from the WORKING tree, and that asymmetry is the whole
-    /// design rather than an oversight.** `retires_with` reads the BASE tree
-    /// because a retired file has no working copy, and because reading base is
-    /// what stops a change rewriting its own permission in the commit that
-    /// spends it. For an increase that inverts exactly: a new file is absent
-    /// from base, so the working tree is the only place its marker can be read,
-    /// and a change therefore *can* write its own permission.
-    ///
-    /// So this column is **structurally weaker than its sibling and must not be
-    /// described as the same guarantee**. It is a declaration a reviewer reads in
-    /// the diff, not a proof the engine verified against a tree the author could
-    /// not edit. What it buys is still worth having: it converts a silent
-    /// increase into a visible, attributed one, and it makes the author name the
-    /// reason at the moment they incur it rather than in a retrospective.
-    ///
-    /// The engine checks only that a declaration is PRESENT and non-empty. Any
-    /// convention about what it must say — an issue key, a bucket name — is the
-    /// consumer's, because a tracker's vocabulary inside this crate is
-    /// non-negotiable rule 1's violation.
-    ///
-    /// Requires `base` for its sibling's reason: the admission is decidable only
-    /// against two trees, since "newly added" means "absent from base".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admits_with: Option<String>,
-    /// How to parse the documents a [`RuleKind::Document`] row selects. Required
-    /// by that kind, rejected by every other.
-    ///
-    /// **Declared, never inferred from the path.** An extension is a naming
-    /// convention — a JSON5 file is conventionally `.json5` and legally
-    /// anything — and this column is what decides which parser reads the bytes.
-    /// Guessing wrong yields "could not look" on a file that is perfectly well
-    /// formed, which blames the document for the engine's inference.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<crate::facts::Format>,
-    /// The dotted node path a [`RuleKind::Document`] row addresses — `a.b.0.c`,
-    /// walking maps by key and lists by index. Required by that kind, rejected
-    /// by every other.
-    ///
-    /// The path is the consumer's, like every other artifact-shaped value here:
-    /// `crates/batten` knows how to walk a document and nothing about what any
-    /// particular one contains (non-negotiable rule 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node: Option<String>,
-    /// The name this rule publishes its derived value under, for another rule to
-    /// read (CLOUD-773). [`RuleKind::Document`] only.
-    ///
-    /// **A value, not a verdict.** Composition already exists in the layer this
-    /// engine is absorbing: 57 of 126 tasks invoke a sibling and branch on its
-    /// exit code. That channel carries three states and nothing else, so a
-    /// consumer that needs the producer's *structure* re-derives it — measured,
-    /// `graph-check` spawns `ready-lint` and then re-spells the issue-key regex
-    /// three times. The re-derivation is caused by values not crossing the
-    /// boundary, which is what this column is for.
-    ///
-    /// Names are global to the config and unique: two rows deriving one name is
-    /// refused at load, because "which one did I read" is not a question a
-    /// reviewer should have to answer.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub derives: Option<String>,
-    /// What a [`RuleKind::Reference`] row cites and the register it resolves
-    /// against (CLOUD-2005). Required by that kind, refused by every other.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cites: Option<crate::register::Cites>,
-    /// The derived value this rule compares its node against — [`Rule::pattern`]'s
-    /// **alternative**, never an addition to it. [`RuleKind::Document`] only.
-    ///
-    /// A row carries exactly one of the two, the shape `forbid`'s
-    /// `pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a
-    /// load error rather than a precedence rule nobody can read.
-    ///
-    /// Three checks run at load and never later (house-style §8, and CLOUD-647
-    /// measured that the obvious candidate engine reports the third at
-    /// *evaluation*, which on the mediated path is the worst possible time):
-    /// the name must be derived by some row, the reference graph must be
-    /// acyclic, and the derivation's [`RuleKind::fact_class`] must not make this
-    /// rule more expensive or narrower than its own kind already is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reads: Option<String>,
-    /// Per-predicate severity, keyed by an id the module publishes (CLOUD-832).
-    /// [`RuleKind::Policy`] only.
-    ///
-    /// **Why a row's single `severity` is not enough.** A bundle carries many
-    /// predicates and this repository's own rules span `deny` and lower
-    /// severities; one row cannot carry both, so without this key every
-    /// predicate in a bundle inherits one verdict and the bundle is as strict as
-    /// its strictest member or as lax as its laxest. That is the "severity
-    /// flattens" half of CLOUD-832, and it is the half a waiver cannot stand in
-    /// for — a waiver suppresses, it does not lower.
-    ///
-    /// Absent, and absent per key, means [`Rule::severity`] — the row's own
-    /// value is the default for every predicate it registers, so the narrow case
-    /// stays one line. A key naming an id no module publishes is refused at
-    /// load by [`crate::policy::load`], which is the only place that sees both
-    /// the row and the module's declared set; it would otherwise be a setting
-    /// that parses and does nothing, which house style §8 refuses everywhere
-    /// else.
-    ///
-    /// This does NOT widen §8's raise-only invariant, and the argument is worth
-    /// stating rather than leaving to luck, because the key appears in the
-    /// OVERRIDE schema too. Three refusals already standing close it:
-    /// [`crate::config::OverrideConfig`] admits rules a local file *adds* and
-    /// refuses a redefinition of a committed id, so there is no committed bar
-    /// here to lower; [`crate::policy::load`] refuses two rows registering one
-    /// module, so an override cannot re-register the same bundle at a lower
-    /// severity; and it refuses two modules publishing one predicate id, so an
-    /// override cannot smuggle a laxer copy of a predicate in beside the
-    /// original. On top of that a module is deny-only by construction — there is
-    /// no spelling for an allow — so a predicate's severity chooses how loudly it
-    /// refuses, never whether some other gate stops refusing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub predicate_severity: Option<BTreeMap<String, RuleSeverity>>,
-    /// The vendored preset this rule enables, by name (CLOUD-836).
-    /// [`RuleKind::Policy`] only, and the third of the three mutually-exclusive
-    /// sources — [`Rule::module`] is one file, [`Rule::bundle`] one folder, this
-    /// one a bundle compiled into the binary.
-    ///
-    /// **A preset is not an authority; it is content the authority enables.**
-    /// That is what keeps it clear of CLOUD-29's one-committed-authority rule,
-    /// and why enabling one is explicit here rather than default-on: a consumer
-    /// who enables nothing gets nothing, so this adds no implicit behaviour for
-    /// §8 to have an opinion about.
-    ///
-    /// The valid names are [`crate::policy::preset_names`], derived from the
-    /// embedded set — an unknown name is a config error at load (exit `1`),
-    /// never a silent no-op, and the published schema's enum is generated from
-    /// the same list so the two cannot disagree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "preset_name_schema")]
-    pub preset: Option<String>,
-    /// The CI provider this repository runs, where the enabled preset reads one
-    /// (CLOUD-1625).
-    ///
-    /// **A consumer fact, so it lives in the consumer's config** — which is
-    /// non-negotiable rule 1 applied to the seam that broke it. The engine
-    /// declares which provider's language a preset's modules read
-    /// ([`crate::preset::Manifest::provider`]); this declares which one is in
-    /// use here; and the two are compared at load. Neither guesses the other.
-    ///
-    /// Omitted is the ordinary case: six of the seven presets read no provider's
-    /// language, so a row enabling one needs nothing here. A row enabling a
-    /// preset that DOES read one, and naming no provider or a different one, is
-    /// refused before compilation — because the alternative is the preset
-    /// evaluating over an empty document set and reporting clean.
-    ///
-    /// ON THIS ROW rather than in `[ci]`: that table is "this repository's
-    /// committed copy of the host's contract" (`crate::ci::Ci`), a mirror of the
-    /// host's branch protection that `ci-drift` polices key by key, and a key
-    /// with no host counterpart breaks the mirror. `[host]` is the host's repo
-    /// settings and is no better a fit. One optional key beside the `preset` it
-    /// qualifies keeps the configuration narrow, which is rule 6.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    /// Modules of the enabled preset this row does NOT compile, by name — the
-    /// file stem, as `plan-mode-refuses-writes` (CLOUD-2290).
-    ///
-    /// The half of ejecting a module that the binary owns: a local copy declares
-    /// the ids the vendored module did, and `claim_ids` refuses one id from two
-    /// bundles, so the vendored module has to step aside for the copy to load.
-    /// `batten preset eject` writes this key; it is ordinary config, so a
-    /// consumer may write it by hand too.
-    ///
-    /// A name the preset does not ship is refused at load (exit `1`), never
-    /// ignored: an `except` that excepts nothing would leave the vendored module
-    /// running beside the copy that was meant to replace it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub except: Vec<String>,
-    /// Which compiled gate a [`RuleKind::Native`] row enables (CLOUD-2291).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gate: Option<NativeGate>,
-    /// The bundle root this rule enables, as a repository-relative directory
-    /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
-    /// [`Rule::module`] rather than an addition to it.
-    ///
-    /// A row carries exactly one of the two, the shape `forbid`'s
-    /// `pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a
-    /// load error rather than a precedence rule nobody can read.
-    ///
-    /// **Why a folder does not reopen §8.** §8 forbids *implicit discovery* —
-    /// the upward directory walk and the `conf.d` merge — because merging can
-    /// weaken. Nothing here merges. The one committed authority names the root
-    /// explicitly, and every module inside it is deny-only by construction, so
-    /// enumerating them can only ADD refusals. §8's invariant is raise-only, and
-    /// a set that cannot subtract satisfies it more strongly than the typed rule
-    /// table does. Globbing for `*.rego` anywhere ELSE would be the thing §8
-    /// refuses; naming this root is the opposite of it.
-    ///
-    /// The root joins the `protected` set for the same reason a named module
-    /// does — see [`Rule::module`]. A folder must not be less protected than a
-    /// file was.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundle: Option<String>,
-    /// The documents a tree-scoped policy row hands its bundle (CLOUD-833).
-    /// [`RuleKind::Policy`] with [`RuleScope::Tree`] only.
-    ///
-    /// **Bounded by declaration, never by an ambient walk.** A bundle is handed
-    /// exactly the documents its row names, the way [`crate::facts::Declared`]
-    /// already works — which is what keeps house style §4's "cheap when
-    /// irrelevant" true: a row whose declared inputs are unchanged does no work
-    /// at all. A rule that walked the tree would pay for every file on every
-    /// invocation and would make the `read` classification a lie by degrees.
-    ///
-    /// Each entry is a repository-relative path. The parsed result is
-    /// `input.tree.documents[<path>]`, built by
-    /// [`crate::rules::tree_document`] from `facts.rs`'s existing `Format`/`Node`
-    /// substrate (CLOUD-772) — reused rather than re-implemented, so no second
-    /// parser lands.
-    ///
-    /// A declared document the tree does not carry is
-    /// [`crate::facts::Look::CouldNotLook`] and never an empty input: a module
-    /// that could not see its subject has not established anything about it,
-    /// which is CLOUD-251's vacuous pass in the place it would be least visible.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub documents: Vec<String>,
-    /// The paths this rule needs before its body is worth running (CLOUD-125).
-    ///
-    /// The **declared input-precondition**: every entry must exist under the
-    /// run's root, or the rule is [`NotObserved::RuleSkipped`] and the first
-    /// missing path is reported as the unmet requirement. Absent — the default —
-    /// means the rule is unconditional, which is what makes this additive: a row
-    /// that declares none behaves exactly as it did before the column existed.
-    ///
-    /// **Not spelled `precondition`**, and that is not aesthetic. A
-    /// `[[verdict.route]]` already carries a `precondition`, and that one is a
-    /// human-answerable question an override is granted against
-    /// ([`crate::admission`]) — a different thing entirely from a predicate the
-    /// engine decides. One word for both would put two unrelated concepts under
-    /// one name in the same config file. The `requires_` prefix is the family
-    /// this actually belongs to, beside `requires_key` and `requires_field`.
-    ///
-    /// **Resolvable without a subprocess, by construction** — the whole line
-    /// CLOUD-125 draws against the `command` kind. Existence of a declared path
-    /// is a stat; a precondition that needed a program to answer would be a
-    /// second, unbounded evaluation before the one the rule declares, and that
-    /// is what the `command` kind is for, evaluated *inside* the check.
-    ///
-    /// Deliberately absent from [`Rule::columns`], with the git and document
-    /// families and for their reason: this classifies as a declared READ rather
-    /// than a per-kind capability, so it is permitted on every kind rather than
-    /// listed in ten `permits()` arms that would then have to be kept in step.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires_path: Vec<String>,
-    /// The documents a tree-scoped policy row hands its bundle, **selected by
-    /// glob** (CLOUD-850).
-    ///
-    /// [`Rule::documents`]'s sibling and the reason it stopped being the only
-    /// spelling. `documents` is literal-path only — the sole path handling was
-    /// `root.join(path)`, no expansion — so `documents = ["mise-tasks/*"]` was
-    /// read as a file with a `*` in its name, failed, landed in `missing`, and
-    /// skipped the whole rule. Silently, green. A policy row was the one kind
-    /// excluded from the glob machinery every other kind uses, and it is the kind
-    /// the entire retirement campaign migrates onto: 27 of the 82 bash gates open
-    /// more than five files.
-    ///
-    /// Resolved with [`Selector`] — `globset` with `literal_separator(true)` —
-    /// against the run's one `ignore` walk, exactly as every glob-taking kind
-    /// already does. No second matcher.
-    ///
-    /// **Additive, and `documents` is unchanged.** A row may declare either or
-    /// both; the union is what its bundle is handed. Keeping the literal spelling
-    /// working is what makes this not a breaking change, and it stays the right
-    /// spelling for the ~55 gates that each open one to four named paths.
-    ///
-    /// A glob that matches nothing is a **stated** skip rather than a silent one,
-    /// for the reason the whole row exists: a selector that selects nothing and a
-    /// tree that satisfies the predicate are otherwise the same green.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<String>,
-    /// The files a tree-scoped policy row hands its bundle as **lines**
-    /// (CLOUD-846).
-    ///
-    /// [`Rule::documents`]'s unparsed sibling, and the ceiling it lifts was
-    /// measured: of the 20 tree-scoped gates, 8 read structured config and 12
-    /// read content no fact could carry — 4 markdown, 5 `.bats`/`.rs`/`.pkl`
-    /// source, 3 no file literals at all. `Format::for_path` answers `None` for
-    /// every one of those, so the path landed in `missing` and the row skipped.
-    ///
-    /// The value is `input.tree.lines[<path>]`, an array of strings. A path that
-    /// cannot be read stays in `missing` — **could-not-look, never an empty
-    /// array**, which is the distinction that keeps CLOUD-251's vacuous pass out:
-    /// a file nobody could read and a file with no matching line are not the same
-    /// answer.
-    ///
-    /// **Bounded by declaration, exactly as `documents` is.** A row reads the
-    /// paths it names and no others.
-    ///
-    /// **Rule 4 is what picks this shape over raw text.** A module may SEE a
-    /// line; a finding may not CARRY one. Lines are the widest shape that cannot
-    /// put content into a finding by accident, and `tests/pointer_only.rs` holds
-    /// that structurally rather than by review.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub lines: Vec<String>,
-    /// The files a tree-scoped policy row hands its bundle as lines, **selected
-    /// by glob** (CLOUD-864).
-    ///
-    /// [`Rule::lines`] is to this what [`Rule::documents`] is to
-    /// [`Rule::sources`], and the pair landed asymmetric: CLOUD-850 gave the
-    /// parsed half a glob and the unparsed half kept literal paths only. That
-    /// leaves the fact model's widest surface reachable only by naming every
-    /// path — and the gates that need LINES rather than a parsed document are
-    /// precisely the ones reading many files, since `Format::for_path` answers
-    /// `None` for source text.
-    ///
-    /// Measured need: the shebang rule this column was added for decides over
-    /// **137** shell programs. Enumerating them is a list that goes stale the
-    /// next time one is added, silently and green — the failure the declaration
-    /// bound is supposed to prevent, reintroduced by the spelling.
-    ///
-    /// Same [`Selector`], same union semantics, same stated-skip on a glob that
-    /// matches nothing. Additive: `lines` is unchanged and stays right for a row
-    /// naming one or two paths.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub line_sources: Vec<String>,
-    /// The Rust files this policy row reads as **call sites**, by literal path
-    /// (CLOUD-914).
-    ///
-    /// [`Rule::lines`]' sibling one tier up: `lines` answers *does this token
-    /// appear in this file*, and this answers *does it appear in command
-    /// position*. A row wanting the second must say so, because parsing is
-    /// strictly more expensive than splitting and nobody should pay it by
-    /// accident.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub invocations: Vec<String>,
-    /// The same, glob-selected (CLOUD-914).
-    ///
-    /// Ships WITH its literal column rather than arriving a row later, which is
-    /// the asymmetry `line_sources` records having to fix: a gate over call
-    /// sites is a gate over many files by construction, so the enumerated
-    /// spelling would go stale the first time a module was added.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub invocation_sources: Vec<String>,
-    /// The Rust files this policy row reads as a **`use` graph**, by literal path
-    /// (CLOUD-762).
-    ///
-    /// Separate from [`Rule::invocations`] because the two answer different
-    /// questions over the same parse — what a file CALLS versus what it REACHES —
-    /// and a row wanting one should not pay to project the other.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub uses: Vec<String>,
-    /// The same, glob-selected (CLOUD-762).
-    ///
-    /// A layering rule decides over every module by construction, so the glob is
-    /// the spelling that matters and it ships with its literal column.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub use_sources: Vec<String>,
-    /// The git facts this policy row reads, **declared** (CLOUD-907).
-    ///
-    /// [`Rule::documents`]'s sibling for the family that is not a file, and the
-    /// declaration is load-bearing twice over.
-    ///
-    /// **It is what keeps `Cost::Read` honest.** `bench/gates/RESULTS.md`
-    /// re-derived the corpus and 22 gate tasks need a git fact the engine could
-    /// not emit; every one of them names which. Resolving the family ambiently
-    /// instead would make every run pay for every variant — and this tree has
-    /// already measured that bill: CLOUD-851 took `check` from a p50 of 4.76ms to
-    /// 10.01ms, 2.103x, by locating the git dir and reading HEAD unconditionally
-    /// for a question no rule had asked.
-    ///
-    /// **And it is what makes the acquisition auditable.** A reader of
-    /// `batten.toml` sees exactly which rows read the checkout's state, which is
-    /// the same property `documents` gives for files.
-    ///
-    /// Refs and ranges are [`Rule::refs`] and [`Rule::ranges`] rather than
-    /// entries here, because those two carry a parameter and these three do not.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub git: Vec<GitRead>,
-    /// Whether this policy row reads the **resolved-symbol** fact (CLOUD-760).
-    ///
-    /// A bare flag rather than a path list, because the fact is one whole-crate
-    /// value: a delegated analyser resolves names across the compilation, and
-    /// asking it about one file would be asking a different, cheaper question
-    /// that [`Rule::invocations`] already answers.
-    ///
-    /// **Declared rather than ambient, and here the reason is the cost class.**
-    /// This is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`
-    /// over the crate, which is seconds rather than the milliseconds every other
-    /// fact costs. Every git fact is declared for a bill CLOUD-851 measured at
-    /// 2.103x; this one would be far worse, and a run that paid it without being
-    /// asked would make `check` unusable.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub symbols: bool,
-    /// The vendored reviews this policy row reads, **declared** (CLOUD-472).
-    ///
-    /// Each becomes an entry of `input.tree.review` under its own `id`. Declared
-    /// per row for `symbols`' reason and more so: this is the second
-    /// `Cost::Effect` fact, and a MISS dispatches an agent — minutes and tokens,
-    /// where clippy is seconds. The digest key makes that once per unique
-    /// subject rather than once per lap, but a run that paid it unasked would
-    /// still be the shape that gets a gate switched off.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review: Vec<crate::facts::ReviewQuery>,
-    /// The refs this policy row resolves, **declared** (CLOUD-907).
-    ///
-    /// Each becomes an entry of `input.tree["git-refs"]` carrying the commit it
-    /// names and whether HEAD descends from it. A ref that does not resolve is
-    /// **absent from that map**, never present with `ancestor_of_head: false`:
-    /// `origin/main` missing in a shallow clone is not "the branch has not
-    /// landed", and a gate reading it that way reports the wrong verdict with
-    /// full confidence.
-    ///
-    /// Separate from [`Rule::ranges`] although git's own ref-name rules would
-    /// make one column injective — `git check-ref-format` forbids `..` in a ref
-    /// name, so an entry containing it could only be a range. Two columns
-    /// anyway: the two ask different questions, they sit on different surfaces
-    /// (a ref is bounded and a range is not), and CLOUD-883's lesson is that a
-    /// column earns its name from what it does rather than from what it can be
-    /// packed with.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub refs: Vec<String>,
-    /// The commit ranges this policy row reads, **declared** (CLOUD-907).
-    ///
-    /// Spelled `<base>..<head>`, and each becomes an entry of
-    /// `input.tree["git-ranges"]` carrying that range's commits as a sha and a
-    /// subject each. A range whose endpoints do not resolve is **absent**, never
-    /// an empty list — "nothing landed in this range" and "I could not read this
-    /// range" are the two answers a migration gate most needs kept apart.
-    ///
-    /// Pointer-only at the boundary: a subject is git's `%s`, which is how the
-    /// log itself points at a commit. A message body or a diff would put tracked
-    /// content on the policy input, and rule 4 is decided at the acquisition
-    /// rather than at the report.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ranges: Vec<String>,
-    /// The commit ranges this policy row reads the IDENTITY FIELDS of,
-    /// **declared** (CLOUD-1187).
-    ///
-    /// Each becomes an entry of `input.tree["commit-meta"]` carrying, per commit,
-    /// its sha, author, committer and trailers — and **no message body and no
-    /// diff**. That omission is structural rather than careful:
-    /// [`crate::git::CommitMeta`] has no body field, so rule 4 is decided by the
-    /// type and not by a projection remembering to drop something.
-    ///
-    /// **Its own column rather than a widening of [`Rule::ranges`]**, and the
-    /// reason is cost. `ranges` reads a subject per commit; this peels a commit
-    /// OBJECT per commit, and range length is unbounded per declaration —
-    /// `origin/main..HEAD` is one declaration and an unknown number of commits.
-    /// Folding the two would make every row that wants subjects pay for a peel it
-    /// never asked for.
-    ///
-    /// A range whose endpoints do not resolve is **absent**, never an empty list,
-    /// exactly as `ranges` is.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commits: Vec<String>,
-    /// The paths this policy row reads the STAGED bytes of, **declared**
-    /// (CLOUD-1203).
-    ///
-    /// `git show :<path>` — the index, never the working tree. That distinction
-    /// is the whole column: [`crate::facts::Fact::Tracked`] walks the checkout,
-    /// so a gate judging THE COMMIT rather than the developer's working copy
-    /// cannot use it and would pass over a staged-but-unsaved edit.
-    ///
-    /// Each becomes an entry of `input.tree.staged`, parsed by the path's own
-    /// format. A path with no staged entry, one whose bytes are not UTF-8, and
-    /// one this build cannot parse are each **absent** and named in `missing`
-    /// with the cause — never present with an empty node.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub staged: Vec<String>,
-    /// The history PATTERNS this policy row resolves, **declared** (CLOUD-1200).
-    ///
-    /// [`Rule::refs`] and [`Rule::ranges`] name what they want; these describe
-    /// it, because the answer set is not knowable at declaration time — every tag
-    /// matching a glob, the commit that deleted a path. Each row becomes an entry
-    /// of `input.tree["git-history"]` under its own `id`.
-    ///
-    /// **The pattern is the bound.** A pattern no row names resolves nothing, so
-    /// this is a projection of a declared set rather than a git shell — the same
-    /// negative half every family here owes.
-    ///
-    /// A SHALLOW clone leaves the whole fact `null`: it cannot see the history a
-    /// path query walks, and a truncated walk reported as a result is a gate
-    /// deciding over history it could not see. A declared pattern that matched
-    /// nothing is present with an empty list, which is a real answer.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub history: Vec<crate::facts::HistoryQuery>,
-    /// The tag GLOBS this policy row lists, **declared** (CLOUD-843).
-    ///
-    /// Each becomes an entry of `input.tree["git-tags"]` under the glob as
-    /// written, carrying every tag it matches — by `git tag --list`'s own match —
-    /// with the commit each peels to and when it was cut. A glob matching nothing
-    /// is present with an empty list, which is an answer; `null` is the
-    /// references that could not be read.
-    ///
-    /// Not [`Rule::history`]'s tag query: that family nulls on a shallow clone,
-    /// because a path query walks history, and a tag listing walks none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    /// The config KEYS this policy row reads, **declared** (CLOUD-843).
-    ///
-    /// Each becomes an entry of `input.tree["git-config"]` carrying the value in
-    /// force and the value each scope sets, with git's boolean reading of each.
-    /// Resolved across every scope git consults, because the question a signing
-    /// posture asks is a conflict BETWEEN scopes.
-    ///
-    /// **The declaration is the secrecy bound.** A config file can carry a
-    /// credential; a key no row names is never read. A key git could not address
-    /// (`section.name` at least) is refused at load.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub git_config: Vec<String>,
-    /// The PATHSPECS this policy row reads the index under, **declared**
-    /// (CLOUD-843).
-    ///
-    /// Each becomes an entry of `input.tree["git-index"]` under the spec as
-    /// written, carrying the index entries it selects (path, mode, oid, stage),
-    /// the selected tracked paths the working tree has diverged from, and the
-    /// untracked paths beneath it. git's pathspec rules without magic; a
-    /// `:`-magic spec is refused at load rather than read as a literal that
-    /// selects nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub index: Vec<String>,
-    /// The refs this policy row reads the engine's own finding store for,
-    /// **declared** (CLOUD-1203).
-    ///
-    /// Each becomes an entry of `input.tree.state` carrying that ref's pointer
-    /// lines — a fingerprint, a rule id and a count each, and nothing a finding
-    /// said. **Keyed by ref**, so a listing accumulated on another branch is
-    /// simply not in the map: a finding observed elsewhere is not evidence about
-    /// this checkout's work.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub state: Vec<String>,
-    /// The commit SHAs this policy row reads the forge's verdict for,
-    /// **declared** (CLOUD-1154).
-    ///
-    /// Each becomes an entry of `input.tree.forge` carrying that SHA's check
-    /// verdicts as `name -> conclusion` tokens, read back from a record a
-    /// producer wrote OUTSIDE the engine. **The engine opens no socket** — house
-    /// style §5 forbids an HTTP client here — so the fetch is somebody else's and
-    /// this is a keyed read off disk, which `evaluator-io-check` gates.
-    ///
-    /// **Keyed by SHA, which is the safety property.** A record taken against a
-    /// different commit is not evidence about this one, so it does not answer.
-    /// That is the difference between reading a verdict and inheriting a stale
-    /// one.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub forge: Vec<String>,
-    /// The third-party tool verdicts this policy row reads, **declared**
-    /// (CLOUD-1171).
-    ///
-    /// Each row becomes an entry of `input.tree["tool-verdict"]` under its own
-    /// `id`, carrying that tool's findings as `name -> pointer` tokens — read
-    /// back from a record a producer wrote OUTSIDE the engine, because `check` is
-    /// `read` and structurally cannot run a validator.
-    ///
-    /// **Keyed by (tool, pinned version, input digest), and the keying is the
-    /// safety property.** A record from a differently-pinned tool, or one taken
-    /// over bytes that have since changed, lives under a different name and is
-    /// never opened. That is what makes a verdict stale by construction rather
-    /// than by a comparison a module could forget.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<crate::facts::ToolQuery>,
-
-    /// The adopted gate runner's EFFECTIVE plan, per declared surface
-    /// (CLOUD-949).
-    ///
-    /// Each row becomes an entry of `input.tree.plan` under its own `id`,
-    /// carrying what the runner said it would run — acquired from the runner
-    /// itself, never re-derived from its config, because the runner owns its
-    /// selector and a second derivation is a second authority on which files a
-    /// step runs over.
-    ///
-    /// **Acquired fresh rather than read back, which is the difference from
-    /// `tools`.** A verdict is a statement about bytes that have a digest; a plan
-    /// is a statement about a WORKING TREE, whose dirty and index state move
-    /// without HEAD. Keying a stored plan would mean comparing every binding
-    /// field before trusting it, and a comparison a caller can forget is the
-    /// staleness class this avoids by simply taking the plan now.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plan: Vec<crate::hk::PlanQuery>,
-    /// The already-minted receipt fields this policy row reads, **declared**
-    /// (CLOUD-1310).
-    ///
-    /// Each row becomes an entry of `input.tree.minted` under its own `id`,
-    /// carrying `subject -> value` tokens taken from receipts the MEDIATED
-    /// boundary wrote. The engine fetches nothing: the credential existed in the
-    /// session that read the subject, and what happens here is a line off disk.
-    ///
-    /// **Bounded by AGE, and that is why this is not [`Rule::captured`].** The
-    /// capture store is keyed by content and carries no clock, so a question
-    /// about a MUTABLE field answers from whichever read sorts first by digest —
-    /// the state before the work. Here a reading older than the row declares is
-    /// simply absent, which is [`Rule::tools`]' stale-by-construction property
-    /// rather than the capture store's.
-    ///
-    /// **Absent is the ORDINARY answer.** The receipt store lives under the git
-    /// directory and is never committed, so on a fresh clone and on every CI
-    /// runner it is empty. A module over this column therefore refuses narrowly
-    /// and abstains widely, and one that read absence as agreement would report
-    /// clean everywhere it matters least.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub minted: Vec<crate::facts::MintedQuery>,
-    /// The reductions this policy row reads out of the capture store,
-    /// **declared** (CLOUD-1188).
-    ///
-    /// Each row becomes an entry of `input.tree.captured` under its own `id`,
-    /// carrying the REDUCTION it asked for — a boolean, a count, or a bounded
-    /// token — and never the response it came from. A row declares what to reduce
-    /// and how, because handing a module a payload would put a tracker's prose on
-    /// the policy input where any predicate could lift it into a pointer.
-    ///
-    /// **The store, never stdin**: a stdin-fed fact is dropped by the surface
-    /// table before projection, is context re-sent every turn, and is invisible to
-    /// the `batten step` key — three independent refusals, any one of which is
-    /// enough.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub captured: Vec<crate::facts::CaptureQuery>,
-    /// The task manifests this row reads, **declared** (CLOUD-856).
-    ///
-    /// Parsed ONCE at session start and recorded; the mediated call reads the
-    /// record. `Fact::Document` stays unresolvable on that path because a
-    /// document is unbounded there, and this is how the one predicate that
-    /// genuinely needs a manifest gets it without putting a parse on the hot
-    /// path.
-    ///
-    /// The manifest's own bytes key the record, so a manifest that moves
-    /// invalidates it by construction.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<crate::facts::TaskQuery>,
-    /// The extractions this row reads over the session's own transcript,
-    /// **declared** (CLOUD-1172).
-    ///
-    /// Each row becomes an entry of `input.facts.extracted` under its own `id`,
-    /// carrying an INTEGER — the extractor set is closed and every member counts
-    /// a typed event, so no span of session text can reach a module through this
-    /// column. An extractor no row declares yields nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extract: Vec<crate::facts::ExtractQuery>,
-    /// The landing targets this policy row asks about, **declared** (CLOUD-880).
-    ///
-    /// Each becomes an entry of `input.tree.landing` answering whether THIS
-    /// checkout's work is on that target — **by patch identity**, because CLOUD-36
-    /// decides merged-ness that way and a rebased landing is invisible to
-    /// ancestry. That is the question [`Rule::refs`] deliberately does not answer:
-    /// a ref resolves to a commit there, and reachability was refused precisely so
-    /// this column could carry the honest test instead.
-    ///
-    /// A target that cannot be scanned is **absent**, never a negative. It is the
-    /// same absence-versus-empty rule as `refs` and `ranges`, and here it is the
-    /// most dangerous of the three to get wrong: `landed: false` fabricated from a
-    /// failed scan reads as *this work is outstanding* and a gate acts on it.
-    ///
-    /// Declaration bounds the cost. A scan walks the head-side commits and
-    /// computes a patch id per commit, so it is one scan per named target rather
-    /// than an ambient sweep of the trunk — the same bound `refs` puts on ref
-    /// resolution, and what makes `Cost::Read` an honest classification.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub landing: Vec<String>,
-    /// The globs whose paths this policy row wants classified against
-    /// [`Rule::base`] — added, edited or deleted (CLOUD-1059).
-    ///
-    /// **Requires `base`**, and the load refuses the column without it, because a
-    /// delta with no rev to compare against is not a narrower question but an
-    /// unanswerable one. That is [`Rule::retires_with`]'s rule, and this column
-    /// shares the `base` it reads on purpose: two spellings of "what did this
-    /// branch change" is the drift a single column exists to prevent.
-    ///
-    /// Declaration bounds WHICH paths are reported and deliberately does not bound
-    /// what answering costs — a glob is a selection over the whole tree, so the
-    /// walk happens either way. That is why [`crate::facts::BASE_DELTA`] is
-    /// `Surface::Check` and never `Hook`.
-    ///
-    /// A base that does not resolve leaves the whole fact `None`, projected as
-    /// `null`, never an empty delta: "this branch changed nothing" and "I could
-    /// not read the base" are the two answers a migration gate must keep apart.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delta_sources: Vec<String>,
-    /// The files OUTSIDE the repository root this policy row may read,
-    /// **declared** (CLOUD-1167).
-    ///
-    /// Each row becomes an entry of `input.tree.external` under its own `id`,
-    /// carrying the parsed node of the file found at `path` beneath the directory
-    /// the named `root` environment variable holds.
-    ///
-    /// **This column is the entire bound, and the negative half is the point.** A
-    /// module reads the ids ITS OWN row declares and nothing else, so no module
-    /// can read a path no row names — which is the difference between a fact and
-    /// a filesystem scanner, and what keeps house style §5's read-only allowlist
-    /// and non-negotiable rule 1 satisfied. The engine expands a variable; it
-    /// does not know what any variable means, so a launcher's or a toolchain's
-    /// directory layout stays in the consumer's config where rule 1 puts it.
-    ///
-    /// An id whose root variable is unset, whose file is absent or unreadable, or
-    /// whose bytes the parser refused is **absent** from the map and named in
-    /// `missing` with its cause — never present with an empty node. "This host
-    /// has no such root" and "the file says nothing" are different answers, and a
-    /// gate that confuses them reports green on every host that never had the
-    /// root.
-    ///
-    /// Declared on the row rather than in a root table so
-    /// [`crate::trust::weakenings`] compares it for free: every `Rule` column
-    /// outside `RULE_NON_PREDICATE` is compared byte-for-byte, so a branch
-    /// repointing a row at a different file is reported as a weakening. That move
-    /// — choosing the evidence — is exactly the one that has to be visible.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external: Vec<crate::facts::Rooted>,
-    /// The registered policy module this rule evaluates, as a repository-relative
-    /// path (CLOUD-647). [`RuleKind::Policy`] only.
-    ///
-    /// **Registration, never discovery.** §8 forbids the upward directory walk
-    /// and the `conf.d` merge; naming the module here, in the one committed
-    /// authority, is the opposite of both, and the list of registered modules is
-    /// itself reviewable data. Globbing a policy directory would be the thing §8
-    /// refuses, and is why this is a path per row rather than a directory key.
-    ///
-    /// The path is what a reader reviews and what `[epoch] tracked` should hash;
-    /// the module's SOURCE never appears in any emitted document, because a
-    /// rendered policy body is a payload and rule 4 admits only pointers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub module: Option<String>,
-    /// Why this rule's findings have no fix — the stated answer, which is not
-    /// the same as an absent one (CLOUD-81).
-    ///
-    /// A finding a caller can neither clear nor act on spends attention for
-    /// nothing, so "there is no fix" must be *said*. The **alternative** to
-    /// [`Rule::fix`], never an addition: a row carrying both is a load error
-    /// rather than a precedence rule nobody can read.
-    ///
-    /// This is the only column CLOUD-81 adds. `fix` already exists — CLOUD-215
-    /// reserved it as the `command` kind's repair side — and
-    /// [`Rule::remediation`] reads it rather than declaring a second spelling of
-    /// the same thing. Recording a repair on a finding is not *running* one, so
-    /// this does not disturb `run_all`'s refusal of a rule that declares it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub no_fix_reason: Option<String>,
-    /// Why a declared repair does NOT hand the call back to be re-issued
-    /// (CLOUD-1639).
-    ///
-    /// Required on a row whose class declares
-    /// [`crate::verdict::Applicability::Silent`], and rejected on every other
-    /// row — the same both-directions shape [`Rule::no_fix_reason`] has, and for
-    /// a sharper reason. `retry` is the posture the field supports: pre-commit
-    /// fails the run when a hook modifies files, Ruff makes the caller opt in,
-    /// and the one measurement of silent server-side rewrite put it 22.3% down
-    /// on utility. So proceeding without telling the caller to re-issue is the
-    /// exception, and an exception with no stated reason is a default wearing
-    /// one.
-    ///
-    /// It is NOT [`Rule::no_fix_reason`]'s sibling in meaning: that one says why
-    /// a row declares no repair at all, this says why a repair that RAN does not
-    /// owe a re-issue. A row can honestly carry both.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub no_retry_reason: Option<String>,
-    /// The receipts a [`RuleKind::Receipt`] row requires, all of which must be
-    /// valid before the matched call is allowed. Required by that kind,
-    /// rejected by every other.
-    ///
-    /// A list rather than a single name because the predicate this ports is
-    /// already a conjunction — readying a PR requires that the branch both
-    /// verified and is linear on the trunk — and expressing it as two rows
-    /// would let one be deleted while the other kept the gate looking whole.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checks: Option<Vec<String>>,
-    /// The receipts a [`RuleKind::Receipt`] row accepts **any one** of. Required
-    /// by that kind when [`Rule::checks`] is absent, rejected by every other.
-    ///
-    /// The disjunction beside the conjunction, rather than a spelling inside
-    /// `checks`, because the two say different things and a row usually wants
-    /// both: `checks` is what must ALL hold, `checks_any` is one alternative
-    /// among equals. A row carrying both is read as the conjunction of the two —
-    /// every name in `checks` valid, AND at least one name here valid — which is
-    /// conjunctive normal form and so expresses anything either column alone
-    /// could not.
-    ///
-    /// The measured occasion is CLOUD-1297. `verify`'s own body accepts a
-    /// `claim`, a `bot` or a `carry` receipt and treats any one as enough, and
-    /// the mediated gate could not follow it: `claim-needs-receipt` demanded
-    /// `claim` alone, so a branch legitimately carrying a `bot.<branch>` receipt
-    /// was denied on every write despite holding a valid attestation — a live
-    /// false positive since CLOUD-693, which CLOUD-1295's third receipt kind
-    /// inherited. Spelling it as a second `checks` row could not work: a second
-    /// receipt row is a second AND, so it would have denied every ordinary write
-    /// on every branch.
-    ///
-    /// An ALTERNATION LOWERS A BAR, which is why a consumer row adopting one
-    /// owes `config-lint` a groomed `Weakens:` clause. That is the raise-only
-    /// discipline of house-style §8 working, not an obstacle to it: the column
-    /// makes a weakening expressible and therefore reviewable, where before it
-    /// was expressible only as a false positive nobody could remove.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checks_any: Option<Vec<String>>,
-    /// Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.
-    ///
-    /// Optional with a pinned default of [`ReceiptKey::Head`], the conservative
-    /// one: a HEAD-keyed receipt expires on an amend or a rebase, so omitting
-    /// the key can only make a gate stricter than intended, never weaker.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key: Option<ReceiptKey>,
-    /// What makes a [`RuleKind::Receipt`] row fire — a command shape, or the fact
-    /// that the call writes (CLOUD-444).
-    ///
-    /// Optional with a pinned default of [`ReceiptTrigger::Command`], which is
-    /// what every row written before this column meant. The axis is orthogonal to
-    /// `key`: a trigger says *when* the precondition is due, a key says *what
-    /// invalidates* the proof of it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trigger: Option<ReceiptTrigger>,
-    /// The programs whose exit status IS the answer, for a
-    /// [`RuleKind::Pipeline`] row (CLOUD-443).
-    ///
-    /// Declared on the rule rather than as a config-root table because it is what
-    /// this rule is *defined over*: a global table would be a second authority
-    /// with no other consumer, and the set would outlive the row that reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verdict: Option<Vec<VerdictProgram>>,
-    /// The pipeline stages that substitute output for status — pagers and
-    /// filters alike, since each replaces the verdict with its own.
-    ///
-    /// A plain name list, not a `VerdictProgram`: a filter's identity is the
-    /// program, and no subcommand makes `tail` more or less of one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filters: Option<Vec<String>>,
-    /// The text utilities whose use **as a first stage over a repository path**
-    /// stands in for a first-class tool, for a [`RuleKind::Pipeline`] row
-    /// (CLOUD-864).
-    ///
-    /// The second predicate this kind carries, and it belongs here for the
-    /// reason the kind exists: what separates a substitution from a legitimate
-    /// filter is not the program but **what surrounds it**. `grep pat crates/`
-    /// answers a question `Grep` answers better; `git ls-files | grep crates/`
-    /// is a filter over another command's output and no tool replaces it. Same
-    /// program, same operand, opposite verdicts — and only the position in the
-    /// pipeline tells them apart, which is precisely what a `shape` row cannot
-    /// see (`matching_shape_rows` iterates every segment with no index in scope,
-    /// so it would refuse the filter too).
-    ///
-    /// A plain name list, like `filters` and for the same reason: a substitute's
-    /// identity is the program.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub substitutes: Option<Vec<String>>,
-    /// The script interpreters whose script FILE operand must resolve inside the
-    /// repository, for a [`RuleKind::Pipeline`] row (CLOUD-2304).
-    ///
-    /// The third family, and `substitutes`' mirror: the same first-stage walk,
-    /// the same pipe bound, the containment test pointed the other way. A
-    /// script file carries its writes in its own body, where no edit guard
-    /// reads them, so one outside the tree is refused and one the tree holds —
-    /// reviewed code — runs. A plain name list, the consumer's fact: which
-    /// programs run a file operand varies by repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interprets: Option<Vec<String>>,
-    /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
-    /// instruction handed to the judge command (CLOUD-56).
-    ///
-    /// **Committed, and that is the point.** The question a model is asked is
-    /// policy: it belongs in the authority a reviewer reads and a diff shows,
-    /// not in a prompt assembled at run time out of something else. It is also
-    /// the one payload class that carries no egress question at all
-    /// ([`crate::judge::RuleText`]) — it is the config author's own words, on
-    /// their way back to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub criteria: Option<String>,
-    /// How fast a [`RuleKind::Judge`] finding must be answered
-    /// ([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means
-    /// [`AdvisoryTier::Advisory`], the least-urgent rank.
-    ///
-    /// This is the axis a judge row declares **instead of** `severity`, and the
-    /// substitution is the whole advisory bound: `severity` decides the exit
-    /// contract, `tier` decides a response deadline. A judge row is refused the
-    /// `severity` column outright, so the axis a model's opinion could ride into
-    /// the exit code does not exist for this kind.
-    ///
-    /// A default rather than a required column, unlike `severity` on every other
-    /// kind: an omitted deadline resolves to the weakest one, which withholds no
-    /// gate because there is no gate here to withhold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tier: Option<AdvisoryTier>,
-}
-
-/// Which git fact a receipt is keyed to, and therefore what invalidates it.
-///
-/// The distinction is not a tuning knob, it is what the receipt *attests*.
-/// A `head` receipt claims something about those exact bytes, so an amend or a
-/// rebase must expire it. A `branch` receipt claims a decision about the work,
-/// which every commit on the branch continues to serve, so a SHA-keyed one
-/// would demand a re-claim per commit — the false-positive rate that gets a
-/// guard bypassed. Both spellings are carried from the shell layer that proved
-/// them (`ready-guard` keys by SHA, `claim-check` by branch).
-///
-/// **`ValueEnum` because the CLI selects the same keying** (CLOUD-741). A
-/// `receipt` rule is pinned to [`RuleScope::MediatedCall`], so `batten check`
-/// can never evaluate one and `verify` cannot reach this predicate through the
-/// engine — which left `verify` re-implementing it in shell, weakly enough that
-/// CLOUD-516's own incident passed. `receipt status --key branch` is how the
-/// tree surface reaches the one implementation instead, so config and CLI must
-/// name the keying with the same tokens or the two surfaces disagree about what
-/// they asked for. `clap`'s and serde's renames both land on `head`/`branch`;
-/// the `clap(rename_all)` is stated rather than inferred so a future variant
-/// cannot drift them apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-#[clap(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum ReceiptKey {
-    /// Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it.
-    #[default]
-    Head,
-    /// Keyed to the branch; every commit on it continues to serve the claim.
-    Branch,
-    /// Keyed to a value the CALL names, read through [`Rule::key_from`]
-    /// (CLOUD-987).
-    ///
-    /// **The subject is one row of somebody's board, not one checkout**, and that
-    /// is the whole reason this variant exists. CLOUD-312's row 2 bounds how stale
-    /// a read may be before a write is authorised, and `issue-read-check`'s header
-    /// says why the key cannot be the branch: *"a branch legitimately updates
-    /// several issues; a branch key would let a fresh read of one issue authorise
-    /// a stale write to another."* So collapsing this to [`ReceiptKey::Branch`]
-    /// is not a simplification — it is the defect that comment refuses, and
-    /// CLOUD-508 is the incident.
-    ///
-    /// **The value becomes a filename, so it is refused rather than sanitised.**
-    /// [`SinkKey`]'s doc already states the hazard for a config-spelled key; a
-    /// PAYLOAD-supplied one is strictly worse, because the call is what a rule is
-    /// judging. A value that is not a single safe path component — empty, or
-    /// carrying a separator, or `.`/`..`, or absurdly long — resolves to
-    /// could-not-look and **allows**, rather than being rewritten into something
-    /// that would file under a subject the caller did not name. Rewriting could
-    /// silently collide two subjects onto one receipt, which is the one outcome
-    /// worse than not looking.
-    Named,
-    /// Keyed to the identity of the branch's whole CHANGE against
-    /// [`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`].
-    ///
-    /// **The fourth keying, and it exists because the other three price a review
-    /// at the wrong rate.** [`ReceiptKey::Head`] expires on every commit AND on
-    /// every rebase, so a landing loop that rebases per lap re-buys the receipt
-    /// each lap for a change that did not move — the false-positive rate
-    /// [`ReceiptKey::Branch`]'s own doc says gets a guard bypassed.
-    /// [`ReceiptKey::Branch`] goes the other way and expires on nothing but a
-    /// restart, so a branch reviewed once may then push anything. Neither is
-    /// *these bytes, however they were replayed*.
-    ///
-    /// The subject is [`crate::git::branch_patch_id`] — a merge-base diff over
-    /// COMMITTED bytes with line numbers excluded — so a rebase that changes no
-    /// content resolves to the same name and the receipt still answers, while a
-    /// single changed line files it under a name nothing looks up.
-    ///
-    /// **Read through the one identity the mint writes under, never re-derived.**
-    /// A second notion of *the same change* is free to disagree with the first
-    /// about exactly the rebase this keying turns on, which is the class
-    /// `.claude/rules/policy-modules.md` records for `base-delta` and the reason
-    /// `receipt::delta_subject` and `mint::render` resolve through the same
-    /// function rather than through two readings of one rule.
-    ///
-    /// An identity that does not resolve — no `key_base`, an unresolvable base
-    /// ref, or an EMPTY diff — is could-not-look, and a rule keyed on it answers
-    /// [`crate::receipt::Validity::Missing`] rather than fabricating a subject. A branch that
-    /// changed nothing has no identity, and minting one would let two empty
-    /// changes compare equal.
-    Delta,
-}
-
-/// One field of a receipt, and what it must say (CLOUD-1100).
-///
-/// A struct rather than two flat columns because the pair is meaningless split:
-/// a position with no required value decides nothing, and a required value with
-/// no position has nothing to read. Spelling them as one table makes the
-/// half-declared form unwritable rather than merely refused.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FieldBound {
-    /// Which whitespace-separated field of the receipt's first line, 1-indexed.
-    ///
-    /// 1-indexed rather than 0-indexed because every prose reader of these
-    /// receipts already counts that way — `claim-check` reads "field 4" and
-    /// `finding-sink-check` "field 5" — and a config that counted differently
-    /// from the comments describing it is a second convention nobody asked for.
-    pub at: usize,
-    /// The value that satisfies the row. Any other value refutes it; an absent
-    /// field is could-not-look and satisfies.
-    pub is: String,
-}
-
-/// What a rule's produced record is filed under (CLOUD-851).
-///
-/// Two, and both are answers the BOUNDARY has: the rule's own id, which is
-/// constant, and the current branch, which is a fact about the checkout. Deliberately
-/// not a free-form string — a key a config could spell arbitrarily is a filename a
-/// config could point anywhere, and the store lives under `$GIT_DIR`.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum SinkKey {
-    /// Filed under the rule's own id: one record per rule, whatever the checkout
-    /// is doing. The right key for a journal.
-    #[default]
-    Rule,
-    /// Filed under the current branch, so every commit on it continues to serve
-    /// the same record — `claim.<branch>`'s shape, and the reason
-    /// [`crate::rules::ReceiptKey::Branch`] exists for the reading half.
-    Branch,
-}
-
-/// Whether `selector` names `raw_tool`: the whole name, or its whole final
-/// `__`-delimited segment.
-///
-/// **One authority, because two callers need the identical answer** (CLOUD-1024).
-/// [`Rule::selects_tool`] decides which rows adjudicate a call and
-/// [`crate::mint::Declared::tool`] decides which results mint a receipt; a rule
-/// that fires on a call whose result minted nothing is a gate nobody can satisfy,
-/// and that is exactly what two hand-rolled matchers would eventually produce.
-///
-/// Never a bare suffix: that would make `Edit` select `NotebookEdit`, widening a
-/// row onto a tool nobody named. The delimiter is what lets a selector survive
-/// the host rotating the server label it was minted under (CLOUD-178, CLOUD-665,
-/// CLOUD-684) — measured on one connector exposed under three names across
-/// registration episodes, where a row naming one matched none of the others and
-/// the miss was silent.
-///
-/// An empty selector is refused at load by both callers, so it cannot reach here
-/// and match the empty final segment of a name ending in `__`.
-#[must_use]
-pub fn selects_tool_name(selector: &str, raw_tool: &str) -> bool {
-    if raw_tool == selector {
-        return true;
-    }
-    // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
-    // built by formatting: the same answer without allocating a string per row
-    // per call, on the hottest path in the binary.
-    raw_tool
-        .strip_suffix(selector)
-        .is_some_and(|prefix| prefix.ends_with("__"))
-}
-
-/// A git fact a rule declares reading, for the three variants that take no
-/// parameter (CLOUD-907).
-///
-/// The parameterised two are [`Rule::refs`] and [`Rule::ranges`]. A closed enum
-/// rather than a string, for [`SinkKey`]'s reason: a name the config could spell
-/// arbitrarily is a question the engine would have to answer at runtime, and an
-/// unknown variant here is a load error rather than a fact that silently
-/// resolves to undefined — which is the shape a Rego predicate reads as "does
-/// not hold".
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum GitRead {
-    /// [`crate::facts::Fact::GitHead`] — HEAD's commit, branch and detachedness.
-    Head,
-    /// [`crate::facts::Fact::GitStatus`] — how the working tree differs from
-    /// HEAD. Tree surface only: it walks the checkout.
-    Status,
-    /// [`crate::facts::Fact::GitRemote`] — the configured remotes and HEAD's
-    /// upstream. Read from `.git/config`; never over the network.
-    Remote,
-    /// [`crate::facts::Fact::GitWorktrees`] — the linked worktree registrations,
-    /// and whether each one's directory is still there (CLOUD-1424). Tree surface
-    /// only: it lists the registry and stats each entry.
-    Worktrees,
-}
-
-/// A rule's declared output (CLOUD-851).
-///
-/// A kind and a key, and nothing else. There is no path column on purpose: a
-/// sink that could name its own destination is a config that can write anywhere,
-/// and the store's layout is the engine's to own.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Sink {
-    /// Which of the three censused kinds this is, deciding whether the record is
-    /// appended, replaced, or merely touched — and whether a later run reads it
-    /// back as a fact.
-    pub kind: crate::facts::Production,
-    /// What the record is filed under.
-    #[serde(default)]
-    pub key: SinkKey,
-}
-
-/// How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).
-///
-/// [`Rule::retires_with`] admits a decrease when the deleted file's declared
-/// subject died. That conserves **files**: it asks *is the subject gone* and never
-/// *did the cases move*, so a migration can delete a suite and land green with
-/// nothing asserting what replaced it. Measured on the one retirement that has
-/// happened — 22 named cases deleted, 18 successors, six identifiable from
-/// nothing in the tree, and one whose behaviour changed deliberately with no
-/// mark on it.
-///
-/// This column closes that. Every named case in a file whose count fell must be
-/// claimed, in the HEAD tree, by **exactly one** arm. Three shipped with
-/// CLOUD-908 and the two optional ones arrived with the classes they are for —
-/// which is why the count is not restated in prose: it went stale the moment
-/// `withdrawn` landed, and this table is the authority instead.
-///
-/// | arm | means | obliges |
-/// | --- | --- | --- |
-/// | `carried` | the same assertion, in a new home | a target that resolves; feeds the differential replay |
-/// | `subsumed` | a general property elsewhere now covers it | a target that resolves |
-/// | `changed` | it diverges deliberately | a target that resolves **and** a reason |
-/// | `ported` | it moved, and the subject STAYED | a target that resolves **and** the surviving subject |
-///
-/// An unclaimed case, an arm naming a target this tree does not have, or one case
-/// claimed twice, all refuse the deletion.
-///
-/// **Declared, never inferred.** The same argument [`Rule::retires_with`] makes
-/// for `# subject:`: a name heuristic over case titles would be worse than
-/// nothing, because titles are prose. The engine knows the RELATIONSHIP — a
-/// deleted named thing is claimed by exactly one arm naming something that
-/// exists — and every token spelling it is the consumer's (non-negotiable rule 1).
-///
-/// **The arms live on their targets, and the walk that finds them is bounded by
-/// declaration.** `declared_in` is the glob the head tree is read over, never an
-/// ambient sweep: the same posture the git facts take, and the reason a mapping
-/// is greppable rather than filed in a second register nothing keeps current.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Conserves {
-    /// The line prefix a named case is declared after, in the file being deleted.
-    ///
-    /// The name STARTS immediately after this token and ENDS at the next
-    /// [`Conserves::close`], so a token ending in the opening delimiter — `@test
-    /// "` — reads the quoted title and nothing else on the line.
-    pub case: String,
-    /// The delimiter a case name ends at, in a dying file and in an arm alike.
-    ///
-    /// One field for both, because they are one question: an arm has to spell the
-    /// case it claims the same way the case spells itself, or the match is between
-    /// two different vocabularies and the mapping decides nothing.
-    pub close: String,
-    /// The token an arm claiming *the same assertion, moved* is written after.
-    pub carried: String,
-    /// The token an arm claiming *a general property covers this now* is written
-    /// after.
-    pub subsumed: String,
-    /// The token an arm claiming *this diverges, deliberately* is written after.
-    /// Alone among the three it also owes a reason — the text after its target.
-    pub changed: String,
-    /// The token an arm claiming *nothing replaces this, the subject is gone* is
-    /// written after (CLOUD-1080). Optional, so a row without it behaves exactly
-    /// as it did before this column existed.
-    ///
-    /// **The other three all name a successor, and a WITHDRAWAL has none.** They
-    /// describe a suite migrating into another mechanism; this describes a feature
-    /// removed, where the honest mapping is that there is nothing to map. Without
-    /// it the only ways past a withdrawal are a false `subsumed` — a ledger entry
-    /// that lies to pass — or a `[[waiver]]`, which `config-lint` refuses as
-    /// `waiver-added` unless the weakening was groomed onto the issue before the
-    /// work. So the gate had no honest path, which is a defect rather than a
-    /// verdict.
-    ///
-    /// **It is admissible ONLY where the dying file's declared subject is absent
-    /// at head**, which is what keeps it strictly narrower than the waiver it
-    /// replaces: it cannot excuse deleting cases whose subject is still standing,
-    /// and that is the abuse a bare fourth verb would open. It owes a reason and
-    /// names no target, for the same reason it exists — there is no successor to
-    /// name, and a column demanding one would be the false `subsumed` again.
-    pub withdrawn: Option<String>,
-    /// The token an arm claiming *the case moved, and the subject STAYED* is
-    /// written after (CLOUD-1268). Optional, like [`Conserves::withdrawn`].
-    ///
-    /// **The exact mirror of the fourth arm, and that symmetry is the design.**
-    /// `withdrawn` is admissible only where the dying file's declared subject
-    /// died; this one only where it LIVES. Between them the two answers to "what
-    /// happened to the subject" both have a spelling, and neither can be written
-    /// over the other's condition.
-    ///
-    /// **The class it exists for was measured and had no honest route.** Where a
-    /// migration retires one LAYER, a suite may declare a subject that layer never
-    /// contains — a manifest, a tool config, a launcher program, a source file.
-    /// [`SubjectFacts::died`] is `.all()`, so it can never hold for such a suite,
-    /// which is undeletable BY CONSTRUCTION and in silence. Measured in this
-    /// engine's own consumer, that was a fifth of a serial test corpus, including
-    /// the longest single suite in a lane whose makespan cannot fall below it.
-    ///
-    /// Which paths those are is the CONSUMER's fact and is not named here
-    /// (non-negotiable rule 1): the engine knows only that a declared subject
-    /// survived. Both other routes edit the dying suite in place, which a consumer
-    /// gate over authored rules may refuse outright — so the spelling has to live
-    /// in the ledger, which is here.
-    ///
-    /// **It obliges MORE than `carried`, never less.** A target the tree carries,
-    /// exactly as the first three do — and additionally a `subject:` field naming
-    /// a path the DYING FILE ITSELF DECLARED at base and the head tree still
-    /// carries. That field is what clears the aggregate subject-alive term, by
-    /// naming the survivor rather than by a `carried` row falsely claiming the
-    /// case moved into it. The subject is read from the base header rather than
-    /// taken from the author, which is the anti-fabrication term: a row cannot
-    /// name a convenient survivor it invented.
-    pub ported: Option<String>,
-    /// The glob the head tree is read over to find arms.
-    ///
-    /// Required rather than defaulted to the rule's own `glob`: the successors of
-    /// a retired suite are by definition NOT under the glob the suite was, so a
-    /// default would look total and select nothing — a mapping that admits
-    /// everything, which is the failure this column exists to end.
-    pub declared_in: String,
-}
-
-/// One program family whose **exit status is the answer** (CLOUD-443).
-///
-/// Enumerable on purpose. "Is this command's status the thing the caller wants"
-/// is not decidable in general, and an open predicate would be a judgement
-/// (non-negotiable rule 3) — so the set is a closed list the consumer declares,
-/// and the read-only member of each family is excluded by name, because a query's
-/// output *is* its answer and piping it is ordinary composition.
-///
-/// The four optional columns are not four ideas: each is the shape one real
-/// family needs, and no row may carry two that contradict.
-///
-/// | column | matches | the family it exists for |
-/// | --- | --- | --- |
-/// | `subcommands` | first non-flag word is one of these | a task runner's `run`, a VCS's mutating verbs |
-/// | `nested` | second non-flag word is one of these | a forge CLI's `<noun> <verb>` |
-/// | `except` | a first word exists and is NOT listed | a build tool with far more verdict subcommands than query ones |
-/// | `any_argument` | a first word merely exists | a test runner, where a bare invocation prints usage and answers nothing |
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct VerdictProgram {
-    /// The program name as it appears on a command line. Matched exactly, on the
-    /// EFFECTIVE program — wrapper lookthrough is the hook parser's, not a second
-    /// implementation here.
-    pub program: String,
-    /// The first non-flag words that make this program verdict-bearing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subcommands: Option<Vec<String>>,
-    /// The second non-flag words, for a program that dispatches twice. Requires
-    /// `subcommands`, since a nested word with nothing above it names no action.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nested: Option<Vec<String>>,
-    /// The first non-flag words that are **queries** — everything else is a
-    /// verdict. The inverse of `subcommands` and refused alongside it: a row
-    /// cannot both allow-list and deny-list the same position.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub except: Option<Vec<String>>,
-    /// Whether any first non-flag word at all makes this a verdict, for a program
-    /// whose bare form answers nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub any_argument: Option<bool>,
-}
+// Housed in `crate::facts` (CLOUD-2789), which reads it too; the path here is
+// unchanged.
+pub use crate::facts::selects_tool_name;
 
 impl VerdictProgram {
     /// Whether `program` and `words` — the effective program and the non-flag
@@ -3348,112 +1068,6 @@ impl VerdictProgram {
         }
         self.any_argument.unwrap_or_default() && first.is_some()
     }
-
-    /// Reject a row that cannot mean anything.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty `program`, an empty
-    /// list in any column, a `nested` with no `subcommands`, a row carrying both
-    /// `subcommands` and `except`, an `any_argument` beside either of them, and a
-    /// row declaring no column at all. Every one of those either matches nothing
-    /// or contradicts itself, and both read as coverage from the file.
-    fn validate(&self, rule: &str) -> anyhow::Result<()> {
-        let refuse = |detail: &str| {
-            Err(UsageError::raise(format!(
-                "rule {rule}: verdict {}: {detail}",
-                self.program
-            )))
-        };
-        if self.program.trim().is_empty() || self.program.split_whitespace().count() != 1 {
-            return Err(UsageError::raise(format!(
-                "rule {rule}: a verdict entry names one program, not {:?}",
-                self.program
-            )));
-        }
-        for (name, list) in [
-            ("subcommands", self.subcommands.as_deref()),
-            ("nested", self.nested.as_deref()),
-            ("except", self.except.as_deref()),
-        ] {
-            if list.is_some_and(<[String]>::is_empty) {
-                return refuse(&format!("`{name}` is empty, so it narrows nothing"));
-            }
-        }
-        if self.subcommands.is_some() && self.except.is_some() {
-            return refuse("`subcommands` and `except` are opposite readings of the same position");
-        }
-        if self.nested.is_some() && self.subcommands.is_none() {
-            return refuse(
-                "`nested` needs `subcommands` — a second word with no first names nothing",
-            );
-        }
-        let any = self.any_argument.unwrap_or_default();
-        if any && (self.subcommands.is_some() || self.except.is_some()) {
-            return refuse("`any_argument` already admits every word, so it cannot be narrowed");
-        }
-        if !any && self.subcommands.is_none() && self.except.is_none() {
-            return refuse("declares no condition, so it never matches");
-        }
-        Ok(())
-    }
-}
-
-/// The mediator a [`Rule::require_via`] row requires (CLOUD-271).
-///
-/// One variant, deliberately, and it is a variant rather than a string because
-/// the set is the set of mediators the matcher knows how to look for. A free
-/// string would let a typo load as a row that never finds its mediator and
-/// therefore refuses every call — a gate that reads as narrow and denies wide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum RequireVia {
-    /// The pinned toolchain: the call reached its program through `mise`.
-    ///
-    /// `mise run <task>` and `mise exec -- <program>` both count. They are the
-    /// same fact for this key — the program was selected by the pin rather than
-    /// by `PATH` — and only the second reaches the program token at all, since
-    /// `mise run` names a task and is judged as `mise` itself.
-    Mise,
-}
-
-/// What makes a receipt row fire (CLOUD-444).
-///
-/// The two triggers answer different questions and neither subsumes the other. A
-/// [`ReceiptTrigger::Command`] row says "before you run *this*, prove *that*" —
-/// the precondition is due at one recognisable invocation, and the row names it
-/// with a `pattern`. A [`ReceiptTrigger::Write`] row says the precondition is due
-/// before the work is *touched at all*, which no command shape can express:
-/// the claim gate fires on every write precisely because the edit it exists to
-/// catch is the first one, whatever tool makes it.
-///
-/// A write-triggered row therefore carries no `pattern` and no `contains` — both
-/// name a command line a write does not have — and its exclusions (git-ignored,
-/// outside the repository, inside `.git`) are boundary facts rather than config,
-/// because they are questions about a checkout and this table is not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ReceiptTrigger {
-    /// Fires on a mediated command matching the row's `pattern`.
-    #[default]
-    Command,
-    /// Fires on any mediated call that writes a judgeable path.
-    Write,
-}
-
-/// Which way a ratcheted count may move.
-///
-/// Named for the *permitted* direction rather than the banned one, so a config
-/// row reads as the promise it makes: `non_decreasing` says this count will not
-/// fall.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Direction {
-    /// The count may rise or hold, never fall. The test-deletion guard.
-    NonDecreasing,
-    /// The count may fall or hold, never rise. The new-`#[ignore]` guard.
-    NonIncreasing,
 }
 
 impl Direction {
@@ -3481,572 +1095,6 @@ impl Direction {
         }
     }
 }
-
-/// One `Rule` column and what the fact model says about it (CLOUD-1282).
-///
-/// # Why a census rather than a list of tree-only columns
-///
-/// A list of the columns to refuse is exactly what stood here before, and its
-/// own comment recorded it lagging the struct. A census answers for EVERY field,
-/// so a column added to `Rule` fails
-/// [`tests::every_rule_column_carries_a_fact_verdict`] until somebody decides
-/// what it declares — the same shape [`crate::trust::CENSUS`] uses, and for the
-/// same reason: the field list is read off the struct's own source, so the table
-/// cannot silently fall behind it.
-#[derive(Debug, Clone, Copy)]
-pub struct ColumnCensus {
-    /// The column, spelled as `Rule` declares it.
-    pub field: &'static str,
-    /// What it says about fact acquisition.
-    pub declares: Declares,
-}
-
-/// A column's verdict in [`COLUMN_CENSUS`]: it declares a fact, or it does not.
-#[derive(Debug, Clone, Copy)]
-pub enum Declares {
-    /// The column declares acquisition of this fact, and the closure answers
-    /// whether a given row actually declared anything in it.
-    ///
-    /// The closure is what makes the derivation possible at all: a census of
-    /// names could say WHICH columns are tree-only and not whether THIS row
-    /// declared one, and the refusal has to name a column the author wrote.
-    Fact(crate::facts::Fact, fn(&Rule) -> bool),
-    /// The column acquires no fact, with the reason — a selector, a remedy, a
-    /// severity, a shape. Recorded rather than omitted, because "not covered"
-    /// and "considered and not fact-bearing" are the two readings a silent
-    /// absence cannot be told apart from.
-    NotFactBearing(&'static str),
-}
-
-/// One column named as declaring a fact that this scope cannot resolve.
-#[derive(Debug, Clone, Copy)]
-pub struct TreeOnlyColumn {
-    /// The column the author wrote.
-    pub field: &'static str,
-    /// The fact it declares.
-    pub fact: crate::facts::Fact,
-}
-
-/// Every `Rule` column, with what it declares.
-///
-/// **Read the surface off the fact, never off this table.** A row names a
-/// [`crate::facts::Fact`] and nothing else; whether that fact reaches the
-/// mediated call is `Fact::class().surface`'s answer, so reclassifying a fact
-/// moves this refusal with it and cannot leave the two disagreeing.
-pub const COLUMN_CENSUS: &[ColumnCensus] = &[
-    ColumnCensus {
-        field: "id",
-        declares: Declares::NotFactBearing("the row's own name"),
-    },
-    ColumnCensus {
-        field: "kind",
-        declares: Declares::NotFactBearing("which predicate decides the row"),
-    },
-    ColumnCensus {
-        field: "glob",
-        declares: Declares::NotFactBearing(
-            "selects files; the tree walk is the engine's, not a declared fact",
-        ),
-    },
-    ColumnCensus {
-        field: "severity",
-        declares: Declares::NotFactBearing("the exit contract"),
-    },
-    ColumnCensus {
-        field: "scope",
-        declares: Declares::NotFactBearing(
-            "the surface this row is judged on — the question, never an answer to it",
-        ),
-    },
-    ColumnCensus {
-        field: "pattern",
-        declares: Declares::NotFactBearing("a literal the predicate matches"),
-    },
-    ColumnCensus {
-        field: "regex",
-        declares: Declares::NotFactBearing("a pattern the predicate matches"),
-    },
-    ColumnCensus {
-        field: "exclude",
-        declares: Declares::NotFactBearing("narrows a match"),
-    },
-    ColumnCensus {
-        field: "content",
-        declares: Declares::NotFactBearing("a literal the predicate matches"),
-    },
-    ColumnCensus {
-        field: "tool",
-        declares: Declares::NotFactBearing(
-            "selects on the call's own tool name, which the envelope carries",
-        ),
-    },
-    ColumnCensus {
-        field: "when_absent",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "key_from",
-        declares: Declares::NotFactBearing("names where a receipt's key comes from"),
-    },
-    ColumnCensus {
-        field: "key_base",
-        declares: Declares::NotFactBearing(
-            "names the ref a delta-keyed receipt's identity is taken against",
-        ),
-    },
-    ColumnCensus {
-        field: "when_value",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "key_shape",
-        declares: Declares::NotFactBearing("the shape a key must have"),
-    },
-    ColumnCensus {
-        field: "max_age",
-        declares: Declares::NotFactBearing("a bound on a receipt another column declared"),
-    },
-    ColumnCensus {
-        field: "requires_field",
-        declares: Declares::NotFactBearing("a condition over the call's own payload"),
-    },
-    ColumnCensus {
-        field: "when_present",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "while_marker",
-        // NOT `Fact::Receipts`, and the distinction is the reason this column can
-        // exist at all (CLOUD-1390). That fact is the boundary RESOLVING receipt
-        // verdicts — validity, staleness, the key it was filed under — and every
-        // one of those questions costs the resolution `checks` pays for. This
-        // column asks whether one path exists. A marker carries no conclusion, so
-        // there is nothing to resolve and nothing that could come back stale.
-        //
-        // Declaring the fact anyway would not be a harmless over-statement: it
-        // would put receipt resolution on the acquisition list for every row
-        // carrying this column, which is CLOUD-460's regression — a resolution
-        // paid for by `ls` and by every file edit — and the whole economy of
-        // `modifier_admits` reaching the filesystem only for a row that asked.
-        declares: Declares::NotFactBearing(
-            "a branch-keyed marker's PRESENCE, which is a path test rather than a \
-             receipt verdict — nothing is resolved, so nothing is acquired",
-        ),
-    },
-    ColumnCensus {
-        field: "while_unpushed",
-        declares: Declares::NotFactBearing(
-            "whether HEAD is on a remote-tracking ref, walked by the modifier that \
-             asked — no receipt is resolved, so nothing is acquired",
-        ),
-    },
-    ColumnCensus {
-        field: "measures",
-        declares: Declares::NotFactBearing(
-            "names a projection of the call, which the envelope carries",
-        ),
-    },
-    ColumnCensus {
-        field: "counts",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "max",
-        declares: Declares::NotFactBearing("a ceiling on a measurement"),
-    },
-    ColumnCensus {
-        field: "resolves",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "contains",
-        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "unless_contains",
-        declares: Declares::NotFactBearing(
-            "a condition over a fact another column declared, in the exempting polarity",
-        ),
-    },
-    ColumnCensus {
-        field: "require_via",
-        declares: Declares::NotFactBearing("narrows how a requirement may be met"),
-    },
-    ColumnCensus {
-        field: "requires_key",
-        // Hook-surface: the boundary already resolves the key evidence for the
-        // typed rule table, so a mediated row declaring it is asking for
-        // something it is handed.
-        declares: Declares::Fact(crate::facts::Fact::Keys, |rule| rule.requires_key.is_some()),
-    },
-    ColumnCensus {
-        field: "reason",
-        declares: Declares::NotFactBearing("the consumer's remedy prose"),
-    },
-    ColumnCensus {
-        field: "policy_url",
-        declares: Declares::NotFactBearing("a pointer a refusal carries"),
-    },
-    ColumnCensus {
-        field: "bypass_env",
-        declares: Declares::NotFactBearing("names this row's hatch"),
-    },
-    ColumnCensus {
-        field: "check",
-        declares: Declares::NotFactBearing(
-            "the command a `command` row runs; a spawn, which no mediated kind may do",
-        ),
-    },
-    ColumnCensus {
-        field: "fix",
-        declares: Declares::NotFactBearing("the command a `command` row repairs with"),
-    },
-    ColumnCensus {
-        field: "produces",
-        declares: Declares::Fact(crate::facts::Fact::Produced, |rule| rule.produces.is_some()),
-    },
-    ColumnCensus {
-        field: "exclude_paths",
-        declares: Declares::NotFactBearing("narrows `glob`"),
-    },
-    ColumnCensus {
-        field: "run",
-        declares: Declares::NotFactBearing("the command a row runs"),
-    },
-    ColumnCensus {
-        field: "verbatim",
-        declares: Declares::NotFactBearing("normalisation of a hashed span"),
-    },
-    ColumnCensus {
-        field: "identity_key",
-        declares: Declares::NotFactBearing("how a finding is identified across runs"),
-    },
-    ColumnCensus {
-        field: "direction",
-        declares: Declares::NotFactBearing("which way a ratchet turns"),
-    },
-    ColumnCensus {
-        field: "base",
-        declares: Declares::NotFactBearing("names the ref a ratchet compares against"),
-    },
-    ColumnCensus {
-        field: "retires_with",
-        declares: Declares::NotFactBearing("an admission's shape"),
-    },
-    ColumnCensus {
-        field: "conserves",
-        declares: Declares::NotFactBearing("an obligation inside an admission"),
-    },
-    ColumnCensus {
-        field: "admits_with",
-        declares: Declares::NotFactBearing("an admission's shape on the other side of the count"),
-    },
-    ColumnCensus {
-        field: "format",
-        declares: Declares::NotFactBearing(
-            "how a declared document is parsed, not whether one is acquired",
-        ),
-    },
-    ColumnCensus {
-        field: "node",
-        declares: Declares::NotFactBearing("addresses inside a document another column declared"),
-    },
-    ColumnCensus {
-        field: "derives",
-        declares: Declares::NotFactBearing(
-            "how a value is computed from a fact another column declared",
-        ),
-    },
-    ColumnCensus {
-        field: "cites",
-        declares: Declares::NotFactBearing(
-            "which declared register a reference row resolves against, and how it cites; the \
-             files read are the register's own declared paths, never a fact",
-        ),
-    },
-    ColumnCensus {
-        field: "reads",
-        declares: Declares::NotFactBearing("addresses inside a fact another column declared"),
-    },
-    ColumnCensus {
-        field: "predicate_severity",
-        declares: Declares::NotFactBearing("per-predicate exit contract"),
-    },
-    ColumnCensus {
-        field: "preset",
-        declares: Declares::NotFactBearing(
-            "names a vendored module; the facts are that module's own declarations",
-        ),
-    },
-    ColumnCensus {
-        field: "provider",
-        declares: Declares::NotFactBearing(
-            "qualifies `preset`, selecting which of its modules compile; the facts stay \
-             those modules' own declarations (CLOUD-1625)",
-        ),
-    },
-    ColumnCensus {
-        field: "gate",
-        declares: Declares::NotFactBearing(
-            "names one of the engine's compiled gates; the facts are the gate's own (CLOUD-2291)",
-        ),
-    },
-    ColumnCensus {
-        field: "except",
-        declares: Declares::NotFactBearing(
-            "qualifies `preset`, naming modules it does not compile; the facts stay the \
-             remaining modules' own declarations (CLOUD-2290)",
-        ),
-    },
-    ColumnCensus {
-        field: "bundle",
-        declares: Declares::NotFactBearing("names a vendored bundle, as `preset` does"),
-    },
-    ColumnCensus {
-        field: "documents",
-        declares: Declares::Fact(crate::facts::Fact::Document, |rule| {
-            !rule.documents.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "requires_path",
-        // A `try_exists` per entry — no glob expansion, no read, nothing
-        // spawned — and permitted on every kind by design. It is a filesystem
-        // question and NOT a `Fact`, so the derivation does not reach it. Named
-        // here rather than left silent, because "the census does not cover it"
-        // and "the census considered it" are the two readings an omission
-        // cannot be told apart from.
-        declares: Declares::NotFactBearing(
-            "a `try_exists` per declared entry, permitted on every kind and acquiring no fact",
-        ),
-    },
-    ColumnCensus {
-        field: "sources",
-        declares: Declares::Fact(crate::facts::Fact::Document, |rule| {
-            !rule.sources.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "lines",
-        declares: Declares::Fact(crate::facts::Fact::Lines, |rule| !rule.lines.is_empty()),
-    },
-    ColumnCensus {
-        field: "line_sources",
-        declares: Declares::Fact(crate::facts::Fact::Lines, |rule| {
-            !rule.line_sources.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "invocations",
-        declares: Declares::Fact(crate::facts::Fact::Invocations, |rule| {
-            !rule.invocations.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "invocation_sources",
-        declares: Declares::Fact(crate::facts::Fact::Invocations, |rule| {
-            !rule.invocation_sources.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "uses",
-        declares: Declares::Fact(crate::facts::Fact::Uses, |rule| !rule.uses.is_empty()),
-    },
-    ColumnCensus {
-        field: "use_sources",
-        declares: Declares::Fact(crate::facts::Fact::Uses, |rule| {
-            !rule.use_sources.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "git",
-        // The head/status/remote/worktrees family. All four are
-        // `Surface::Check`, so the column is tree-only whichever read a row
-        // asked for and one fact answers for it.
-        declares: Declares::Fact(crate::facts::Fact::GitHead, |rule| !rule.git.is_empty()),
-    },
-    ColumnCensus {
-        field: "symbols",
-        declares: Declares::Fact(crate::facts::Fact::Symbols, |rule| rule.symbols),
-    },
-    ColumnCensus {
-        field: "review",
-        declares: Declares::Fact(crate::facts::Fact::Review, |rule| !rule.review.is_empty()),
-    },
-    ColumnCensus {
-        field: "refs",
-        declares: Declares::Fact(crate::facts::Fact::GitRef, |rule| !rule.refs.is_empty()),
-    },
-    ColumnCensus {
-        field: "ranges",
-        declares: Declares::Fact(crate::facts::Fact::GitRange, |rule| !rule.ranges.is_empty()),
-    },
-    ColumnCensus {
-        field: "commits",
-        declares: Declares::Fact(crate::facts::Fact::CommitMeta, |rule| {
-            !rule.commits.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "staged",
-        declares: Declares::Fact(crate::facts::Fact::Staged, |rule| !rule.staged.is_empty()),
-    },
-    ColumnCensus {
-        field: "history",
-        declares: Declares::Fact(crate::facts::Fact::GitHistory, |rule| {
-            !rule.history.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "tags",
-        declares: Declares::Fact(crate::facts::Fact::GitTags, |rule| !rule.tags.is_empty()),
-    },
-    ColumnCensus {
-        field: "git_config",
-        declares: Declares::Fact(crate::facts::Fact::GitConfig, |rule| {
-            !rule.git_config.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "index",
-        declares: Declares::Fact(crate::facts::Fact::GitIndex, |rule| !rule.index.is_empty()),
-    },
-    ColumnCensus {
-        field: "state",
-        declares: Declares::Fact(crate::facts::Fact::State, |rule| !rule.state.is_empty()),
-    },
-    ColumnCensus {
-        field: "forge",
-        declares: Declares::Fact(crate::facts::Fact::Forge, |rule| !rule.forge.is_empty()),
-    },
-    ColumnCensus {
-        field: "tools",
-        declares: Declares::Fact(crate::facts::Fact::ToolVerdict, |rule| {
-            !rule.tools.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "plan",
-        declares: Declares::Fact(crate::facts::Fact::Plan, |rule| !rule.plan.is_empty()),
-    },
-    ColumnCensus {
-        field: "minted",
-        declares: Declares::Fact(crate::facts::Fact::Minted, |rule| !rule.minted.is_empty()),
-    },
-    ColumnCensus {
-        field: "captured",
-        declares: Declares::Fact(crate::facts::Fact::Captured, |rule| {
-            !rule.captured.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "tasks",
-        // Hook-surface (CLOUD-856): read from a receipt minted at session start,
-        // so the mediated path parses no manifest. A mediated row declaring it
-        // is asking for something this surface can answer.
-        declares: Declares::Fact(crate::facts::Fact::Tasks, |rule| !rule.tasks.is_empty()),
-    },
-    ColumnCensus {
-        field: "extract",
-        // Hook-surface (CLOUD-1172): a declared extractor's COUNT over this
-        // session's transcript, an integer over typed events.
-        declares: Declares::Fact(crate::facts::Fact::Extracted, |rule| {
-            !rule.extract.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "landing",
-        declares: Declares::Fact(crate::facts::Fact::Landing, |rule| !rule.landing.is_empty()),
-    },
-    ColumnCensus {
-        field: "delta_sources",
-        declares: Declares::Fact(crate::facts::Fact::BaseDelta, |rule| {
-            !rule.delta_sources.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "external",
-        declares: Declares::Fact(crate::facts::Fact::External, |rule| {
-            !rule.external.is_empty()
-        }),
-    },
-    ColumnCensus {
-        field: "module",
-        declares: Declares::NotFactBearing(
-            "names the module file; the facts are that module's own declarations",
-        ),
-    },
-    ColumnCensus {
-        field: "no_fix_reason",
-        declares: Declares::NotFactBearing("states why a row declares no fix"),
-    },
-    ColumnCensus {
-        field: "no_retry_reason",
-        declares: Declares::NotFactBearing(
-            "states why a repaired call has nothing to re-issue, so the row's \
-             class may be `silent` rather than `retry` (CLOUD-1639)",
-        ),
-    },
-    ColumnCensus {
-        field: "checks",
-        // Hook-surface: the boundary already resolves receipt verdicts for the
-        // typed rule table, which is what makes `ready-guard` a mediated row.
-        declares: Declares::Fact(crate::facts::Fact::Receipts, |rule| rule.checks.is_some()),
-    },
-    ColumnCensus {
-        field: "checks_any",
-        // THE SAME FACT AS `checks`, and that is the whole of the entry: the two
-        // columns differ in how they are ADJUDICATED — all of one, any of the
-        // other — and not at all in what has to be resolved to adjudicate them.
-        // A row naming three receipts in an alternation needs all three verdicts
-        // resolved, because "any one is valid" cannot be answered without asking
-        // about each; the alternation is applied to the answers, never to which
-        // questions get asked.
-        //
-        // So this entry is what makes `Rule::receipt_names` honest at the
-        // acquisition layer, the same way that helper makes it honest at every
-        // resolution site: a column declaring no fact here would say the
-        // alternation's names need not be resolved, which is the dead gate
-        // CLOUD-1297 exists to have avoided.
-        declares: Declares::Fact(crate::facts::Fact::Receipts, |rule| {
-            rule.checks_any.is_some()
-        }),
-    },
-    ColumnCensus {
-        field: "key",
-        declares: Declares::NotFactBearing(
-            "which git fact a receipt is keyed to, not a fact itself",
-        ),
-    },
-    ColumnCensus {
-        field: "trigger",
-        declares: Declares::NotFactBearing("what makes a receipt row fire"),
-    },
-    ColumnCensus {
-        field: "verdict",
-        declares: Declares::NotFactBearing("the verdict-bearing programs a pipeline row knows"),
-    },
-    ColumnCensus {
-        field: "filters",
-        declares: Declares::NotFactBearing("the filter programs a pipeline row knows"),
-    },
-    ColumnCensus {
-        field: "substitutes",
-        declares: Declares::NotFactBearing("the utilities a pipeline row redirects"),
-    },
-    ColumnCensus {
-        field: "interprets",
-        declares: Declares::NotFactBearing("the interpreters a pipeline row contains"),
-    },
-    ColumnCensus {
-        field: "criteria",
-        declares: Declares::NotFactBearing("what a judge row asks a model"),
-    },
-    ColumnCensus {
-        field: "tier",
-        declares: Declares::NotFactBearing("a judge finding's advisory tier"),
-    },
-];
 
 impl Rule {
     /// The program a [`RuleKind::Command`] rule invokes: the first
@@ -4111,980 +1159,6 @@ impl Rule {
             .unwrap_or_else(|| self.severity())
     }
 
-    /// The obligation [`RuleKind::permits`] cannot express (CLOUD-758).
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
-    /// both, or a `content` expression the matcher cannot compile.
-    ///
-    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
-    ///
-    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
-    /// reason: a row with NEITHER loads, matches every mediated call, and turns
-    /// a ban into a universal gate; a row with BOTH is two predicates where the
-    /// reader can see one, and a precedence rule nobody can read is worse than a
-    /// refusal.
-    ///
-    /// # Errors
-    ///
-    fn validate_shape_columns(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Shape {
-            return Ok(());
-        }
-        // THREE KEYING COLUMNS NOW, EXACTLY ONE OF WHICH A ROW CARRIES
-        // (CLOUD-924). Counted rather than matched as a tuple: a 2x2 match was
-        // already at its readable limit and a 2x2x2 one would spell six
-        // impossible arms to reach the two that matter.
-        let keys: Vec<&str> = [
-            ("pattern", self.pattern.is_some()),
-            ("content", self.content.is_some()),
-            ("tool", self.tool.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(name, present)| present.then_some(name))
-        .collect();
-        if keys.len() > 1 {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" carries {}; a row is keyed on a command \
-                 (`pattern`), on written content (`content`), or on the tool a call names \
-                 (`tool`) — never on more than one",
-                self.id,
-                keys.join(" and ")
-            )));
-        }
-        if let Some(selector) = self.tool.as_deref() {
-            // Refused at load rather than at adjudication, where an empty
-            // selector would match the empty final segment of every name ending
-            // in `__` — a row that reads as naming one tool and selects a family.
-            if selector.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `tool` is empty; name the tool this row is about",
-                    self.id
-                )));
-            }
-            // The same command-only modifiers `content` refuses below, refused
-            // for the same reason one column over: a structured call carries no
-            // argv either, so each would read as configured and narrow nothing.
-            self.refuse_command_modifiers("tool")?;
-            return self.validate_ceiling();
-        }
-        match (self.pattern.is_some(), self.content.as_deref()) {
-            (true, None) => self.validate_ceiling(),
-            // Compiled at load, the way `regex`, `exclude` and `requires_key`
-            // already are. Left to adjudication an unparseable expression is
-            // skipped on every mediated call, which is a gate that reads as
-            // configured in the file and denies nothing — the one failure this
-            // kind's whole validation surface exists to close.
-            (false, Some(expression)) => {
-                Regex::new(expression).map_err(|err| {
-                    UsageError::raise(format!(
-                        "rule {}: `content` is not a valid regular expression: {err}",
-                        self.id
-                    ))
-                })?;
-                // AND THE COMMAND-ONLY MODIFIERS ARE REFUSED HERE, because the
-                // column census permits them on this kind and `adjudicate`
-                // evaluates only `content` for a content-keyed row. Left to load
-                // they are accepted, ignored on every call, and the row denies
-                // writes the configuration appears to narrow — a rule that reads
-                // as scoped and is not, which is the same inert-coverage failure
-                // the `content` compile above closes one column over.
-                //
-                self.refuse_command_modifiers("content")?;
-                self.validate_ceiling()
-            }
-            (false, None) => Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" requires `pattern` (a command line), `content` (a \
-                 regex over what a write would land), or `tool` (the tool a call names)",
-                self.id
-            ))),
-            // Unreachable: the count above refuses every row carrying more than
-            // one keying column, and this is one of those. Kept as an arm rather
-            // than wildcarded so a fourth keying column has to come back here and
-            // be decided (non-negotiable rule 6's shape, applied to a match).
-            (true, Some(_)) => Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" carries both `pattern` and `content`; a row is keyed \
-                 on a command or on written content, never on both",
-                self.id
-            ))),
-        }
-    }
-
-    /// The three ceiling columns travel together, or none of them does
-    /// (CLOUD-925).
-    ///
-    /// A value inside the row decides the obligation, so the per-kind census
-    /// structurally cannot state it — the same reason `receipt`'s
-    /// trigger-dependent columns and `policy`'s one-of-three source live here.
-    ///
-    /// Each partial row is a distinct silent failure and that is why all three
-    /// are refused rather than defaulted: a `max` with no `measures` caps
-    /// something unnamed, a `measures` with no `max` measures and decides
-    /// nothing, and a pair with no `counts` cannot say whether 6000 means tokens
-    /// or artifacts — which is a cap off by three orders of magnitude, in the
-    /// permissive direction.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the columns a partial row is missing.
-    /// The two polarity modifiers may not name the same projection (CLOUD-987).
-    ///
-    /// A row asking for one key to be both absent and present can never fire, so
-    /// it loads, matches nothing, and reads from the file as a narrowing — the
-    /// inert-coverage failure this whole validation surface refuses. Naming
-    /// *different* projections is legitimate and is what row 3 wants.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the projection asked for twice.
-    fn validate_polarity(&self) -> anyhow::Result<()> {
-        if let (Some(absent), Some(present)) = (self.when_absent, self.when_present)
-            && absent == present
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `when_absent` and `when_present` both name the same projection, so \
-                 this row can never fire; name different ones or drop one",
-                self.id
-            )));
-        }
-        // THE VALUE QUALIFIER TRAVELS WITH ITS PROJECTION (CLOUD-312 row 3), and
-        // both directions are refused because each is a different silent failure.
-        //
-        // A value with no `when_present` names nothing to read it out of, so the
-        // row compares against a projection it never took — a column that reads as
-        // a narrowing and performs none.
-        //
-        // **HERE RATHER THAN IN `validate_receipt_columns`**, which is where these
-        // two were written first and where they were half-dead: `when_value` is
-        // permitted on `shape` as well as `receipt`, and that function returns
-        // early for every other kind — so a `shape` row carrying the column with
-        // no projection loaded clean and narrowed nothing. Caught in review on
-        // #680. Every kind that can carry the column reaches this function.
-        if self.when_value.is_some() && self.when_present.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `when_value` qualifies `when_present` — name the projection whose value \
-                 this is, or the row compares against nothing and narrows nothing",
-                self.id
-            )));
-        }
-        // EMPTY **AFTER FOLDING**, not before, and the difference is the whole
-        // check. The comparison drops spaces, underscores and hyphens, so `"___"`
-        // and `"---"` fold to nothing and then compare equal to any value made
-        // only of separators — a match nobody intended. Testing the raw string for
-        // emptiness caught `""` and let the other two through, which is the defect
-        // the previous version of this comment described without covering.
-        if self
-            .when_value
-            .as_deref()
-            .is_some_and(|value| crate::hook::comparable(value).is_empty())
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `when_value` folds to nothing, so it matches any value made only of \
-                 spaces, underscores or hyphens; name the value this row is about",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_ceiling(&self) -> anyhow::Result<()> {
-        let declared: Vec<&str> = [
-            ("measures", self.measures.is_some()),
-            ("counts", self.counts.is_some()),
-            ("max", self.max.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(name, present)| present.then_some(name))
-        .collect();
-        if declared.is_empty() {
-            // A rewrite table with no ceiling to serve rewrites nothing, and
-            // reads from the file as though it narrowed a count.
-            if !self.resolves.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `resolves` needs a `counts = \"tracked-artifacts\"` ceiling to \
-                     serve; on its own it rewrites nothing",
-                    self.id
-                )));
-            }
-            return Ok(());
-        }
-        if declared.len() != 3 {
-            return Err(UsageError::raise(format!(
-                "rule {}: a per-call ceiling needs `measures`, `counts` and `max` together; \
-                 this row carries only {}. A partial ceiling measures something it cannot \
-                 decide over, or caps a number whose unit is unstated",
-                self.id,
-                declared.join(" and ")
-            )));
-        }
-        // TOOL-KEYED ONLY, and narrower than the column census can say.
-        //
-        // A ceiling is a modifier over a selection, and the only selection it has
-        // a consumer for is a tool: CLOUD-312's row 6 is `fanout-guard`, which
-        // fires on `Task`. Admitting it on a `pattern` row would ship a
-        // combination with no test behind it and no caller asking for it, and
-        // `rules/rust.md`'s reading is that the cheap default is the one
-        // direction the mistake is expensive in. Widening this is one line plus
-        // the cases that prove it.
-        if self.tool.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: a per-call ceiling is keyed on `tool` — the ceiling decides whether \
-                 that selection refuses, and a command-keyed one has no consumer yet",
-                self.id
-            )));
-        }
-        // A rewrite table only means something to the unit that resolves paths.
-        // On a token ceiling it would load, rewrite nothing, and read as a
-        // narrowing — the inert-coverage failure this whole surface refuses.
-        if !self.resolves.is_empty() && self.counts != Some(CeilingUnit::TrackedArtifacts) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `resolves` belongs to `counts = \"tracked-artifacts\"`; a token \
-                 ceiling resolves no paths",
-                self.id
-            )));
-        }
-        // Compiled at load, the way `regex`, `exclude` and `content` are: left to
-        // adjudication an unparseable expression is skipped on every call, which
-        // makes the ceiling count LESS than it should — the permissive direction,
-        // and silent.
-        for rewrite in &self.resolves {
-            Regex::new(&rewrite.reference).map_err(|err| {
-                UsageError::raise(format!(
-                    "rule {}: `resolves.reference` is not a valid regular expression: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
-    /// that names no command line.
-    ///
-    /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
-    /// because the argument is identical one column over, and stating it twice is
-    /// how the two would drift when a sixth modifier lands. Each of the five
-    /// names a COMMAND: `contains` and `unless_contains` are substring tests over
-    /// an argv in the two polarities, `require_via` is a via-shape test over the
-    /// same argv, `requires_key` asks whether the work is keyed before a
-    /// command may run, and `base` exists only to tell `requires_key` which
-    /// commits to read. A write and a structured call carry no argv for any of
-    /// them to read, so left to load they are accepted, ignored on every call,
-    /// and the row narrows nothing the configuration appears to narrow.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
-    fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
-        for (field, present) in [
-            ("contains", self.contains.is_some()),
-            ("unless_contains", self.unless_contains.is_some()),
-            ("require_via", self.require_via.is_some()),
-            ("requires_key", self.requires_key.is_some()),
-            ("base", self.base.is_some()),
-        ] {
-            if present {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"shape\" keyed on `{keyed_on}` cannot carry `{field}`; \
-                     that column narrows a command line, and this row names none",
-                    self.id
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
-    /// express (CLOUD-444).
-    ///
-    /// Which columns a receipt row owes depends on its `trigger`, a value inside
-    /// the row — so the per-kind census cannot state it, exactly as it cannot
-    /// state a policy row's one-of-three source. Both refusals have the same
-    /// reasoning: a column that reads as configured and decides nothing is the
-    /// defect this kind was added to close.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
-    /// `pattern`, for a write-triggered row carrying either command column, and
-    /// for an empty `checks` list.
-    /// The `delta` key and its base travel together (CLOUD-1547).
-    ///
-    /// Refused in BOTH directions, for the reason `key_from`'s pair is and with
-    /// the same pair of silent failures one keying over.
-    ///
-    /// A `delta` key with no base has no second side to diff against, so it has
-    /// no identity at all and would read no file for any call — which reads as
-    /// *never reviewed* and denies everything. That is the direction that gets a
-    /// guard switched off rather than satisfied, and it is worse than the
-    /// permissive one here precisely because it looks like the gate working. A
-    /// base on any other key is the mirror: a column that reads as configured and
-    /// is never consulted.
-    ///
-    /// **Its own function rather than a fourth arm inside
-    /// [`Rule::validate_receipt_columns`]**, which clippy's line ceiling forced
-    /// and which is the right shape anyway: that one decides what a `trigger`
-    /// owes, and this decides what a `key` owes.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for `key = "delta"` with no `key_base`, and
-    /// for a `key_base` on any other keying.
-    fn validate_delta_base(&self) -> anyhow::Result<()> {
-        match (self.receipt_key(), self.key_base.as_deref()) {
-            (ReceiptKey::Delta, None) => Err(UsageError::raise(format!(
-                "rule {}: `key = \"delta\"` requires `key_base` — the ref the identity is taken \
-                 against. Without one the change has no second side to diff, so the receipt \
-                 would be keyed on nothing and no call could ever satisfy it",
-                self.id
-            ))),
-            (key, Some(_)) if key != ReceiptKey::Delta => Err(UsageError::raise(format!(
-                "rule {}: `key_base` belongs to `key = \"delta\"`; a {} receipt is keyed on a ref \
-                 or a value rather than on a diff, so there is nothing to take a base against",
-                self.id,
-                match key {
-                    ReceiptKey::Head => "head-keyed",
-                    ReceiptKey::Branch => "branch-keyed",
-                    ReceiptKey::Named => "named-keyed",
-                    ReceiptKey::Delta => unreachable!("guarded by the arm above"),
-                }
-            ))),
-            _ => Ok(()),
-        }
-    }
-
-    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Receipt {
-            return Ok(());
-        }
-        // `key = "branch"` was refused from this same spot until the
-        // branch-keyed store existed; every refusal here has that one's
-        // reasoning — a column that reads as configured and decides nothing is
-        // the defect this kind was added to close.
-        match self.receipt_trigger() {
-            // A command-triggered row selecting on NOTHING matches every
-            // mediated call, turning a precondition into a universal gate.
-            // `tool` satisfies the obligation as well as `pattern` does
-            // (CLOUD-924): both name what the row is about, one by command line
-            // and one by the tool a structured call names — and CLOUD-312's rows
-            // 1-3 are precisely the second shape.
-            ReceiptTrigger::Command if self.pattern.is_none() && self.tool.is_none() => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` (the command whose precondition this is) or `tool` (the tool a structured call names)",
-                    self.id
-                )));
-            }
-            // Both columns key on one call, and a row carrying both is two
-            // selectors where a reader can see one — `validate_shape_columns`'
-            // argument, on the kind that shares the columns.
-            ReceiptTrigger::Command if self.pattern.is_some() && self.tool.is_some() => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"receipt\" carries both `pattern` and `tool`; a row is keyed on a command line or on the tool a call names, never on both",
-                    self.id
-                )));
-            }
-            // A write carries no command line, so either column would sit there
-            // matching nothing while reading as a narrowing. `tool` is NOT
-            // refused here: a write tool has a name, and keying a write-triggered
-            // row to one is how a precondition narrows from every write to the
-            // writes a particular tool makes.
-            ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
-                    self.id
-                )));
-            }
-            _ => {}
-        }
-        // THE `named` KEY AND ITS PROJECTION TRAVEL TOGETHER (CLOUD-987), and
-        // both halves are refused because each is a different silent failure.
-        //
-        // A `named` key with no projection has no subject, so it would read one
-        // file for every call — `ReceiptKey::Branch` under another name, and the
-        // collapse that variant's doc refuses. A projection with some other key
-        // is a column that reads as configured and is never consulted.
-        match (self.receipt_key(), self.key_from) {
-            (ReceiptKey::Named, None) => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `key = \"named\"` requires `key_from` — the projection that supplies \
-                     the subject. Without one the receipt would be keyed on nothing and read the \
-                     same file for every call",
-                    self.id
-                )));
-            }
-            (key, Some(_)) if key != ReceiptKey::Named => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `key_from` belongs to `key = \"named\"`; a {} receipt takes its \
-                     subject from the checkout, not from the call",
-                    self.id,
-                    match key {
-                        ReceiptKey::Head => "head-keyed",
-                        ReceiptKey::Branch => "branch-keyed",
-                        ReceiptKey::Named => unreachable!("guarded by the arm above"),
-                        ReceiptKey::Delta => "delta-keyed",
-                    }
-                )));
-            }
-            _ => {}
-        }
-        self.validate_delta_base()?;
-        // COMPILED AT LOAD, for the reason `resolves.reference` is and with the
-        // failure running the same direction: left to adjudication an unparseable
-        // expression is discarded per call, the subject resolves to absent,
-        // `verdicts` reads that as could-not-look, and the call is ALLOWED. So a
-        // typo silently disables the row it was meant to qualify — the permissive
-        // direction, and invisible.
-        //
-        // This clause is here because the column shipped without it while its own
-        // doc comment claimed it: caught in review on #680, and the comment was
-        // the worse half, because a stated invariant is what stops the next reader
-        // checking.
-        if let Some(shape) = self.key_shape.as_deref() {
-            Regex::new(shape).map_err(|err| {
-                UsageError::raise(format!(
-                    "rule {}: `key_shape` is not a valid regular expression: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        // A zero bound expires a receipt the instant it is written, so the row
-        // refuses every call it selects while reading from the file as though it
-        // permitted a fresh one. Same shape as the empty-`checks` refusal below:
-        // a column whose value makes the row unsatisfiable is a config error, not
-        // a very strict policy.
-        if self.max_age == Some(0) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `max_age = 0` expires every receipt the moment it is written, so no call \
-                 can satisfy this row; name the number of seconds a receipt stays good for",
-                self.id
-            )));
-        }
-        // Refused for `validate_shape_columns`' reason, on the kind that shares
-        // the column: an empty selector would match the empty final segment of
-        // every name ending in `__`.
-        if self.tool.as_deref().is_some_and(str::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `tool` is empty; name the tool this row is about",
-                self.id
-            )));
-        }
-        // Both halves of the field bound are refused for the reason `max_age = 0`
-        // is: a value that makes the column decide nothing reads from the file as
-        // though it decided something. `at = 0` names no field under 1-indexed
-        // counting, so it can never match and the row would satisfy every call
-        // through the absent-is-could-not-look arm; an empty `is` would be
-        // satisfied only by a receipt field that is itself empty, which the
-        // whitespace split cannot produce.
-        if let Some(bound) = self.requires_field.as_ref() {
-            if bound.at == 0 {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `requires_field.at = 0` names no field — receipt fields are counted \
-                     from 1, as every reader of these receipts already counts them",
-                    self.id
-                )));
-            }
-            if bound.is.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `requires_field.is` is empty, so no receipt field can ever match it \
-                     and the row would decide nothing; name the value that satisfies this row",
-                    self.id
-                )));
-            }
-        }
-        self.validate_receipt_names()?;
-        self.validate_marker()
-    }
-
-    /// A `while_marker` must name a family that landing sweeps (CLOUD-1390).
-    ///
-    /// **A REFUSAL NEEDS A SPEND, and this is the only thing that supplies one.**
-    /// The column's whole contract is *fires while the marker exists*; what makes
-    /// that finite is [`crate::land::retire_branch`] deleting the file. Name a
-    /// family outside [`crate::land::BRANCH_KEYED_RECEIPTS`] and the row is a
-    /// deny nothing clears — the work lands, the marker survives the retirement,
-    /// and the next piece of work to reuse the branch name is refused for a punt
-    /// somebody else took. That is CLOUD-774's inherited-suppression defect in the
-    /// refusing direction, which is strictly worse than the advisory one.
-    ///
-    /// Asserted at load rather than documented, because the doc on
-    /// [`Rule::while_marker`] said exactly this and a sentence in a doc comment
-    /// stops nobody (non-negotiable rule 2). The pair can now only drift by
-    /// failing.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the row and the marker. Pointer-only:
-    /// the two ids and the permitted list, never a path from the receipt store.
-    fn validate_marker(&self) -> anyhow::Result<()> {
-        let Some(marker) = self.while_marker.as_deref() else {
-            return Ok(());
-        };
-        if crate::land::BRANCH_KEYED_RECEIPTS.contains(&marker) {
-            return Ok(());
-        }
-        Err(UsageError::raise(format!(
-            "rule {}: `while_marker = \"{marker}\"` names no branch-keyed receipt family, so \
-             landing would not clear it and the row would deny forever — including on the next \
-             piece of work to reuse the branch name. Name one of: {}",
-            self.id,
-            crate::land::BRANCH_KEYED_RECEIPTS.join(", ")
-        )))
-    }
-
-    /// The three refusals over a receipt row's two name columns (CLOUD-1297).
-    ///
-    /// Split out of [`Rule::validate_receipt_columns`] because that function
-    /// crossed the 100-line bound when the alternation arrived, and this is the
-    /// half that comes out whole: every arm here is about WHICH RECEIPTS the row
-    /// names, where everything left behind is about the trigger and the columns
-    /// it implies.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for an empty `checks` list, an empty
-    /// `checks_any` list, or a row naming neither column.
-    fn validate_receipt_names(&self) -> anyhow::Result<()> {
-        // A row naming an empty `checks` list gates its trigger on nothing and
-        // allows every call, which reads as coverage from the file.
-        if self.checks.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"receipt\" requires at least one entry in `checks`; an empty list gates nothing",
-                self.id
-            )));
-        }
-        // The same refusal for the alternation, and it is worth its own arm
-        // rather than folding into the one above: an empty ALTERNATION is
-        // satisfied by nothing, so a row carrying one can never allow a call at
-        // all. That fails in the opposite direction to an empty conjunction —
-        // one gates nothing, the other gates everything — and a reader handed a
-        // single message would be told the wrong thing about their row.
-        if self.checks_any.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"receipt\" requires at least one entry in `checks_any`; an empty alternation is satisfied by no receipt, so the row could never allow a call",
-                self.id
-            )));
-        }
-        // CLOUD-1297's conditional requirement, standing in for the `checks`
-        // entry `RuleKind::permits` used to carry. A row naming NEITHER column
-        // gates its trigger on nothing and allows every call — the same defect
-        // the empty-`checks` arm above refuses, arrived at by omission rather
-        // than by an empty list, and the census cannot express "one of these
-        // two".
-        if self.checks.is_none() && self.checks_any.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"receipt\" requires `checks` (every named receipt must be valid) or `checks_any` (any one of them), or both; a row naming neither gates its trigger on nothing",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    /// `ask` is a MEDIATED-CALL disposition, and both refusals below are config
-    /// faults rather than silent downgrades (CLOUD-340).
-    ///
-    /// Extracted for the reason its neighbours are: `validate` is at its line
-    /// ceiling, and this is a question about a value INSIDE the row — a
-    /// severity, not a kind — which the per-kind census structurally cannot ask.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) when a non-`mediated_call` row declares
-    /// `ask`, or when an `ask` row carries no `reason`.
-    fn validate_ask_disposition(&self) -> anyhow::Result<()> {
-        // A tree-scoped rule has no caller to ask: `batten check` walks a
-        // repository and answers to whoever ran it, so there is no in-band
-        // decision channel and no call to hold open. Accepting `ask` there and
-        // rendering it as a deny would be a downgrade nobody wrote down — the
-        // shape this repository refuses everywhere else — so it is exit 1 here.
-        //
-        // The `reason` requirement is the same one a deny carries and for a
-        // sharper version of the same purpose: an escalation reaches a HUMAN as
-        // the entire explanation, with none of the surrounding output a check
-        // run has. A refusal that reads "denied by rule 7" is poor; an escalation
-        // that reads that way is unanswerable.
-        if self.severity == Some(crate::severity::RuleSeverity::Ask) {
-            if self.scope != RuleScope::MediatedCall {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `severity = \"ask\"` hands the decision to a human, and a \
-                     `scope = \"{}\"` rule has no caller to hand it to — a repository walk \
-                     answers to whoever ran it. Use `deny`, or move the row to \
-                     `scope = \"mediated_call\"`",
-                    self.id,
-                    self.scope.as_str(),
-                )));
-            }
-            if self.reason.as_ref().is_none_or(|it| it.trim().is_empty()) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `severity = \"ask\"` requires a `reason` — it reaches a person \
-                     as the whole explanation, with none of the output a check run carries \
-                     around it",
-                    self.id,
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// The load-time refusals the three repository-state columns owe
-    /// (CLOUD-843).
-    ///
-    /// Each refuses a declaration the acquisition could only answer wrongly: an
-    /// empty tag glob lists nothing, a config key git cannot address resolves to
-    /// a permanent `unset`, and a `:`-magic pathspec read as a literal selects
-    /// nothing. Every one would load, acquire, and hand its module an answer to a
-    /// question nobody asked — CLOUD-845's dead gate by way of a typo — so each is
-    /// named here with the column and the entry.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) naming the first offending entry.
-    fn validate_repository_state(&self) -> anyhow::Result<()> {
-        if self.tags.iter().any(String::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `tags` carries an empty glob, which lists no tag and would read as \
-                 a repository that has none",
-                self.id
-            )));
-        }
-        if let Some(key) = self
-            .git_config
-            .iter()
-            .find(|key| !crate::git::config_key_parses(key))
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `git_config` key `{key}` is not one git can address — a key is \
-                 `section.name` or `section.subsection.name`, and this one would read as unset \
-                 forever",
-                self.id
-            )));
-        }
-        if let Some(spec) = self
-            .index
-            .iter()
-            .find(|spec| !crate::git::pathspec_is_supported(spec))
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `index` pathspec `{spec}` is empty or uses pathspec magic, which this \
-                 build does not implement; read as a literal it would select nothing",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    /// The three obligations a policy row carries that [`RuleKind::permits`]
-    /// cannot express (CLOUD-833, CLOUD-836).
-    ///
-    /// All three depend on a value INSIDE the row rather than on its kind, which
-    /// is what a flat per-kind column list structurally cannot say — the same
-    /// reason `forbid`'s `pattern`/`regex` pair and `receipt`'s trigger-dependent
-    /// columns live in `validate` rather than in the census.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) when the row names no source or more than
-    /// one, when a mediated-call row declares `documents`, or when a tree-scoped
-    /// row declares none.
-    fn validate_policy_source(&self) -> anyhow::Result<()> {
-        // A QUALIFIER WITH NOTHING TO QUALIFY IS THE DEAD COLUMN THIS ROW EXISTS
-        // TO END (CLOUD-1625). `provider` selects among a preset's modules and is
-        // read nowhere else, so a row declaring it without `preset` — on this kind
-        // or any other — parses, loads, and has the key read by nothing, which is
-        // exactly the silence `columns()`'s census refuses one layer over. Checked
-        // BEFORE the kind guard, because the wrong kind is the case where the
-        // silence is total.
-        if self.provider.is_some() && self.preset.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `provider` qualifies `preset`, and this row names no preset; \
-                 nothing reads the column, so it would declare a CI provider that \
-                 selects nothing",
-                self.id
-            )));
-        }
-        // `except` qualifies `preset` exactly as `provider` does (CLOUD-2290).
-        if !self.except.is_empty() && self.preset.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `except` names modules of a preset to skip, and this row names \
-                 no preset; nothing reads the column, so it would skip nothing",
-                self.id
-            )));
-        }
-        if self.kind != RuleKind::Policy {
-            return Ok(());
-        }
-        // A policy row names exactly one source, and `permits` cannot say so —
-        // a flat column list has no "one of" (CLOUD-833). Same split
-        // `Document`'s `pattern`/`reads` pair already carries, and the same
-        // reason: a row with both is a load error rather than a precedence rule
-        // nobody can read.
-        let sources = [
-            self.module.as_deref().map(|_| "module"),
-            self.bundle.as_deref().map(|_| "bundle"),
-            self.preset.as_deref().map(|_| "preset"),
-        ];
-        let named: Vec<&str> = sources.into_iter().flatten().collect();
-        match named.len() {
-            0 => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"policy\" requires one of `module` (one file), \
-                         `bundle` (a folder) or `preset` (a vendored bundle); a row naming \
-                         none enables no policy and could only ever decide nothing",
-                    self.id
-                )));
-            }
-            1 => {}
-            _ => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"policy\" takes exactly one of `module`, `bundle` or \
-                         `preset`, and this names {}; two sources for one row is a precedence \
-                         question nobody should have to answer",
-                    self.id,
-                    named.join(" and ")
-                )));
-            }
-        }
-        // THE COLUMN REFUSAL IS DERIVED (CLOUD-1282). Six hand-written blocks
-        // stood here — `documents`, `sources`, `lines`, `line_sources`, `uses`,
-        // `invocations` — and the second one's own comment recorded how the list
-        // grew: "`sources` and `lines` are tree columns for the same reason
-        // `documents` is, and they were added to `permits` without this."
-        //
-        // So the list was already KNOWN to lag the struct, and it still did:
-        // `git`, `refs`, `ranges`, `commits`, `staged`, `history`, `state`,
-        // `forge`, `tools`, `captured`, `landing`, `delta_sources`, `external`
-        // and `symbols` were all declarable on a mediated row, and each parsed,
-        // loaded, was never acquired for that scope, and left the module reading
-        // the corresponding `input.tree.*` key deciding nothing — CLOUD-845's
-        // dead-gate class one layer up.
-        //
-        // Adding fourteen more names is the wrong fix and is the mechanism that
-        // produced the gap. `COLUMN_CENSUS` says which FACT each column
-        // declares, `Fact::class().surface` says where that fact resolves, and
-        // the two together answer for a column added tomorrow with no edit here.
-        if self.scope == RuleScope::MediatedCall
-            && let Some(column) = self.tree_only_column()
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `{}` declares `{}`, a fact resolvable only on the {} surface, and this \
-                 row is `scope = \"mediated_call\"` — the column would parse, load, and never be \
-                 acquired, leaving a module that reads it deciding nothing",
-                self.id,
-                column.field,
-                column.fact.as_str(),
-                column.fact.class().surface.as_str(),
-            )));
-        }
-        // A MALFORMED SELECTOR IS A CONFIG FAULT, REFUSED HERE. `acquire_declared`
-        // and `policy_rule` both discard the error `declared_documents` returns —
-        // deliberately, because by then the run is under way — so without this the
-        // row would be SILENTLY SKIPPED under `check` while `policy test` (which
-        // propagates it) hard-failed. A bad pattern disabling a gate quietly is
-        // the exact failure CLOUD-845 and CLOUD-850 exist to close, and adding a
-        // column without this check reopened it for the new field.
-        for pattern in &self.sources {
-            Selector::new(pattern).map_err(|err| {
-                UsageError::raise(format!(
-                    "rule {}: `sources` pattern `{pattern}` is not valid: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        // CLOUD-843, for the reason the selector check above states: a
-        // declaration the acquisition could only ever answer wrongly is a config
-        // fault at load, never a gate that quietly decides over nothing.
-        self.validate_repository_state()?;
-        // A DECLARED DOCUMENT THIS BUILD CAN NEVER PARSE IS A CONFIG FAULT, not
-        // a verdict (CLOUD-845). It used to be neither: `tree_document` checked
-        // the extension BEFORE any I/O and dropped the path into `missing`, so
-        // `policy_rule` skipped the whole rule — silently, green, without the
-        // file ever being opened. A row declaring a prose, script or
-        // configuration-language path this build parses none of therefore looked
-        // exactly like a row whose document was absent, and a migrated gate could
-        // go dead by declaring the wrong extension just as surely as by naming a
-        // field the engine never emits.
-        //
-        // The split is what §5's exit-1 attaches to: no state of the filesystem
-        // makes an unparseable extension parseable, so reporting it as
-        // could-not-look would report a permanent authoring error as a transient
-        // one. Absent, unreadable and unparsed stay verdicts; this one is caught
-        // at load, where a config error belongs.
-        for path in &self.documents {
-            if crate::facts::Format::for_path(path).is_none() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `documents` names `{path}`, whose extension this build has no \
-                     parser for — the row would skip silently rather than decide. Parseable \
-                     extensions are {}",
-                    self.id,
-                    crate::facts::parseable_extensions()
-                )));
-            }
-        }
-        self.validate_declared_format_matches_glob()?;
-        // THE CONVERSE WAS A REFUSAL AND IS NOT ONE ANY MORE (CLOUD-845). It
-        // read: a tree row with no declared documents "is handed an empty tree
-        // and decides nothing about the repository", so refusing it was better
-        // than letting it read as a configured gate.
-        //
-        // That reasoning was exactly right while `documents` was the ONLY thing
-        // the tree document carried. It is not any more: `tracked` is emitted on
-        // every tree evaluation, from the walk the run already did, so a row
-        // declaring no documents is handed the checkout's path list and can
-        // decide plenty about the repository — `no-docs-tree`-shaped predicates
-        // over *which files exist* are precisely that row, and CLOUD-846 counts
-        // three of the twenty tree-scoped gates that read no file literals at
-        // all.
-        //
-        // The bound the old refusal protected still holds and is unweakened,
-        // because it was a bound on CONTENT: a row still reads no file it did
-        // not name. `tracked` is paths, costs nothing per rule, and cannot carry
-        // a byte of any file — which is why widening here does not widen what a
-        // module may see of a file's insides.
-        Ok(())
-    }
-
-    /// Refuse a `document` row whose declared `format` contradicts the extension
-    /// its glob names (CLOUD-1787).
-    ///
-    /// # The trap this closes
-    ///
-    /// `format` is declared and never inferred, which is right — a `.json` file
-    /// that is really JSON5 must be declarable as JSON5. But nothing checked the
-    /// declaration against the paths it would meet, and one pairing is actively
-    /// dangerous rather than merely wrong: `format = "yaml"` over `*.md`
-    /// **appears to work**, because `---` is YAML's document-start marker, so a
-    /// markdown file's frontmatter is document 1 of the stream and gets read.
-    /// Document 2 is the body, which is only accidentally valid YAML. Measured
-    /// in CLOUD-1787: with identical correct frontmatter, prose and `**bold**`
-    /// passed while a table, a task list and a block quote failed — the verdict
-    /// decided by the prose, not the data.
-    ///
-    /// A row whose correctness depends on whether prose happens to lex is not a
-    /// gate, and it fails silently in both directions, so it is refused at load
-    /// where a config error costs a config error.
-    ///
-    /// # Why the literal suffix and not the glob
-    ///
-    /// Deciding what an arbitrary glob *can* match needs a glob engine and
-    /// answers "possibly" for most inputs. The extension a glob ENDS in is a
-    /// string, it is what every real row writes (`*.md`, `**/*.md`,
-    /// `notes/*.md`), and it is exactly the case above. A computed or
-    /// extensionless glob is not caught here and the message says so rather than
-    /// implying a totality this does not have.
-    fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()> {
-        let (Some(declared), Some(glob)) = (self.format, self.glob.as_deref()) else {
-            return Ok(());
-        };
-        let Some(named) = crate::facts::Format::for_path(glob) else {
-            return Ok(());
-        };
-        if named == declared {
-            return Ok(());
-        }
-        Err(UsageError::raise(format!(
-            "rule {}: `glob` is `{glob}`, whose extension names {}, but `format` says {} — one \
-             of the two is wrong, and the pairing is admitted by neither. Declare `format = \
-             \"{}\"` to read the file as its extension says. (Checked on the literal extension \
-             a glob ends in; a computed glob is not checked.)",
-            self.id,
-            named.as_str(),
-            declared.as_str(),
-            named.as_str()
-        )))
-    }
-
-    /// Validate that the per-kind fields present match the declared `kind`.
-    ///
-    /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
-    /// `deny_unknown_fields`), so the kind/field agreement that a tagged enum
-    /// would give for free is asserted here instead — and a field belonging to
-    /// another kind is an *error*, never ignored, so a rule can never half-apply.
-    /// Every optional column, paired with whether this rule carries it.
-    ///
-    /// The census is what keeps [`Rule::validate`] total. The previous version
-    /// hand-wrote one match arm per kind naming one required and one forbidden
-    /// field, which was correct for two kinds and two columns and goes stale
-    /// silently the moment either grows: a new column simply appears in no arm,
-    /// so every kind accepts it. Listing the columns once and asking each kind
-    /// about all of them makes that failure impossible, and
-    /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
-    /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 59] {
-        [
-            // In the census because it is now per-kind, which is what makes
-            // "required by every kind but the judge" a fact the existing
-            // machinery decides rather than a special case anyone maintains.
-            ("severity", self.severity.is_some()),
-            ("criteria", self.criteria.is_some()),
-            ("tier", self.tier.is_some()),
-            ("no_fix_reason", self.no_fix_reason.is_some()),
-            ("no_retry_reason", self.no_retry_reason.is_some()),
-            ("glob", self.glob.is_some()),
-            ("pattern", self.pattern.is_some()),
-            ("regex", self.regex.is_some()),
-            ("exclude", self.exclude.is_some()),
-            ("content", self.content.is_some()),
-            ("tool", self.tool.is_some()),
-            ("measures", self.measures.is_some()),
-            ("counts", self.counts.is_some()),
-            ("max", self.max.is_some()),
-            ("resolves", !self.resolves.is_empty()),
-            ("when_absent", self.when_absent.is_some()),
-            ("when_present", self.when_present.is_some()),
-            ("when_value", self.when_value.is_some()),
-            ("key_from", self.key_from.is_some()),
-            ("key_base", self.key_base.is_some()),
-            ("key_shape", self.key_shape.is_some()),
-            ("max_age", self.max_age.is_some()),
-            ("requires_field", self.requires_field.is_some()),
-            ("check", self.check.is_some()),
-            ("fix", self.fix.is_some()),
-            ("contains", self.contains.is_some()),
-            ("unless_contains", self.unless_contains.is_some()),
-            ("require_via", self.require_via.is_some()),
-            ("requires_key", self.requires_key.is_some()),
-            ("reason", self.reason.is_some()),
-            ("policy_url", self.policy_url.is_some()),
-            ("bypass_env", self.bypass_env.is_some()),
-            ("verbatim", self.verbatim.is_some()),
-            ("identity_key", self.identity_key.is_some()),
-            ("direction", self.direction.is_some()),
-            ("base", self.base.is_some()),
-            ("retires_with", self.retires_with.is_some()),
-            ("conserves", self.conserves.is_some()),
-            ("admits_with", self.admits_with.is_some()),
-            ("format", self.format.is_some()),
-            ("node", self.node.is_some()),
-            ("derives", self.derives.is_some()),
-            ("cites", self.cites.is_some()),
-            ("reads", self.reads.is_some()),
-            ("module", self.module.is_some()),
-            ("checks", self.checks.is_some()),
-            ("checks_any", self.checks_any.is_some()),
-            ("key", self.key.is_some()),
-            ("trigger", self.trigger.is_some()),
-            ("verdict", self.verdict.is_some()),
-            ("filters", self.filters.is_some()),
-            ("substitutes", self.substitutes.is_some()),
-            ("interprets", self.interprets.is_some()),
-            // CLOUD-2291: a `native` row's whole predicate is which gate.
-            ("gate", self.gate.is_some()),
-            // `landing` is NOT here, and neither are `git`, `refs` or `ranges`
-            // (CLOUD-880, following CLOUD-907). The census drives the per-kind
-            // permit/require validation, and a column in it owes an entry in some
-            // kind's `permits()` — `every_optional_rule_field_is_classified_by_
-            // every_kind` is the gate, and it caught this column the first time it
-            // was added here. The four git-family columns are declared reads
-            // rather than per-kind capabilities, so they follow their siblings
-            // rather than inventing a fifth classification for one of them.
-            ("line_sources", !self.line_sources.is_empty()),
-            ("invocations", !self.invocations.is_empty()),
-            ("invocation_sources", !self.invocation_sources.is_empty()),
-            ("uses", !self.uses.is_empty()),
-            ("use_sources", !self.use_sources.is_empty()),
-        ]
-    }
-
     /// Every receipt name this row mentions, in either column (CLOUD-1297).
     ///
     /// **The one place a resolution site may read, and it exists to close a dead
@@ -5108,19 +1182,6 @@ impl Rule {
             .chain(self.checks_any.iter().flatten())
     }
 
-    /// What makes this row fire, with the pinned default applied — the one place
-    /// absence is resolved, so no call site reads it a second way.
-    #[must_use]
-    pub fn receipt_trigger(&self) -> ReceiptTrigger {
-        self.trigger.unwrap_or_default()
-    }
-
-    /// Which git fact this row's receipts are keyed to, default applied.
-    #[must_use]
-    pub fn receipt_key(&self) -> ReceiptKey {
-        self.key.unwrap_or_default()
-    }
-
     /// The mediator this row requires, if it requires one.
     ///
     /// Absence is "no mediator required", which is every row that predates
@@ -5129,676 +1190,6 @@ impl Rule {
     #[must_use]
     pub fn require_via(&self) -> Option<RequireVia> {
         self.require_via
-    }
-
-    fn validate(&self) -> anyhow::Result<()> {
-        let kind = self.kind.as_str();
-        // Ahead of every per-kind question, so the rename is what the author
-        // reads. Left to the census, a `run` on a command rule would report
-        // "requires `check`" — true, and silent about the key already holding
-        // the value.
-        if self.run.is_some() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `run` is now `check` (house style §9's check/fix duality); rename the key",
-                self.id
-            )));
-        }
-        self.validate_external_rows()?;
-        self.validate_tool_rows()?;
-        self.validate_minted_rows()?;
-        self.validate_pipeline_tables()?;
-        self.validate_sink()?;
-        self.validate_exclude_paths()?;
-        // The key modifier's own obligations (CLOUD-446). Both here rather than
-        // in the column census for the reason stated below it: the census is a
-        // per-kind const, and these depend on a value inside the row.
-        if let Some(expression) = self.requires_key.as_deref() {
-            // Without a range there is nothing to read commit subjects over, so
-            // the row would fall back to the branch name alone — a narrowing
-            // nobody wrote, arrived at by omission.
-            if self.base.is_none() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `requires_key` requires `base` — the rev its commit evidence is read since",
-                    self.id
-                )));
-            }
-            // Compiled at load, like `regex` and `exclude`: an expression the
-            // matcher cannot parse must name its row. Left to adjudication it
-            // would fail open on every call, which is a gate that reads as
-            // present and denies nothing.
-            Regex::new(expression).map_err(|err| {
-                UsageError::raise(format!(
-                    "rule {}: `requires_key` is not valid: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        self.validate_admission_columns()?;
-        self.validate_conserves()?;
-        // Extracted for `validate_policy_source`'s reason, and it is the same
-        // class of obligation: which columns a receipt row owes depends on a
-        // value inside it, which the per-kind census cannot say.
-        self.validate_shape_columns()?;
-        self.validate_polarity()?;
-        self.validate_receipt_columns()?;
-        // Extracted rather than inlined, because `validate` is at its line ceiling
-        // and a per-kind block is what it should shed first: the census above is
-        // the general mechanism, and these are the three things a flat column
-        // list structurally cannot say about one kind.
-        self.validate_policy_source()?;
-        self.validate_ask_disposition()?;
-        for column in self.kind.requires() {
-            let present = self
-                .columns()
-                .into_iter()
-                .any(|(name, present)| name == *column && present);
-            if !present {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"{kind}\" requires `{column}`",
-                    self.id
-                )));
-            }
-        }
-        for (name, present) in self.columns() {
-            if present && !self.kind.permits().contains(&name) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `{name}` is not valid for kind \"{kind}\"",
-                    self.id
-                )));
-            }
-        }
-        // Scope routes a rule to the surface that evaluates it, so a pairing the
-        // engine cannot honour must be refused rather than accepted and never
-        // run. An inert rule reads as coverage.
-        if !self.kind.scopes().contains(&self.scope) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"{kind}\" does not evaluate over scope \"{}\"",
-                self.id,
-                self.scope.as_str()
-            )));
-        }
-        if self.glob.as_deref().is_some_and(str::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `glob` must not be empty",
-                self.id
-            )));
-        }
-        // Compiled at load, like `regex` and `exclude` above it (CLOUD-214): a
-        // pattern the matcher cannot parse must name the row that carries it,
-        // rather than becoming a rule that selects nothing and reads as a gate
-        // that found nothing wrong.
-        if let Some(glob) = self.glob.as_deref() {
-            Selector::new(glob)
-                .map_err(|err| UsageError::raise(format!("rule {}: {err}", self.id)))?;
-        }
-        self.validate_command_pattern()?;
-        self.validate_forbid_predicate()?;
-        self.validate_document_predicate()?;
-        self.validate_remediation()
-    }
-
-    /// The pipeline row's own tables (CLOUD-443).
-    ///
-    /// Refused for the reason everything in [`Rule::validate`] is refused: a
-    /// list that narrows nothing, or a row whose conditions contradict, loads
-    /// clean and decides nothing. Extracted rather than inlined so `validate`
-    /// stays under the line limit as columns accumulate — the census below it
-    /// is the part that must stay whole.
-    fn validate_pipeline_tables(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Pipeline {
-            return Ok(());
-        }
-        for entry in self.verdict.iter().flatten() {
-            entry.validate(&self.id)?;
-        }
-        if self.verdict.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" requires at least one `verdict` entry; with none it judges no command",
-                self.id
-            )));
-        }
-        if self.filters.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" requires at least one `filters` entry; with none it cannot recognise the substitution it refuses",
-                self.id
-            )));
-        }
-        if self.substitutes.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" requires at least one `substitutes` entry; with none it recognises no substitution",
-                self.id
-            )));
-        }
-        if self.interprets.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" requires at least one `interprets` entry; with none it recognises no interpreter",
-                self.id
-            )));
-        }
-        // ONE of the two families, whole (CLOUD-864). The per-kind required
-        // table cannot express this — it is a disjunction over sibling columns,
-        // and that table is a flat list — so the obligation lands here, which is
-        // the same place `Receipt`'s conditional `pattern` requirement lives.
-        //
-        // Stated as a disjunction rather than as "at least one column set" on
-        // purpose: a row carrying `verdict` and no `filters` recognises a
-        // verdict-bearing command and nothing that could discard it, which
-        // matches and decides nothing. Half a family is the inert row, not a
-        // narrower gate.
-        let discard_family = self.verdict.is_some() && self.filters.is_some();
-        let substitution_family = self.substitutes.is_some() || self.interprets.is_some();
-        if !discard_family && !substitution_family {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" needs either `verdict` AND `filters` (the discard family) or `substitutes` or `interprets` (the substitution family); with neither it matches nothing",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    /// Refuse a `pattern` the command matcher cannot honour (CLOUD-401).
-    ///
-    /// The empty-operand fix closed one row that loaded into silence; this
-    /// closes the **class**. `hook::matching_shape_rows` and
-    /// `hook::matching_receipt_rows` compare a pattern against a command that
-    /// has already been normalised two ways — `effective_program` has stepped
-    /// past env assignments and look-through wrappers, and the operand words
-    /// have had every flag dropped — so a pattern naming what that
-    /// normalisation removes is a row that can never fire. It loads clean,
-    /// gates nothing, and reads as coverage, which is the exact defect
-    /// [`validate`]'s doc comment is written against.
-    ///
-    /// Refused here rather than in the per-kind column census because the
-    /// census is a const list of column NAMES: this depends on the value inside
-    /// the column. Both surfaces that key on a command line are covered — a
-    /// `shape` row's ban and a `receipt` row's trigger read the same pattern
-    /// through the same matcher (`Rule::trigger`), so a rule inert on one is
-    /// inert on the other.
-    ///
-    /// A program-only pattern is **valid**, and that is the point: it is the
-    /// reading `Rule::pattern`'s doc comment already invites, and the one this
-    /// validator must not take back.
-    fn validate_command_pattern(&self) -> anyhow::Result<()> {
-        // The kinds that key on a command line. A `write`-triggered receipt row
-        // is refused a `pattern` outright above, so it never reaches here.
-        let keys_on_a_command = self.kind == RuleKind::Shape
-            || (self.kind == RuleKind::Receipt
-                && self.receipt_trigger() == ReceiptTrigger::Command);
-        if !keys_on_a_command {
-            return Ok(());
-        }
-        if self.pattern.is_none() {
-            return Ok(());
-        }
-        // `trigger()` yields nothing for a pattern with no word in it, and a
-        // row it cannot read is a row the matcher skips.
-        let Some((program, wanted)) = self.trigger() else {
-            return Err(UsageError::raise(format!(
-                "rule {}: `pattern` names no program; a pattern of only whitespace matches no command",
-                self.id
-            )));
-        };
-        if crate::hook::is_lookthrough_wrapper(program) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `pattern` names the wrapper `{program}`, which the matcher looks THROUGH to judge the program it wraps; name that program instead",
-                self.id
-            )));
-        }
-        if crate::hook::is_env_assignment(program) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `pattern` starts with the environment assignment `{program}`, which the matcher steps past; name the program instead",
-                self.id
-            )));
-        }
-        if let Some(flag) = wanted.iter().find(|word| word.starts_with('-')) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `pattern` requires the flag `{flag}`, and the matcher compares operand words with flags already dropped; use `contains` for a flag",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
-    ///
-    /// Not expressible in [`RuleKind::requires`] for the same reason
-    /// `pattern`-xor-`regex` is not: that list is columns that must *all* be
-    /// present. [`RuleKind::permits`] carries the other half — a `shape` row is
-    /// refused both columns there, because it is adjudicated per mediated call
-    /// and never reaches the store, the same reasoning that already denies it
-    /// `identity_key`.
-    ///
-    /// **Carrying neither is refused at ingest, not here** (§5). A rule with no
-    /// remediation still loads and still gates: `check` and `enforce` render its
-    /// findings and exit on them exactly as before. What it cannot do is put one
-    /// in the store, because a *stored* finding is one something later has to
-    /// close. Refusing at load would instead make an un-actionable rule
-    /// un-runnable, which turns a store-shaped requirement into a gate outage
-    /// for every consumer whose config predates this field.
-    /// The out-of-root bound's own obligations, refused at LOAD (CLOUD-1167).
-    ///
-    /// Its own function rather than a block inside `validate` for
-    /// [`Rule::validate_tool_rows`]' reason: that function is at its 100-line
-    /// ceiling, and every declared-read family adds a paragraph to it.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row missing an `id` or a
-    /// `root`, one whose `path` can leave the root it named, or one id declared
-    /// twice over different files.
-    fn validate_external_rows(&self) -> anyhow::Result<()> {
-        // THE OUT-OF-ROOT BOUND, REFUSED AT LOAD (CLOUD-1167). Both halves are
-        // config faults rather than verdicts: no state of the filesystem makes
-        // either admissible, so reporting them as could-not-look would present a
-        // permanent authoring error as a transient one — the choice
-        // `NotAcquired::UnknownFormat` already makes one layer down.
-        //
-        // Checked before the kind gate below so it binds every kind that may
-        // carry the column, and stated here rather than in the per-kind census
-        // because the census is a flat list of column NAMES and this is a
-        // property of a column's CONTENTS.
-        let mut seen_external: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
-        for row in &self.external {
-            if row.id.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: an `external` row needs a non-empty `id`; it is the key the file is projected under and a module has no other way to name it",
-                    self.id
-                )));
-            }
-            if row.root.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` row {:?} needs a non-empty `root`; it is the NAME of the environment variable the path resolves beneath, and an empty one would resolve against the process's working directory",
-                    self.id, row.id
-                )));
-            }
-            // THE ANTI-ESCAPE HALF. A declaration that can walk back out of the
-            // root it named is a scanner with extra steps, and this is the one
-            // place it can be refused for good rather than per run.
-            if row.path.trim().is_empty() || row.escapes() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` row {:?} needs a `path` that is relative and stays beneath its root; an absolute path or a `..` component would read outside the root the row declared, which is the bound this column exists to hold",
-                    self.id, row.id
-                )));
-            }
-            // THE ONE-ID-ONE-FILE HALF. Acquisition caches by id across the whole
-            // rule set, so two rows declaring one id differently would resolve by
-            // whichever row the loop reached first — a silent precedence rule
-            // over which file a module actually reads. `Wanted` records the same
-            // lesson one family over, where keying a cache on the path alone
-            // starved the losing row.
-            if let Some((root, path)) = seen_external.insert(&row.id, (&row.root, &row.path))
-                && (root != row.root || path != row.path)
-            {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` id {:?} is declared twice with different roots or paths; one id names one file, or which file a module reads depends on rule order",
-                    self.id, row.id
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// The tool-verdict key's own obligations, refused at LOAD (CLOUD-1171).
-    ///
-    /// Its own function rather than another block inside `validate` for the
-    /// reason `validate_sink` is one: that function is at its line ceiling and
-    /// every declared-read family adds a paragraph to it.
-    ///
-    /// Every refusal here is a CONFIG FAULT rather than a verdict, which is the
-    /// choice `NotAcquired::UnknownFormat` already makes: no state of the
-    /// filesystem makes an empty tool name or a separator inside a version
-    /// admissible, so reporting either as could-not-look would present a
-    /// permanent authoring error as a transient one.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row whose key cannot be
-    /// composed unambiguously, or for one id declared twice over different keys.
-    fn validate_tool_rows(&self) -> anyhow::Result<()> {
-        let mut seen: BTreeMap<&str, &crate::facts::ToolQuery> = BTreeMap::new();
-        for row in &self.tools {
-            if row.id.trim().is_empty() || row.input.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: a `tools` row needs a non-empty `id` and `input`; the id is the key the verdict is projected under, and the input is the file whose digest keys the record",
-                    self.id
-                )));
-            }
-            // THE AMBIGUOUS-KEY HALF. The three components are joined into one
-            // record name, so a component carrying the separator or a path
-            // component would let two different declarations compose the same
-            // key — two questions with one answer, decided by whichever producer
-            // wrote last.
-            if row.malformed() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `tools` row {:?} needs a `tool` and `version` that are non-empty and carry no `{}` or path separator; all three key components are joined into one record name, and a separator inside one would let two declarations compose the same key",
-                    self.id,
-                    row.id,
-                    crate::facts::KEY_SEPARATOR
-                )));
-            }
-            // THE ONE-ID-ONE-KEY HALF, for `external`'s reason: acquisition keys
-            // by id, so two rows declaring one id differently would resolve by
-            // whichever the loop reached first — a silent precedence rule over
-            // which verdict a module actually reads.
-            if let Some(first) = seen.insert(&row.id, row)
-                && (first.tool != row.tool
-                    || first.version != row.version
-                    || first.input != row.input)
-            {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `tools` id {:?} is declared twice with different keys; one id names one verdict, or which record a module reads depends on rule order",
-                    self.id, row.id
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Refuse a `[[rule.minted]]` row that cannot address a receipt, or an id
-    /// declared twice over different questions (CLOUD-1310).
-    ///
-    /// **The mint NAME is not resolved against the mint table, and that is
-    /// deliberate.** A mint that has never fired leaves no receipts, which is
-    /// could-not-look and is the ordinary state on any fresh clone — so refusing
-    /// the row at load would refuse the common case rather than an authoring
-    /// error. What is refused here is only what no state of the filesystem could
-    /// make admissible.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a row naming an unusable mint or
-    /// id, for a row whose two column indices are the same, and for one id
-    /// declared twice over different questions.
-    fn validate_minted_rows(&self) -> anyhow::Result<()> {
-        let mut seen: BTreeMap<&str, &crate::facts::MintedQuery> = BTreeMap::new();
-        for row in &self.minted {
-            if row.malformed() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: a `minted` row needs a non-empty `id` and a `mint` that is non-empty and carries no path separator; the mint names the receipt files this reads and a separator would send it outside the store",
-                    self.id
-                )));
-            }
-            // THE TWO-COLUMNS-ARE-DIFFERENT HALF. The value and the time it was
-            // read are different columns of one line; declaring them the same
-            // index projects the timestamp as the value while the bound compares
-            // the timestamp against itself, so the row is always fresh and always
-            // answers with a clock. It reads as a working gate.
-            if row.field == row.recency {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `minted` row {:?} declares `field` and `recency` at the same index {}; the value and the time it was read are different columns, and collapsing them projects the timestamp as the value while the age bound compares it against itself",
-                    self.id, row.id, row.field
-                )));
-            }
-            // THE ONE-ID-ONE-QUESTION HALF, for `tools`' reason one function up:
-            // acquisition keys by id, so two rows declaring one id differently
-            // would resolve by whichever the loop reached first.
-            if let Some(first) = seen.insert(&row.id, row)
-                && (first.mint != row.mint
-                    || first.field != row.field
-                    || first.recency != row.recency
-                    || first.max_age_days != row.max_age_days)
-            {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `minted` id {:?} is declared twice with different questions; one id names one field of one mint at one bound, or which reading a module gets depends on rule order",
-                    self.id, row.id
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// A declared sink must be on a kind that can actually request one
-    /// (CLOUD-851).
-    ///
-    /// The request set is built from a [`Scan`], which only the TREE surface
-    /// produces: `adjudicate` returns a decision about one call and has no
-    /// findings vector to digest. So a `produces` on a `mediated_call`-only kind
-    /// would parse, read as configured, and write nothing on every call — the
-    /// inert-coverage failure `validate_shape_columns` and
-    /// `validate_receipt_columns` each close one column over, and the same one
-    /// `Rule::fix`'s refusal states rather than pretends about.
-    ///
-    /// Refused at LOAD rather than skipped at run time, because a skip is
-    /// invisible: the run reports its findings and the record simply is not
-    /// there, which looks exactly like a run that had nothing to produce.
-    fn validate_sink(&self) -> anyhow::Result<()> {
-        if self.produces.is_none() {
-            return Ok(());
-        }
-        // THE ROW'S OWN SCOPE, not the kind's CAPABILITY, and the difference is a
-        // real hole the first version left. `RuleKind::Policy` scopes to BOTH
-        // surfaces, so `kind.scopes().contains(&Tree)` is true for a policy row
-        // configured `scope = "mediated_call"` — it passed validation, the tree
-        // runner skipped it as another surface's business, `requested_sinks`
-        // excluded it as not-evaluated, and the declared record was never
-        // written. Exactly the inert-coverage failure this function exists to
-        // refuse, reached through the one kind that spans both scopes.
-        if self.scope != RuleScope::Tree {
-            return Err(UsageError::raise(format!(
-                "rule {}: `produces` on a `{}`-scoped row, which is decided by `adjudicate` \
-                 rather than by a findings scan; there is nothing for a sink to summarise \
-                 and the record would never be written",
-                self.id,
-                self.scope.as_str()
-            )));
-        }
-        Ok(())
-    }
-
-    /// The value-dependent obligations on the two ratchet admission columns,
-    /// [`Rule::retires_with`] and [`Rule::admits_with`].
-    ///
-    /// Extracted from [`Rule::validate`] for `validate_conserves`'s reason — the
-    /// per-kind census sees a present column and nothing about what is inside it
-    /// — and the two are here together because they are the same three refusals
-    /// mirrored, so a reader comparing them should not have to hold two screens.
-    ///
-    /// Each column admits ONE direction of change, and all three refusals close
-    /// the same failure: a column that reads as a configured permission and
-    /// decides nothing.
-    ///
-    /// * **`base` must be there.** Each column asks a question about another
-    ///   tree — was this subject alive, was this file absent — and there is no
-    ///   such tree without it. The ratchet kind already requires `base`, but the
-    ///   obligation is on the VALUE, so a future kind taking either column
-    ///   inherits the refusal rather than the omission.
-    /// * **The token must not be blank.** An empty prefix matches at the start of
-    ///   every line, so every file would "declare" whatever its first line
-    ///   happens to say. That is `requires_key`'s compile-at-load failure in the
-    ///   one form these columns can take it.
-    /// * **The direction must be the one the column governs.** This is the blank
-    ///   token's failure reached by the other axis, and it is the sharper of the
-    ///   two because the column is not merely inert on the wrong row — it
-    ///   switches the row OFF. `retires_with`'s block inspects only the files
-    ///   whose count FELL, so on a `non_increasing` row it collects no subject,
-    ///   leaves the blocker set empty, and the evaluator returns clean over every
-    ///   increase. `undeclared_growth` is the mirror: it inspects only the files
-    ///   that ROSE, so on a `non_decreasing` row every decrease is admitted in
-    ///   silence. Found by review of #694 on `admits_with`; the sibling had
-    ///   carried it latent since CLOUD-807.
-    fn validate_admission_columns(&self) -> anyhow::Result<()> {
-        for (name, token, wanted, wanted_name, base_reason) in [
-            (
-                "retires_with",
-                self.retires_with.as_deref(),
-                Direction::NonDecreasing,
-                "DECREASE",
-                "the rev a subject must have been alive at",
-            ),
-            (
-                "admits_with",
-                self.admits_with.as_deref(),
-                Direction::NonIncreasing,
-                "INCREASE",
-                "an increase is only decidable against the tree a file was absent from",
-            ),
-        ] {
-            let Some(token) = token else {
-                continue;
-            };
-            if self.base.is_none() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `{name}` requires `base` — {base_reason}",
-                    self.id
-                )));
-            }
-            if token.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `{name}` cannot be blank — it is the line prefix a declaration is read after, and an empty one matches every line",
-                    self.id
-                )));
-            }
-            if self.direction != Some(wanted) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `{name}` requires `direction = \"{}\"` — it admits a {wanted_name}, and on a row that refuses the other direction it switches the row off instead of refining it",
-                    self.id,
-                    wanted.as_str(),
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Every token in a [`Conserves`] decides something, so a blank one is a
-    /// configured admission (CLOUD-908).
-    ///
-    /// The obligations, and each closes a way the mapping could read as present
-    /// and decide nothing:
-    ///
-    /// * **`retires_with` must be there.** This column refines that admission. A
-    ///   ratchet that never permits a decrease has no deletion to map, so the
-    ///   mapping would be inert — and inert coverage is what the whole row is
-    ///   about.
-    /// * **No token may be blank.** An empty prefix matches at the start of every
-    ///   line, so every line would "declare" a case or claim one. The same
-    ///   reading `retires_with` takes over its own token.
-    /// * **The three arms must be distinct.** Two arms spelled alike make "exactly
-    ///   one arm" undecidable: one line would claim a case twice, and the refusal
-    ///   for a double claim would fire on every correct mapping instead.
-    /// * **`declared_in` must compile.** A glob `globset` cannot parse selects
-    ///   nothing, and a mapping read over nothing admits every deletion.
-    fn validate_conserves(&self) -> anyhow::Result<()> {
-        let Some(conserves) = self.conserves.as_ref() else {
-            return Ok(());
-        };
-        if self.retires_with.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `conserves` requires `retires_with` — it obliges a mapping INSIDE that column's admission, and a ratchet that admits no decrease has no deletion to map",
-                self.id
-            )));
-        }
-        for (name, token) in [
-            ("case", &conserves.case),
-            ("close", &conserves.close),
-            ("carried", &conserves.carried),
-            ("subsumed", &conserves.subsumed),
-            ("changed", &conserves.changed),
-            ("declared_in", &conserves.declared_in),
-        ] {
-            if token.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `conserves.{name}` cannot be blank — every token here decides something, and an empty one matches every line",
-                    self.id
-                )));
-            }
-        }
-        // Blank is refused for the optional arm too, where it is DECLARED: an
-        // empty token matches every line, so `withdrawn = ""` would claim every
-        // case in the ledger. Absent and blank are different answers, and only the
-        // first one means "this row has three arms".
-        for (name, token) in [
-            ("withdrawn", conserves.withdrawn.as_deref()),
-            ("ported", conserves.ported.as_deref()),
-        ] {
-            if let Some(token) = token
-                && token.trim().is_empty()
-            {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `conserves.{name}` is declared but blank — an empty token matches every line, which would claim every case. Remove the key to leave the arm undeclared.",
-                    self.id
-                )));
-            }
-        }
-        let arms: Vec<&String> = [
-            Some(&conserves.carried),
-            Some(&conserves.subsumed),
-            Some(&conserves.changed),
-            conserves.withdrawn.as_ref(),
-            conserves.ported.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        for (index, arm) in arms.iter().enumerate() {
-            if arms[index + 1..].contains(arm) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `conserves` spells two arms alike, so \"exactly one arm\" cannot be decided — one line would claim a case twice",
-                    self.id
-                )));
-            }
-        }
-        Selector::new(&conserves.declared_in)?;
-        Ok(())
-    }
-
-    /// `exclude_paths` has to be honoured by everything that reads the rule's
-    /// selection, and two shapes cannot honour it (CLOUD-883).
-    ///
-    /// **No `glob`.** The column subtracts from an include set, so with nothing to
-    /// subtract from it narrows nothing while reading as a narrowing — the
-    /// inert-coverage failure `validate_sink` and `validate_shape_columns` each
-    /// close one column over.
-    ///
-    /// **A ratchet.** Its verdict compares the working tree against a count taken
-    /// at the base rev by `git::count_at_rev`, which globs on its own and knows
-    /// nothing of this column. The two sides would select different sets, and the
-    /// direction is the dangerous one CLOUD-328 measured: a working side narrowed
-    /// below a base that counted everything sits permanently under its baseline,
-    /// so no addition could ever push it over and **the gate cannot fail**.
-    /// Refused rather than half-implemented, because a ratchet that cannot fail
-    /// reads exactly like one that is passing.
-    fn validate_exclude_paths(&self) -> anyhow::Result<()> {
-        if self.exclude_paths.is_empty() {
-            return Ok(());
-        }
-        if self.glob.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `exclude_paths` subtracts from `glob`, and this row declares none — \
-                 it would narrow nothing while reading as a narrowing",
-                self.id
-            )));
-        }
-        if self.kind == RuleKind::Ratchet {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"ratchet\" counts the base rev with its own glob, which cannot \
-                 read `exclude_paths`; the two sides would select different sets and the \
-                 working side could never rise above the base, so the gate could not fail",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_remediation(&self) -> anyhow::Result<()> {
-        if let Some(why) =
-            crate::remedy::malformed(self.fix.as_deref(), self.no_fix_reason.as_deref())
-        {
-            return Err(UsageError::raise(format!("rule {}: {why}", self.id)));
-        }
-        // `no_retry_reason` WITHOUT a repair says why something that never runs
-        // does not hand back — a sentence about nothing (CLOUD-1639). The
-        // converse (a `fix` with no `no_retry_reason`) is legal and is the
-        // ordinary `retry` row; what makes it owed is the CLASS declaring
-        // `silent`, which is a cross-table question and lives in
-        // `crate::policy::check_repairs_are_applicable`.
-        if self.no_retry_reason.is_some() && self.fix.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `no_retry_reason` says why a repair does not hand the call back, and \
-                 this row declares no `fix` to repair with",
-                self.id
-            )));
-        }
-        Ok(())
     }
 
     /// The predicate that settles this rule's findings (CLOUD-81).
@@ -5902,71 +1293,6 @@ impl Rule {
         self.no_fix_reason.clone().map(Remediation::NoFix)
     }
 
-    /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
-    ///
-    /// Not expressible in [`RuleKind::requires`], which is a flat list of
-    /// columns that must all be present — "exactly one of these two" needs a
-    /// check of its own (CLOUD-283). Refusing a row that carries both is what
-    /// keeps this a *choice* rather than a precedence rule a reader has to know.
-    ///
-    /// Each expression is compiled here, at load, so a bad one is a config error
-    /// naming the row rather than a failure part-way through a scan.
-    /// A document row's predicate: exactly one of `pattern` or `reads`.
-    ///
-    /// The same "one of" the forbid predicate carries and for the same reason —
-    /// a flat column list cannot express it, so it lives here where the pair is
-    /// in scope. A row with neither loads, matches a document, and asks nothing
-    /// of it; a row with both declares two answers to one comparison.
-    fn validate_document_predicate(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Document {
-            return Ok(());
-        }
-        match (self.pattern.is_some(), self.reads.is_some()) {
-            (true, true) => Err(UsageError::raise(format!(
-                "rule {}: `pattern` and `reads` are alternatives; a row carries exactly one, \
-                 never both",
-                self.id
-            ))),
-            (false, false) => Err(UsageError::raise(format!(
-                "rule {}: kind \"document\" requires `pattern` (a literal) or `reads` (another \
-                 rule's derived value)",
-                self.id
-            ))),
-            _ => Ok(()),
-        }
-    }
-
-    fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
-        if !matches!(self.kind, RuleKind::Forbid | RuleKind::Ratchet) {
-            return Ok(());
-        }
-        match (self.pattern.is_some(), self.regex.is_some()) {
-            (true, true) => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `pattern` and `regex` are alternatives; a row carries exactly one, \
-                     never both",
-                    self.id
-                )));
-            }
-            (false, false) => {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"{}\" requires `pattern` (a literal) or `regex` (a shape)",
-                    self.id,
-                    self.kind.as_str()
-                )));
-            }
-            _ => {}
-        }
-        for (column, expression) in [("regex", &self.regex), ("exclude", &self.exclude)] {
-            if let Some(expression) = expression {
-                Regex::new(expression).map_err(|err| {
-                    UsageError::raise(format!("rule {}: `{column}` is not valid: {err}", self.id))
-                })?;
-            }
-        }
-        Ok(())
-    }
-
     /// Whether this row's [`Rule::tool`] selector names `raw_tool` (CLOUD-924).
     ///
     /// `false` for a row carrying no selector, so a caller can ask this of any
@@ -6003,37 +1329,72 @@ impl Rule {
         self.trigger()
     }
 
-    /// The first column this row declares whose fact the mediated call cannot
-    /// resolve (CLOUD-1282).
-    ///
-    /// Derived rather than listed: [`COLUMN_CENSUS`] says which fact each column
-    /// declares and [`crate::facts::Fact::class`] says where that fact resolves,
-    /// so a column added to this struct is covered the day it lands — and a fact
-    /// RECLASSIFIED onto the hook surface stops being refused here without an
-    /// edit, which a list could not manage in either direction.
-    ///
-    /// `Surface::Hook` is the NARROWEST surface a fact may be resolved on, so it
-    /// is the one value that reaches the mediated call; every other means the
-    /// column would parse, load and never be acquired.
-    ///
-    /// Census order decides which column a multi-column row is refused for,
-    /// which is declaration order in the struct — the same tie-break every other
-    /// table here uses, and the one a reviewer reading top to bottom expects.
-    #[must_use]
-    pub fn tree_only_column(&self) -> Option<TreeOnlyColumn> {
+    /// Every fact this row declares, read off [`COLUMN_CENSUS`] (step 13a).
+    pub fn census_facts(&self) -> impl Iterator<Item = crate::facts::Fact> + '_ {
         COLUMN_CENSUS
             .iter()
-            .find_map(|column| match column.declares {
-                Declares::Fact(fact, declared)
-                    if fact.class().surface != crate::facts::Surface::Hook && declared(self) =>
-                {
-                    Some(TreeOnlyColumn {
-                        field: column.field,
-                        fact,
-                    })
-                }
+            .filter_map(|column| match column.declares {
+                Declares::Fact(fact, declared) if declared(self) => Some(fact),
                 Declares::Fact(..) | Declares::NotFactBearing(_) => None,
             })
+    }
+
+    /// Which half of a split `enforce` judges this row (step 13a).
+    ///
+    /// [`Half::Tree`] only where the verdict is provably a function of the
+    /// indexed tree, so a receipt keyed on that tree may stand in for it; every
+    /// other answer — and every answer this cannot establish — is
+    /// [`Half::Live`], the half that always re-runs.
+    ///
+    /// * `forbid`, `document`, `secrets`, `reference`: tree when every fact the
+    ///   row declares is [`crate::facts::Subject::Tree`].
+    /// * `ratchet`: tree when its `base` is one of `keyed_bases` — the refs the
+    ///   caller's receipt keys the merge base of — and its facts are tree.
+    /// * `policy`: tree when its facts are tree and its bundle's
+    ///   [`crate::policy::Bundle::tree_reads`] names only tree keys. No bundle
+    ///   is live.
+    /// * every spawning, mediated or native kind, any `scope = "mediated_call"`
+    ///   row, and any row gated on `requires_path` (an existence test the tree
+    ///   key does not cover, since the path may be ignored): live.
+    #[must_use]
+    pub fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half {
+        use crate::facts::Subject;
+        if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
+            return Half::Live;
+        }
+        let facts_tree = self
+            .census_facts()
+            .all(|fact| fact.subject() == Subject::Tree);
+        let tree = match self.kind {
+            RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
+                facts_tree
+            }
+            RuleKind::Ratchet => {
+                facts_tree
+                    && self
+                        .base
+                        .as_ref()
+                        .is_some_and(|base| keyed_bases.contains(base))
+            }
+            RuleKind::Policy => {
+                facts_tree
+                    && bundle.is_some_and(|bundle| match bundle.tree_reads() {
+                        crate::policy::Reads::Known(keys) => keys.iter().all(|key| {
+                            key == TREE_MISSING_KEY
+                                || crate::facts::Fact::from_tree_key(key)
+                                    .is_some_and(|fact| fact.subject() == Subject::Tree)
+                        }),
+                        crate::policy::Reads::Opaque => false,
+                    })
+            }
+            RuleKind::Command
+            | RuleKind::Judge
+            | RuleKind::Receipt
+            | RuleKind::Shape
+            | RuleKind::Pipeline
+            | RuleKind::Native => false,
+        };
+        if tree { Half::Tree } else { Half::Live }
     }
 
     /// The command shape this row keys on, for **any** kind that keys on one.
@@ -6078,399 +1439,14 @@ impl Rule {
             .map(String::as_str)
     }
 }
+// CLOUD-2669: `refuse_command_modifiers` above, which a row inside the `impl`
+// cannot sit beside at column 0.
+// CLOUD-2662's `validate_on_columns`, in the same `impl`.
 
-/// Validate a whole `[[rule]]` table, and refuse a duplicated id.
-///
-/// Called at **load** rather than only by a runner (`config::parse_ungated`),
-/// because there are now two runners: the tree engine and `batten hook`. A rule
-/// validated only by the surface that happens to run it is a rule the other
-/// surface accepts malformed — and for the hook that means a policy row that
-/// loads, matches nothing, and reads as coverage.
-///
-/// Two rows for one id is a policy question with two answers, and silently
-/// taking the first is how a tightening edit gets lost behind a stale row. Same
-/// reasoning, and the same shape, as [`crate::verbs::validate`].
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for a malformed or duplicated rule.
-pub fn validate(rules: &[Rule]) -> anyhow::Result<()> {
-    validate_rows(rules)?;
-    validate_composition(rules, None)
-}
-
-/// Everything [`validate`] checks except the cross-row composition — split out so
-/// [`validate_in`] can run the composition half with a locator instead of
-/// running it twice and reporting the unlocated message first.
-fn validate_rows(rules: &[Rule]) -> anyhow::Result<()> {
-    for (index, rule) in rules.iter().enumerate() {
-        rule.validate()?;
-        if rules[..index].iter().any(|prior| prior.id == rule.id) {
-            return Err(UsageError::raise(format!(
-                "rule {}: declared twice; a rule has one definition",
-                rule.id
-            )));
-        }
-        // One check name, one keying (CLOUD-444). The boundary resolves each
-        // required name to a single verdict, so two rows disagreeing about what
-        // invalidates the same receipt would silently resolve it one row's way —
-        // a branch-keyed claim expiring per commit, or a HEAD-keyed verification
-        // outliving the bytes it validated. Both are false greens, and the
-        // per-row `validate` cannot see the collision, so it is refused here.
-        for prior in &rules[..index] {
-            let (Some(mine), Some(theirs)) = (rule.checks.as_ref(), prior.checks.as_ref()) else {
-                continue;
-            };
-            if rule.receipt_key() == prior.receipt_key() {
-                continue;
-            }
-            if let Some(shared) = mine.iter().find(|check| theirs.contains(check)) {
-                return Err(UsageError::raise(format!(
-                    "rules {} and {}: both require the receipt `{shared}` under different `key` values; one check name has one keying",
-                    prior.id, rule.id
-                )));
-            }
-        }
-        // ONE PLAN ID, ONE QUERY — the same argument as the row above, over
-        // `[[rule.plan]]` (CLOUD-949). `plan_facts` writes every declared query
-        // into one map keyed by `id`, so two queries sharing an id and differing
-        // in `hook`, `required` or `prohibited_profiles` resolve to whichever
-        // was inserted last. That is a false green of the worst kind: the
-        // module reads `input.tree.plan["gate"]` and is answered about a
-        // DIFFERENT surface than the row it belongs to declared, so a required
-        // step can go unchecked while the gate reports clean.
-        //
-        // Refused at LOAD rather than deduplicated at acquisition, because
-        // silently picking one of two disagreeing declarations is the same
-        // defect one layer down. An IDENTICAL redeclaration is accepted: it
-        // names one query, so there is nothing to resolve.
-        //
-        // The per-row `validate` cannot see this — the collision is between
-        // rows as often as within one — which is why it lives here beside
-        // CLOUD-444's, whose reasoning it borrows wholesale.
-        for query in &rule.plan {
-            let collides = |other: &crate::hk::PlanQuery| other.id == query.id && other != query;
-            if let Some(prior) = rules[..index]
-                .iter()
-                .find(|prior| prior.plan.iter().any(collides))
-            {
-                return Err(UsageError::raise(format!(
-                    "rules {} and {}: both declare the plan `{}` with different terms; one plan id has one query",
-                    prior.id, rule.id, query.id
-                )));
-            }
-            if rule.plan.iter().any(collides) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: declares the plan `{}` twice with different terms; one plan id has one query",
-                    rule.id, query.id
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// [`validate`], with the config text in hand so a composition refusal can point
-/// at a **line** rather than only at a rule id (CLOUD-773's §5).
-///
-/// The located form is what the two real loaders call; the bare [`validate`]
-/// stays for callers holding a rule table and no file — the defaults, and the
-/// runner's own defence in depth. One implementation, an optional locator, so
-/// the two can never disagree about what is refused.
-///
-/// # Errors
-///
-/// As [`validate`].
-pub fn validate_in(rules: &[Rule], text: &str, source: &str) -> anyhow::Result<()> {
-    validate_rows(rules)?;
-    validate_composition(rules, Some(Located { text, source }))
-}
-
-/// The config text and its path, for turning a rule id into `path:line`.
-#[derive(Clone, Copy)]
-struct Located<'a> {
-    text: &'a str,
-    source: &'a str,
-}
-
-impl Located<'_> {
-    /// `<source>:<line>` for the row declaring `id`, or `<source>` where the
-    /// declaration cannot be located.
-    ///
-    /// A literal search for the `id` key rather than a second TOML parse: the
-    /// pointer is a courtesy on an error path, and a parser here would be a
-    /// second reader of the file the loader already read.
-    fn pointer(self, id: &str) -> String {
-        let needle = format!("id = \"{id}\"");
-        for (index, line) in self.text.lines().enumerate() {
-            if line.trim_start().starts_with(&needle) {
-                return format!("{}:{}", self.source, index + 1);
-            }
-        }
-        self.source.to_owned()
-    }
-}
-
-/// Where a rule id renders when there is no config text to locate it in.
-fn pointer_for(at: Option<Located<'_>>, id: &str) -> String {
-    match at {
-        Some(located) => located.pointer(id),
-        None => format!("rule {id}"),
-    }
-}
-
-/// Refuse a composition a run could not honour, **at load and never later**.
-///
-/// Four refusals, and the ordering matters only in that each is checked over the
-/// whole table rather than per row — which is why this cannot live in
-/// [`Rule::validate`]:
-///
-/// 1. **Two rows deriving one name.** "Which one did I read" is not a question a
-///    reviewer should have to answer, and the answer would be positional.
-/// 2. **A reference to a name nothing derives.** The row loads, matches a
-///    document, and compares against a value that will never exist — the
-///    present-and-inert gate this file is written against.
-/// 3. **A cycle.** Once B can reference A, A can reference B. CLOUD-647 measured
-///    that the obvious candidate engine reports cycles at *evaluation*, which on
-///    the mediated path is the worst possible time and the wrong exit class.
-/// 4. **A reference that changes the reading rule's class.** CLOUD-757 settled
-///    composition as the **meet on both axes**: a derived fact is at most as
-///    cheap as its most expensive input and at most as wide as its narrowest.
-///    So if meeting the derivation's class with the reader's own moves it, the
-///    reader is not the rule it declares itself to be — a `read`-class row would
-///    silently inherit an `effect`-class dependency, or a hook-surface row would
-///    answer from a fact never resolvable there.
-///
-/// Pointer-only (rule 4): a `path:line` and a rule id, never a derived value.
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) for each of the four. A config declaring a
-/// composition the engine cannot honour is the config-or-usage class, never a
-/// policy verdict about the repository.
-fn validate_composition(rules: &[Rule], at: Option<Located<'_>>) -> anyhow::Result<()> {
-    let mut derived: BTreeMap<&str, &Rule> = BTreeMap::new();
-    for rule in rules {
-        let Some(name) = rule.derives.as_deref() else {
-            continue;
-        };
-        if let Some(prior) = derived.insert(name, rule) {
-            return Err(UsageError::raise(format!(
-                "{} and {}: both derive `{name}`; a derived value has one definition",
-                pointer_for(at, &prior.id),
-                pointer_for(at, &rule.id)
-            )));
-        }
-    }
-    for rule in rules {
-        let Some(name) = rule.reads.as_deref() else {
-            continue;
-        };
-        let Some(producer) = derived.get(name).copied() else {
-            return Err(UsageError::raise(format!(
-                "{}: reads `{name}`, which no rule derives",
-                pointer_for(at, &rule.id)
-            )));
-        };
-        // The meet on BOTH axes. Equality with the reader's own class is the
-        // predicate rather than a comparison per axis, because "did this
-        // reference move me" is one question and asking it twice invites the
-        // two halves to drift.
-        //
-        // EACH SIDE IS JUDGED AT ITS OWN SCOPE (CLOUD-833). `fact_class` used to
-        // key on the kind alone; a `policy` row is `Free` x `Hook` on the
-        // mediated call and `Read` x `Check` on the tree, so asking for one
-        // rule's class while holding the other's scope would compare two things
-        // neither row declares. `rule.scope` and `producer.scope` are the values
-        // each row actually carries, and passing anything else here is how this
-        // check would start answering a question nobody asked.
-        let mine = rule.kind.fact_class(rule.scope);
-        let theirs = producer.kind.fact_class(producer.scope);
-        if mine.meet(theirs) != mine {
-            return Err(UsageError::raise(format!(
-                "{}: reads `{name}`, derived by {} at cost `{}` on surface `{}`, which a rule at \
-                 cost `{}` on surface `{}` cannot carry — composition takes the meet on both axes",
-                pointer_for(at, &rule.id),
-                pointer_for(at, &producer.id),
-                theirs.cost.as_str(),
-                theirs.surface.as_str(),
-                mine.cost.as_str(),
-                mine.surface.as_str()
-            )));
-        }
-    }
-    // Depth-first over the reference edges. The graph is tiny — one edge per row
-    // that reads — so the walk is the whole algorithm and there is nothing to
-    // memoise that would pay for itself.
-    for rule in rules {
-        if rule.reads.is_none() {
-            continue;
-        }
-        let mut seen: Vec<&str> = vec![rule.id.as_str()];
-        let mut here = rule;
-        while let Some(name) = here.reads.as_deref() {
-            let Some(next) = derived.get(name).copied() else {
-                break;
-            };
-            if seen.contains(&next.id.as_str()) {
-                return Err(UsageError::raise(format!(
-                    "{} and {}: their `reads`/`derives` references form a cycle, so neither \
-                     value can be resolved; refused at load, where a cycle costs a config error \
-                     rather than a decision",
-                    pointer_for(at, &here.id),
-                    pointer_for(at, &next.id)
-                )));
-            }
-            seen.push(next.id.as_str());
-            here = next;
-        }
-    }
-    Ok(())
-}
-
-/// A single policy finding: the rule that fired and where, as a pointer only.
-///
-/// A finding never carries the matched bytes (non-negotiable rule 4) — only the
-/// rule id and a `path:line` location the caller can open.
-///
-/// The `severity` is the producing rule's — the value the exit contract
-/// consumes: a `deny` finding fails the run, a `warn` finding reports without
-/// failing it (CLOUD-49 promotes it). It rides along for that decision only; it
-/// is **never** an identity input (see [`crate::identity`] — re-rating a
-/// finding must not re-mint it).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Finding {
-    /// The [`Rule::id`] that produced this finding.
-    pub rule: String,
-    /// The ROW this finding belongs to, where that is not [`Finding::rule`]
-    /// (CLOUD-1087).
-    ///
-    /// `None` means "the rule id is the owner", which is true for every kind but
-    /// `policy` — a policy finding reports the PREDICATE's id (CLOUD-832), and a
-    /// module may carry many predicates under one row.
-    ///
-    /// # Why a field and not a lookup
-    ///
-    /// This replaces `Scan::attributed`, a side map keyed on the scope
-    /// fingerprint. Review of #721 raised the same objection twice in two
-    /// shapes — keyed on the predicate id, then keyed on the fingerprint — and
-    /// re-keying a third time answers the instance rather than the class. Both
-    /// rounds were saying that the owner was being INFERRED from a value that
-    /// means something else, when it can simply be RECORDED. A construction
-    /// where a `command` row's id equals a predicate id and its glob equals the
-    /// verdict token mints the same `scope_fingerprint`, so the map could hand
-    /// one row's findings to another; a field cannot collide, because nothing
-    /// is looked up.
-    ///
-    /// [`Finding::rule`] is deliberately untouched and keeps the predicate id:
-    /// reporting and [`crate::waiver::apply`] ask a different question and their
-    /// answer is already right.
-    ///
-    /// Engine-internal — it reaches no pointer and no record, so rule 4 needs no
-    /// new decision here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    /// The producing rule's [`Rule::severity`], for the exit-contract decision.
-    pub severity: RuleSeverity,
-    /// Where the violation is. A file-scoped kind reports the repo-relative
-    /// path (`/`-separated); a rule-scoped kind — a command whose exit code
-    /// condemns a whole batch rather than one line — reports the rule's `glob`,
-    /// which is the tightest honest pointer available for it.
-    pub path: String,
-    /// The 1-based line number of the offending line, when the kind locates one.
-    /// `None` for a rule-scoped finding.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line: Option<usize>,
-    /// The finding's identity, minted **engine-side** (CLOUD-164).
-    ///
-    /// Position is deliberately not an input: `line` moves when a neighbour is
-    /// inserted and this does not, which is what lets a store recognise the same
-    /// defect across an edit. Before this field existed the churn pack read the
-    /// matched line and hashed it test-side, which could pin the identity
-    /// *function* but never the extractor — there was none. This is the
-    /// extractor, and deleting that test-side join is how the pack now proves it
-    /// picks the right span.
-    pub identity: crate::identity::StoredIdentity,
-    /// The predicate that settles this finding, captured from the producing rule
-    /// (CLOUD-81). Carried on the finding rather than looked up later, so the
-    /// store never has to reach back into a config it cannot see.
-    pub check: Check,
-    /// The fix, or the stated reason there is none. `None` only for a rule
-    /// [`Rule::validate`] would have refused; [`crate::findings::record`]
-    /// refuses to store one.
-    pub remediation: Option<Remediation>,
-    /// Which of the producing kind's answers this finding is, where the kind
-    /// has more than one (CLOUD-1787).
-    ///
-    /// `None` for every kind whose findings mean one thing. A `document` row
-    /// has three — the node differs, the node is absent, the document could not
-    /// be read, and now a fourth: there is no document here — and they were
-    /// **computed and then dropped**, reaching only
-    /// [`crate::identity::code_fingerprint`]. So two findings with opposite
-    /// remedies printed the same `path:1 rule-id`, and an author told their
-    /// `tier` was wrong went looking at a `tier` that was correct. That is the
-    /// harm CLOUD-1787 reports first, and it is an OUTPUT defect: the decision
-    /// was always right.
-    ///
-    /// # Still a pointer (rule 4)
-    ///
-    /// A closed vocabulary of `&'static str` tokens the engine owns, never a
-    /// byte of the file. `no-document` says what the reader found, not what the
-    /// file says.
-    ///
-    /// Skipped when absent, so every finding that does not set one serialises
-    /// exactly as it did before — §6 movement is confined to the kind that
-    /// gained the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<&'static str>,
-    /// A policy finding's subjects other than the one [`Finding::path`] holds,
-    /// rendered, in the module's order (CLOUD-2213).
-    ///
-    /// `path` is one slot, so `issue file same` printed `at batten.toml` and
-    /// dropped the row id it judged. These ride the line after the pointer;
-    /// identity, admission and baseline still key on `path` alone, so nothing
-    /// already recorded moves.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub carried: Vec<String>,
-}
-
-/// The renderer this type went without (CLOUD-371).
-///
-/// Every other emitted type in the engine named its own `line`/`line_text`/
-/// `summary`; the most-emitted one had none, so its pointer shape lived as an
-/// inline `match` on [`Finding::line`] at two separate call sites in
-/// `lib.rs` — `run_policy_hooks` and `run_rules` — which is the asymmetry that
-/// proved the funnel was missing. The bytes below are exactly what both sites
-/// composed, moved rather than rewritten.
-///
-/// **Pointer only, and that is this type above all** (rule 4): the location and
-/// the rule that fired, never the offending line's text. A rule-scoped finding
-/// carries no line and prints its pointer without one rather than inventing a
-/// number it does not have — the `None` arm is a different pointer, not a
-/// degraded one.
-///
-/// One finding in the grammar every Batten finding takes (CLOUD-2145):
-/// `batten <severity> <id> at <path>[:<line>][ <reason>]`. The head names the
-/// source inside a task's interleaved output, where the command a reader ran
-/// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
-//MUTANT check-line-unheaded|s@^        let head = crate::refusal::head(self.severity.finding_severity(), \&self.rule);$@        let head = self.rule.clone();@|a_check_finding_line_labels_its_rule
-impl crate::output::Line for Finding {
-    fn line(&self) -> String {
-        let head = crate::refusal::head(self.severity.finding_severity(), &self.rule);
-        let mut at = match self.line {
-            Some(line) => format!("{head} at {}:{line}", self.path),
-            None => format!("{head} at {}", self.path),
-        };
-        for subject in &self.carried {
-            at.push(' ');
-            at.push_str(subject);
-        }
-        match self.reason {
-            Some(reason) => format!("{at} {reason}"),
-            None => at,
-        }
-    }
-}
+// `Finding` lives in `findings` (CLOUD-2789), beside the `Check` and
+// `Remediation` it carries, so the modules below `rules` can name a finding
+// without reaching up here.
+pub use crate::findings::Finding;
 
 /// Whether a rule kind's predicate decides its question or approximates it
 /// (CLOUD-331).
@@ -6618,6 +1594,10 @@ pub struct Scan {
     /// operator told only that a gate "errored" when the engine knows, and used
     /// to say, that a scanner and its own output disagreed.
     pub errored: BTreeMap<String, RuleFailure>,
+    /// The rows a split `enforce` left to the OTHER half (step 13a): neither
+    /// judged here nor withheld, so a baseline entry for one of them is the
+    /// other half's to apply and never stale in this one. Empty on an unsplit run.
+    pub other_half: BTreeSet<String>,
 }
 
 /// What a contained failure is reported as: its class, and the reason it gave.
@@ -6697,7 +1677,7 @@ enum Isolated {
 ///   "Batten could not answer" about a file they can fix, and would silently
 ///   move a landed contract (`enforce`'s missing-binary refusal) from `1` to
 ///   `3`;
-/// * a [`crate::error::Denial`] is a **verdict**. Containing it would downgrade
+/// * a [`crate::refusal::Denial`] is a **verdict**. Containing it would downgrade
 ///   a decided refusal into an infrastructure complaint — the identical mistake
 ///   CLOUD-126's own precedence row exists to refuse, arriving one layer down.
 ///
@@ -6721,7 +1701,7 @@ fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolat
         Ok(Ok(Some(why))) => Isolated::NotEvaluated(why),
         Ok(Err(failure)) => {
             if failure.downcast_ref::<UsageError>().is_some()
-                || failure.downcast_ref::<crate::error::Denial>().is_some()
+                || failure.downcast_ref::<crate::refusal::Denial>().is_some()
             {
                 Isolated::Propagate(failure)
             } else {
@@ -6785,6 +1765,8 @@ pub fn run_static(
         vocabulary,
         root,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
             // The tree verbs, so the surface their `Cost::Effect` facts are
@@ -6882,7 +1864,34 @@ pub struct RunOptions<'a> {
     /// admits: the fail-closed direction for a bound whose job is to stop a
     /// stale answer being trusted.
     pub now: Option<u64>,
+    /// Which half of a split `enforce` this run judges (step 13a), or `None`
+    /// for every row — what `enforce` has always meant.
+    ///
+    /// Partitioned after the bundles load, because a policy row's half is read
+    /// off its compiled modules. Under [`Half::Tree`] the backstop also nulls
+    /// every live key of the tree document and skips acquiring the live
+    /// families, so a misclassified row reads `null` rather than a moved world.
+    pub half: Option<Half>,
+    /// The refs a tree-half receipt keys the merge base of (`--keyed-base`), which
+    /// is what admits a `ratchet` row to [`Half::Tree`].
+    pub keyed_bases: &'a [String],
 }
+
+impl Half {
+    /// The stable lowercase token (§6), the `--half` spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Half::Tree => "tree",
+            Half::Live => "live",
+        }
+    }
+}
+
+/// The one `input.tree` key no fact carries: the could-not-look causes of the
+/// per-path facts the row itself declared. Under a tree-half row every declared
+/// fact is tree, so its causes are too.
+const TREE_MISSING_KEY: &str = "missing";
 
 /// Which files a run selects rules against (CLOUD-519).
 ///
@@ -6970,9 +1979,11 @@ fn run_static_inner(
     // process or reach the network, a property CLOUD-831 gates rather than
     // asserts. So admitting it here makes `check` MORE capable without making it
     // less honest, and the spawning refusal below is untouched.
-    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     // Refuse before any work: the read-only surface must not even begin a run
-    // it cannot complete honestly.
+    // it cannot complete honestly. BEFORE THE BUNDLES LOAD, too (#1276): loading
+    // first let an unreadable module's usage error answer for a config whose
+    // real refusal is the spawning kind, and which of the two a caller saw
+    // turned on what the loader could resolve.
     for rule in rules {
         if rule.kind.carries_ambient_authority() {
             // The refusal contract (CLOUD-122) covers this deny site too, and it
@@ -6994,6 +2005,7 @@ fn run_static_inner(
             ));
         }
     }
+    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     run(rules, &[], root, &bundles, vocabulary, opts)
 }
 
@@ -7079,6 +2091,8 @@ pub fn run_recorded(
         &bundles,
         vocabulary,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks,
             scope: &Scope::Tree,
             // The caller's surface: `Surface::Check` for the `state record`
@@ -7126,6 +2140,8 @@ pub fn run_all(
         vocabulary,
         root,
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
             // The tree verbs, so the surface their `Cost::Effect` facts are
@@ -7174,7 +2190,101 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary, opts)
+    let Some(half) = opts.half else {
+        return run(rules, provisions, root, &bundles, vocabulary, opts);
+    };
+    let (kept, bundles) = partition_half(rules, bundles, half, opts.keyed_bases, checks)?;
+    let mut scan = run(&kept, provisions, root, &bundles, vocabulary, opts)?;
+    scan.other_half = rules
+        .iter()
+        .filter(|rule| !kept.iter().any(|judged| judged.id == rule.id))
+        .map(|rule| rule.id.clone())
+        .collect();
+    Ok(scan)
+}
+
+/// The rows of `rules` that `half` judges, and the bundles they own (step 13a).
+///
+/// After [`crate::policy::load`], because a policy row's half is read off its
+/// compiled modules. A row the caller SELECTED by `--rule` that belongs to the
+/// other half is refused rather than dropped: a narrowed run that silently
+/// judged nothing would report a pass from a gate that never ran, which is
+/// exactly what `--rule`'s own unknown-id refusal exists to prevent.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the first selected row of the other half.
+pub fn partition_half(
+    rules: &[Rule],
+    bundles: Vec<crate::policy::Bundle>,
+    half: Half,
+    keyed_bases: &[String],
+    checks: crate::policy::ModuleChecks,
+) -> anyhow::Result<(Vec<Rule>, Vec<crate::policy::Bundle>)> {
+    let (kept, other): (Vec<&Rule>, Vec<&Rule>) = rules.iter().partition(|rule| {
+        let bundle = bundles.iter().find(|bundle| bundle.id() == rule.id);
+        rule.half(bundle, keyed_bases) == half
+    });
+    if checks == crate::policy::ModuleChecks::RunOverSelection
+        && let Some(rule) = other.first()
+    {
+        return Err(UsageError::raise(format!(
+            "rule `{}` is judged by the other half of a split `enforce`, not `--half {}`; \
+             select it under `--half {}`, or drop `--half`",
+            rule.id,
+            half.as_str(),
+            match half {
+                Half::Tree => Half::Live.as_str(),
+                Half::Live => Half::Tree.as_str(),
+            }
+        )));
+    }
+    let kept: Vec<Rule> = kept.into_iter().cloned().collect();
+    let bundles = bundles
+        .into_iter()
+        .filter(|bundle| kept.iter().any(|rule| rule.id == bundle.id()))
+        .collect();
+    Ok((kept, bundles))
+}
+
+/// The tree half's backstop (step 13a): `document` with every live key of
+/// `input.tree` set to `null`.
+///
+/// [`Rule::half`] is what keeps a live read out of the tree half; this is what
+/// keeps a misclassification from reaching a module as a moved world. `null` is
+/// could-not-look on every tree key, so a module reading one stays silent
+/// rather than judging state the receipt does not key. A key no fact carries,
+/// bar `missing`, is nulled too — unknown is live. A document that will not
+/// parse is returned unchanged, since the engine refuses it as before.
+#[must_use]
+pub fn null_live_keys(document: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(document) else {
+        return document.to_owned();
+    };
+    if let Some(tree) = value
+        .get_mut("tree")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (key, slot) in tree.iter_mut() {
+            let tree_fact = key == TREE_MISSING_KEY
+                || crate::facts::Fact::from_tree_key(key)
+                    .is_some_and(|fact| fact.subject() == crate::facts::Subject::Tree);
+            if !tree_fact {
+                *slot = serde_json::Value::Null;
+            }
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| document.to_owned())
+}
+
+/// How many threads evaluate a surface's due rules: one on the hook, which
+/// `rules/rust.md` holds to a single thread, else every core.
+fn workers_for(surface: crate::facts::Surface) -> usize {
+    if surface == crate::facts::Surface::Hook {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+    }
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -7211,7 +2321,12 @@ fn run(
         scope,
         surface,
         now,
+        half,
+        keyed_bases: _,
     } = opts;
+    // The tree half's backstop (step 13a): the families no tree row declares are
+    // not acquired at all, and `null_live_keys` nulls what remains.
+    let tree_half = half == Some(Half::Tree);
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
     // The narrowed selection, computed once beside the walk. Every acquisition
@@ -7246,20 +2361,20 @@ fn run(
     // 4.76ms -> 10.01ms (2.103x) against the merge base — `perf-compare` refused
     // the branch — for a question no rule in the set had asked. A run whose rules
     // declare no sink now does exactly what it did before this row landed.
-    let produced = if crate::sink::any_declared(rules) {
+    let produced = if !tree_half && crate::sink::any_declared(declared_sinks(rules)) {
         match crate::git::git_dir(root) {
             Err(_) => BTreeMap::new(),
             Ok(git_dir) => {
                 // The branch is a second read, so it is resolved only when a sink is
                 // keyed by one — the economy `receipt::verdicts` already states.
-                let branch = if crate::sink::any_branch_keyed(rules) {
+                let branch = if crate::sink::any_branch_keyed(declared_sinks(rules)) {
                     crate::git::current_branch(root).ok().flatten()
                 } else {
                     None
                 };
                 crate::sink::store(
                     &git_dir,
-                    &crate::sink::declared_records(rules, branch.as_deref()),
+                    &crate::sink::declared_records(declared_sinks(rules), branch.as_deref()),
                 )?
             }
         }
@@ -7325,7 +2440,7 @@ fn run(
     // reads and parses every response in the store, so a run whose rows ask for
     // none must not pay for one.
     let captured = captured_facts(rules, root);
-    let state = if declared_state.is_empty() {
+    let state = if tree_half || declared_state.is_empty() {
         None
     } else {
         crate::store::resolve(root)
@@ -7360,24 +2475,7 @@ fn run(
     // liveness depend on a table it has nothing to do with.
     // `record_key`, not `current_branch`: the key the producers wrote under, which
     // on a detached HEAD (every CI checkout) is the commit rather than nothing.
-    let records = match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) => recorder_records(
-            &git_dir,
-            &branch,
-            recorders,
-            vocabulary.records,
-            crate::record::VERB_WRITTEN,
-        ),
-        _ => BTreeMap::new(),
-    };
-    // CLOUD-1126, read UNCONDITIONALLY for `VERB_WRITTEN`'s reason: the engine
-    // owns both the writer and the reader of this store, so there is no
-    // declaration a consumer could forget and nothing to make the read
-    // conditional on.
-    let records_blocked = match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) => recorder_blocked(&git_dir, &branch),
-        _ => BTreeMap::new(),
-    };
+    let (records, records_blocked) = recorded_stores(root, recorders, vocabulary, tree_half);
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
     // `registry_for` is the one authority on it, and a vendored class replaces a
@@ -7409,6 +2507,7 @@ fn run(
         bundles,
         verdicts: &registry,
         tables: &tables,
+        half,
     };
 
     let mut scan = Scan::default();
@@ -7484,6 +2583,7 @@ fn evaluate_rules(
     inputs: &RunInputs<'_>,
     scan: &mut Scan,
 ) -> anyhow::Result<()> {
+    let mut due: Vec<&Rule> = Vec::new();
     for rule in rules {
         // A COPY BEHIND ITS PRESET (CLOUD-2290), on the tree verbs only and for
         // every scope: an ejected module usually decides the mediated call, which
@@ -7560,36 +2660,40 @@ fn evaluate_rules(
         // the state this row found, where nothing reported and the largest item
         // in CI was a silent span.
         //
-        // Deltas over the process-global counters rather than an accumulator
-        // threaded through nine read sites. Sound because this loop is serial,
-        // which `rules/rust.md` records as a measured verdict rather
-        // than an accident.
+        // Deltas over this THREAD's read counters ([`thread_reads`]) rather
+        // than an accumulator threaded through nine read sites: rules run side
+        // by side off the hook surface (#1276), so the process-global counters
+        // interleave and only a thread's own count is one rule's.
         //
         // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
         // precondition skip above puts it: a rule held back by an unmet
         // requirement never enters the body, so it has no cost to report and a
         // zero row for it would read as "evaluated, and free".
-        let started = std::time::Instant::now();
-        let (files_before, bytes_before) = (files_read(), bytes_read());
-        let outcome = {
-            let Scan {
-                findings, classes, ..
-            } = &mut *scan;
-            isolate(|| run_rule(rule, root, inputs, findings, classes))
-        };
-        costs_lock().push(RuleCost {
-            rule: rule.id.clone(),
-            elapsed: started.elapsed(),
-            files_read: files_read().saturating_sub(files_before),
-            bytes_read: bytes_read().saturating_sub(bytes_before),
-        });
-        match outcome {
+        due.push(rule);
+    }
+    // EVERY DUE RULE IS EVALUATED, THEN FOLDED IN DECLARATION ORDER (#1276).
+    // The loop above stays serial: it is cheap and writes the scan in order.
+    // Evaluation runs on `workers` threads off the tree verbs — measured on
+    // #1276, `enforce --half live` spent ~200 s on one core of four, every
+    // rule reading shared, read-only inputs and writing only its own findings
+    // and classes. Each rule fills its own buffers and they are folded in the
+    // order the table declares, so the output is byte-for-byte what the serial
+    // loop produced (§6). The hook surface stays on one thread: `rules/rust.md`
+    // holds `batten hook` to at most one runtime and never a multi-thread one.
+    let workers = workers_for(inputs.surface);
+    let evaluated = evaluate_due(&due, root, inputs, workers);
+    for (rule, done) in due.iter().zip(evaluated) {
+        scan.findings.extend(done.findings);
+        scan.classes.extend(done.classes);
+        costs_lock().push(done.cost);
+        match done.outcome {
             Isolated::Evaluated => {}
             Isolated::NotEvaluated(why) => {
                 scan.not_evaluated.insert(rule.id.clone(), why);
             }
             // A typed answer the boundary owns — see `isolate` for why these two
-            // are not a gate's to contain.
+            // are not a gate's to contain. The first in declaration order wins,
+            // as it did when the loop stopped there.
             Isolated::Propagate(failure) => return Err(failure),
             Isolated::Errored(failure) => {
                 // Both maps, and both are load-bearing: `not_evaluated` is what
@@ -7603,6 +2707,94 @@ fn evaluate_rules(
         }
     }
     Ok(())
+}
+
+/// One rule's evaluation, held until it is folded in declaration order.
+struct Evaluated {
+    findings: Vec<Finding>,
+    classes: BTreeMap<String, String>,
+    outcome: Isolated,
+    cost: RuleCost,
+}
+
+/// Evaluate each of `due` on up to `workers` scoped threads, answering in
+/// `due`'s order. A worker takes the next index until none is left, so a slow
+/// rule holds one thread and the rest drain past it.
+///
+/// THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind (CLOUD-1217),
+/// and its read counts are THIS THREAD'S ([`thread_reads`]): the process-wide
+/// counters interleave once rules run side by side.
+fn evaluate_due(
+    due: &[&Rule],
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    workers: usize,
+) -> Vec<Evaluated> {
+    let one = |rule: &Rule| {
+        let started = std::time::Instant::now();
+        let (files_before, bytes_before) = thread_reads();
+        let mut findings = Vec::new();
+        let mut classes = BTreeMap::new();
+        let outcome = isolate(|| run_rule(rule, root, inputs, &mut findings, &mut classes));
+        let (files_after, bytes_after) = thread_reads();
+        Evaluated {
+            findings,
+            classes,
+            outcome,
+            cost: RuleCost {
+                rule: rule.id.clone(),
+                elapsed: started.elapsed(),
+                files_read: files_after.saturating_sub(files_before),
+                bytes_read: bytes_after.saturating_sub(bytes_before),
+            },
+        }
+    };
+    let workers = workers.clamp(1, due.len().max(1));
+    if workers == 1 {
+        return due.iter().map(|rule| one(rule)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<Evaluated>>> = due.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(rule) = due.get(at) else {
+                        break;
+                    };
+                    let done = one(rule);
+                    if let Some(slot) = slots.get(at) {
+                        *slot
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(done);
+                    }
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .zip(due)
+        .map(|(slot, rule)| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(|| Evaluated {
+                    findings: Vec::new(),
+                    classes: BTreeMap::new(),
+                    outcome: Isolated::Errored(RuleFailure {
+                        class: ErrorClass::Panic,
+                        reason: String::new(),
+                    }),
+                    cost: RuleCost {
+                        rule: rule.id.clone(),
+                        elapsed: std::time::Duration::ZERO,
+                        files_read: 0,
+                        bytes_read: 0,
+                    },
+                })
+        })
+        .collect()
 }
 
 /// What the run asks the boundary to write (CLOUD-851).
@@ -7664,7 +2856,7 @@ fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
                 digest: if sink.kind == crate::facts::Production::Marker {
                     String::new()
                 } else {
-                    crate::receipt::hex_sha256(subject.as_bytes())
+                    crate::digest::sha256_hex(subject.as_bytes())
                 },
                 count,
             })
@@ -7774,7 +2966,7 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
     let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return BTreeMap::new();
     };
     text.lines()
@@ -7792,13 +2984,10 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
 // The second replaces the declaration with a hardcoded name, which is the
 // ambient sweep this table exists to refuse — it passes the present case and
 // only a case asserting that an UNDECLARED family stays unprojected can see it.
-//MUTANT-SUITE crates/batten/tests/it/record_families.rs
-//MUTANT declared-family-unprojected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@@|a_declared_family_reaches_the_module_that_reads_it
-//MUTANT undeclared-family-projected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@        .chain(std::iter::once("measured"))@|an_undeclared_family_is_not_projected_whatever_the_store_holds
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
-    recorders: &[crate::recorder::Declared],
+    recorders: &[crate::config_model::RecorderDeclared],
     // The verb-written families this repository declares (CLOUD-1810). A THIRD
     // source beside the two below rather than an extension of either, because the
     // three differ in who writes them: a `[[recorder]]` row is filled from a
@@ -7808,7 +2997,7 @@ fn recorder_records(
     // Without it a `record named` family was in no source at all, so its key never
     // reached `input.tree.records`, every rule beneath it was undefined, and the
     // row reading it reported clean over a record that said otherwise.
-    families: &[crate::record::Declared],
+    families: &[crate::config_model::RecordDeclared],
     verb_written: &[&str],
 ) -> BTreeMap<String, Vec<String>> {
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -7858,7 +3047,7 @@ fn recorder_records(
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value
         // is the empty list — "nothing was recorded" rather than "nothing looked".
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
@@ -7876,7 +3065,37 @@ fn recorder_records(
 /// the provisions and bundles the config carries. Grouped rather than passed
 /// one by one because it is exactly the set `run` hoists above its loop, and
 /// because it grows by a field every time an acquisition row lands.
+/// The record stores a run projects: the recorder and family lines, and the
+/// blocked rows (CLOUD-1126) — both read UNCONDITIONALLY for `VERB_WRITTEN`'s
+/// reason, since the engine owns both the writer and the reader, so there is no
+/// declaration a consumer could forget and nothing to make the read conditional
+/// on. Neither is read by the tree half (step 13a): both are live state no tree
+/// key covers.
+fn recorded_stores(
+    root: &Path,
+    recorders: &[crate::config_model::RecorderDeclared],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    tree_half: bool,
+) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
+    match (crate::git::git_dir(root), crate::git::record_key(root)) {
+        (Ok(git_dir), Ok(branch)) if !tree_half => (
+            recorder_records(
+                &git_dir,
+                &branch,
+                recorders,
+                vocabulary.records,
+                crate::config_check::record::VERB_WRITTEN,
+            ),
+            recorder_blocked(&git_dir, &branch),
+        ),
+        _ => (BTreeMap::new(), BTreeMap::new()),
+    }
+}
+
 struct RunInputs<'a> {
+    /// Which half of a split `enforce` this run judges (step 13a); under
+    /// [`Half::Tree`] the tree document passes through [`null_live_keys`].
+    half: Option<Half>,
     provisions: &'a [crate::provision::Provision],
     files: &'a [String],
     /// The file set a rule is SELECTED against, which is `files` narrowed by the
@@ -8290,11 +3509,10 @@ pub fn documents_acquired() -> usize {
 /// passes, and the two conservation walks — which is precisely the population the
 /// cache never covered.
 ///
-/// **Monotonic and process-global, read as a DELTA around one rule**, which is
-/// what makes the per-rule attribution possible without threading an accumulator
-/// through nine call sites. Sound only because [`run`]'s loop is serial; a
-/// concurrent second run in the same process would interleave, which is why the
-/// test that reads them lives in its own binary, exactly as
+/// **Monotonic and process-global.** A rule's census reads its delta from
+/// [`thread_reads`], this thread's share, because rules run side by side off
+/// the hook surface (#1276); these stay the process totals a test reads, which
+/// is why that test lives in its own binary, exactly as
 /// `document_read_count.rs` does and for the same reason.
 static FILES_READ: AtomicUsize = AtomicUsize::new(0);
 static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
@@ -8307,6 +3525,21 @@ static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
 fn count_read(bytes: usize) {
     FILES_READ.fetch_add(1, Ordering::Relaxed);
     BYTES_READ.fetch_add(bytes, Ordering::Relaxed);
+    THREAD_READS.with(|reads| {
+        let (files, total) = reads.get();
+        reads.set((files + 1, total + bytes));
+    });
+}
+
+thread_local! {
+    /// This thread's share of [`FILES_READ`] and [`BYTES_READ`]: what a rule's
+    /// census reads as its delta once rules run side by side (#1276).
+    static THREAD_READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The files and bytes this thread has read on a rule's behalf.
+fn thread_reads() -> (usize, usize) {
+    THREAD_READS.with(std::cell::Cell::get)
 }
 
 /// How many files this process has read on a rule's behalf.
@@ -8389,7 +3622,7 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
     // work is actually spent, and the `UnknownFormat` arm above deliberately
     // costs nothing and is deliberately not counted.
     DOCUMENTS_ACQUIRED.fetch_add(1, Ordering::Relaxed);
-    let bytes = match fs::read(root.join(rel_path)) {
+    let bytes = match crate::fsio::read(root.join(rel_path)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Acquired::No(NotAcquired::Absent);
@@ -9117,34 +4350,6 @@ pub(crate) struct Resolved<'a> {
     pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
 }
 
-pub(crate) struct Declared<'a> {
-    /// Files a row declared as parsed documents.
-    pub documents: &'a [String],
-    /// Files a row declared as line sets.
-    pub lines: &'a [String],
-    /// Rust files a row declared as call sites.
-    pub invocations: &'a [String],
-    /// Rust files a row declared as a `use` graph.
-    pub uses: &'a [String],
-    /// The paths this row declared a STAGED read of (CLOUD-1203).
-    ///
-    /// The ROW's own list rather than the run's, which is what scopes the read to
-    /// the declaration: another row's staged path is not in this document.
-    pub staged: &'a [String],
-    /// The `[[rule.external]]` rows this row declared (CLOUD-1167).
-    ///
-    /// The ROW's own rows rather than the run's, which is what scopes the read
-    /// to the declaration: another row's `external` id is not in this document,
-    /// so a module cannot reach a file its own row did not name.
-    pub external: &'a [crate::facts::Rooted],
-    /// The format to read a STAGED path with when its extension names none.
-    ///
-    /// `None` is the ordinary case and means the extension is the only authority.
-    /// See the `format` column's own note on why this is a fallback rather than
-    /// an override.
-    pub staged_format: Option<crate::facts::Format>,
-}
-
 /// Project the `use` family, resolving every edge against ONE re-export table.
 ///
 /// Separate from [`project_declared`] rather than folded into it, and the reason
@@ -9717,8 +4922,6 @@ fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_
 /// ask, so [`crate::facts::Look::CouldNotLook`] is the arm. Both project `null`
 /// today, which is exactly why the distinction has to be right here rather than
 /// in whichever arm happens to render the same.
-//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-//MUTANT mediated-spawn-permitted|s@^    let admitted = \x7cclass: crate::facts::Class\x7c class.resolvable_on(surface);$@    let admitted = \x7cclass: crate::facts::Class\x7c { let _ = (class, surface); true };@|the_mediated_verb_spawns_nothing_on_any_event
 fn effect_facts(
     rules: &[Rule],
     root: &Path,
@@ -10107,7 +5310,10 @@ pub(crate) fn tree_document(
             // CLOUD-1978: hook-surface; its question is about a call's argument.
             | crate::facts::Fact::DispatchCleared
             // CLOUD-2270: hook-surface; its question is about a push.
-            | crate::facts::Fact::RedHead => continue,
+            | crate::facts::Fact::RedHead
+            | crate::facts::Fact::LandLive
+            | crate::facts::Fact::PathspecStatus
+            | crate::facts::Fact::Budgeted => continue,
         };
         tree.insert(key.to_owned(), value);
     }
@@ -10231,13 +5437,14 @@ fn ejected_behind(
         (None, None) => return,
     };
     for path in paths {
-        let Ok(source) = std::fs::read_to_string(root.join(&path)) else {
+        let Ok(source) = crate::fsio::read_to_string(root.join(&path)) else {
             continue;
         };
         let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
             continue;
         };
-        let Some(shipped) = crate::preset::find(&preset).map(|manifest| manifest.version) else {
+        let Some(shipped) = crate::preset_catalog::find(&preset).map(|manifest| manifest.version)
+        else {
             continue;
         };
         if recorded >= shipped {
@@ -10257,7 +5464,7 @@ fn ejected_behind(
             )],
             owner: Some(rule.id.clone()),
             rule: MODULE_PIN_STALE.to_owned(),
-            severity: RuleSeverity::Warn,
+            severity: RuleSeverity::Advise,
             path,
             line: Some(1),
             identity: identity_of(rule, identity::FindingKind::Code, default),
@@ -10367,6 +5574,11 @@ fn policy_rule(
         tracked,
         &resolved_of(inputs),
     );
+    let input = if inputs.half == Some(Half::Tree) {
+        null_live_keys(&input)
+    } else {
+        input
+    };
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
         return Some(NotObserved::RuleSkipped);
     };
@@ -10581,7 +5793,6 @@ fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Optio
 }
 
 /// Every subject but the one [`first_pointer`] chose, rendered (CLOUD-2213).
-//MUTANT carried-subjects-dropped|s@^        .filter(\x7c(index, _)\x7c Some(\*index) != skip)$@        .filter(\x7c(index, _)\x7c Some(*index) != skip \&\& false)@|a_policy_findings_other_subjects_ride_its_line
 fn carried_subjects(subjects: &[crate::verdict::Subject]) -> Vec<String> {
     let skip = pointer_index(subjects);
     subjects
@@ -10622,6 +5833,621 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
     }
 }
 
+/// What one file counts under a ratchet row.
+///
+/// # Errors
+///
+/// Returns an error when `regex` does not compile; `validate` has refused that
+/// at load, so this is the belt to its suspenders.
+fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + '_> {
+    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
+    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
+    // so the `None` arm is unreachable and counts nothing.
+    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
+    // Or the token measure `policy budget` takes per file (CLOUD-2663): the same
+    // function over the same loaded text, so the ratchet and the budget cannot
+    // disagree about one file.
+    // NEITHER A LITERAL NOR AN EXPRESSION IS THE TOKEN MEASURE: `validate`
+    // admits exactly one of the three, and refuses any ratchet `counts` but
+    // `tokens` (`validate_ratchet_measure`).
+    // Or a lint's escapes, read off the parsed syntax (#1276): `pattern` names
+    // the lint, and the count is of attributes, never of text.
+    let lint = rule
+        .pattern
+        .as_deref()
+        .filter(|_| rule.counts == Some(CeilingUnit::LintEscapes));
+    Ok(move |text: &str| {
+        if let Some(lint) = lint {
+            return crate::codemod::lint_escapes(text, crate::codemod::Edition::E2024, lint);
+        }
+        match (&expression, rule.pattern.as_deref()) {
+            (Some(expression), _) => expression.find_iter(text).count(),
+            (None, Some(pattern)) => text.matches(pattern).count(),
+            (None, None) => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
+        }
+    })
+}
+
+/// One ratchet row a mediated write would move the banned way (CLOUD-2692).
+///
+/// `was` and `now` are the written file's own count before and after the write:
+/// the pointer a reader needs to find what moved. The row is the subject, so a
+/// waiver keyed on its id answers it at the call as it does in `check`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct CallRatchet {
+    /// The row's id.
+    pub rule: String,
+    /// The written path.
+    pub path: String,
+    /// The path's count before the write.
+    pub was: usize,
+    /// The path's count after it.
+    pub now: usize,
+}
+
+/// Whether `rule` is a ratchet a mediated write can be judged against
+/// (CLOUD-2692).
+///
+/// Every ratchet but the two whose admission reads subject facts: `retires_with`
+/// asks whether a declared subject died, and `conserves` maps case names across
+/// the whole set, and neither is a single-file question. Those stay `check`'s.
+#[must_use]
+pub fn judged_at_call(rule: &Rule) -> bool {
+    rule.kind == RuleKind::Ratchet
+        && rule.severity() != RuleSeverity::Allow
+        && rule.direction.is_some()
+        && rule.base.is_some()
+        && rule.glob.is_some()
+        && rule.retires_with.is_none()
+        && rule.conserves.is_none()
+}
+
+/// The cache format; bump when [`BlobCounts`], [`FileCounts`] or a key's
+/// inputs change.
+const CALL_RATCHET_FORMAT: &str = "batten-call-ratchet-4";
+
+/// What a row counts, as cache-key bytes: two rows with the same counter share
+/// their counts, and a row whose counter changed reads none of its old ones.
+fn counter_key(rule: &Rule) -> Vec<u8> {
+    format!(
+        "{}\0{}\0{:?}",
+        rule.pattern.as_deref().unwrap_or_default(),
+        rule.regex.as_deref().unwrap_or_default(),
+        rule.counts
+    )
+    .into_bytes()
+}
+
+/// One persisted count table under the cache's `ratchet-counts` directory,
+/// keyed by `name` within this repository and counter.
+fn count_entry(
+    cache: Option<&Path>,
+    root: &Path,
+    counter: &[u8],
+    name: &str,
+) -> Option<(std::path::PathBuf, String)> {
+    cache.map(|dir| {
+        let at = dir.join("ratchet-counts").join(
+            blake3::hash(
+                &[
+                    root.display().to_string().as_bytes(),
+                    b"\0",
+                    name.as_bytes(),
+                    b"\0",
+                    counter,
+                ]
+                .concat(),
+            )
+            .to_hex()
+            .as_str(),
+        );
+        (
+            at,
+            crate::cache::key(CALL_RATCHET_FORMAT, &[name.as_bytes(), counter]),
+        )
+    })
+}
+
+/// Each committed blob's count under one counter, by blob id, persisted
+/// (CLOUD-2692).
+///
+/// **A count is a pure function of a blob's content and the counter**, so it is
+/// cached by content: a blob is read and counted once, ever. The blobs asked
+/// for are the merge base's, which every branch and session shares, so after
+/// the first call on a base they are all held.
+struct BlobCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, usize>,
+    added: bool,
+}
+
+impl BlobCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "blobs");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    fn missing<'a>(&self, ids: &[&'a str]) -> Vec<&'a str> {
+        ids.iter()
+            .copied()
+            .filter(|id| !self.counts.contains_key(*id))
+            .collect()
+    }
+
+    fn get(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.counts.get(id)).copied().unwrap_or(0)
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// What a working file's count is keyed by: the file's identity and the stat
+/// fields any write moves, git's index heuristic. A file whose key is unchanged
+/// is not read again.
+type Stamp = (u64, u64, u64, i128);
+
+/// Each working file's count under one counter, by path, keyed by its
+/// [`Stamp`], persisted (CLOUD-2692).
+///
+/// **The working side is read from the files, never from HEAD's blobs**: the
+/// sum the row asks about is the tree as it stands, which a file read answers
+/// directly, uncompressed, and an uncommitted edit to a changed path is counted
+/// where a HEAD read would have missed it. A file is re-read only when its
+/// stamp moved.
+struct FileCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, (Stamp, usize)>,
+    added: bool,
+}
+
+impl FileCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "files");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    /// The held count of `path`, when it was taken at `stamp`.
+    fn fresh(&self, path: &str, stamp: Stamp) -> Option<usize> {
+        self.counts
+            .get(path)
+            .filter(|(held, _)| *held == stamp)
+            .map(|(_, count)| *count)
+    }
+
+    fn put(&mut self, path: &str, stamp: Stamp, count: usize) {
+        self.counts.insert(path.to_owned(), (stamp, count));
+        self.added = true;
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// A file's [`Stamp`]: device, inode, size and modification time in
+/// nanoseconds. Off unix the identity half is zero and size and time decide.
+fn stamp(meta: &fs::Metadata) -> Stamp {
+    #[cfg(unix)]
+    let (dev, ino) = {
+        use std::os::unix::fs::MetadataExt as _;
+        (meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let (dev, ino) = (0, 0);
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| {
+            i128::try_from(since.as_nanos()).unwrap_or(i128::MAX)
+        });
+    (dev, ino, meta.len(), modified)
+}
+
+/// A count as a signed quantity, for the movement arithmetic.
+fn signed(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// Judge the ratchet rows a mediated write to `target` selects (CLOUD-2692):
+/// each row the write moves the banned way past its base.
+///
+/// `current` is the target's text now (`None` for a new file) and `projected`
+/// its text after the write. Cheapest first:
+///
+/// * **The write's own move**, with no read at all: a write that holds or
+///   moves the file's count the allowed way is never refused, so a repair of a
+///   standing breach goes through, and a rise the row's `admits_with` token
+///   declares in the written text is admitted, as `check` admits it.
+/// * **`per_file`**: the projected file against its own count at the merge
+///   base. A path absent at the base has no ceiling and is not judged.
+/// * **Aggregate**: the sum's movement from the merge base, over the paths the
+///   branch changed, plus the target: each path's count in the WORKING TREE
+///   (the target's projected) less its count at the base. A path the tree diff
+///   does not name holds the same count on both sides, so it cannot move the
+///   sum, and is never read.
+///
+/// **Every read is put in flight before any is made**: readahead is submitted
+/// for every changed working file, and for the packs when a base count is not
+/// yet held, so a cold page cache returns all the bytes at the device's queue
+/// depth rather than one fault at a time. Working counts are keyed by each
+/// file's stat and base counts by blob id, so a warm call reads nothing but the
+/// target.
+///
+/// **Uncommitted edits to files no commit changed are not read**: the one
+/// primitive that sees them, the worktree status, measured 91 ms here. `check`
+/// still judges the whole tree.
+///
+/// # Errors
+///
+/// When a row's counter does not compile, or git cannot read the repository.
+pub fn ratchets_at_call(
+    rules: &[&Rule],
+    root: &Path,
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Vec<CallRatchet>> {
+    let moving = moving_rows(rules, target, current, projected)?;
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut counters = counter_states(&moving, root, cache)?;
+    let sets = changed_sets(&moving, root, target, cache)?;
+    let stamps = working_stamps(&sets, root, target);
+    count_base(&sets, &mut counters, root)?;
+    count_working(&stamps, &mut counters, root);
+    let found = moving
+        .into_iter()
+        .filter_map(|row| judge(row, &sets, &counters, &stamps, target))
+        .collect();
+    for state in counters.values() {
+        state.blobs.save();
+        state.files.save();
+    }
+    Ok(found)
+}
+
+/// A row this write moves in its banned direction: the row, its direction, base
+/// and glob, and the target's count before and after the write.
+type Moving<'a> = (&'a Rule, Direction, &'a str, &'a str, usize, usize);
+
+/// The rows the write's own move breaches, with no IO: everything later reads
+/// only for these.
+fn moving_rows<'a>(
+    rules: &[&'a Rule],
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+) -> anyhow::Result<Vec<Moving<'a>>> {
+    let mut moving = Vec::new();
+    for rule in rules {
+        let (Some(direction), Some(base), Some(glob)) =
+            (rule.direction, rule.base.as_deref(), rule.glob.as_deref())
+        else {
+            continue;
+        };
+        if !judged_at_call(rule) || !glob_match(glob, target) {
+            continue;
+        }
+        let tally = ratchet_tally(rule)?;
+        let was = current.map_or(0, &tally);
+        let now = tally(projected);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        // A RISE, said by the direction: a violated row moved, so a
+        // non-increasing one rose and a non-decreasing one fell.
+        if direction == Direction::NonIncreasing
+            && let Some(token) = rule.admits_with.as_deref()
+            && !declared_subject(projected, token).is_empty()
+        {
+            continue;
+        }
+        moving.push((*rule, direction, base, glob, was, now));
+    }
+    Ok(moving)
+}
+
+/// ONE COUNTER PER DISTINCT DEFINITION, each with its own persisted tables, so
+/// every blob and file is read once and counted for all of them.
+fn counter_states<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<Vec<u8>, CounterState<'a>>> {
+    let mut counters: BTreeMap<Vec<u8>, CounterState<'a>> = BTreeMap::new();
+    for (rule, ..) in moving {
+        if let std::collections::btree_map::Entry::Vacant(slot) = counters.entry(counter_key(rule))
+        {
+            let key = slot.key().clone();
+            slot.insert(CounterState {
+                tally: Box::new(ratchet_tally(rule)?),
+                blobs: BlobCounts::load(&key, root, cache),
+                files: FileCounts::load(&key, root, cache),
+            });
+        }
+    }
+    Ok(counters)
+}
+
+/// THE CHANGED SET per (base, glob), keyed by (HEAD, base, glob): two id
+/// lookups through one open, so a warm call walks no commit graph and diffs no
+/// tree.
+fn changed_sets<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<(&'a str, &'a str), Changed>> {
+    let refs: Vec<&str> = std::iter::once("HEAD")
+        .chain(moving.iter().map(|(_, _, base, ..)| *base))
+        .collect();
+    let ids = crate::git::rev_ids(root, &refs)?;
+    let head = ids.first().cloned().flatten().unwrap_or_default();
+    let mut sets: BTreeMap<(&str, &str), Changed> = BTreeMap::new();
+    for (index, (_, _, base, glob, ..)) in moving.iter().enumerate() {
+        if sets.contains_key(&(*base, *glob)) {
+            continue;
+        }
+        let base_id = ids.get(index + 1).cloned().flatten().unwrap_or_default();
+        let changed = changed_set(root, &head, base, &base_id, glob, target, cache)?;
+        sets.insert((*base, *glob), changed);
+    }
+    Ok(sets)
+}
+
+/// Each changed working file's stat, the target excepted (its count is the
+/// projected one).
+fn working_stamps<'s>(
+    sets: &'s BTreeMap<(&str, &str), Changed>,
+    root: &Path,
+    target: &str,
+) -> BTreeMap<&'s str, Option<Stamp>> {
+    let mut stamps: BTreeMap<&str, Option<Stamp>> = BTreeMap::new();
+    for changed in sets.values() {
+        for (path, _) in &changed.paths {
+            if path != target {
+                stamps
+                    .entry(path.as_str())
+                    .or_insert_with(|| fs::metadata(root.join(path)).ok().map(|meta| stamp(&meta)));
+            }
+        }
+    }
+    stamps
+}
+
+/// The base side: each blob no counter holds, inflated once and in parallel,
+/// counted for every counter inside its reader. EVERY READ IN FLIGHT BEFORE
+/// ANY IS MADE (operator ruling, 2026-11-11): the packs are prefetched first.
+fn count_base(
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) -> anyhow::Result<()> {
+    let base_ids: BTreeSet<&str> = sets
+        .values()
+        .flat_map(|changed| changed.paths.iter().filter_map(|(_, id)| id.as_deref()))
+        .collect();
+    let base_ids: Vec<&str> = base_ids.into_iter().collect();
+    let unread: BTreeSet<&str> = counters
+        .values()
+        .flat_map(|state| state.blobs.missing(&base_ids))
+        .collect();
+    if unread.is_empty() {
+        return Ok(());
+    }
+    let _ = crate::git::prefetch_packs(root);
+    let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
+        counters.values().map(|state| &*state.tally).collect();
+    let unread: Vec<&str> = unread.into_iter().collect();
+    let counted = crate::git::map_blobs(root, &unread, &|text: &str| {
+        tallies
+            .iter()
+            .map(|tally| tally(text))
+            .collect::<Vec<usize>>()
+    })?;
+    for (index, state) in counters.values_mut().enumerate() {
+        for id in &unread {
+            let count = counted.get(*id).map_or(0, |counts| counts[index]);
+            state.blobs.counts.insert((*id).to_owned(), count);
+        }
+        state.blobs.added = true;
+    }
+    Ok(())
+}
+
+/// The working side: every file a counter does not hold at its stamp, read in
+/// one completion batch and counted once for every counter.
+fn count_working(
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) {
+    let stale: Vec<&str> = stamps
+        .iter()
+        .filter_map(|(path, stamped)| {
+            let stamped = (*stamped)?;
+            counters
+                .values()
+                .any(|state| state.files.fresh(path, stamped).is_none())
+                .then_some(*path)
+        })
+        .collect();
+    let sized: Vec<(std::path::PathBuf, u64)> = stale
+        .iter()
+        .map(|path| {
+            let size = stamps
+                .get(path)
+                .copied()
+                .flatten()
+                .map_or(0, |(_, _, size, _)| size);
+            (root.join(path), size)
+        })
+        .collect();
+    let texts: Vec<Option<String>> = crate::fsio::read_many(&sized)
+        .into_iter()
+        .map(|bytes| bytes.and_then(|bytes| String::from_utf8(bytes).ok()))
+        .collect();
+    for (path, text) in stale.iter().zip(texts) {
+        let Some(Some(stamped)) = stamps.get(path) else {
+            continue;
+        };
+        let text = text.unwrap_or_default();
+        for state in counters.values_mut() {
+            state.files.put(path, *stamped, (state.tally)(&text));
+        }
+    }
+}
+
+/// One moving row's verdict: a per-file row against the target's base blob, an
+/// aggregate as the summed movement over every changed path.
+fn judge(
+    (rule, direction, base, glob, was, now): Moving<'_>,
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &BTreeMap<Vec<u8>, CounterState<'_>>,
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    target: &str,
+) -> Option<CallRatchet> {
+    let changed = &sets[&(base, glob)];
+    let state = counters.get(&counter_key(rule))?;
+    let breached = if rule.per_file {
+        changed
+            .paths
+            .iter()
+            .find(|(path, _)| path == target)
+            .and_then(|(_, id)| id.as_deref())
+            .is_some_and(|id| direction.violated(state.blobs.get(Some(id)), now))
+    } else {
+        let mut movement = 0_i64;
+        for (path, id) in &changed.paths {
+            let working = if path == target {
+                now
+            } else {
+                stamps
+                    .get(path.as_str())
+                    .copied()
+                    .flatten()
+                    .map_or(0, |stamped| state.files.fresh(path, stamped).unwrap_or(0))
+            };
+            movement += signed(working) - signed(state.blobs.get(id.as_deref()));
+        }
+        match direction {
+            Direction::NonDecreasing => movement < 0,
+            Direction::NonIncreasing => movement > 0,
+        }
+    };
+    breached.then(|| CallRatchet {
+        rule: rule.id.clone(),
+        path: target.to_owned(),
+        was,
+        now,
+    })
+}
+
+/// One counter's tally and its two persisted tables, for one call.
+struct CounterState<'a> {
+    tally: Box<dyn Fn(&str) -> usize + Sync + 'a>,
+    blobs: BlobCounts,
+    files: FileCounts,
+}
+
+/// The paths a branch changed under one glob since its merge base, each with
+/// its blob id at the base (`None` where it is absent there), the target always
+/// among them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Changed {
+    paths: Vec<(String, Option<String>)>,
+}
+
+/// [`Changed`] for (`head`, `base_id`, `glob`), from the cache when this HEAD
+/// was diffed against this base before: the merge base and the tree diff are
+/// taken only when HEAD or the base ref moved.
+fn changed_set(
+    root: &Path,
+    head: &str,
+    base: &str,
+    base_id: &str,
+    glob: &str,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Changed> {
+    let entry = cache.map(|dir| {
+        let at = dir.join("ratchet-changed").join(
+            blake3::hash(format!("{}\0{base}\0{glob}", root.display()).as_bytes())
+                .to_hex()
+                .as_str(),
+        );
+        let key = crate::cache::key(
+            CALL_RATCHET_FORMAT,
+            &[head.as_bytes(), base_id.as_bytes(), glob.as_bytes()],
+        );
+        (at, key)
+    });
+    let cached = entry
+        .as_ref()
+        .and_then(|(at, key)| crate::cache::read(at, key))
+        .and_then(|body| serde_json::from_slice::<(String, Changed)>(&body).ok());
+    let (merge_base, mut set) = if let Some(cached) = cached {
+        cached
+    } else {
+        // As `ratchet_rule` reads it (CLOUD-405), falling back to the
+        // declared ref exactly where it does.
+        let merge_base = crate::git::merge_base(root, base)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| base.to_owned());
+        let set = Changed {
+            paths: crate::git::blobs_changed_between(root, &merge_base, head, glob)?
+                .into_iter()
+                .map(|(path, at_base, _)| (path, at_base))
+                .collect(),
+        };
+        if let Some((at, key)) = &entry
+            && let Ok(body) = serde_json::to_vec(&(&merge_base, &set))
+        {
+            crate::cache::write(at, key, &body);
+        }
+        (merge_base, set)
+    };
+    // The target is always judged, committed or not.
+    if !set.paths.iter().any(|(path, _)| path == target) {
+        let at_base = crate::git::blob_ids_at(root, &merge_base, &[target])?.remove(target);
+        set.paths.push((target.to_owned(), at_base));
+    }
+    Ok(set)
+}
+
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
 /// tree, and report if the aggregate moved the banned way.
 ///
@@ -10634,7 +6460,6 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 /// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
-//MUTANT ratchet-regex-uncounted|s@^        (Some(expression), _) => expression.find_iter(text).count(),$@        (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -10652,15 +6477,7 @@ fn ratchet_rule(
         // Unreachable: the census requires both for this kind.
         return Ok(());
     };
-    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
-    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
-    // so the `None` arm is unreachable and counts nothing.
-    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
-    let tally = |text: &str| match (&expression, rule.pattern.as_deref()) {
-        (Some(expression), _) => expression.find_iter(text).count(),
-        (None, Some(pattern)) => text.matches(pattern).count(),
-        (None, None) => 0,
-    };
+    let tally = ratchet_tally(rule)?;
 
     // THE COUNT IS TAKEN AT THE MERGE BASE, NOT AT THE DECLARED REF'S TIP
     // (CLOUD-405). The question a ratchet asks is "did THIS change move the
@@ -10734,7 +6551,7 @@ fn ratchet_rule(
     let admits_with = rule.admits_with.as_deref();
     let mut working_declared: BTreeSet<&str> = BTreeSet::new();
     for path in matched {
-        let text = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(text.len());
         let count = tally(&text);
         working_count += count;
@@ -10790,6 +6607,21 @@ fn ratchet_rule(
         &subjects,
         findings,
     );
+
+    // PER FILE, NO AGGREGATE (CLOUD-2663): each path is judged on its own base
+    // count, and the sum is never asked, so one file shrinking cannot pay for
+    // another growing.
+    if rule.per_file {
+        per_file_findings(
+            rule,
+            direction,
+            &base_counts,
+            &working_counts,
+            &working_declared,
+            findings,
+        );
+        return Ok(());
+    }
 
     if !direction.violated(base_count, working_count) {
         return Ok(());
@@ -11094,6 +6926,46 @@ fn ratchet_finding(
     });
 }
 
+/// One finding per path whose own count moved the banned way (CLOUD-2663).
+///
+/// Judged over the union of base and working paths. A path absent at base has
+/// no ceiling and is skipped; a path absent now counts `0`, so a deletion is a
+/// fall exactly as the aggregate reads it. A rising path that declares the
+/// `admits_with` token is admitted, and one that does not is refused with the
+/// same blocker an aggregate row prints.
+fn per_file_findings(
+    rule: &Rule,
+    direction: Direction,
+    base_counts: &BTreeMap<String, usize>,
+    working_counts: &BTreeMap<&str, usize>,
+    working_declared: &BTreeSet<&str>,
+    findings: &mut Vec<Finding>,
+) {
+    let paths: BTreeSet<&str> = base_counts
+        .keys()
+        .map(String::as_str)
+        .chain(working_counts.keys().copied())
+        .collect();
+    for path in paths {
+        let Some(&was) = base_counts.get(path) else {
+            continue;
+        };
+        let now = working_counts.get(path).copied().unwrap_or(0);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        let mut blockers = BTreeSet::new();
+        // A RISE, said by the direction: the row was violated, so it moved.
+        if rule.admits_with.is_some() && direction == Direction::NonIncreasing {
+            if working_declared.contains(path) {
+                continue;
+            }
+            blockers.insert(format!("{GROWTH_UNDECLARED} {path}"));
+        }
+        ratchet_finding(rule, path, was, now, &blockers, findings);
+    }
+}
+
 /// Which files grew without declaring a reason (CLOUD-929).
 ///
 /// The mirror of `retires_with`'s admission, and deliberately the weaker half.
@@ -11298,7 +7170,7 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
     }
     let mut claimed = ClaimedCases::default();
     for path in files.iter().filter(|path| selector.matches(path)) {
-        let Ok(text) = fs::read_to_string(root.join(path)) else {
+        let Ok(text) = crate::fsio::read_to_string(root.join(path)) else {
             continue;
         };
         count_read(text.len());
@@ -11705,7 +7577,7 @@ fn conserve_case_names(
         // The head copy, if the file survived. A PARTIAL deletion owes a mapping
         // for the cases it dropped and nothing for the ones still standing, so
         // the surviving names have to be read rather than assumed absent.
-        let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let survivors = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(survivors.len());
         let mapping = Mapping {
             conserves,
@@ -12208,6 +8080,26 @@ fn lookup_on(
 pub(crate) fn is_not_an_executable_image(err: &std::io::Error) -> bool {
     // 193 = ERROR_BAD_EXE_FORMAT (Windows), 8 = ENOEXEC (Unix).
     matches!(err.raw_os_error(), Some(193 | 8))
+}
+
+/// `pr watch --progress`'s recorder, run as a program the CALLER names
+/// (CLOUD-2789): resolved through [`spawn_resolving`], the engine's one way to
+/// find a program, and handed to `pr_watch` as its `spawn`, so that module names
+/// nothing above it. Every failure is ignored: progress is a signal, never a
+/// verdict.
+pub fn record_progress(program: &str, args: &[String]) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
+    )]
+    let _ = spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    });
 }
 
 /// Spawn `program`, resolving the two ways Windows refuses a program a shell
@@ -12781,10 +8673,7 @@ fn run_once(
 pub fn any_blocking(findings: &[Finding], fail_on_warning: bool, rules: &[Rule]) -> bool {
     findings.iter().any(|finding| {
         decidability_of(finding, rules).may_block()
-            && severity::promote(
-                severity::row_for_rule(finding.severity).report,
-                fail_on_warning,
-            ) == ReportLevel::Fail
+            && severity::report_for(finding.severity, fail_on_warning) == ReportLevel::Fail
     })
 }
 
@@ -12908,7 +8797,7 @@ fn forbid_in_files(
     let mode = span_mode(rule);
     for rel_path in paths {
         let rel_path = rel_path.as_str();
-        let contents = match fs::read(root.join(rel_path)) {
+        let contents = match crate::fsio::read(root.join(rel_path)) {
             Ok(bytes) => bytes,
             // A path the walk listed and the read cannot find is a tree that
             // moved under us, not a finding — the same silence as before, per
@@ -13661,146 +9550,11 @@ pub const DECLARED_ACQUISITION: &str = "(declared documents)";
 /// on.
 const DOCUMENT_NO_DOCUMENT: &str = "no-document";
 
-/// The entry whose presence makes a directory a repository of its own — git's
-/// own boundary marker, and therefore the one this crate reads.
-///
-/// It is a *directory* in a plain clone and a *file* in a submodule or a linked
-/// worktree, which is why presence is what is tested and never the kind.
-pub const NESTED_REPOSITORY_MARKER: &str = ".git";
-
-/// Every file under `root`, as sorted repo-relative `/`-separated paths — the
-/// one tree walk the crate has.
-///
-/// Sorted, so any pass over it is deterministic (§6), and `.git` is skipped:
-/// the object store is never policy input. A second walker would be a second
-/// answer to "what does Batten look at", which is the divergence
-/// [`crate::markers`] reuses this to avoid.
-///
-/// # Ignored files are not policy input (CLOUD-214)
-///
-/// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
-/// repository consider its own" is answered by the `.gitignore` the contributors
-/// already maintain rather than by a second list here. Adopted, not rebuilt:
-/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
-/// it, and none of them is this crate's to re-implement.
-///
-/// The measurement that decided it, on this repository after one `cargo build`:
-/// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
-/// ignored build output under `target/` and only 330 were the repository's own.
-/// A `forbid` rule was one broad glob away from reporting findings against
-/// compiler artifacts, and every rule paid to walk them.
-///
-/// Two settings are load-bearing and pinned by tests rather than left to the
-/// crate's defaults:
-///
-/// * **Hidden entries are walked** (`hidden(false)`). `ignore` skips dotfiles by
-///   default, which would silently drop `.github/`, `.serena/` and `.claude/` —
-///   three directories this repository's committed rules select outright, so the
-///   default would turn live gates into dead ones with no diagnostic.
-/// * **Ignore files are honoured, `require_git` off.** A fixture that is not a
-///   git repository still reads its own `.gitignore`, so the selection does not
-///   change shape depending on whether git happens to be initialised.
-///
-/// # The selection stops at a nested repository (CLOUD-328)
-///
-/// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
-/// own, and this walk does not enter it. **This is the single statement of
-/// which files a glob selects, and the base-rev half of a ratchet
-/// ([`crate::git::count_at_rev`]) reads the same rule** — it skips gitlink
-/// entries — so the two halves select the same set by construction rather than
-/// by a consumer's care with globs.
-///
-/// Without it the two disagree, and the direction is the dangerous one: a
-/// `non_decreasing` row whose glob spans a submodule sits permanently above a
-/// base that counted one gitlink, so no deletion could ever pull it back under
-/// and **the gate cannot fail**. Measured on this repository at the commit that
-/// raised CLOUD-328: base 637 against working 1404, a fixed `+767` in a tree
-/// where nothing had been added.
-///
-/// It is not a ratchet-only property, because this is not a ratchet-only
-/// walker: it is also what stops a `forbid` rule reporting findings against
-/// vendored third-party code, and a `budget` or a marker scan from measuring a
-/// checkout that is not this one. The rule is stated in git's terms rather than
-/// as a submodule list precisely so a linked worktree — `.claude/worktrees/`,
-/// where agents work — is bounded by the same reading.
-///
-/// `root` itself is never a boundary: it carries the marker by definition, and
-/// only *descended* directories are tested.
-///
-/// # Errors
-///
-/// An I/O failure while walking propagates as an internal error (→ exit `3`).
-pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
-    let root = root.to_path_buf();
-    let mut walker = ignore::WalkBuilder::new(&root);
-    walker
-        // Dotfiles are ordinary policy input here; see the doc comment.
-        .hidden(false)
-        // A `.gitignore` means what it says whether or not `git init` has run,
-        // so the selection does not change shape under a fixture.
-        .require_git(false)
-        // The repository's own ignore surface, and only it. A developer's global
-        // excludes are a property of their machine, not of this repository, and
-        // a gate whose file set varies per workstation is not one gate.
-        .git_global(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .parents(false)
-        // One filesystem: a walk that follows a mount out of the repository is
-        // measuring somebody else's disk.
-        .same_file_system(true)
-        .follow_links(false);
-    // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
-    // root's own `.git` but knows nothing about a nested repository, so the rule
-    // this crate states has to be applied here or it would be silently dropped
-    // by the very change that adopts a better walk. `tests/submodule.rs` is what
-    // catches that, and it is why those assertions landed first.
-    let boundary = root.clone();
-    walker.filter_entry(move |entry| {
-        if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
-            return true;
-        }
-        // The object store is never policy input, and this skip cannot be left
-        // to the walker: `ignore` excludes `.git` as a *hidden* entry, and
-        // `hidden(false)` above — which this repository's own rules require, to
-        // reach `.github/` and `.serena/` — switches that off along with it.
-        // Dropping it would put every blob, ref and hook body into the file set.
-        if entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER) {
-            return false;
-        }
-        // `root` carries the marker by definition; testing it would empty every
-        // walk, so only descended directories are judged.
-        if entry.path() == boundary {
-            return true;
-        }
-        !entry.path().join(NESTED_REPOSITORY_MARKER).exists()
-    });
-
-    let mut files = Vec::new();
-    for entry in walker.build() {
-        let entry = entry?;
-        // Directories, and the root itself, are not files; a symlink is not
-        // followed, so it never contributes a path outside the tree.
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        if let Ok(rel) = entry.path().strip_prefix(&root) {
-            files.push(rel_to_slash(rel));
-        }
-    }
-    // `ignore` yields in directory order; §6 byte-stability is this sort.
-    files.sort();
-    Ok(files)
-}
-
-/// Render a relative path with `/` separators, so globbing and output are
-/// identical across platforms (§6 byte-stability spans OSes).
-fn rel_to_slash(rel: &Path) -> String {
-    rel.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
+// The tree walk and its boundary marker live in `git`, and the glob in the
+// `selector` leaf (CLOUD-2789), so `git` reads the tree without reaching up
+// into `rules`.
+pub use crate::git::{NESTED_REPOSITORY_MARKER, tree_files};
+pub use crate::selector::Selector;
 
 /// The marker that turns a glob into an exclude inside an ordered
 /// include/exclude list: gitignore's `!` prefix, so a reader who knows one knows
@@ -13830,6 +9584,17 @@ pub struct PathSet {
 }
 
 impl PathSet {
+    /// The include patterns as written, so a caller can ENUMERATE what the set
+    /// covers rather than only ask about one path (step 14: the protected-path
+    /// snapshot walks them).
+    #[must_use]
+    pub fn include_patterns(&self) -> Vec<&str> {
+        self.includes
+            .iter()
+            .map(|selector| selector.pattern())
+            .collect()
+    }
+
     /// The set that contains nothing.
     ///
     /// Spelled out rather than derived as `Default`, because the safe empty value
@@ -14033,116 +9798,13 @@ impl Sets {
     ///
     /// Returns a [`UsageError`] (→ exit `1`) when a list is malformed — a bare
     /// `!` in `scope`, or a `!` entry in an include-only key.
-    pub fn from_config(config: &crate::config::Config) -> anyhow::Result<Self> {
+    pub fn from_config(config: &crate::config_model::Config) -> anyhow::Result<Self> {
         Ok(Sets {
             scope: PathSet::scope(&config.scope)?,
             protected: PathSet::includes("protected", &config.protected)?,
             unlanded: PathSet::includes("unlanded", &config.unlanded)?,
         })
     }
-}
-
-/// One compiled glob, matched against repo-relative `/`-separated paths
-/// (CLOUD-214).
-///
-/// [`globset`] rather than a hand-rolled matcher: the replaced one backtracked
-/// over every `**` split point — exponential on a pattern with several — and
-/// knew only `*`, `?` and `**`, so a consumer had no character classes, no
-/// braces and no way to say "not this". Adopting the matcher ripgrep already
-/// ships is the wrap-don't-rebuild directive applied to the one thing every rule
-/// runs through.
-///
-/// **Compiled once, matched many.** A pattern is parsed when the rule loads, not
-/// once per candidate path, which is what keeps the selection linear in the size
-/// of the tree rather than in tree × pattern-length.
-///
-/// # Semantics, pinned rather than inherited
-///
-/// `literal_separator(true)` is the one non-default setting and it is
-/// load-bearing: without it `*` crosses `/`, so `*.rs` would select every Rust
-/// file at every depth and a rule scoped to one directory would silently widen.
-/// Widening is the single direction a policy engine may never drift, and
-/// [`tests::glob_semantics_are_pinned_at_the_shipped_patterns`] is what holds it.
-///
-/// **Parsed at load, compiled at first match** (CLOUD-2315). A malformed glob is
-/// still refused when the rule loads, because parsing is what refuses it; the
-/// regex a match runs is built the first time something asks. The hook loads
-/// ~108 selectors per call and matches a handful, and compiling every one was
-/// 14% of the instructions a warm call ran.
-#[derive(Debug, Clone)]
-pub struct Selector {
-    /// Carries the pattern as written too (`Glob::glob`), so there is no
-    /// second copy of it here.
-    glob: globset::Glob,
-    matcher: std::sync::OnceLock<globset::GlobMatcher>,
-}
-
-impl Selector {
-    /// Compile `pattern`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for a pattern `globset` cannot
-    /// parse — an unclosed character class, a stray `**` inside a component.
-    /// A malformed glob is bad config, and refusing it at load is what stops it
-    /// reaching a run as a rule that quietly selects nothing.
-    pub fn new(pattern: &str) -> anyhow::Result<Self> {
-        let glob = globset::GlobBuilder::new(pattern)
-            // See the type's doc comment: without this, `*` crosses `/` and
-            // every rule's scope widens.
-            .literal_separator(true)
-            .build()
-            .map_err(|err| UsageError::raise(format!("glob `{pattern}` is not valid: {err}")))?;
-        Ok(Selector {
-            glob,
-            matcher: std::sync::OnceLock::new(),
-        })
-    }
-
-    /// Whether `path` — repo-relative, `/`-separated — is selected.
-    #[must_use]
-    pub fn matches(&self, path: &str) -> bool {
-        self.matcher
-            .get_or_init(|| self.glob.compile_matcher())
-            .is_match(path)
-    }
-
-    /// The pattern this was compiled from, as the consumer wrote it.
-    #[must_use]
-    pub fn pattern(&self) -> &str {
-        self.glob.glob()
-    }
-}
-
-/// Two selectors are the same selector when they came from the same pattern.
-///
-/// Hand-written because a compiled matcher has no equality of its own, and
-/// stated over the pattern rather than derived so the compiled form stays an
-/// implementation detail: a [`PathSet`] comparison is a comparison of the
-/// config that built it.
-impl PartialEq for Selector {
-    fn eq(&self, other: &Self) -> bool {
-        self.pattern() == other.pattern()
-    }
-}
-
-impl Eq for Selector {}
-
-/// Match a `/`-separated glob against a `/`-separated path, compiling the
-/// pattern for this one call.
-///
-/// The convenience form, for a caller holding a single pattern and a single
-/// path. A caller testing many paths against one pattern must build a
-/// [`Selector`] instead — compiling per call is the cost this type exists to
-/// avoid.
-///
-/// A pattern that does not compile matches **nothing**, which is the safe
-/// direction: it can only ever produce fewer findings than the consumer asked
-/// for, never more. It is also unreachable for a rule, because [`Rule::validate`]
-/// refuses a malformed `glob` at load, where the diagnostic names the row.
-#[must_use]
-pub fn glob_match(pattern: &str, path: &str) -> bool {
-    Selector::new(pattern).is_ok_and(|selector| selector.matches(path))
 }
 
 #[cfg(test)]
@@ -14271,7 +9933,7 @@ mod tests {
                 if path.extension() != Some(std::ffi::OsStr::new("rs")) {
                     continue;
                 }
-                let source = std::fs::read_to_string(&path).unwrap();
+                let source = crate::fsio::read_to_string(&path).unwrap();
                 sources.push((path, source));
             }
         }
@@ -14755,7 +10417,7 @@ mod tests {
         let root = std::env::temp_dir();
         let emitted = emitted_tree_keys(&root);
 
-        let source = std::fs::read_to_string(
+        let source = crate::fsio::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("src")
                 .join("policy.rs"),
@@ -14920,6 +10582,43 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+        // CLOUD-2663: `counts = "tokens"` stands in for the literal, alone.
+        let tokens = Rule {
+            pattern: None,
+            counts: Some(CeilingUnit::Tokens),
+            ..base.clone()
+        };
+        assert!(tokens.validate().is_ok());
+        for refused in [
+            Rule {
+                pattern: Some("#[test]".to_owned()),
+                ..tokens.clone()
+            },
+            Rule {
+                counts: Some(CeilingUnit::TrackedArtifacts),
+                ..tokens.clone()
+            },
+            Rule {
+                per_file: true,
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            },
+            Rule {
+                per_file: true,
+                conserves: Some(ledger_vocabulary()),
+                ..base.clone()
+            },
+        ] {
+            assert!(refused.validate().is_err(), "{refused:?}");
+        }
+        assert!(
+            Rule {
+                per_file: true,
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
         );
         // Same for the other half of §9's duality: a ratchet runs nothing.
         assert!(
@@ -15372,6 +11071,7 @@ mod tests {
 
         fn inputs<'a>(&'a self, files: &'a [String]) -> RunInputs<'a> {
             RunInputs {
+                half: None,
                 provisions: &[],
                 files,
                 scoped: files,
@@ -15415,121 +11115,21 @@ mod tests {
         traversals: serde_json::Value::Null,
     };
 
-    // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
-    // fixture that spreads one would stop naming the columns it leaves empty,
-    // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`], which keeps this literal
-    // under the length ceiling without an escape.
+    // The row a config would carry with only `id` and `kind` written: every
+    // other column at its serde default, exactly as a consumer's blank row
+    // loads. Built through serde rather than a literal listing every column,
+    // which had outgrown the function-length lint; the census a new column owes
+    // is `Rule::columns` and its classification test, not this fixture. The
+    // three columns whose blank value depends on the kind are filled by
+    // [`per_kind`].
     fn blank(id: &str, kind: RuleKind) -> Rule {
-        per_kind(Rule {
-            review: Vec::new(),
-            id: id.to_owned(),
-            kind,
-            glob: None,
-            // Filled by `per_kind`.
-            severity: None,
-            scope: kind.scopes()[0],
-            pattern: None,
-            regex: None,
-            exclude: None,
-            content: None,
-            tool: None,
-            measures: None,
-            counts: None,
-            max: None,
-            resolves: Vec::new(),
-            when_absent: None,
-            when_present: None,
-            when_value: None,
-            while_marker: None,
-            while_unpushed: false,
-            key_from: None,
-            key_base: None,
-            key_shape: None,
-            max_age: None,
-            requires_field: None,
-            contains: None,
-            unless_contains: None,
-            require_via: None,
-            requires_key: None,
-            reason: None,
-            policy_url: None,
-            bypass_env: None,
-            check: None,
-            fix: None,
-            produces: None,
-            exclude_paths: Vec::new(),
-            symbols: false,
-            run: None,
-            verbatim: None,
-            identity_key: None,
-            direction: None,
-            base: None,
-            retires_with: None,
-            conserves: None,
-            admits_with: None,
-            format: None,
-            node: None,
-            derives: None,
-            cites: None,
-            reads: None,
-            module: None,
-            bundle: None,
-            preset: None,
-            // No preset, so nothing here reads a CI provider (CLOUD-1625).
-            provider: None,
-            except: Vec::new(),
-            gate: None,
-            documents: Vec::new(),
-            requires_path: Vec::new(),
-            sources: Vec::new(),
-            lines: Vec::new(),
-            line_sources: Vec::new(),
-            invocations: Vec::new(),
-            invocation_sources: Vec::new(),
-            uses: Vec::new(),
-            use_sources: Vec::new(),
-            git: Vec::new(),
-            refs: Vec::new(),
-            ranges: Vec::new(),
-            commits: Vec::new(),
-            staged: Vec::new(),
-            history: Vec::new(),
-            tags: Vec::new(),
-            git_config: Vec::new(),
-            index: Vec::new(),
-            state: Vec::new(),
-            forge: Vec::new(),
-            tools: Vec::new(),
-            plan: Vec::new(),
-            minted: Vec::new(),
-            captured: Vec::new(),
-            tasks: Vec::new(),
-            extract: Vec::new(),
-            landing: Vec::new(),
-            delta_sources: Vec::new(),
-            external: Vec::new(),
-            predicate_severity: None,
-            criteria: None,
-            tier: None,
-            // Both filled by `per_kind`.
-            no_fix_reason: None,
-            checks: None,
-            // Left `None` even where the kind permits it, unlike `checks` above:
-            // a receipt fixture needs SOME receipt named to be valid, and
-            // `checks` above already supplies one. Filling both would make every
-            // blank receipt row carry an alternation no case asked for, and a
-            // fixture that quietly exercises a column is how a test passes for a
-            // reason its author did not choose.
-            checks_any: None,
-            key: None,
-            trigger: None,
-            verdict: None,
-            filters: None,
-            substitutes: None,
-            interprets: None,
-            no_retry_reason: None,
-        })
+        let row: Rule = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "scope": kind.scopes()[0],
+        }))
+        .expect("an id, a kind and a scope are a whole blank row");
+        per_kind(row)
     }
 
     /// The columns whose blank value depends on `rule.kind`, each filled only for
@@ -16277,7 +11877,7 @@ mod tests {
             Isolated::Propagate(_)
         ));
         assert!(matches!(
-            isolate(|| Err(crate::error::Denial::raise(
+            isolate(|| Err(crate::refusal::Denial::raise(
                 &crate::refusal::Refusal::new("r", "refused", crate::refusal::Fix::None),
                 crate::refusal::Arm::Full,
             ))),
@@ -17931,10 +13531,10 @@ mod tests {
         let dir = temp_dir("rules-warn-reports");
         write(&dir, "a.rs", "TODO\n");
         let mut rule = forbid("no-todo", "**/*.rs", "TODO");
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, RuleSeverity::Warn);
+        assert_eq!(findings[0].severity, RuleSeverity::Advise);
         // THE TABLE IS PASSED, not `&[]`. `any_blocking` resolves each finding's
         // owning row to classify it (CLOUD-331), so a fixture that supplied no
         // table would be asserting over a classification path this test does not
@@ -18309,7 +13909,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             if !resolved.is_file() {
                 return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
             }
-            if !std::fs::read(&resolved)
+            if !crate::fsio::read(&resolved)
                 .unwrap_or_default()
                 .starts_with(b"MZ")
             {
@@ -19564,6 +15164,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
 
     fn tree_options(scope: &Scope) -> RunOptions<'_> {
         RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: crate::policy::ModuleChecks::Run,
             scope,
             surface: crate::facts::Surface::Check,
@@ -20010,6 +15612,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         };
         let could_not_look = crate::facts::Look::CouldNotLook;
         let inputs = RunInputs {
+            half: None,
             review: &could_not_look,
             ..blind.inputs(&files)
         };
@@ -20129,6 +15732,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let facts = BareFacts::new();
         let owners = |surface| {
             let inputs = RunInputs {
+                half: None,
                 surface,
                 ..facts.inputs(&files)
             };
@@ -20677,6 +16281,7 @@ violation contains {
                     ..BareFacts::new()
                 };
                 let inputs = RunInputs {
+                    half: None,
                     bundles: bundle.map_or(&[][..], std::slice::from_ref),
                     ..facts.inputs(&files)
                 };
@@ -20807,6 +16412,8 @@ violation contains {
             crate::policy::Vocabulary::EMPTY,
             &dir,
             RunOptions {
+                half: None,
+                keyed_bases: &[],
                 checks: crate::policy::ModuleChecks::SkipOnHotPath,
                 ..tree_options(&tree)
             },
@@ -20838,6 +16445,87 @@ violation contains {
             }
         }
         dir
+    }
+
+    /// Two rows count the same only when their counters match: pattern,
+    /// regex and what is counted all key the persisted tables.
+    ///
+    /// Fails by: a constant key, which shares one row's counts with another's.
+    #[test]
+    fn rows_share_counts_only_when_their_counters_match() {
+        let row = |pattern: Option<&str>, regex: Option<&str>| Rule {
+            pattern: pattern.map(String::from),
+            regex: regex.map(String::from),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let base = counter_key(&row(Some("x"), None));
+        assert_eq!(base, counter_key(&row(Some("x"), None)));
+        assert_ne!(base, counter_key(&row(Some("y"), None)));
+        assert_ne!(base, counter_key(&row(None, Some("x"))));
+    }
+
+    /// A write moves only the rows judged at the call whose glob holds the
+    /// target: a row `check` alone judges, or one over other paths, is not
+    /// read.
+    ///
+    /// Fails by: a row admitted when either condition holds rather than both.
+    #[test]
+    fn only_a_call_judged_row_over_the_target_moves() {
+        let judged = Rule {
+            base: Some(String::from("origin/main")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let retiring = Rule {
+            retires_with: Some(String::from("# subject:")),
+            ..judged.clone()
+        };
+        let elsewhere = Rule {
+            glob: Some(String::from("*.md")),
+            ..judged.clone()
+        };
+        let rows = [&judged, &retiring, &elsewhere];
+        let moving = moving_rows(&rows, "t.bats", Some(""), ONE_CASE).expect("counts");
+        assert_eq!(moving.len(), 1, "only the judged row over *.bats moves");
+        assert!(std::ptr::eq(moving[0].0, std::ptr::from_ref(&judged)));
+    }
+
+    /// The changed set follows its base ref: moving the base while HEAD stays
+    /// put is a different set, not the cached one.
+    ///
+    /// Fails by: the set's cache keyed on another row's ref (HEAD's id), which
+    /// answers the old set after the base moved.
+    #[test]
+    fn a_moved_base_is_a_new_changed_set_with_head_unmoved() {
+        let dir = ratchet_repo("rules-changed-base-moved", &[("a.bats", ONE_CASE)], &[]);
+        let head = || {
+            crate::git::rev_ids(&dir, &["HEAD"]).expect("ids")[0]
+                .clone()
+                .expect("HEAD resolves")
+        };
+        let point_base = |id: String| {
+            fs::write(dir.join(".git/refs/heads/base"), format!("{id}\n")).expect("ref");
+        };
+        point_base(head());
+        write(&dir, "b.bats", ONE_CASE);
+        // A commit's tree is the paths it is handed, so `a.bats` is carried.
+        let both = [String::from("a.bats"), String::from("b.bats")];
+        crate::gitwrite::commit_paths(&dir, &both, "second").expect("commit");
+        let cache = temp_dir("rules-changed-base-moved-cache");
+        let row = Rule {
+            base: Some(String::from("base")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let moving = [(&row, Direction::NonIncreasing, "base", "*.bats", 0, 1)];
+        let paths = |sets: BTreeMap<(&str, &str), Changed>| {
+            sets.into_values()
+                .flat_map(|set| set.paths.into_iter().map(|(path, _)| path))
+                .collect::<Vec<_>>()
+        };
+        let before = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(before), ["b.bats", "t.bats"]);
+        point_base(head());
+        let after = changed_sets(&moving, &dir, "t.bats", Some(&cache)).expect("diffed");
+        assert_eq!(paths(after), ["t.bats"], "the base now carries b.bats");
     }
 
     fn ratchet_row(direction: Direction) -> Rule {
@@ -20887,6 +16575,125 @@ violation contains {
         assert_eq!(
             ratchet_run(ratchet_row(Direction::NonDecreasing), &held),
             (Vec::new(), Vec::new())
+        );
+    }
+
+    fn md_row(per_file: bool) -> Rule {
+        Rule {
+            glob: Some(String::from("docs/*.md")),
+            counts: Some(CeilingUnit::Tokens),
+            direction: Some(Direction::NonIncreasing),
+            base: Some(String::from("HEAD")),
+            per_file,
+            ..blank("r", RuleKind::Ratchet)
+        }
+    }
+
+    /// A token ratchet counts exactly what `policy budget` counts per file, over
+    /// loaded text: growth inside an HTML comment is not growth.
+    ///
+    /// Fails by: the tokens arm counting nothing.
+    #[test]
+    fn a_token_ratchet_counts_what_the_budget_counts() {
+        let base_text = "# Title\n\nSome body text here.\n";
+        let n = crate::budget::estimate_tokens(&crate::budget::loaded(base_text));
+        assert!(n > 0);
+        let grown = format!("{base_text}12345678");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-grew",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &grown)],
+        );
+        assert_eq!(
+            ratchet_run(md_row(false), &dir),
+            (vec![format!("docs/*.md {n}->{}", n + 2)], Vec::new())
+        );
+        let commented = format!("{base_text}<!-- a long comment the loader drops -->\n");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-comment",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &commented)],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// One file shrinking does not pay for another growing on a per-file row.
+    ///
+    /// Fails by: the per-file branch skipped, judging the sum.
+    #[test]
+    fn a_per_file_ratchet_refuses_growth_another_file_paid_for() {
+        let a = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbb";
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file",
+            &[("docs/a.md", a), ("docs/b.md", b)],
+            &[("docs/a.md", &a[..16]), ("docs/b.md", &format!("{b}bbbb"))],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+        assert_eq!(
+            ratchet_run(md_row(true), &dir),
+            (vec![String::from("docs/b.md 4->5")], Vec::new())
+        );
+    }
+
+    /// A file the branch creates has no ceiling on a per-file row.
+    ///
+    /// Fails by: judging a new path against a base count of zero.
+    #[test]
+    fn a_per_file_ratchet_does_not_judge_a_path_new_at_base() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-new",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/new.md", "nnnnnnnnnnnnnnnn")],
+        );
+        assert_eq!(ratchet_run(md_row(true), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// A deleted file is a fall to zero on a per-file row.
+    ///
+    /// Fails by: skipping a path absent from the working tree.
+    #[test]
+    fn a_per_file_non_decreasing_ratchet_refuses_a_deleted_file() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-deleted",
+            &[("t.bats", TWO_CASES), ("u.bats", ONE_CASE)],
+            &[("t.bats", "")],
+        );
+        let rule = Rule {
+            per_file: true,
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        assert_eq!(
+            ratchet_run(rule, &dir),
+            (vec![String::from("t.bats 2->0")], Vec::new())
+        );
+    }
+
+    /// A per-file rise that declares the `admits_with` token is admitted; a silent
+    /// one is refused with the aggregate's blocker.
+    #[test]
+    fn a_per_file_ratchet_admits_a_declared_rise_only() {
+        let declared = ratchet_repo(
+            "rules-ratchet-per-file-declared",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nadmits: x\n")],
+        );
+        let rule = || Rule {
+            admits_with: Some(String::from("admits:")),
+            ..md_row(true)
+        };
+        assert_eq!(ratchet_run(rule(), &declared), (Vec::new(), Vec::new()));
+        let silent = ratchet_repo(
+            "rules-ratchet-per-file-silent",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nmore text\n")],
+        );
+        assert_eq!(
+            ratchet_run(rule(), &silent),
+            (
+                vec![format!("docs/a.md 2->4 [{GROWTH_UNDECLARED} docs/a.md]")],
+                Vec::new()
+            )
         );
     }
 
@@ -21519,6 +17326,7 @@ violation contains {
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             tables: &tables,
             ..facts.inputs(&files)
         };
@@ -21581,6 +17389,7 @@ violation contains {
         };
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             tables: &tables,
             ..facts.inputs(&files)
         };
@@ -21769,6 +17578,7 @@ violation contains {
         let scoped = vec![String::from("a.rs")];
         let facts = BareFacts::new();
         let inputs = RunInputs {
+            half: None,
             scoped: &scoped,
             ..facts.inputs(&files)
         };
@@ -21856,5 +17666,261 @@ violation contains {
         let refused = walk_traversals(vocabulary, &dir, &[], &BTreeMap::new())
             .expect_err("an undeclared register is refused");
         assert!(refused.to_string().contains("`missing`"), "{refused}");
+    }
+}
+
+/// Step 13a: the split `enforce`'s classifier, partition and backstop.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod half_tests {
+    use super::{Half, Rule, RuleKind, RuleScope, null_live_keys};
+    use crate::facts::{Fact, Subject};
+
+    /// A blank row of `kind` on its first permitted scope, plus `extra`.
+    fn row(kind: RuleKind, extra: &serde_json::Value) -> Rule {
+        let mut value = serde_json::json!({
+            "id": "r",
+            "kind": kind,
+            "scope": kind.scopes()[0],
+        });
+        if let (Some(object), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+            object.extend(more.clone());
+        }
+        serde_json::from_value(value).expect("a blank row deserialises")
+    }
+
+    const KEYED: &[String] = &[];
+
+    #[test]
+    fn the_tree_subjects_are_exactly_the_indexed_facts() {
+        let tree: Vec<Fact> = Fact::ALL
+            .iter()
+            .copied()
+            .filter(|fact| fact.subject() == Subject::Tree)
+            .collect();
+        assert_eq!(
+            tree,
+            vec![
+                Fact::Document,
+                Fact::Tracked,
+                Fact::Traversals,
+                Fact::Lines,
+                Fact::GitIndex,
+                Fact::Staged,
+                Fact::Invocations,
+                Fact::Uses,
+            ],
+            "a fact joins the tree half only by an edit here, never by default"
+        );
+        for fact in tree {
+            let key = fact
+                .tree_key()
+                .expect("a tree subject is projected on the tree surface");
+            assert_eq!(Fact::from_tree_key(key), Some(fact), "{key} round-trips");
+        }
+        assert_eq!(Fact::from_tree_key("missing"), None);
+    }
+
+    #[test]
+    fn each_kind_falls_on_its_half() {
+        for kind in RuleKind::ALL {
+            let blank = row(*kind, &serde_json::json!({}));
+            let expected = match kind {
+                RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
+                    Half::Tree
+                }
+                // A ratchet with no keyed base, and a policy row with no bundle,
+                // cannot be shown to be tree.
+                RuleKind::Ratchet
+                | RuleKind::Policy
+                | RuleKind::Command
+                | RuleKind::Judge
+                | RuleKind::Receipt
+                | RuleKind::Shape
+                | RuleKind::Pipeline
+                | RuleKind::Native => Half::Live,
+            };
+            let got = if blank.scope == RuleScope::MediatedCall {
+                Half::Live
+            } else {
+                expected
+            };
+            assert_eq!(blank.half(None, KEYED), got, "{}", kind.as_str());
+        }
+    }
+
+    /// Fails by: a tree fact read as live (a tree row re-run every lap), a
+    /// live fact read as tree (a receipt standing in for a live verdict), or
+    /// the row's declared facts not read at all.
+    #[test]
+    fn a_rows_declared_facts_decide_its_half() {
+        let lines = row(RuleKind::Forbid, &serde_json::json!({"lines": ["x"]}));
+        assert_eq!(lines.half(None, KEYED), Half::Tree);
+        let symbols = row(RuleKind::Forbid, &serde_json::json!({"symbols": true}));
+        assert_eq!(symbols.half(None, KEYED), Half::Live);
+        assert_eq!((Half::Tree.as_str(), Half::Live.as_str()), ("tree", "live"));
+    }
+
+    /// Fails by: a lint count taking a `regex` beside its lint, or one naming
+    /// no lint.
+    #[test]
+    fn a_lint_count_names_its_lint_and_nothing_else() {
+        let count = |extra: serde_json::Value| {
+            let mut fields = serde_json::json!({"counts": "lint_escapes"});
+            fields
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            row(RuleKind::Ratchet, &fields).validate_ratchet_measure()
+        };
+        assert!(count(serde_json::json!({"pattern": "clippy::x"})).is_ok());
+        assert!(count(serde_json::json!({})).is_err(), "no lint");
+        assert!(
+            count(serde_json::json!({"pattern": "clippy::x", "regex": "y"})).is_err(),
+            "a regex beside the lint"
+        );
+    }
+
+    /// Fails by: the hook evaluating on more than one thread, or another
+    /// surface on one.
+    #[test]
+    fn only_the_hook_evaluates_on_one_thread() {
+        assert_eq!(super::workers_for(crate::facts::Surface::Hook), 1);
+        assert_eq!(
+            super::workers_for(crate::facts::Surface::Check),
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        );
+    }
+
+    #[test]
+    fn a_ratchet_is_tree_only_against_a_keyed_base() {
+        let ratchet = row(
+            RuleKind::Ratchet,
+            &serde_json::json!({"base": "origin/main"}),
+        );
+        assert_eq!(ratchet.half(None, &[]), Half::Live);
+        assert_eq!(ratchet.half(None, &["origin/other".to_owned()]), Half::Live);
+        assert_eq!(ratchet.half(None, &["origin/main".to_owned()]), Half::Tree);
+    }
+
+    #[test]
+    fn a_live_fact_or_an_existence_test_moves_a_tree_kind_live() {
+        let forbid = row(RuleKind::Forbid, &serde_json::json!({}));
+        assert_eq!(forbid.half(None, KEYED), Half::Tree, "the premise");
+        let required = Rule {
+            requires_path: vec!["target/x".to_owned()],
+            ..forbid.clone()
+        };
+        assert_eq!(required.half(None, KEYED), Half::Live);
+        let mediated = Rule {
+            scope: RuleScope::MediatedCall,
+            ..forbid
+        };
+        assert_eq!(mediated.half(None, KEYED), Half::Live);
+    }
+
+    #[test]
+    fn a_policy_row_is_tree_only_when_its_bundle_reads_tree_keys() {
+        let policy = row(RuleKind::Policy, &serde_json::json!({"scope": "tree"}));
+        let module = |body: &str| {
+            format!(
+                "package batten.r\n\nimport rego.v1\n\nrules contains \"x probe probex\"\n\n\
+                 violation contains {{\"rule\": \"x probe probex\", \"verdict\": \"x probe probex\", \
+                 \"subjects\": []}} if {{\n{body}\n}}\n"
+            )
+        };
+        let bundle = |body: &str| {
+            crate::policy::compile(
+                "r",
+                &[("policy/r.rego".to_owned(), module(body))],
+                &serde_json::json!({}),
+            )
+            .expect("the fixture compiles")
+        };
+        let tree = bundle("\tinput.tree.documents.x != null\n\tinput.tree.missing != null");
+        assert_eq!(policy.half(Some(&tree), KEYED), Half::Tree);
+        let records = bundle("\tinput.tree.records.x != null");
+        assert_eq!(policy.half(Some(&records), KEYED), Half::Live);
+        let aliased = bundle("\tt := input.tree\n\tt.documents != null");
+        assert_eq!(policy.half(Some(&aliased), KEYED), Half::Live);
+    }
+
+    #[test]
+    fn the_backstop_nulls_every_live_key_and_keeps_the_tree() {
+        let document = serde_json::json!({"tree": {
+            "documents": {"a": 1},
+            "staged": {"b": 2},
+            "missing": {"c": "unparsed"},
+            "records": {"runs": ["row\tx"]},
+            "git-head": "abc",
+            "forge": {},
+            "unheard-of": 1,
+        }});
+        let nulled: serde_json::Value =
+            serde_json::from_str(&null_live_keys(&document.to_string())).expect("json");
+        let tree = &nulled["tree"];
+        assert_eq!(tree["documents"], serde_json::json!({"a": 1}));
+        assert_eq!(tree["staged"], serde_json::json!({"b": 2}));
+        assert_eq!(tree["missing"], serde_json::json!({"c": "unparsed"}));
+        for live in ["records", "git-head", "forge", "unheard-of"] {
+            assert!(tree[live].is_null(), "{live} is nulled");
+        }
+    }
+
+    #[test]
+    fn the_committed_rules_partition_by_what_they_read() {
+        // THE PROPERTY OVER THE ROWS THAT SHIP. Every committed row lands on one
+        // half; a tree row declares only tree facts and is a kind that cannot
+        // spawn; and the split buys something — some rows are tree.
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
+        )
+        .expect("the committed authority reads");
+        let table: toml::Table = toml::from_str(&text).expect("the committed authority parses");
+        let rows: Vec<Rule> = table
+            .get("rule")
+            .and_then(toml::Value::as_array)
+            .expect("the authority declares rows")
+            .iter()
+            .map(|value| {
+                value
+                    .clone()
+                    .try_into()
+                    .expect("a committed row deserialises")
+            })
+            .collect();
+        let keyed = ["origin/main".to_owned()];
+        let mut tree = 0;
+        for rule in &rows {
+            match rule.half(None, &keyed) {
+                Half::Tree => {
+                    tree += 1;
+                    // The one spawning kind a tree row may be: the secrets
+                    // scanner, pinned by a checksum the authority itself keys.
+                    assert!(
+                        !rule.kind.carries_ambient_authority() || rule.kind == RuleKind::Secrets,
+                        "{}",
+                        rule.id
+                    );
+                    assert_ne!(
+                        rule.kind,
+                        RuleKind::Policy,
+                        "{}: no bundle is live",
+                        rule.id
+                    );
+                    assert!(
+                        rule.census_facts()
+                            .all(|fact| fact.subject() == Subject::Tree),
+                        "{}",
+                        rule.id
+                    );
+                }
+                Half::Live => {}
+            }
+        }
+        assert!(
+            tree > 0,
+            "no committed row is tree, so the split would buy nothing"
+        );
     }
 }

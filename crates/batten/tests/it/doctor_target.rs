@@ -97,7 +97,7 @@
 // carried: "it links rather than type-checks" mise.toml
 // carried: "it does not build the optimized profile" mise.toml
 // carried: "it mutates the toolchain only through the target-ensure lock" crates/batten/src/doctor.rs
-// changed: "a non-darwin target is refused" mise.toml the guard survives as the task body's own precondition and now exits 2 rather than 1, folding onto the engine's table (CLOUD-1718). What does NOT survive is its declared mutation: the `#MUTANT non-darwin-target-passes` row retired with the file, so the guard is no longer shown able to fail. It has no engine home — `doctor target` installs any triple legitimately — and the cost is stated here rather than hidden
+// changed: "a non-darwin target is refused" mise.toml the guard survives as the task body's own precondition and now exits 2 rather than 1, folding onto the engine's table (CLOUD-1718). What does NOT survive is its declared mutation: the shell row retired with the file, so the guard is no longer shown able to fail. It has no engine home — `doctor target` installs any triple legitimately — and the cost is stated here rather than hidden
 //
 // Seven cases assert properties their own subject removed.
 // withdrawn: "--no-targets is the CLI spelling of an empty DOCTOR_TARGETS: rustup untouched" the flag existed to keep one program's target half off a caller's path; a declared table has no half to exclude, because the rows that touch the toolchain ARE separate rows
@@ -129,7 +129,7 @@ fn the_verb_is_declared_and_takes_a_triple() {
     let output = batten()
         .args(["doctor", "target", "--help"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor target --help");
 
     assert!(output.status.success(), "the sub-verb resolves");
@@ -150,7 +150,7 @@ fn a_triple_rustup_cannot_install_is_one_pointer_line_and_never_the_spew() {
     let output = batten()
         .args(["doctor", "target", UNREAL])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor target");
 
     // Could-not-look is a legitimate answer here: a host with no rustup at all

@@ -272,15 +272,92 @@ fn verify_declares_no_depends() {
     );
 }
 
+/// The `mise run …` a step runs: the step itself, or the statement a
+/// receipted `step run <id> -- mise run …` wraps (CLOUD-2788).
+fn mise_run(step: &str) -> Option<&str> {
+    if step.starts_with("mise run ") {
+        return Some(step);
+    }
+    step.split_once("step run ")
+        .and_then(|(_, rest)| rest.split_once(" -- "))
+        .map(|(_, statement)| statement)
+        .filter(|statement| statement.starts_with("mise run "))
+}
+
+/// The tasks one `mise run` step reaches: each `:::` member's first word.
+fn members(step: &str) -> Vec<String> {
+    mise_run(step)
+        .unwrap_or(step)
+        .trim_start_matches("mise run ")
+        .trim_start_matches("--continue-on-error ")
+        .split(" ::: ")
+        .filter_map(|task| task.split_whitespace().next())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// THE GATES RUN IN TIERS, CHEAPEST FIRST, AND A TIER GATES THE NEXT (owner
+/// rulings, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor` and
+/// `semver` were `depends`, which ran before the body; one fan then started them
+/// all at once, so seconds-long gates refused a head while the suite and its
+/// mutants ran on for 41 minutes. Each tier is its own `--continue-on-error`
+/// fan, so it reports every failure it holds, and the `run` array stops at the
+/// first failing tier. Fails by: a build or the suite moved into a cheaper tier,
+/// or the tiers collapsed back into one step.
+///
+/// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785: a step `batten step graph run
+/// <group>` runs every `[[step]]` row of the group, so a task's tier is the
+/// position of the step whose group holds a row running it.
 #[test]
-fn verify_gated_carries_the_depends_verify_gave_up() {
-    let depends = depends_of("verify:gated");
-    for needed in ["tree-clean", "ci", "cross-check"] {
-        assert!(
-            depends.iter().any(|entry| entry == needed),
-            "verify:gated depends on {needed}: {depends:?}"
+fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
+    let gated = steps("verify:gated");
+    let position = |task: &str| {
+        gated
+            .iter()
+            .position(|step| match common::graph_group(step) {
+                Some(group) => common::group_rows(&group)
+                    .iter()
+                    .any(|row| row.task.as_deref() == Some(task)),
+                None => mise_run(step).is_some() && members(step).iter().any(|m| m == task),
+            })
+            .unwrap_or_else(|| panic!("verify:gated runs {task}: {gated:?}"))
+    };
+    let seconds = [
+        "verify:commit-lint",
+        "verify:config-lint",
+        "prose-only-check",
+        "engine-pin-check",
+        "zizmor",
+        "deny",
+    ];
+    let minutes = ["semver", "verify:test-replay", "cross-check", "darwin-link"];
+    let tier_one = position(seconds[0]);
+    let tier_two = position(minutes[0]);
+    let suite = position("ci");
+    for task in seconds {
+        assert_eq!(
+            position(task),
+            tier_one,
+            "{task} is in the seconds tier: {gated:?}"
         );
     }
+    for task in minutes {
+        assert_eq!(
+            position(task),
+            tier_two,
+            "{task} is in the minutes tier: {gated:?}"
+        );
+    }
+    assert!(
+        tier_one < tier_two && tier_two < suite,
+        "seconds, then minutes, then the suite: {gated:?}"
+    );
+    assert_eq!(
+        members(&gated[suite]),
+        ["ci"],
+        "the suite is its own tier: {gated:?}"
+    );
+    assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
 
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
@@ -318,7 +395,22 @@ fn the_receipt_is_the_last_step() {
     let gated = steps("verify:gated");
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
-    assert!(gated[0].contains("tree-clean"), "{gated:?}");
+    // THE FIRST STEP IS A GRAPH WHOSE ONE ROOT IS `tree-clean` (CLOUD-2785):
+    // every other row of the group waits on it, so nothing in the group is
+    // decided over a dirty tree.
+    let first = common::graph_group(&gated[0])
+        .map(|group| common::group_rows(&group))
+        .unwrap_or_default();
+    let roots: Vec<_> = first
+        .iter()
+        .filter(|row| row.depends_on.is_empty())
+        .map(|row| row.task.clone())
+        .collect();
+    assert_eq!(
+        roots,
+        [Some("tree-clean".to_owned())],
+        "{gated:?}: {first:?}"
+    );
     assert!(
         depends_of("verify:gated")
             .iter()
@@ -327,14 +419,18 @@ fn the_receipt_is_the_last_step() {
     );
 }
 
-/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last step before the
+/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last gate before the
 /// receipt, so every other body step has exited when it starts, and it is not a
-/// `depends` entry, which mise would run beside the rest of the fan.
+/// `depends` entry, which mise would run beside the rest of the fan. Only the
+/// coverage read (CLOUD-2788) sits between it and the receipt: it reads the pass
+/// records, `perf-gate`'s among them, so it must follow, and it runs nothing.
 #[test]
 fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
     let gated = steps("verify:gated");
     let perf = step_at(&gated, "mise run perf-gate");
-    assert_eq!(perf, gated.len() - 2, "{gated:?}");
+    let cover = step_at(&gated, "step cover");
+    assert_eq!(perf, gated.len() - 3, "{gated:?}");
+    assert_eq!(cover, gated.len() - 2, "{gated:?}");
     assert!(
         !depends_of("verify:gated")
             .iter()
@@ -377,11 +473,31 @@ fn the_receipted_tasks_name_their_own_step_rows() {
         );
         assert!(rows.contains(&id), "{id} has a [[step]] row: {rows:?}");
     }
-    // The replay keys the base it was handed, not only the default trunk's.
+    // The replay keys the base it was handed, not only the default trunk's: the
+    // task replays against `TEST_REPLAY_BASE`, and the row keys the merge base
+    // of the same override in-process (`step base --ref-env`, CLOUD-2787).
     assert!(
-        steps("verify:test-replay")[0].contains("--arg {{env.TEST_REPLAY_BASE}} --"),
+        steps("verify:test-replay")[0].contains("--base {{env.TEST_REPLAY_BASE}}"),
         "{:?}",
         steps("verify:test-replay")
+    );
+    assert!(
+        env_of("verify:test-replay", "TEST_REPLAY_BASE").contains("BATTEN_SPEC_BASE"),
+        "the task's base is the override the row keys"
+    );
+    let replay_tools = table["step"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(toml::Value::as_str) == Some("test-replay"))
+        })
+        .and_then(|row| row.get("tools"))
+        .map(toml::Value::to_string)
+        .unwrap_or_default();
+    assert!(
+        replay_tools.contains(r#""step", "base""#)
+            && replay_tools.contains(r#""--ref-env", "BATTEN_SPEC_BASE""#),
+        "the test-replay row keys its base through `step base --ref-env`: {replay_tools}"
     );
 }
 
@@ -451,7 +567,7 @@ fn record(dir: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -465,7 +581,7 @@ fn status(dir: &Path, args: &[&str]) -> (i32, String) {
         .args(["receipt", "status"])
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt status");
     (
         output.status.code().expect("exit code"),

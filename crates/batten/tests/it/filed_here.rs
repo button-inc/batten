@@ -101,6 +101,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -157,7 +158,7 @@ const BEFORE: &str = "2026-01-01T00:00:00Z";
 fn commit(root: &Path, message: &str, date: &str) {
     let output = common::git_command(root, &["commit", "--quiet", "-m", message, "--date", date])
         .env("GIT_COMMITTER_DATE", date)
-        .output()
+        .streamed_output()
         .expect("run git");
     assert!(output.status.success(), "commit the fixture base");
 }

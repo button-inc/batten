@@ -43,7 +43,7 @@
 # SERENA IS SLATED FOR REMOVAL, so (3) needs a home. Python-interpreter fragility
 # is not something to keep tolerating merely to surface memory, and the blocker is
 # the tree-sitter cluster, since serena also supplies AST-driven text
-# manipulation. When it goes, `crates/batten/src/graph.rs` is where this property
+# manipulation. When it goes, `crates/batten-base/src/graph.rs` is where this property
 # lands: a bounded walk from `core` over `mem:` edges, terminating on the root,
 # which is exactly CLOUD-683's BFS with a visit counter on it.
 #

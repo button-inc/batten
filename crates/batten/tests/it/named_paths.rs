@@ -61,7 +61,7 @@ use crate::common::{Fixture, git_in};
 fn repo(name: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config("version = 1\n")
-        .file("crates/batten/src/git.rs", "// git\n")
+        .file("crates/batten-core/src/git.rs", "// git\n")
         .file("mise-tasks/land.sh", "#!/usr/bin/env bash\nexit 0\n")
         .file("crates/batten/src/dup.rs", "// one\n")
         .file("crates/other/src/dup.rs", "// two\n")
@@ -78,7 +78,7 @@ fn named(dir: &Path, body: &str) -> (i32, String) {
     batten::ready::named_paths(&payload, dir).expect("the authority could look")
 }
 
-/// CARRIES: "bodies here write `git.rs:107`, not `crates/batten/src/git.rs`.
+/// CARRIES: "bodies here write `git.rs:107`, not `crates/batten-core/src/git.rs`.
 /// Exact path matching finds ZERO and basename resolution finds all three."
 #[test]
 fn a_short_form_resolves_to_the_tracked_path() {
@@ -86,7 +86,7 @@ fn a_short_form_resolves_to_the_tracked_path() {
     let (status, said) = named(&dir, "the bug is in `git.rs` around line 107");
     assert_eq!(status, 0);
     assert!(
-        said.contains("crates/batten/src/git.rs"),
+        said.contains("crates/batten-core/src/git.rs"),
         "the basename resolved to its tracked path: {said}"
     );
     assert!(said.starts_with('1'), "one path named: {said}");
@@ -123,8 +123,8 @@ fn a_bare_task_name_resolves_through_its_extension() {
 #[test]
 fn an_exact_tracked_path_resolves_as_itself() {
     let dir = repo("named-exact");
-    let (_, said) = named(&dir, "see crates/batten/src/git.rs for the detail");
-    assert!(said.contains("crates/batten/src/git.rs"), "{said}");
+    let (_, said) = named(&dir, "see crates/batten-core/src/git.rs for the detail");
+    assert!(said.contains("crates/batten-core/src/git.rs"), "{said}");
 }
 
 /// POINTER-ONLY IS STRUCTURAL: only tracked paths can reach the output, so a
@@ -137,7 +137,7 @@ fn prose_in_the_body_cannot_reach_the_output() {
         "Acme Corporation reported this. token=ghp_notarealsecretvalue. \
          The fix is in `git.rs`.",
     );
-    assert!(said.contains("crates/batten/src/git.rs"), "{said}");
+    assert!(said.contains("crates/batten-core/src/git.rs"), "{said}");
     for leaked in ["Acme", "ghp_", "token="] {
         assert!(
             !said.contains(leaked),

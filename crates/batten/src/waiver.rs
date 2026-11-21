@@ -127,11 +127,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
+pub use crate::config_check::waiver::validate;
+use crate::config_model::RuleKind;
+pub use crate::config_model::Waiver;
 use crate::error::UsageError;
-use crate::rules::{self, Finding, RuleKind};
+use crate::findings::Finding;
 
 /// A calendar date, to the day.
 ///
@@ -210,28 +211,12 @@ impl Date {
 
     /// The date of an instant given as seconds since the Unix epoch, UTC.
     ///
-    /// The standard era-based civil-from-days algorithm, hand-written so a date
-    /// costs no dependency — the same reason [`crate::receipt`] gives for its
-    /// timestamp formatter, which now reads its date half from here rather than
-    /// carrying a second copy of this arithmetic.
+    /// [`crate::clock::civil`]'s reading as a `Date`: the one civil-from-days
+    /// conversion in the tree, which the receipt timestamp formatter reads too.
     #[must_use]
     pub fn from_unix_seconds(seconds: u64) -> Date {
-        // Shift to the era starting 0000-03-01; every quantity below is
-        // non-negative, so the arithmetic stays in u64.
-        let z = seconds / 86_400 + 719_468;
-        let era = z / 146_097;
-        let day_of_era = z % 146_097;
-        let year_of_era =
-            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-        let mp = (5 * day_of_year + 2) / 153;
-        let day = day_of_year - (153 * mp + 2) / 5 + 1;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 };
-        Date {
-            year: year_of_era + era * 400 + u64::from(month <= 2),
-            month,
-            day,
-        }
+        let (year, month, day) = crate::clock::civil(seconds);
+        Date { year, month, day }
     }
 
     /// The canonical `YYYY-MM-DD` spelling — the one [`Date::parse`] accepts.
@@ -256,30 +241,6 @@ impl Date {
 pub fn today() -> Result<Date> {
     let since = SystemTime::now().duration_since(UNIX_EPOCH)?;
     Ok(Date::from_unix_seconds(since.as_secs()))
-}
-
-/// One declared waiver: which rule, why, until when, and optionally where.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Waiver {
-    /// The [`crate::rules::Rule::id`] this waiver suppresses findings of.
-    pub rule: String,
-    /// Why the finding is being waived. Required, and required to be non-empty:
-    /// an unjustified waiver is the undesigned hatch this table replaces, and a
-    /// reason nobody had to write is one nobody can review.
-    pub reason: String,
-    /// The last day this waiver applies, `YYYY-MM-DD`. Required — see the module
-    /// docs on why a waiver with no expiry is the rot rather than a convenience.
-    pub expires: String,
-    /// A glob narrowing the waiver to some of the rule's findings.
-    ///
-    /// Absent means the whole rule, which is the widest a waiver can be and
-    /// therefore the one that must be typed deliberately rather than reached by
-    /// omitting a field nobody noticed. Matched with
-    /// [`crate::rules::glob_match`], so a waiver's path vocabulary is the one the
-    /// rules use and not a second dialect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 impl Waiver {
@@ -330,7 +291,7 @@ impl Waiver {
         }
         match &self.path {
             None => true,
-            Some(glob) => rules::glob_match(glob, &finding.path),
+            Some(glob) => crate::selector::glob_match(glob, &finding.path),
         }
     }
 
@@ -355,40 +316,6 @@ fn root_message(err: &anyhow::Error) -> String {
     err.chain()
         .last()
         .map_or_else(|| err.to_string(), std::string::ToString::to_string)
-}
-
-/// Refuse a malformed waiver table at load, so a typo cannot sit inert.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for an empty rule id, an empty reason,
-/// an unparseable expiry, or the same rule-and-path waived twice.
-pub fn validate(table: &[Waiver]) -> Result<()> {
-    for (index, waiver) in table.iter().enumerate() {
-        if waiver.rule.trim().is_empty() {
-            return Err(UsageError::raise(
-                "waiver: rule must not be empty — a waiver that names no rule suppresses nothing",
-            ));
-        }
-        if waiver.reason.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "waiver {}: reason is required — an unjustified waiver is exactly the hatch this \
-                 table exists to replace",
-                waiver.rule
-            )));
-        }
-        waiver.expiry()?;
-        if table[..index]
-            .iter()
-            .any(|prior| prior.key() == waiver.key())
-        {
-            return Err(UsageError::raise(format!(
-                "{}: declared twice",
-                waiver.key()
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// One suppression this run performed, as an audit record.

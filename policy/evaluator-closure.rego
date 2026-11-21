@@ -40,7 +40,7 @@
 # every legitimate bump.
 #
 #MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
-#MUTANT io-crate-reachable-passes|s@^\tsome line in lines$@\tfalse #@|an_io_crate_in_the_recorded_closure_is_refused
+#MUTANT io-crate-reachable-passes|s@^\tsome line in lines$@\tsome line in []@|an_io_crate_in_the_recorded_closure_is_refused
 #MUTANT absent-evaluator-passes|s@^\t"absent" in lines$@\tfalse@|no_evaluator_node_at_all_is_could_not_look_not_a_clean_bill
 
 # METADATA

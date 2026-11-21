@@ -75,7 +75,7 @@ fn replay(dir: &Path, base: &str) -> Output {
         .env_remove("NEXTEST_PROFILE")
         .args(["test", "replay", "--base", base])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -257,5 +257,148 @@ fn a_replay_builds_where_the_prune_can_reach_it() {
         // store at `tree/target/nextest`, which is no build and goes with it.
         !holds_directory_named(&data_dir(&dir), "debug"),
         "no build tree is left under the state directory"
+    );
+}
+
+/// CRASH-ONLY: each verdict is journaled the moment it is read, so a rerun over
+/// the same HEAD and base reads every one back and builds nothing. The build
+/// tree is removed between the runs; a rerun that judged anything would
+/// rebuild it, and one that read nothing back would not name the test again.
+#[test]
+fn a_rerun_over_the_same_head_and_base_reads_every_verdict_back() {
+    let (dir, base) = repo("replay-journaled");
+    narrowed(&dir);
+    let first = replay(&dir, &base);
+    assert_eq!(first.status.code(), Some(2), "{}", text(&first));
+    let built = dir.join("target").join("replay");
+    assert!(built.is_dir(), "the first run builds: {}", text(&first));
+    std::fs::remove_dir_all(&built).unwrap();
+    let second = replay(&dir, &base);
+    assert_eq!(second.status.code(), Some(2), "{}", text(&second));
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&first.stdout),
+        "the journaled verdict reads as the judged one"
+    );
+    assert!(
+        !built.exists(),
+        "every verdict was journaled, so nothing was built"
+    );
+}
+
+/// The kept tree is HEAD's: a HEAD that moves rematerialises it, and the test
+/// whose base body is unchanged but whose HEAD moved is judged again, here to
+/// a different verdict.
+#[test]
+fn a_moved_head_judges_again() {
+    let (dir, base) = repo("replay-moved-head");
+    narrowed(&dir);
+    let first = replay(&dir, &base);
+    assert_eq!(first.status.code(), Some(2), "{}", text(&first));
+    head(
+        &dir,
+        &BASE.replace(
+            "assert_eq!(super::add(2, 2), 4);",
+            "assert!(super::add(2, 2) > 3);",
+        ),
+    );
+    let second = replay(&dir, &base);
+    assert!(second.status.success(), "{}", text(&second));
+    assert!(second.stdout.is_empty(), "{}", text(&second));
+}
+
+/// A FAILED UNION BUILD NAMES WHERE ITS COMPILER OUTPUT IS KEPT (#1276), in
+/// the plain report: HEAD drops the function the base body calls.
+#[test]
+fn a_union_build_that_failed_names_its_kept_output() {
+    let (dir, base) = repo("replay-kept-log");
+    head(
+        &dir,
+        &BASE.replace("pub fn add(", "pub fn plus(").replace(
+            "super::add(2, 2), 4);",
+            "super::plus(2, 2), 4);\n        let _ = 0;",
+        ),
+    );
+    let output = replay(&dir, &base);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("test replay: a union build failed"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A crate whose test names an item through a path, for the item-move cases
+/// (CLOUD-2790): `value` lives in `a`, the test spells `crate::a::value`.
+const ITEMS_LIB: &str = "\
+pub mod a;
+pub mod b;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn named() {
+        assert_eq!(crate::a::value(), 1);
+    }
+}
+";
+
+fn items_repo(name: &str) -> (PathBuf, String) {
+    let dir = common::scratch(name);
+    common::write(&dir, "Cargo.toml", MANIFEST);
+    common::write(&dir, "src/lib.rs", ITEMS_LIB);
+    common::write(&dir, "src/a.rs", "pub fn value() -> u8 {\n    1\n}\n");
+    common::write(&dir, "src/b.rs", "");
+    common::write(&dir, ".gitignore", "target/\nCargo.lock\n");
+    common::init_repo(&dir);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "base"]);
+    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    (dir, base)
+}
+
+/// `value` moves to `b`, returning `returns`, and the test's assertion becomes
+/// `body`.
+fn moved_to_b(dir: &Path, body: &str, returns: &str) {
+    common::write(dir, "src/a.rs", "");
+    common::write(
+        dir,
+        "src/b.rs",
+        &format!("pub fn value() -> u8 {{\n    {returns}\n}}\n"),
+    );
+    common::write(
+        dir,
+        "src/lib.rs",
+        &ITEMS_LIB.replace("assert_eq!(crate::a::value(), 1);", body),
+    );
+    common::git_in(dir, &["add", "-A"]);
+    common::git_in(dir, &["commit", "-qm", "head"]);
+}
+
+/// Fails by: a path respelled at a moved item's new home read as a modified
+/// assertion — the admission every respelled test used to cost. The crate sits
+/// at the repository's root, so this also shows the index reads the tree's own
+/// manifest rather than this repository's `crates/` layout.
+#[test]
+fn a_test_respelled_at_a_moved_items_home_is_clean() {
+    let (dir, base) = items_repo("replay-item-moved");
+    moved_to_b(&dir, "assert_eq!(crate::b::value(), 1);", "1");
+    let output = replay(&dir, &base);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(output.stdout.is_empty(), "{}", text(&output));
+}
+
+/// Fails by: an unrelated item that merely shares the deleted one's name read
+/// as its move, so a test switched to it passed unjudged.
+#[test]
+fn a_test_switched_to_another_item_of_its_name_is_reported() {
+    let (dir, base) = items_repo("replay-item-switched");
+    moved_to_b(&dir, "assert_eq!(crate::b::value(), 2);", "2");
+    let output = replay(&dir, &base);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("test-expectation-changed src/lib.rs::tests::named"),
+        "{}",
+        text(&output)
     );
 }

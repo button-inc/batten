@@ -40,6 +40,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -113,7 +114,7 @@ impl Bench {
             .args(args)
             .at_home(&self.home)
             .env("BATTEN_ENVIRONMENT", environment)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     }
 
@@ -329,7 +330,7 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
             .expect("stdin is piped")
             .write_all(br#"{"hook_event_name":"SessionStart"}"#)
             .expect("write stdin");
-        child.wait_with_output().expect("wait for batten")
+        child.streamed_wait().expect("wait for batten")
     };
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     assert!(!bench.record().exists());
@@ -368,7 +369,7 @@ fn session_start_in(bench: &Bench, environment: &str) -> std::process::Output {
         .expect("stdin is piped")
         .write_all(br#"{"hook_event_name":"SessionStart"}"#)
         .expect("write stdin");
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 /// A consumer that DECLARED the repair as a `[[startup]]` row gets it at session
@@ -529,7 +530,7 @@ fn a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface() {
         .current_dir(&bench.home)
         .args(["wiring", "reclaim", "-y"])
         .at_home(&bench.home)
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     let said = format!("{}{}", stdout(&outcome), stderr(&outcome));

@@ -41,61 +41,53 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize, Serializer};
+pub use crate::config_check::refusal::validate;
+pub use crate::config_model::Ceiling;
+use serde::{Serialize, Serializer};
 
-/// The `[refusal]` table: what one emitted mediated line may cost.
+/// A mediated call refused by policy: maps to [`ExitCode::Violation`] (exit `2`)
+/// with the reason on stderr, which is what a hook host reads as the deny.
 ///
-/// **Declared, never a literal in the crate** (non-negotiable rule 2, and the
-/// same reasoning `[budget.instructions]` is built on): a ceiling written into
-/// `crates/batten` is this repository's judgement compiled into every consumer's
-/// engine, and a consumer whose harness renders differently could not move it
-/// without a release. [`crate::budget::BudgetSet`] is the landed shape this
-/// copies — a ceiling and nothing else, absent meaning unenforced, because a
-/// threshold nobody declared is not a threshold of zero.
+/// [`ExitCode::Violation`]: crate::ExitCode::Violation
 ///
-/// The unit is **estimated tokens**, on `budget.rs`'s own bytes-per-token
-/// convention rather than a tokenizer: this is a ceiling on a line, checked off
-/// the hot path, and a real BPE pass here would be the dependency CLOUD-1284
-/// deliberately kept to `[dev-dependencies]`.
+/// **ONLY A [`Refusal`] MAKES ONE (CLOUD-2078).** The field is private and both
+/// constructors take a classed refusal and the arm to render, so nothing
+/// outside this module can build a verdict from prose, which the compiler
+/// rather than a review decides.
 ///
-/// It is not [`crate::verdict`]'s `GLOSS_MAX`, which stays. That bounds one
-/// FIELD — the gloss `explain` prints — and this bounds the emitted LINE. Both
-/// exist for the same reason and neither substitutes for the other: with the
-/// gloss off the hot path, `GLOSS_MAX` is what stops it growing back into a
-/// paragraph where nothing measures it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Ceiling {
-    /// The ceiling on estimated tokens for ONE emitted mediated refusal line.
-    /// The boundary is `<=`: exactly at budget passes, matching
-    /// [`crate::budget::Report::over_budget`] so the two thresholds in this tree
-    /// do not disagree about their own edge.
+/// It lives here, beside [`Refusal`], rather than in [`crate::error`], so the
+/// module every other one reports through names no refusal (CLOUD-2789).
+#[derive(Debug)]
+pub struct Denial(String);
+
+impl std::fmt::Display for Denial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Denial {}
+
+impl Denial {
+    /// Build a [`Denial`] as an [`anyhow::Error`], ready to `return Err(..)`.
     ///
-    /// **Bounds the REPEAT arm** — the compact `<token> <pointers> <rule-id>`
-    /// every firing after the first emits. The first sighting is a different
-    /// quantity and has its own key below.
-    pub max_tokens: usize,
-    /// The ceiling on the FIRST sighting of a rule, which carries the class
-    /// definition (CLOUD-1637).
-    ///
-    /// **A second key rather than a second meaning for the first**, because the
-    /// two arms are different quantities: `max_tokens` prices prose a reader has
-    /// already read, and this prices the one firing where they have not. Folding
-    /// them would force a consumer to choose between bounding the repeat usefully
-    /// and letting the definition arrive at all.
-    ///
-    /// Absent means unbounded, which is the answer every other budget in this
-    /// tree gives an undeclared row: the ceiling is the consumer's statement
-    /// about their own line, and inventing one here would be this crate deciding
-    /// a consumer fact.
-    ///
-    /// What it bounds is the ROUTE LIST, never the line. Over budget, routes are
-    /// dropped from the end and the gloss never is; when `<token> <pointers>
-    /// <rule-id> — <gloss>; <first route>` is itself over, it is emitted anyway.
-    /// See [`crate::hook::deny_text`] for why that irreducible case is a decision
-    /// rather than an oversight.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_sighting_max_tokens: Option<usize>,
+    /// Named `raise` for symmetry with [`crate::UsageError::raise`]: it returns an
+    /// [`anyhow::Error`] wrapping the `Denial`, not `Self`.
+    #[must_use]
+    pub fn raise(refusal: &Refusal, arm: Arm) -> anyhow::Error {
+        anyhow::Error::new(Denial(refusal.render_finding(arm)))
+    }
+
+    /// [`Denial::raise`] opening with the reading legend, for the first finding
+    /// of a context's epoch (CLOUD-2145).
+    #[must_use]
+    pub fn raise_opened(refusal: &Refusal, arm: Arm, legend: Option<&str>) -> anyhow::Error {
+        let rendered = refusal.render_finding(arm);
+        anyhow::Error::new(Denial(match legend {
+            Some(legend) => format!("{legend}\n{rendered}"),
+            None => rendered,
+        }))
+    }
 }
 
 impl Ceiling {
@@ -116,55 +108,6 @@ impl Ceiling {
         self.first_sighting_max_tokens
             .is_some_and(|max| crate::budget::estimate_tokens(line) > max)
     }
-}
-
-/// Refuse a `[refusal]` table that declares a ceiling nothing could satisfy.
-///
-/// A zero ceiling would refuse every line including the shortest possible one,
-/// which is the switched-off gate CLOUD-418 names: it fires on everything, so
-/// the first person to run it turns it off. Refused at load, in the same
-/// direction and for the same reason `budget.rs` refuses an empty set.
-///
-/// # Errors
-///
-/// When the declared ceiling is zero.
-pub fn validate(ceiling: Option<&Ceiling>) -> Result<(), String> {
-    let Some(declared) = ceiling else {
-        return Ok(());
-    };
-    if declared.max_tokens == 0 {
-        return Err(
-            "`[refusal] max_tokens = 0` refuses every line a refusal could emit, including the \
-             shortest one the grammar can spell — a ceiling nothing can satisfy is a gate that \
-             gets switched off rather than one that holds"
-                .to_owned(),
-        );
-    }
-    if declared.first_sighting_max_tokens == Some(0) {
-        return Err(
-            "`[refusal] first_sighting_max_tokens = 0` refuses every first sighting a refusal \
-             could emit, including the irreducible one — and the first sighting is the only \
-             firing that carries the class definition, so a zero there withholds the remedy \
-             from the one reader who has not read it"
-                .to_owned(),
-        );
-    }
-    // The first sighting carries strictly more than the repeat — the same line
-    // plus a gloss and at least one route — so a first-sighting ceiling at or
-    // below the repeat's cannot be met by any line that arm can compose. Refused
-    // here rather than discovered as an arm that silently never renders its
-    // definition, which is the defect this row exists to remove.
-    if let Some(first) = declared.first_sighting_max_tokens
-        && first <= declared.max_tokens
-    {
-        return Err(format!(
-            "`[refusal] first_sighting_max_tokens = {first}` is not above `max_tokens = {}`, and \
-             a first sighting is the repeat line plus a gloss and a route — so no line this arm \
-             can compose would fit, and the definition would never render",
-            declared.max_tokens
-        ));
-    }
-    Ok(())
 }
 
 /// What to run instead — the half of a refusal that makes it actionable.
@@ -361,10 +304,6 @@ pub struct Refusal {
 /// Rule 4 is untouched: this binds only what the refusal already renders, and
 /// `bindings` is `skip_serializing`, so `-J` output and `schema/*.json` do not
 /// move.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT printed-spelling-dropped|s@^    let mut spellings = vec!\[bound_subject(&render_subjects(subjects))\];$@    let mut spellings: Vec<String> = Vec::new();@|a_subject_copied_from_the_refusal_line_admits_the_write
-//MUTANT path-spelling-dropped|s@^    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);$@    let path: Option<String> = None;@|a_spent_admission_admits_the_write_it_was_taken_for
-//MUTANT class-spelling-raw|s@^        return vec!\[bound_subject(token)\];$@        return vec![token.to_owned()];@|a_refusal_naming_nothing_binds_its_class_as_a_request_spells_it
 fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<String> {
     use crate::verdict::{bound_subject, render_subjects};
     if subjects.is_empty() {
@@ -451,7 +390,7 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     // One file per key, CREATED EXCLUSIVELY (CLOUD-2145): the existence test and
     // the mark are one operation, so of a parallel batch of identical firings
     // exactly one reads "first". A check-then-write let every one of them.
-    let path = dir.join(crate::provision::digest(key.as_bytes()));
+    let path = dir.join(crate::digest::sha256_hex(key.as_bytes()));
     let _ = std::fs::create_dir_all(&dir);
     // An error other than "already there" answers TRUE: an unwritable store
     // means the next firing explains itself again, which is the safe direction.
@@ -474,7 +413,6 @@ pub const LEGEND: &str = "`batten policy explain <class>` prints any finding's d
 const LEGEND_KEY: &str = "legend";
 
 /// Whether this context's epoch still owes the legend, marking it delivered.
-//MUTANT legend-every-firing|s@^    first_sighting(root, context, LEGEND_KEY, LEGEND)$@    true@|the_first_finding_of_an_epoch_carries_the_legend
 #[must_use]
 pub fn legend_due(root: &Path, context: &str) -> bool {
     first_sighting(root, context, LEGEND_KEY, LEGEND)
@@ -490,14 +428,12 @@ pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
 }
 
 /// The directory one context's sightings live in.
-//MUTANT sighting-context-ignored|s@^    Some(store.join(crate::provision::digest(context.as_bytes())))$@    Some(store.join(crate::provision::digest(b"")))@|two_contexts_in_one_clone_each_get_the_full_text
 fn context_dir(root: &Path, context: &str) -> Option<std::path::PathBuf> {
     let store = crate::git::git_dir(root).ok()?.join(STORE);
-    Some(store.join(crate::provision::digest(context.as_bytes())))
+    Some(store.join(crate::digest::sha256_hex(context.as_bytes())))
 }
 
 /// Which arm this firing of `refusal` gets in `context`, marking it seen.
-//MUTANT sight-always-first|s@^    if !first_sighting(root, context, \&key, \&full) {$@    if false {@|a_warn_advisory_is_full_once_then_a_pointer
 #[must_use]
 pub fn sight(root: &Path, context: &str, refusal: &Refusal) -> Arm {
     let full = refusal.render_finding(Arm::Full);
@@ -519,7 +455,7 @@ pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
         return Arm::Full;
     };
     let key = refusal.sighting_key();
-    if dir.join(crate::provision::digest(key.as_bytes())).exists() {
+    if dir.join(crate::digest::sha256_hex(key.as_bytes())).exists() {
         Arm::Pointer
     } else {
         Arm::Full
@@ -528,7 +464,6 @@ pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
 
 /// Forget every item this ONE context has seen (CLOUD-2075). Other contexts in
 /// the clone are never touched.
-//MUTANT forget-sightings-noop|s@^        let _ = std::fs::remove_dir_all(dir);$@        let _ = dir;@|a_session_start_forgets_only_that_contexts_sightings
 pub fn forget_sightings(root: &Path, context: &str) {
     if let Some(dir) = context_dir(root, context) {
         let _ = std::fs::remove_dir_all(dir);
@@ -538,9 +473,8 @@ pub fn forget_sightings(root: &Path, context: &str) {
 /// An item's identity: the rule, the class, and a digest of its DEFINITION, so
 /// an edit to a gloss, route, precondition or reason mid-cycle is a new item
 /// that renders in full again (CLOUD-1582, absorbed).
-//MUTANT sighting-key-ignores-definition|s@^    let digest = crate::provision::digest(definition.as_bytes());$@    let digest = crate::provision::digest(b"");@|an_edited_definition_is_a_new_item_mid_cycle
 fn key_of(rule: &str, class: Option<&str>, definition: &str) -> String {
-    let digest = crate::provision::digest(definition.as_bytes());
+    let digest = crate::digest::sha256_hex(definition.as_bytes());
     format!("{rule}\u{1f}{}\u{1f}{digest}", class.unwrap_or_default())
 }
 
@@ -710,7 +644,6 @@ fn read_body(line: &str, rule: String, verdict: Option<String>) -> Parsed {
 /// leaving every other line byte-identical (CLOUD-2075 §D). `mark(key, full)`
 /// consults and marks the reader's store and answers whether this is the first
 /// sighting.
-//MUTANT boundary-collapse-skipped|s@^        let rewritten = if arm == Arm::Pointer { pointer } else { body };$@        let rewritten = body;@|collapse_cuts_a_marked_full_arm_to_its_pointer_prefix
 pub fn collapse(text: &str, mut mark: impl FnMut(&str, &str) -> bool) -> String {
     let mut lines: Vec<&str> = Vec::new();
     for body in text.split('\n') {
@@ -745,85 +678,10 @@ pub enum Arm {
     Pointer,
 }
 
-/// The word every finding line opens with, naming the binary that raised it and
-/// that `policy explain` is run through (CLOUD-2145). No harness writes a line
-/// opening `batten <severity> `, so it is also what tells a finding apart from
-/// a host's own messages.
-pub const PROVENANCE: &str = "batten";
-
-/// What a line is, as its second word (CLOUD-2145): for a finding, how it
-/// bears on the call — `deny` refused it, `warn` must be answered soon, `note`
-/// eventually — and `remedy` for a line that is no finding at all but how a
-/// rule's findings are fixed. One ASCII token each, the shape of a compiler's
-/// `error`/`warning`/`help`.
-///
-/// THE WORD, NOT THE SHAPE, SAYS IT IS A REMEDY: a finding may name no subject
-/// (`batten deny plan write refused; run ExitPlanMode…`), so a missing ` at `
-/// cannot mark a remedy line, and a reader merging stdout and stderr would read
-/// `batten deny <rule> — …` as a second finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Severity {
-    /// The call was refused.
-    #[default]
-    Deny,
-    /// An advisory to answer before the work goes much further.
-    Warn,
-    /// An advisory with no deadline.
-    Note,
-    /// Not a finding: how a rule's findings, each on its own line, are fixed.
-    Remedy,
-}
-
-impl Severity {
-    /// Every head word.
-    pub const ALL: [Severity; 4] = [
-        Severity::Deny,
-        Severity::Warn,
-        Severity::Note,
-        Severity::Remedy,
-    ];
-
-    /// The word the line carries.
-    #[must_use]
-    pub const fn word(self) -> &'static str {
-        match self {
-            Severity::Deny => "deny",
-            Severity::Warn => "warn",
-            Severity::Note => "note",
-            Severity::Remedy => "remedy",
-        }
-    }
-
-    /// The severity an advisory of `tier` is printed under.
-    #[must_use]
-    pub const fn of_tier(tier: crate::severity::AdvisoryTier) -> Severity {
-        match tier {
-            crate::severity::AdvisoryTier::Warning | crate::severity::AdvisoryTier::Caution => {
-                Severity::Warn
-            }
-            crate::severity::AdvisoryTier::Advisory => Severity::Note,
-        }
-    }
-}
-
-/// Whether `text` opens with a finding's head, `batten <severity> `.
-#[must_use]
-pub fn is_headed(text: &str) -> bool {
-    Severity::ALL.iter().any(|severity| {
-        text.strip_prefix(PROVENANCE)
-            .and_then(|rest| rest.strip_prefix(' '))
-            .and_then(|rest| rest.strip_prefix(severity.word()))
-            .is_some_and(|rest| rest.starts_with(' '))
-    })
-}
-
-/// The ONE spelling of a finding's head, `batten <severity> <name>`. Every line
-/// that reports a finding opens with this; `emission_census` refuses a
-/// hand-spelled one.
-#[must_use]
-pub fn head(severity: Severity, name: &str) -> String {
-    format!("{PROVENANCE} {} {}", severity.word(), plain(name))
-}
+// The line's grammar lives in the `grammar` leaf (CLOUD-2789), so the modules
+// below this one can spell a finding's head without reaching up here.
+pub use crate::grammar::{PROVENANCE, Severity, head, is_headed};
+use crate::grammar::{RULE_HOP_PLACEHOLDER, plain};
 
 /// The two names a finding line labels, so a reader can always tell a rule
 /// from a verdict (CLOUD-2075).
@@ -859,20 +717,9 @@ fn quoted(name: &str) -> String {
     format!("'{}'", name.replace('\'', "\\'"))
 }
 
-/// Pointer text made safe for the grammar: it can never contain the tail
-/// opener or the clause separator.
-fn plain(text: &str) -> String {
-    text.replace(" — ", " - ").replace("; ", ", ")
-}
-
 /// How every rendered override route opens; [`parse_finding`] drops these
 /// segments from an item's definition because their subject varies per firing.
 const OVERRIDE_OPENER: &str = "admit with batten override request ";
-
-/// CLOUD-1806's class route. The hop [`finding_line`] appends names the same
-/// verb with the real id, so a route whose target is this placeholder is
-/// dropped at render rather than printed twice.
-pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'";
 
 /// The one projection every channel carries (CLOUD-2075, CLOUD-2142):
 /// `<label> '<name>'[ at <S>](; <route>)*[ — ['<T>' ]<definition>]`,
@@ -892,14 +739,6 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
 /// line rather than truncating one.
-//MUTANT full-arm-reason-dropped|s@^    let remedy = refusal.remedy();$@    let remedy = None::<\&str>;@|a_first_sighting_carries_the_rows_reason_and_both_labels
-//MUTANT reason-replaces-do-dropped|s@^        Some(remedy) => vec!\[remedy\],$@        Some(_) => refusal.doc.act.iter().map(String::as_str).collect(),@|a_rule_reason_replaces_the_class_do
-//MUTANT repeat-carries-definition|s@^    let repeat = arm == Arm::Pointer;$@    let repeat = false;@|the_repeat_carries_every_pointer_and_no_definition
-//MUTANT repeat-drops-routes|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_repeat_carries_every_pointer_and_no_definition
-//MUTANT named-by-rule|s@^    let name = refusal.verdict().unwrap_or(refusal.rule());$@    let name = if refusal.rule().is_empty() { refusal.verdict().unwrap_or_default() } else { refusal.rule() };@|a_finding_is_named_by_its_violation_class
-//MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
-//MUTANT raising-row-dropped|s@^    if raised_by {$@    if false {@|a_first_sighting_names_the_row_that_raised_it
-//MUTANT severity-unprinted|s@^    let mut line = head(refusal.severity, name);$@    let mut line = head(Severity::Deny, name);@|an_advisory_finding_carries_its_severity
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     // THE VIOLATION'S NAME (CLOUD-2145): the class, whose definition is the one
     // a reader holds and looks up, and which explains the pointers below. Only a
@@ -1013,8 +852,6 @@ pub fn override_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) ->
 }
 
 /// One route's text, or `None` where it does not render.
-//MUTANT override-route-unrendered|s@^    if route.kind == RouteKind::Override {$@    if route.kind == RouteKind::Override \&\& false {@|the_override_route_on_the_line_is_the_request_that_admits
-//MUTANT route-reader-unnamed|s@^        Some(reader) => format!("{text} via {reader}"),$@        Some(_) => text,@|a_document_route_into_a_read_redirected_path_names_its_reader
 fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String> {
     use crate::verdict::RouteKind;
     if route.kind == RouteKind::Override {
@@ -1041,20 +878,18 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
 
 /// A CLI failure as one classed finding (CLOUD-2078), plus the diagnosis lines
 /// that follow it: `None` for a [`crate::error::Passthrough`] (no output of
-/// Batten's own) or a [`crate::error::Denial`] (already a rendered finding).
+/// Batten's own) or a [`crate::refusal::Denial`] (already a rendered finding).
 ///
 /// A [`crate::UsageError`] is its declared class, or `input parse refused`; any
 /// other error is `verb run broken` with its chain as subjects, outermost first.
 /// A finding is ONE line, so each message's first line is the subject and the
 /// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
-//MUTANT usage-failure-misclassed|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = usage.verdict.unwrap_or(Native::RunBroken);@|every_cli_failure_renders_its_verdict_label
-//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
 #[must_use]
 pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     if failure
         .downcast_ref::<crate::error::Passthrough>()
         .is_some()
-        || failure.downcast_ref::<crate::error::Denial>().is_some()
+        || failure.downcast_ref::<crate::refusal::Denial>().is_some()
     {
         return None;
     }
@@ -1098,8 +933,6 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
 /// subject: every finding of the rule is already its own line, so a count here
 /// would say twice what the reader holds. `None` where the row declares neither
 /// a fix nor a reason and is no class: such a line would say nothing.
-//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
-//MUTANT fix-route-unrendered|s@^        Fix::Run(command) => refusal.with_command_route(\&command),$@        Fix::Run(_) => refusal,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
 #[must_use]
 pub fn of_rule(
     rule: &str,
@@ -1132,9 +965,6 @@ pub fn of_rule(
     })
 }
 
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
-//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
@@ -1223,6 +1053,19 @@ impl Refusal {
             precondition: None,
         });
         self
+    }
+
+    /// [`Refusal::with_document_route`] as the ONLY route, and no fix (CLOUD-2284).
+    ///
+    /// For a pointer whose store is not a JSON document: the class's own
+    /// `--field` route refuses there, so every route it printed failed. The fix
+    /// is cleared too, or `remedy` would print that command once it is no
+    /// longer a route target.
+    #[must_use]
+    pub fn with_only_document_route(mut self, path: &str) -> Refusal {
+        self.routes.clear();
+        self.fix = Fix::None;
+        self.with_document_route(path)
     }
 
     /// Mark this refusal's subjects as separate tree findings at `paths`, so
@@ -1947,7 +1790,7 @@ mod tests {
     fn a_passthrough_or_a_denial_is_no_failure_to_render() {
         assert!(of_failure(&crate::error::Passthrough::raise(3)).is_none());
         let refusal = Refusal::new("g", "r", Fix::None);
-        assert!(of_failure(&crate::error::Denial::raise(&refusal, Arm::Full)).is_none());
+        assert!(of_failure(&crate::refusal::Denial::raise(&refusal, Arm::Full)).is_none());
     }
 
     /// Fails by: two refusals that differ in more than their subjects folded

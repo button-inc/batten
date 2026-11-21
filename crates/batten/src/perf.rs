@@ -68,13 +68,15 @@
 //! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
 //! looking for `^arm=`, never by a second exit code.
 
+use crate::capture::Streamed as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::config_model::{Event, Harness};
 use crate::error::UsageError;
-use crate::hook::{Event, Harness, WiringFile};
+use crate::hook::WiringFile;
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -122,8 +124,6 @@ const OUT_DIR_VAR: &str = "BENCH_OUT_DIR";
 ///
 /// The cost is three times the runs, paid only by a commit that touches crate
 /// source, a manifest or the lockfile — [`Decision`] skips clean otherwise.
-//MUTANT-SUITE crates/batten/tests/it/perf_pair.rs
-//MUTANT sample-too-small-to-decide|s@const DEFAULT_RUNS: \&str = "300";@const DEFAULT_RUNS: \&str = "100";@|the_default_sample_is_at_least_what_the_null_was_remeasured_at
 const DEFAULT_RUNS: &str = "300";
 /// Warmups, moved with [`DEFAULT_RUNS`] and measured in the same pair of nulls.
 const DEFAULT_WARMUP: &str = "30";
@@ -238,7 +238,7 @@ fn matches(entry: &str, path: &str) -> bool {
 /// compiled into the binary, so a change to one is already a change to `crates/`.
 /// Including it would be a second, weaker spelling of a path already covered.
 #[must_use]
-pub fn registered_paths(rules: &[crate::rules::Rule]) -> Vec<String> {
+pub fn registered_paths(rules: &[crate::config_model::Rule]) -> Vec<String> {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for rule in rules {
         if let Some(module) = rule.module.as_ref() {
@@ -595,7 +595,6 @@ pub fn base_target_dir(perf_dir: &Path, key: &str) -> PathBuf {
 /// other (CLOUD-1891): the dependency closure is built once and shared, and
 /// only the `batten` crate differs between the arms.
 #[must_use]
-//MUTANT base-arm-inside-shared|s@^    perf_dir.join("arms")$@    perf_dir.join("base-k")@|the_shared_arms_directory_keeps_each_arm_apart
 pub fn arms_target_dir(perf_dir: &Path) -> PathBuf {
     perf_dir.join("arms")
 }
@@ -645,15 +644,13 @@ fn arms_suspect(null: bool, head_could_inherit: bool, identical: bool) -> bool {
 /// Whether the head arm could hold the base arm's `batten` units: the base was
 /// built into the shared directory in this run, and the head build did not drop
 /// them first (CLOUD-2107, CLOUD-2399).
-//MUTANT identical-arms-always-suspect|s@^    base_built_now \&\& !head_cleaned$@    !head_cleaned@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
-//MUTANT cleaned-head-still-suspect|s@^    base_built_now \&\& !head_cleaned$@    base_built_now@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
 fn head_could_inherit(base_built_now: bool, head_cleaned: bool) -> bool {
     base_built_now && !head_cleaned
 }
 
 /// Whether two files hold the same bytes; an unreadable side is never "same".
 fn same_bytes(left: &Path, right: &Path) -> bool {
-    match (std::fs::read(left), std::fs::read(right)) {
+    match (crate::fsio::read(left), crate::fsio::read(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -719,7 +716,6 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
 /// # Errors
 ///
 /// A repository that cannot be opened.
-//MUTANT binary-key-takes-tests|s@^        \&id("crates/batten/src")?,$@        \&id("crates")?,@|a_test_only_commit_keeps_the_binary_source_key
 pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
     let id = |path: &str| -> Result<String> {
         Ok(crate::git::resolve_ref(repo, &format!("{rev}:{path}"))?.unwrap_or_default())
@@ -738,7 +734,6 @@ pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
 /// look. Measured on #1134: a test-and-config-only change built its head from
 /// the base's very sources after `build` had dropped the shared units, got the
 /// base's bytes, and the guard refused it as a wrong binary.
-//MUTANT identical-sources-suspect|s@^        (Some(base), Some(head)) => base != head,$@        (Some(_), Some(_)) => true,@|identical_arms_from_identical_sources_are_not_suspect
 fn sources_differ(base: Option<&str>, head: Option<&str>) -> bool {
     match (base, head) {
         (Some(base), Some(head)) => base != head,
@@ -753,7 +748,6 @@ fn sources_differ(base: Option<&str>, head: Option<&str>) -> bool {
 /// behind with no binary in it, and reading that as "built" would hand hyperfine
 /// a path it cannot execute and report the could-not-look as a measurement.
 #[must_use]
-//MUTANT built-for-unread|s@^    base_binary(perf_dir, key).is_file() \&\& marked_for(perf_dir, key)$@    base_binary(perf_dir, key).is_file()@|a_seeded_base_dir_does_not_answer_as_built
 pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
     // BUILT FOR THIS KEY, NOT MERELY PRESENT (CLOUD-2068). A warm-start seed
     // renames a sibling's directory to this key with that sibling's binary still
@@ -786,7 +780,6 @@ pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
 /// # Errors
 ///
 /// A directory that cannot be created, or a copy or marker write that fails.
-//MUTANT kept-head-unmarked|s@^    crate::durable::replace(built_for(perf_dir, key), key)$@    Ok::<(), anyhow::Error>(())@|a_kept_head_answers_as_the_next_base
 pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> Result<()> {
     if let Ok(entries) = std::fs::read_dir(perf_dir) {
         for entry in entries.filter_map(std::result::Result::ok) {
@@ -812,7 +805,7 @@ pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> 
 
 /// Whether the `built-for` marker names `key`.
 fn marked_for(perf_dir: &Path, key: &str) -> bool {
-    std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
+    crate::fsio::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
 }
 
 /// The marker a base build writes beside its binary, naming the key it was
@@ -905,7 +898,6 @@ const PAIR_PROFILE_CONFIG: [&str; 4] = [
 /// built this checkout's release binary into the real `target/release` — 634
 /// CPU-seconds of `rustc` inside one case on a lap whose prune had evicted it. A
 /// missing manifest now fails the build here, which is `build`'s could-not-look.
-//MUTANT build-escapes-to-enclosing-workspace|s@    args.push(String::from("--manifest-path"));@    let _ = "--manifest-path";@|a_measurement_builds_the_repository_it_was_asked_about
 fn build_args(profile: &str, dir: &Path) -> Vec<String> {
     let mut args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
         .iter()
@@ -972,7 +964,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
     let mut cleaned = false;
     if let Some(marker) = &marker {
-        let last = std::fs::read_to_string(marker).ok();
+        let last = crate::fsio::read_to_string(marker).ok();
         if switches_arm(last.as_deref(), what) {
             let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
                 .iter()
@@ -997,10 +989,6 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     }
     Ok(cleaned)
 }
-
-//MUTANT-SUITE crates/batten/src/perf.rs
-//MUTANT arm-switch-never|s@^    last != Some(what)$@    false@|switching_arms_drops_the_shared_units
-//MUTANT identical-arms-unguarded|s@^        (Ok(left), Ok(right)) => left == right,$@        (Ok(_), Ok(_)) => false,@|identical_arms_are_the_same_bytes
 
 /// The file in a shared target dir naming the arm last built into it.
 const LAST_ARM: &str = "perf-last-arm";
@@ -1052,7 +1040,7 @@ fn mediation_verb(bin: &Path) -> Result<String> {
     let mut command = std::process::Command::new(bin);
     let output = command
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .with_context(|| format!("perf-pair: could not ask {} for its surface", bin.display()))?;
     if !output.status.success() {
         bail!(
@@ -1105,7 +1093,7 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
         WiringFile::Whole(path) => (path, None),
     };
     let settings = tree.join(path);
-    let text = std::fs::read_to_string(&settings).with_context(|| {
+    let text = crate::fsio::read_to_string(&settings).with_context(|| {
         format!(
             "perf-pair: {} wires no settings the wired pair can read. No measurement.",
             settings.display()
@@ -1792,7 +1780,7 @@ fn bench(
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
 
-    let text = std::fs::read_to_string(&json)
+    let text = crate::fsio::read_to_string(&json)
         .with_context(|| format!("perf-pair: could not read the {id} pair. No measurement."))?;
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("perf-pair: the {id} pair did not parse. No measurement."))?;
@@ -2096,7 +2084,7 @@ fn parse_pairs(input: &str) -> Result<Vec<Paired>> {
 /// false green this repository keeps re-meeting.
 pub fn compare(
     input: &str,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Comparison> {
     let records = parse_pairs(input)?;
@@ -2210,7 +2198,7 @@ pub enum Gate {
 pub fn gate(
     repo: &Path,
     options: Options,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Gate> {
     match pair(repo, options)? {
@@ -2580,7 +2568,7 @@ pub fn config_load(path: &Path) -> Result<Sweep> {
     // Read once, up front, for two reasons: it is the `parse` arm's input, and a
     // missing or unparseable file is a could-not-look that must be reported
     // BEFORE any timing rather than as a zero.
-    let text = std::fs::read_to_string(path)
+    let text = crate::fsio::read_to_string(path)
         .with_context(|| format!("perf-config-load: could not read {source}"))?;
     crate::config::parse(&text, &source)
         .with_context(|| format!("perf-config-load: {source} does not parse"))?;
@@ -2966,8 +2954,6 @@ impl Residency {
 /// also keeps the script free of the `|` the row itself is split on — a script
 /// carrying `||` reads as eight fields where three are wanted.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
-//MUTANT current-warm-first-sighting|s@        !matches!(self, Self::FullEveryTime)@        matches!(self, Self::FirstFullThenCompact)@|a_compact_warm_repeat_is_exactly_the_refusal_line
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
     // A cold firing is a first sighting under every strategy; a warm one is a
     // first sighting exactly when the strategy does not treat it as a repeat.
@@ -3408,9 +3394,6 @@ pub fn median_seconds(samples: &[u64]) -> Option<u64> {
     sorted.get(at).copied()
 }
 
-//MUTANT-SUITE crates/batten/src/perf.rs
-//MUTANT latency-ceiling-without-slack|s@    if median > budget.saturating_add(slack) {@    if median > budget {@|a_median_inside_the_slack_is_within
-//MUTANT latency-loose-unread|s@    } else if median < budget / loose_factor.max(1) {@    } else if false {@|a_median_under_the_loose_floor_is_drift
 /// The verdict over a median, with the retired body's integer arithmetic: the
 /// ceiling is `budget + slack` and the floor `budget / loose_factor`.
 #[must_use]
@@ -3501,8 +3484,8 @@ mod tests {
             "the kept head answers as the next pair's base"
         );
         assert_eq!(
-            std::fs::read(base_binary(&perf, "headkey"))?,
-            std::fs::read(&head)?
+            crate::fsio::read(base_binary(&perf, "headkey"))?,
+            crate::fsio::read(&head)?
         );
         assert!(!stale.exists(), "a base neither live nor kept is removed");
         Ok(())
@@ -3625,8 +3608,8 @@ mod tests {
         std::fs::write(&built, b"head")?;
         let head = perf.join("pair").join("batten-head");
         take_arm(&shared, &head, "head")?;
-        assert_eq!(std::fs::read(&base)?, b"base");
-        assert_eq!(std::fs::read(&head)?, b"head");
+        assert_eq!(crate::fsio::read(&base)?, b"base");
+        assert_eq!(crate::fsio::read(&head)?, b"head");
         assert!(take_arm(&perf.join("empty"), &head, "head").is_err());
         let _ = std::fs::remove_dir_all(&scratch);
         Ok(())
@@ -3676,47 +3659,26 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `base_key` reads; no production spawn"
-    )]
     fn a_commit_outside_the_crates_keeps_the_base_key() {
         let repo = perf_scratch("base-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        // IN-CRATE, NO SPAWN (#1276): the fixture is commits, which `gitwrite`
+        // writes; shelling out to the host's `git` was a spawn for nothing.
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates")).expect("mkdir");
         std::fs::write(repo.join("crates/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("Cargo.toml"), "m").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        // Each commit names its WHOLE tree: `commit_paths` writes the tree from
+        // the paths it is handed, so a partial list would drop a file.
+        let first = commit(&["crates/lib.rs", "Cargo.toml"], "one");
         std::fs::write(repo.join("README"), "r").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&["crates/lib.rs", "Cargo.toml", "README"], "two");
         std::fs::write(repo.join("crates/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&["crates/lib.rs", "Cargo.toml", "README"], "three");
         let key = |sha: &str| base_key(&repo, sha).expect("key");
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
@@ -3739,48 +3701,24 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `binary_source_key` reads; no production spawn"
-    )]
     fn a_test_only_commit_keeps_the_binary_source_key() {
         let repo = perf_scratch("binary-source-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates/batten/src")).expect("mkdir");
         std::fs::create_dir_all(repo.join("crates/batten/tests")).expect("mkdir");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        let tree = ["crates/batten/src/lib.rs", "crates/batten/tests/it.rs"];
+        let first = commit(&tree, "one");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t2").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&tree, "two");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&tree, "three");
         let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
         assert_ne!(
             base_key(&repo, &first).expect("key"),
@@ -3852,7 +3790,7 @@ mod tests {
         sibling(&perf, "b", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let seeded = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(seeded).expect("seeded"), "b");
+        assert_eq!(crate::fsio::read_to_string(seeded).expect("seeded"), "b");
         assert!(
             !base_target_dir(&perf, "b").exists(),
             "a rename, not a copy"
@@ -3888,7 +3826,7 @@ mod tests {
         sibling(&perf, "d", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let kept = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), "c");
+        assert_eq!(crate::fsio::read_to_string(kept).expect("kept"), "c");
         assert!(base_target_dir(&perf, "d").exists());
     }
 
@@ -4195,7 +4133,7 @@ mod tests {
         assert!(head.is_file(), "a directory that is no base build stays");
         assert!(base_target_dir(&perf, "livebase").is_dir());
         assert!(!base_target_dir(&perf, "stale").exists());
-        assert_eq!(std::fs::read(base_binary(&perf, "headkey"))?, b"head");
+        assert_eq!(crate::fsio::read(base_binary(&perf, "headkey"))?, b"head");
         Ok(())
     }
 
@@ -4334,10 +4272,10 @@ mod tests {
         assert_eq!(check, out.join("check-repo"));
         assert_eq!(hooks, repo.join("crates/batten/tests/fixtures/hooks"));
         assert_eq!(
-            std::fs::read_to_string(check.join("batten.toml"))?,
+            crate::fsio::read_to_string(check.join("batten.toml"))?,
             "authority"
         );
-        assert_eq!(std::fs::read_to_string(check.join("lib.rs"))?, "source");
+        assert_eq!(crate::fsio::read_to_string(check.join("lib.rs"))?, "source");
         Ok(())
     }
 
@@ -4594,17 +4532,17 @@ mod tests {
         let (floor, two) = (root.join("floor"), root.join("two"));
         sweep_fixture(&floor, 0)?;
         assert_eq!(
-            std::fs::read_to_string(floor.join("batten.toml"))?,
+            crate::fsio::read_to_string(floor.join("batten.toml"))?,
             "version = 1\n"
         );
         sweep_fixture(&two, 2)?;
-        let authority = std::fs::read_to_string(two.join("batten.toml"))?;
+        let authority = crate::fsio::read_to_string(two.join("batten.toml"))?;
         assert!(
             authority.contains("documents = [\"config0.toml\", \"config1.toml\"]"),
             "{authority}"
         );
         assert_eq!(
-            std::fs::read_to_string(two.join("config1.toml"))?,
+            crate::fsio::read_to_string(two.join("config1.toml"))?,
             "quiet = true\n"
         );
         assert!(two.join(".git").is_dir());

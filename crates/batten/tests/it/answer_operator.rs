@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -134,7 +135,7 @@ fn channels(dir: &Path, home: &Path, transcript: &Path) -> String {
             .write_all(envelope.as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten hook");
+    let outcome = child.streamed_wait().expect("run batten hook");
     format!(
         "{}{}",
         String::from_utf8_lossy(&outcome.stdout),

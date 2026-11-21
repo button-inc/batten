@@ -35,23 +35,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 
-/// The engine a config needs: exactly one of a release tag or a source digest.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Pin {
-    /// A published release, spelled as its tag (`v0.0.198`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release: Option<String>,
-    /// The digest `batten engine digest` prints for the source tree the engine
-    /// must be built from (64 hex).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Pin;
 
 /// What a [`Pin`] names, decided once (CLOUD-2418): a verb that matches this
 /// rather than the two fields reads a malformed pin as every other such verb
@@ -67,14 +55,20 @@ pub enum PinKind {
 }
 
 /// What every verb says of a [`PinKind::Malformed`] pin.
-pub const MALFORMED_PIN: &str = "`engine` names exactly one of `release` or `source`";
+pub const MALFORMED_PIN: &str =
+    "`engine` names exactly one of `release` (a release tag, `v0.0.217`) or `source`";
 
 impl Pin {
     /// What this pin names.
+    ///
+    /// **A RELEASE IS A RELEASE TAG OR IT IS MALFORMED (CLOUD-2644).** The tag is
+    /// joined into the engine cache's path, and a binary found there is run
+    /// without a re-check, so `"../../x"` must never reach the join: it is
+    /// refused here, by the one reader every caller asks.
     #[must_use]
     pub fn kind(self) -> PinKind {
         match (self.release, self.source) {
-            (Some(tag), None) => PinKind::Release(tag),
+            (Some(tag), None) if release_version(&tag).is_ok() => PinKind::Release(tag),
             (None, Some(digest)) => PinKind::Source(digest),
             _ => PinKind::Malformed,
         }
@@ -115,8 +109,6 @@ fn is_input(path: &str) -> bool {
 /// SHA-256's empty value, `e3b0c442…`, which names no source; measured on #1132,
 /// a debug binary carried exactly that stamp and every `cargo run -p batten`
 /// task refused under a source pin.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT empty-digest-stamped|s@^    if inputs == 0 {$@    if false {@|a_stamp_over_no_inputs_is_refused
 pub fn digest(root: &Path) -> Result<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
@@ -125,7 +117,7 @@ pub fn digest(root: &Path) -> Result<String> {
         .iter()
         .filter(|path| is_input(path))
     {
-        let bytes = std::fs::read(root.join(path))?;
+        let bytes = crate::fsio::read(root.join(path))?;
         hasher.update(path.as_bytes());
         hasher.update([0]);
         hasher.update(&bytes);
@@ -162,8 +154,6 @@ fn hex(bytes: &[u8]) -> String {
 /// binary under `root` is cargo's output, not an installed engine. Under
 /// `mise exec` that output is first on `PATH`, and the one past it is what the
 /// hook runs — the case #1132 measured.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT source-update-installs-nothing|s@^        targets.push(resolved);$@@|a_source_pin_update_installs_where_the_hook_resolves
 #[must_use]
 pub fn install_targets(
     running: &Path,
@@ -238,14 +228,141 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
     Ok(())
 }
 
-/// The pin a config declares, read from its raw text without parsing the rest.
+/// The pin a config declares: the top-level `engine` key, read from the raw
+/// text as a stream and never parsed as a whole (CLOUD-2279).
 ///
-/// Top-level keys precede the first table header in TOML, so the scan stops
-/// there; an `engine` line past it belongs to some table and is not the pin.
+/// The scan stops at the key, or at the first table header — top-level keys
+/// precede every table in TOML, so an `engine` line past one belongs to that
+/// table and is not the pin. A valid config puts the key at its head, after only
+/// `version` ([`pin_out_of_order`]), so a load reads a handful of lines here
+/// whatever the file's size. Read syntactically, never validated: a later
+/// release's new check (the prose cap, CLOUD-1642) must not be able to stop the
+/// pin from being read, because following the pin is how that release gets out
+/// of the way.
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
     top_level(text, "engine")?.try_into().ok()
 }
+
+/// The 1-based line of an `engine` pin some top-level key other than `version`
+/// precedes, or `None` for a pin at the head or no pin at all.
+///
+/// **A pin out of order is invalid, never unreadable**: [`declared`] still finds
+/// it, so the engine follows the pin, and `config lint` refuses the file until
+/// the key is moved up. The order is what keeps the hot path's read short, so a
+/// file that buries its pin is a config to rewrite, not one to scan further for.
+#[must_use]
+pub fn pin_out_of_order(text: &str) -> Option<usize> {
+    let mut buried = false;
+    for (index, line) in text.lines().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with('[') {
+            return None;
+        }
+        let Some((key, _)) = code.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || key.starts_with('#') {
+            continue;
+        }
+        if key == "engine" {
+            return buried.then_some(index + 1);
+        }
+        // A line continuing a multi-line value is not a key: it never begins
+        // with a bare key, so only a bare-key spelling counts.
+        if key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            buried |= key != "version";
+        }
+    }
+    None
+}
+
+/// `text` with the `engine` key pinning release `tag`, for a config that pins
+/// nothing at all; `None` for one that already pins (CLOUD-2595 §2c).
+///
+/// **The Gradle Wrapper's move.** "Any later version of batten that finds a
+/// toml without a pin should just add it after the parse succeeds" (the owner,
+/// 2026-11-04): the engine that loaded the file writes its own release in, so the
+/// file is read only by the release it pins from then on. [`rewrite`] places the
+/// key at the head, after `version`, where [`pin_out_of_order`] wants it.
+#[must_use]
+pub fn adopted(text: &str, tag: &str) -> Option<String> {
+    if declared(text).is_some() {
+        return None;
+    }
+    let pin = Pin {
+        release: Some(tag.to_owned()),
+        source: None,
+    };
+    Some(rewrite(text, &pin))
+}
+
+/// The remedy for a declaration [`ahead_of`] the pin, which `engine update`
+/// never moves back.
+const PIN_UP: &str = "pin a release at or above it, or lower it";
+
+/// The batten declarations in `text` that disagree with release pin `tag`
+/// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
+/// the pin, and a `min_batten_version` above it. Each is its 1-based line, what
+/// it says, and the remedy that clears it: `engine update` moves a provision row
+/// to the pin, but never lowers a floor, so a floor above the pin names the two
+/// moves that can.
+///
+/// The document is parsed once, so a row is found however it is spelled, by
+/// the same [`is_batten_row`] `engine update` rewrites by; a config that will
+/// not parse is the load's to refuse, and has no findings here.
+#[must_use]
+pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)> {
+    let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    if let Some(item) = doc.get("min_batten_version")
+        && let Some(floor) = item.as_str()
+        && semver::Version::parse(floor).is_ok_and(|floor| ahead_of(&floor, &pin))
+    {
+        found.push((
+            item_line(text, item),
+            format!("min_batten_version {floor}"),
+            PIN_UP,
+        ));
+    }
+    let rows = doc
+        .get("provision")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(toml_edit::ArrayOfTables::iter);
+    for row in rows.filter(|row| is_batten_row(*row)) {
+        let Some(item) = row.get("version") else {
+            continue;
+        };
+        let Some(version) = item.as_str() else {
+            continue;
+        };
+        let parsed = release_version(version).ok();
+        if parsed.as_ref() == Some(&pin) {
+            continue;
+        }
+        let remedy = if parsed.is_some_and(|have| ahead_of(&have, &pin)) {
+            PIN_UP
+        } else {
+            "run `batten engine update`"
+        };
+        found.push((
+            item_line(text, item),
+            format!("provision batten {version}"),
+            remedy,
+        ));
+    }
+    found.sort();
+    found
+}
+
+// The rows below are judged by the install suite, as before this block.
 
 /// One top-level key of a config, read from its raw text without parsing the
 /// rest (CLOUD-2279): the scan [`declared`] makes, for any key.
@@ -287,7 +404,6 @@ pub const REPAIR_PINNED: &str = "mise exec -- batten engine install";
 
 /// Whether `command` is one of the repair's two whole spellings: equality, so
 /// no shell composition rides either.
-//MUTANT floor-admits-a-carried-repair|s@^    command == REPAIR \x7c\x7c command == REPAIR_PINNED$@    command.contains(REPAIR)@|a_command_carrying_the_repair_verb_is_still_refused
 #[must_use]
 pub fn is_repair(command: &str) -> bool {
     command == REPAIR || command == REPAIR_PINNED
@@ -310,7 +426,6 @@ pub fn repair_at(root: &std::path::Path, repair: &str) -> String {
 /// Whether `command` is a repair spelled whole, bare or rooted at `root`:
 /// equality against strings built from the authority, so the `&&` admitted is
 /// the one this engine wrote and no other composition rides it.
-//MUTANT rooted-repair-refused|s@^            .any(\x7crepair\x7c command == repair_at(root, repair))$@            .any(\x7c_\x7c false)@|a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it
 #[must_use]
 pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
     is_repair(command)
@@ -321,7 +436,7 @@ pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
 
 /// `word` as one POSIX shell word: bare where it carries nothing the shell
 /// reads, single-quoted otherwise.
-fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     if !word.is_empty()
         && word
             .chars()
@@ -333,13 +448,8 @@ fn shell_word(word: &str) -> String {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
-//MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest.as_str()) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest.as_str()) {@|a_source_pin_without_a_stamp_is_refused
-
 /// Whether the running binary lives inside the tree holding `source`, the
 /// config it was refused over — that tree's own build, not an installed engine.
-//MUTANT in-tree-build-updated|s@^        .is_some_and(\x7croot\x7c exe.starts_with(root))$@        .is_some_and(\x7c_\x7c false)@|a_stale_build_of_the_checkout_names_the_rebuild
 fn built_in(source: &str) -> bool {
     let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         return false;
@@ -359,8 +469,6 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// and an in-process load names its source by label rather than by a path the
 /// in-tree arm could judge. Source pins only — a release pin is a published
 /// engine's name, and running another under it is the skew this check refuses.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
 }
@@ -392,8 +500,6 @@ pub(crate) fn runs_local() -> bool {
 /// the tree stopped `follow_pin` finding its own build, reinstating the drift
 /// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
 /// honoured for a tree this process never built.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT foreign-target-dir-read|s@^        .join("target")$@        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(\x7c\x7c "target".into()))@|the_handoff_reads_no_target_dir_of_this_process
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     let build = root
@@ -412,8 +518,6 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// stayed green while proving less than it read as proving, which is the defect
 /// `hand_off` collapsed two hand-offs to fix. Same answer here: one existence
 /// rule, one line, one row over it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT build-presence-unchecked|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 fn existing(build: PathBuf) -> Option<PathBuf> {
     build.is_file().then_some(build)
 }
@@ -426,8 +530,6 @@ fn existing(build: PathBuf) -> Option<PathBuf> {
 /// that same root with this process's environment inherited. The two ends of
 /// one file therefore agree for every value of the variable, absolute or
 /// relative — which is the agreement this issue exists to restore.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT own-build-ignores-the-target-dir|s@^    existing(release_build(root))$@    existing(root.join("target").join("release").join(crate::surface::BINARY))@|a_source_pin_is_followed_into_a_redirected_target_dir
 #[must_use]
 pub fn own_build(root: &Path) -> Option<PathBuf> {
     existing(release_build(root))
@@ -476,8 +578,6 @@ pub fn release_build(root: &Path) -> PathBuf {
 /// A [`UsageError`] naming both identities and the update, when the pin names
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let Some(pin) = declared(text) else {
         return Ok(());
@@ -549,7 +649,7 @@ pub fn running_stamp() -> Option<String> {
 /// `binary`'s stamp, or `None` when it carries none.
 #[must_use]
 pub fn stamp_of(binary: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(stamp_path(binary)).ok()?;
+    let text = crate::fsio::read_to_string(stamp_path(binary)).ok()?;
     let digest = text.trim();
     (!digest.is_empty()).then(|| digest.to_owned())
 }
@@ -648,9 +748,6 @@ pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
     sums_entries(sums).find_map(|(digest, name)| (name == asset).then_some(digest))
 }
 
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT digest-unchecked|s@^    if got != want {$@    if false {@|an_archive_whose_digest_disagrees_is_refused
-
 /// Refuse an archive whose SHA-256 is not the one its release published.
 ///
 /// # Errors
@@ -663,7 +760,7 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
             "engine install: the release publishes no digest for {asset}, so it cannot be verified"
         ))
     })?;
-    let got = crate::receipt::hex_sha256(archive);
+    let got = crate::digest::sha256_hex(archive);
     if got != want {
         return Err(UsageError::raise(format!(
             "engine install: {asset} hashes {got}, not the {want} its release published; nothing was installed"
@@ -671,6 +768,8 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
     }
     Ok(())
 }
+
+// The rows below are judged by this module's own unit suite, as before.
 
 /// The engine binary of release `tag`, fetched from `repository` for this build's
 /// own target and checked against that release's `SHA256SUMS` (CLOUD-2062).
@@ -684,8 +783,17 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
 /// Either download answering other than 200, a digest that disagrees, or an
 /// archive with no binary at its root — in every case nothing is installed.
 pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
-    let target = running_target();
-    let asset = release_asset(tag, &target);
+    fetch_release_for(repository, tag, &running_target())
+}
+
+/// [`fetch_release`] for `target`'s asset rather than this engine's: how
+/// `engine install` fetches the same tag's gnu build to try it here.
+///
+/// # Errors
+///
+/// As [`fetch_release`].
+pub fn fetch_release_for(repository: &str, tag: &str, target: &str) -> Result<Vec<u8>> {
+    let asset = release_asset(tag, target);
     let archive = crate::fetch::get(&release_url(repository, tag, &asset), &[])?;
     let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
     if archive.status != 200 || sums.status != 200 {
@@ -695,7 +803,43 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
         )));
     }
     verify(&archive.body, &String::from_utf8_lossy(&sums.body), &asset)?;
-    extract(&archive.body, &crate::dist::binary_file("batten", &target))
+    extract(&archive.body, &crate::dist::binary_file("batten", target))
+}
+
+// The rows below are judged by this module's own unit suite, as before.
+
+/// The gnu build of a musl Linux `target`'s platform, or `None` for any other.
+#[must_use]
+fn gnu_twin(target: &str) -> Option<String> {
+    target
+        .strip_suffix("-unknown-linux-musl")
+        .map(|arch| format!("{arch}-unknown-linux-gnu"))
+}
+
+/// Which build `engine install` places: `(target, bytes)` (CLOUD-2595).
+///
+/// **gnu where it RUNS, musl everywhere else.** The bootstrap always fetches
+/// the static musl build, because it runs on every Linux and the script cannot
+/// know more. gnu is about 15× faster per hook (`mallocng` returning freed
+/// memory on every free, measured in CLOUD-1859), so a musl engine fetches its
+/// tag's gnu build — verified as any download is — and keeps it only when
+/// `runs` says it answered on this host. Not by guessing from a loader: a host
+/// with no libc, or a glibc older than the build, fails `runs` and keeps musl.
+/// Anything else — no gnu build for the platform, an unpublished tag, a fetch
+/// that failed — keeps the musl bytes, silently, since they already run.
+pub fn chosen_build(
+    running: &str,
+    musl: Vec<u8>,
+    fetch: impl FnOnce(&str) -> Option<Vec<u8>>,
+    runs: impl FnOnce(&[u8]) -> bool,
+) -> (String, Vec<u8>) {
+    let Some(gnu) = gnu_twin(running) else {
+        return (running.to_owned(), musl);
+    };
+    match fetch(&gnu) {
+        Some(candidate) if runs(&candidate) => (gnu, candidate),
+        _ => (running.to_owned(), musl),
+    }
 }
 
 /// The release `reference`'s `batten.toml` pins, read off the repository's
@@ -753,26 +897,83 @@ pub struct Heading {
     pub version: semver::Version,
     /// The release's date, when the heading carries one.
     pub date: Option<String>,
+    /// How many of its entries are marked breaking (CLOUD-2660); `None` for a
+    /// release no changelog carries.
+    pub breaking: Option<usize>,
+    /// Its section's lines, 1-based, heading to last non-blank line; `None` for
+    /// a release no changelog carries.
+    pub span: Option<(usize, usize)>,
 }
 
-/// Every release heading in a changelog body, in the order it lists them.
+/// The marker release-plz puts on a breaking entry.
+pub const BREAKING: &str = "[**breaking**]";
+
+/// The version and date a `## [x.y.z](…) - YYYY-MM-DD` line names, or `None`
+/// for any other line.
+fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
+    let (version, tail) = line.strip_prefix("## [")?.split_once(']')?;
+    let version = semver::Version::parse(version).ok()?;
+    let date = tail
+        .rsplit_once(" - ")
+        .map(|(_, date)| date.trim())
+        .filter(|date| crate::waiver::Date::parse(date).is_ok())
+        .map(str::to_owned);
+    Some((version, date))
+}
+
+/// Every release section in a changelog body, in the order it lists them, each
+/// with its breaking count and line span (CLOUD-2660).
 ///
 /// A line that is not a version heading — `## [Unreleased]`, prose, a deeper
-/// heading — is not a release and is skipped.
+/// heading — is not a release. ANY `## ` line, parsed or not, closes the open
+/// section, so an unparsed heading never merges its entries into the release
+/// above it.
 #[must_use]
-pub fn changelog_headings(text: &str) -> Vec<Heading> {
-    text.lines()
-        .filter_map(|line| {
-            let (version, tail) = line.strip_prefix("## [")?.split_once(']')?;
-            let version = semver::Version::parse(version).ok()?;
-            let date = tail
-                .rsplit_once(" - ")
-                .map(|(_, date)| date.trim())
-                .filter(|date| crate::waiver::Date::parse(date).is_ok())
-                .map(str::to_owned);
-            Some(Heading { version, date })
-        })
-        .collect()
+pub fn changelog_sections(text: &str) -> Vec<Heading> {
+    let mut sections = Vec::new();
+    let mut open: Option<Heading> = None;
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        if line.starts_with("## ") {
+            sections.extend(open.take());
+            open = heading_of(line).map(|(version, date)| Heading {
+                version,
+                date,
+                breaking: Some(0),
+                span: Some((number, number)),
+            });
+            continue;
+        }
+        if let Some(heading) = open.as_mut() {
+            if line.contains(BREAKING) {
+                heading.breaking = heading.breaking.map(|count| count + 1);
+            }
+            if !line.trim().is_empty() {
+                heading.span = heading.span.map(|(start, _)| (start, number));
+            }
+        }
+    }
+    sections.extend(open);
+    sections
+}
+
+/// Where a reader finds the listed releases' sections (CLOUD-2660): the
+/// changelog at `reference`, the ref whose text was read, spanning the
+/// smallest heading line to the largest section end. `?plain=1` because a
+/// rendered `.md` blob ignores `#L` anchors.
+#[must_use]
+pub fn notes_url(repository: &str, reference: &str, newer: &[Heading]) -> String {
+    let base = format!(
+        "{}/blob/{reference}/{CHANGELOG}?plain=1",
+        repository.trim_end_matches('/')
+    );
+    let spans: Vec<(usize, usize)> = newer.iter().filter_map(|heading| heading.span).collect();
+    let first = spans.iter().map(|span| span.0).min();
+    let last = spans.iter().map(|span| span.1).max();
+    match (first, last) {
+        (Some(first), Some(last)) => format!("{base}#L{first}-L{last}"),
+        _ => base,
+    }
 }
 
 /// The changelog headings `reference` carries, read off the raw-file host
@@ -791,7 +992,7 @@ pub fn ref_changelog(repository: &str, reference: &str) -> Result<Vec<Heading>> 
             answer.status
         ));
     }
-    Ok(changelog_headings(&String::from_utf8_lossy(&answer.body)))
+    Ok(changelog_sections(&String::from_utf8_lossy(&answer.body)))
 }
 
 /// The releases newer than `pin` and no newer than `latest`, oldest first.
@@ -815,6 +1016,8 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
         newer.push(Heading {
             version: latest,
             date: None,
+            breaking: None,
+            span: None,
         });
     }
     Ok(newer)
@@ -935,10 +1138,11 @@ fn is_pin_line(line: &str) -> bool {
 
 /// `text` with its top-level pin set to `pin` (CLOUD-2063).
 ///
-/// The existing line is replaced in place. With none, the pin goes directly
-/// after the first top-level key, so it stays above every table header — where
-/// [`declared`] reads it — and no comment block is separated from its table.
-/// Every other byte is kept.
+/// The pin line goes directly after `version`, or before the first top-level
+/// key where there is no `version`: the head of the file, where [`declared`]
+/// reads it in a few lines and [`pin_out_of_order`] wants it. An existing line
+/// is moved there, so a rewrite also repairs a buried pin, and a pin already in
+/// place is rewritten where it stands. Every other byte is kept.
 #[must_use]
 pub fn rewrite(text: &str, pin: &Pin) -> String {
     let wanted = line(pin);
@@ -947,15 +1151,32 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
         .iter()
         .position(|line| line.trim_start().starts_with('['))
         .unwrap_or(lines.len());
+    // THE PIN GOES AT THE HEAD, after only `version` ([`pin_out_of_order`]): an
+    // existing line is lifted out and set back in its place, so a pin already
+    // there is rewritten where it stands and a buried one is moved up.
+    let mut header = header;
     if let Some(at) = lines[..header].iter().position(|line| is_pin_line(line)) {
-        lines[at] = wanted;
-    } else {
-        let key = lines[..header].iter().position(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.is_empty() && !trimmed.starts_with('#')
-        });
-        lines.insert(key.map_or(0, |at| at + 1), wanted);
+        lines.remove(at);
+        header -= 1;
     }
+    let version = lines[..header].iter().position(|line| {
+        line.trim_start()
+            .strip_prefix("version")
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    });
+    let at = version.map_or_else(
+        || {
+            lines[..header]
+                .iter()
+                .position(|line| {
+                    let trimmed = line.trim_start();
+                    !trimmed.is_empty() && !trimmed.starts_with('#')
+                })
+                .unwrap_or(header)
+        },
+        |at| at + 1,
+    );
+    lines.insert(at, wanted);
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
         out.push('\n');
@@ -967,64 +1188,7 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
 /// from; 0 for an item that carries no span.
 fn item_line(text: &str, item: &toml_edit::Item) -> usize {
     item.span()
-        .map_or(0, |span| crate::lint::line_of(text, span.start))
-}
-
-/// The batten declarations in `text` that disagree with release pin `tag`
-/// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
-/// the pin, and a `min_batten_version` above it. Each is its 1-based line, what
-/// it says, and the remedy that clears it: `engine update` moves a provision row
-/// to the pin, but never lowers a floor, so a floor above the pin names the two
-/// moves that can.
-///
-/// The document is parsed once, so a row is found however it is spelled, by
-/// the same [`is_batten_row`] `engine update` rewrites by; a config that will
-/// not parse is the load's to refuse, and has no findings here.
-#[must_use]
-pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)> {
-    let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    if let Some(item) = doc.get("min_batten_version")
-        && let Some(floor) = item.as_str()
-        && semver::Version::parse(floor).is_ok_and(|floor| ahead_of(&floor, &pin))
-    {
-        found.push((
-            item_line(text, item),
-            format!("min_batten_version {floor}"),
-            PIN_UP,
-        ));
-    }
-    let rows = doc
-        .get("provision")
-        .and_then(toml_edit::Item::as_array_of_tables)
-        .into_iter()
-        .flat_map(toml_edit::ArrayOfTables::iter);
-    for row in rows.filter(|row| is_batten_row(*row)) {
-        let Some(item) = row.get("version") else {
-            continue;
-        };
-        let Some(version) = item.as_str() else {
-            continue;
-        };
-        let parsed = release_version(version).ok();
-        if parsed.as_ref() == Some(&pin) {
-            continue;
-        }
-        let remedy = if parsed.is_some_and(|have| ahead_of(&have, &pin)) {
-            PIN_UP
-        } else {
-            "run `batten engine update`"
-        };
-        found.push((
-            item_line(text, item),
-            format!("provision batten {version}"),
-            remedy,
-        ));
-    }
-    found.sort();
-    found
+        .map_or(0, |span| crate::findings::line_of(text, span.start))
 }
 
 /// `url` moved to release `new` (bare, `9.9.9`), or `None` when it names no
@@ -1034,9 +1198,6 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
 /// segment (`…/download/v8.8.8/`), whose `v` is kept as written, and the asset
 /// name after it. A host, an org or a mirror path that happens to contain the
 /// old version is left as it is, which a substring replace was not.
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT url-swap-unanchored|s@^    Some(format!("{base}/{prefix}{new}/{asset}"))$@    Some(url.replace(old, new))@|a_moved_url_rewrites_only_its_release
-//MUTANT gate-digest-case-sensitive|s@^        if pinned.map(str::to_ascii_lowercase) != published_digest(body, asset) {$@        if pinned.map(str::to_owned) != published_digest(body, asset) {@|an_artifact_at_the_pinned_version_is_judged_by_its_url_and_digest
 #[must_use]
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
@@ -1142,7 +1303,7 @@ pub fn asset_of(url: &str) -> &str {
 /// As [`release_sums`], and an internal error when the cache cannot be written.
 pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<String> {
     let path = release_dir(state_dir, tag).join("SHA256SUMS");
-    if let Ok(body) = std::fs::read_to_string(&path) {
+    if let Ok(body) = crate::fsio::read_to_string(&path) {
         return Ok(body);
     }
     let body = release_sums(repository, tag)?;
@@ -1152,10 +1313,6 @@ pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<Stri
     crate::durable::replace(&path, &body)?;
     Ok(body)
 }
-
-/// The remedy for a declaration [`ahead_of`] the pin, which `engine update`
-/// never moves back.
-const PIN_UP: &str = "pin a release at or above it, or lower it";
 
 /// Whether a declared version is past the pin (CLOUD-2279): the one test of
 /// what `engine update` leaves alone, because it moves forward only, and so of
@@ -1267,8 +1424,6 @@ fn yaml_events(text: &str) -> Option<Vec<(yaml_rust2::Event, usize)>> {
 /// expression (`${{ … }}`) is not one, and a longer key such as
 /// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
 /// `published`, the release's [`published_digests`].
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT workflow-quoted-key-missed|s@^                        .find(\x7ckey\x7c \*key == value)$@                        .find(\x7c_\x7c false)@|a_quoted_workflow_key_is_a_copy
 #[must_use]
 pub fn workflow_literals(
     text: &str,
@@ -1389,8 +1544,6 @@ pub fn workflow_literals(
 /// lane call a verb its pin does not carry. Measured on #1132: three of four
 /// such calls were invisible to this scan. Every `-- batten ` on a command line
 /// is a released-binary call of its own.
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT wrapped-verb-unseen|s@^        for (at, _) in command.match_indices("-- batten ") {$@        for (at, _) in command.match_indices("\\u{0}") {@|a_wrapped_released_call_invokes_its_verb
 #[must_use]
 pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     fn verb(rest: &str) -> String {
@@ -1443,6 +1596,10 @@ pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
 
 /// The pinned release's binary, fetched and verified once and cached after.
 ///
+/// Every followed hook call reaches here, and a cached binary was verified
+/// against its release's `SHA256SUMS` before it was written, so it is never
+/// re-checked and its digest never read.
+///
 /// # Errors
 ///
 /// As [`fetch_release`], or a cache that will not write.
@@ -1460,17 +1617,9 @@ pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<P
     Ok(path)
 }
 
-#[cfg(unix)]
+/// [`crate::durable::make_executable`], with an error this crate's callers read.
 pub(crate) fn make_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn make_executable(_path: &Path) -> Result<()> {
-    // Windows has no executable bit; the extension carries it.
-    Ok(())
+    Ok(crate::durable::make_executable(path)?)
 }
 
 #[cfg(test)]
@@ -1499,6 +1648,70 @@ mod tests {
     }
 
     #[test]
+    fn a_buried_pin_is_moved_under_version_and_a_versionless_one_heads_the_keys() {
+        let release = Pin {
+            release: Some("v0.0.201".into()),
+            source: None,
+        };
+        let buried = "version = 1\nname = \"x\"\nengine = { release = \"v0.0.1\" }\n[t]\n";
+        let moved = rewrite(buried, &release);
+        assert_eq!(
+            moved,
+            "version = 1\nengine = { release = \"v0.0.201\" }\nname = \"x\"\n[t]\n"
+        );
+        assert_eq!(pin_out_of_order(buried), Some(3));
+        assert_eq!(pin_out_of_order(&moved), None);
+        let versionless = "# head\nname = \"x\"\n";
+        assert_eq!(
+            rewrite(versionless, &release),
+            "# head\nengine = { release = \"v0.0.201\" }\nname = \"x\"\n"
+        );
+    }
+
+    #[test]
+    fn a_pin_out_of_order_is_still_the_pin_and_is_named_by_its_line() {
+        let buried = "version = 1\n# a note\nmin = 2\nengine = { release = \"v0.0.9\" }\n";
+        assert_eq!(pin_out_of_order(buried), Some(4));
+        assert_eq!(
+            declared(buried).and_then(|pin| pin.release).as_deref(),
+            Some("v0.0.9")
+        );
+        for head in [
+            "engine = { release = \"v0.0.9\" }\nversion = 1\n",
+            "version = 1\nengine = { release = \"v0.0.9\" }\nmin = 2\n",
+            "version = 1\n\n# comment = here\nengine = { release = \"v0.0.9\" }\n",
+            // No pin, or a pin only inside a table, is never out of order.
+            "version = 1\nmin = 2\n",
+            "version = 1\nmin = 2\n[t]\nengine = 1\n",
+        ] {
+            assert_eq!(pin_out_of_order(head), None, "{head}");
+        }
+    }
+
+    #[test]
+    fn the_pin_read_stops_at_the_pin_and_never_reads_the_rest() {
+        // Everything past the pin is not TOML at all: a read that went on would
+        // still answer, so this asserts the answer, and the order check, never
+        // depend on the tail.
+        let text = "version = 1\nengine = { release = \"v0.0.9\" }\n\u{0}not = [toml\n";
+        assert_eq!(
+            declared(text).and_then(|pin| pin.release).as_deref(),
+            Some("v0.0.9")
+        );
+        assert_eq!(pin_out_of_order(text), None);
+    }
+
+    #[test]
+    fn adoption_writes_the_key_under_version_and_never_over_a_pin() {
+        let written = adopted("version = 1\nname = \"x\"\n", "v0.0.216").expect("a pin");
+        assert_eq!(
+            written,
+            "version = 1\nengine = { release = \"v0.0.216\" }\nname = \"x\"\n"
+        );
+        assert_eq!(adopted(&written, "v0.0.217"), None);
+    }
+
+    #[test]
     fn only_command_lines_invoke_a_verb() {
         let workflow = "      # hands them to `batten checks green`, a pure function\n\
                         \x20       run: |\n\
@@ -1509,7 +1722,7 @@ mod tests {
         assert_eq!(verbs, ["checks green", "pr ensure"]);
     }
 
-    /// `#MUTANT wrapped-verb-unseen` reads only each line's first verb.
+    /// A mutant reading only each line's first verb reddens here.
     #[test]
     fn a_wrapped_released_call_invokes_its_verb() {
         let workflow = "      - run: batten ci step --arg-env X -- batten release path --strict\n\
@@ -1529,11 +1742,24 @@ mod tests {
         );
     }
 
+    /// An unparsed heading closes the section above it (CLOUD-2660): its
+    /// breaking entry is never counted against the release before it.
+    #[test]
+    fn an_unparsed_heading_ends_the_section_above_it() {
+        let sections = changelog_sections(
+            "## [1.3.0](x) - 2020-03-01\n- fix\n## [v1.2.0]\n- [**breaking**] x\n## [1.1.0](x) - 2020-01-01\n",
+        );
+        let newest = sections.first().expect("1.3.0 parses");
+        assert_eq!(newest.version.to_string(), "1.3.0");
+        assert_eq!(newest.breaking, Some(0));
+        assert_eq!(newest.span, Some((1, 2)));
+    }
+
     /// A changelog that lags only its newest release still counts it
     /// (CLOUD-2279): three behind is never read as two.
     #[test]
     fn a_changelog_missing_its_newest_heading_still_counts_it() -> Result<()> {
-        let headings = changelog_headings(
+        let headings = changelog_sections(
             "## [1.2.0](x) - 2026-02-01\n\n## [1.1.0](x) - 2026-01-01\n\n## [1.0.0](x) - 2025-12-01\n",
         );
         let newer = releases_between(&headings, "v1.0.0", "v1.3.0")?;
@@ -1597,8 +1823,34 @@ mod tests {
         assert!(found.is_empty(), "{found:?}");
     }
 
-    /// A floor or a provision row above the pin names the moves that clear it,
-    /// never the update that cannot move it back; a row below names the update.
+    /// The gate refuses every batten declaration off the pin: a floor ABOVE it
+    /// (never one at or below), and every batten row naming another release,
+    /// each at its own line; a row at the pin and another tool's row say nothing.
+    #[test]
+    fn every_batten_declaration_off_the_pin_is_named() {
+        let text = "version = 1\nmin_batten_version = \"0.0.217\"\n\n\
+                    [[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\n\
+                    [[provision]]\nname = \"other\"\nversion = \"9.0.0\"\n\n\
+                    [[provision]]\nname = \"batten\"\nversion = \"0.0.210\"\n";
+        assert_eq!(
+            disagreements(text, "v0.0.216"),
+            [
+                (2, "min_batten_version 0.0.217".to_owned(), PIN_UP),
+                (
+                    14,
+                    "provision batten 0.0.210".to_owned(),
+                    "run `batten engine update`"
+                ),
+            ]
+        );
+        for floor in ["0.0.216", "0.0.100"] {
+            let at = format!(
+                "min_batten_version = \"{floor}\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n"
+            );
+            assert!(disagreements(&at, "v0.0.216").is_empty(), "{floor}");
+        }
+    }
+
     #[test]
     fn a_declaration_ahead_of_the_pin_names_its_own_remedy() {
         let found = disagreements(
@@ -1607,6 +1859,75 @@ mod tests {
         );
         let remedies: Vec<&str> = found.iter().map(|(_, _, remedy)| *remedy).collect();
         assert_eq!(remedies, [PIN_UP, PIN_UP, "run `batten engine update`"]);
+    }
+
+    /// A pinned tag that is not a release never reaches a path (CLOUD-2644):
+    /// from the row or from the key, it reads as malformed.
+    #[test]
+    fn a_tag_that_is_not_a_release_is_malformed() {
+        let key = "engine = { release = \"../../x\" }\n";
+        assert_eq!(declared(key).map(Pin::kind), Some(PinKind::Malformed));
+        let good = "engine = { release = \"v0.0.216\" }\n";
+        assert_eq!(
+            declared(good).map(Pin::kind),
+            Some(PinKind::Release("v0.0.216".to_owned()))
+        );
+        // A batten provision row is a provision, never a pin.
+        let row = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
+        assert_eq!(declared(row), None);
+    }
+
+    /// A musl engine whose tag's gnu build runs here places gnu.
+    #[test]
+    fn a_gnu_build_that_runs_replaces_musl() {
+        let (target, bytes) = chosen_build(
+            "x86_64-unknown-linux-musl",
+            b"musl".to_vec(),
+            |gnu| (gnu == "x86_64-unknown-linux-gnu").then(|| b"gnu".to_vec()),
+            |candidate| candidate == b"gnu",
+        );
+        assert_eq!(
+            (target.as_str(), bytes.as_slice()),
+            ("x86_64-unknown-linux-gnu", &b"gnu"[..])
+        );
+    }
+
+    /// A gnu build that does not answer here — no libc, too old a glibc — is
+    /// never placed; the musl build, which already runs, stays.
+    #[test]
+    fn a_gnu_build_that_does_not_run_leaves_musl() {
+        let (target, bytes) = chosen_build(
+            "aarch64-unknown-linux-musl",
+            b"musl".to_vec(),
+            |_| Some(b"gnu".to_vec()),
+            |_| false,
+        );
+        assert_eq!(
+            (target.as_str(), bytes.as_slice()),
+            ("aarch64-unknown-linux-musl", &b"musl"[..])
+        );
+        // A fetch that failed keeps musl too.
+        let (target, _) = chosen_build("x86_64-unknown-linux-musl", Vec::new(), |_| None, |_| true);
+        assert_eq!(target, "x86_64-unknown-linux-musl");
+    }
+
+    /// Any engine that is not musl Linux fetches nothing and keeps itself.
+    #[test]
+    fn only_a_musl_linux_engine_looks_for_gnu() {
+        for running in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let (target, _) = chosen_build(
+                running,
+                Vec::new(),
+                |_| panic!("{running} must not fetch a twin"),
+                |_| true,
+            );
+            assert_eq!(target, running);
+        }
+        assert_eq!(gnu_twin("x86_64-unknown-linux-gnu"), None);
     }
 
     /// Only the download segment and the asset name move; a mirror path that
@@ -1806,6 +2127,8 @@ mod tests {
         let heading = |version: &str| Heading {
             version: release_version(version).unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
             date: None,
+            breaking: None,
+            span: None,
         };
         let versions = |found: Vec<Heading>| -> Vec<String> {
             found.iter().map(|h| h.version.to_string()).collect()
@@ -1885,5 +2208,20 @@ mod tests {
             assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
         }
         Ok(())
+    }
+}
+
+/// Where the engine pin may sit (#1276).
+#[cfg(test)]
+mod pin_order_tests {
+    use super::pin_out_of_order;
+
+    /// Fails by: `version` counted as a key that buries the pin, another key
+    /// not counted, or an empty key read as one.
+    #[test]
+    fn only_a_key_other_than_version_buries_the_pin() {
+        assert_eq!(pin_out_of_order("version = 1\nengine = \"x\"\n"), None);
+        assert_eq!(pin_out_of_order("other = 1\nengine = \"x\"\n"), Some(2));
+        assert_eq!(pin_out_of_order("= 1\nengine = \"x\"\n"), None);
     }
 }

@@ -13,8 +13,9 @@
 //! a tool call's `name` and `input`, a result's `is_error` boolean, and a hook
 //! decision's `exitCode`. That last one matters most: a host records its hook
 //! runs structurally, so "was this call denied" is `exit_code == 2` against the
-//! one §7 table — not a substring match on an error message. A predicate built
-//! on prose would be a classifier wearing a gate's clothes.
+//! one §7 table — not a substring match on an error message. This module
+//! reduces events; text read anywhere in the engine leaves it only as a typed
+//! fact, never as a span (`rules/policy-modules.md`).
 //!
 //! The free-text payload is **never interpreted and never emitted**. A
 //! transcript is the single richest source of secrets the engine can be pointed
@@ -84,8 +85,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::config_check::transcript::validate;
+use crate::config_model::Harness;
+pub use crate::config_model::TranscriptConfig;
 use crate::error::UsageError;
-use crate::hook::{Harness, RecordShape, TranscriptShape};
+use crate::hook::{RecordShape, TranscriptShape};
 
 /// What the human channel says when a configured transcript is not there.
 ///
@@ -721,7 +725,6 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
 /// [`tally_appended`] with its entry under the cache partition `cache`. No
 /// partition is a whole read, never could-not-look: a cache that cannot be
 /// kept must not cost a readable transcript its answer.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<Tally> {
     use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
@@ -860,7 +863,64 @@ impl Summary for Tally {
     }
 }
 
-//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
+// `Extraction::of` lives here rather than in `facts` (CLOUD-2789): the
+// decision reads this module's `Summary`, and `Extraction` is `batten-facts`'
+// now, so the method rides an extension trait. A caller names the trait once
+// (`use crate::transcript::ExtractionOf as _`) and the call stays `.of(..)`.
+/// [`crate::facts::Extraction`]'s answer over a parsed stream.
+pub trait ExtractionOf {
+    /// See the implementation on [`crate::facts::Extraction`].
+    #[must_use]
+    fn of(self, stream: &impl Summary) -> Option<usize>;
+}
+
+impl ExtractionOf for crate::facts::Extraction {
+    /// This extraction's answer over a parsed stream, or `None` where this host
+    /// records none of the events it reduces.
+    ///
+    /// **`None` is COULD-NOT-LOOK and it is decided here** (CLOUD-1344). Zero is
+    /// a real answer meaning the extractor ran, so an extraction whose underlying
+    /// event kind never appears must not report one: "zero repeats" over a
+    /// two-hundred-call session is a false green over a session nobody measured.
+    /// Deciding it in the engine rather than as a per-module conjunct is what
+    /// keeps it from being a dead gate on every harness but the one its author
+    /// tested.
+    ///
+    /// Takes the whole `Stream` rather than `Counts` because the members divide:
+    /// the totals come from [`Stream::counts`] and the runs from
+    /// [`Stream::repeats`], and `Counts` is the `-J` capability report's own
+    /// shape rather than this family's.
+    ///
+    /// Exhaustive with no wildcard arm, like every other axis match in this
+    /// module: a member added later decides here or fails to compile, rather than
+    /// defaulting to a count of something else.
+    ///
+    /// Generic over [`Summary`] so the hook's incremental
+    /// [`Tally`] is read by this same decision (CLOUD-2315).
+    fn of(self, stream: &impl Summary) -> Option<usize> {
+        let records = stream.records();
+        let recorded = |kind: Kind| records.contains(&kind);
+        match self {
+            Self::Turns => recorded(Kind::Turns).then(|| stream.counts().turns),
+            Self::ToolCalls => recorded(Kind::ToolCalls).then(|| stream.counts().tool_calls),
+            Self::ToolErrors => recorded(Kind::ToolResults).then(|| stream.counts().tool_errors),
+            Self::HookDecisions => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_decisions)
+            }
+            Self::HookDenials => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_denials)
+            }
+            Self::AgentTurnRun => recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run),
+            Self::UnansweredHumanCalls => {
+                recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
+            }
+            // Gated on the kind it counts, as `ToolCalls` is: a host recording no
+            // tool calls cannot say a plan was never presented.
+            Self::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
+        }
+    }
+}
+
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {
@@ -1221,7 +1281,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         TranscriptShape::Unsurveyed(owes) => return Capability::Unsurveyed(owes),
     };
     let path = root.join(relative);
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         // Unopenable and absent are one answer on purpose: both mean the file
         // yielded nothing, and distinguishing a missing file from a permission
         // failure would report an access problem as a parse failure. A file that
@@ -1606,8 +1666,6 @@ fn collect(
 /// [`crate::refusal::parse_finding`] — the same grammar parse
 /// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
 /// line of which parses is still one refusal, with no findings.
-//MUTANT-SUITE crates/batten/src/transcript.rs
-//MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
     let parsed: Vec<crate::refusal::Parsed> = emitted
@@ -1747,7 +1805,7 @@ pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
-            let Ok(body) = std::fs::read_to_string(&path) else {
+            let Ok(body) = crate::fsio::read_to_string(&path) else {
                 continue;
             };
             // THE FIRST AUTHORED ID IN THE FILE IDENTIFIES IT; a file with none
@@ -2070,72 +2128,6 @@ struct Block {
     text: Option<String>,
 }
 
-/// The configured transcript, as `batten.toml` declares it: where it is, and
-/// whose dialect it is in.
-///
-/// **It used to say "a path, not a format selector", and that was the bug**
-/// (CLOUD-1624). Which host wrote the file was left to the fixtures, so the
-/// engine read every transcript through one host's grammar and reported the zero
-/// events that produces on any other as a clean session. The dialect is a fact
-/// about this consumer's setup, and non-negotiable rule 1 puts a consumer fact
-/// in the consumer's own `batten.toml` rather than in the core.
-///
-/// Host-specific, never consumer-specific, so rule 1 holds in the other
-/// direction too — no consumer's directory layout appears in the engine.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TranscriptConfig {
-    /// Repo-relative path to the completed session transcript.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    /// Which host wrote it, selecting the record grammar to read it with
-    /// (CLOUD-1624).
-    ///
-    /// **Omitted is could-not-look, never a default.** `cli.rs`'s attribution
-    /// host is the precedent and states it: an unnamed host "declares nothing
-    /// rather than borrowing a default's declarations". Defaulting here would
-    /// read an unnamed host's transcript through one host's grammar and report
-    /// the zero events that yields as a clean session — the exact false green
-    /// this key exists to close. A consumer that declares a `path` and no
-    /// `harness` gets [`Capability::Unnamed`] and every gate over the transcript
-    /// abstains.
-    ///
-    /// The fourth fact about one host on this table, joining `path`,
-    /// `memory_root` and the task store for the reason those three already give:
-    /// splitting facts about a single host across tables is the widening rule 6
-    /// forbids.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness: Option<Harness>,
-    /// The host's memory-root prefix, for CLOUD-267's self-persistence match.
-    ///
-    /// Host-adapter data on the same table rather than a second authority: the
-    /// transcript's format and the host's memory layout are two facts about one
-    /// host, and splitting them across tables would be the widening rule 6
-    /// forbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.
-    ///
-    /// A **prefix matched against targets the transcript recorded** — never a
-    /// path this engine opens, stats, or globs, which is what keeps the rule
-    /// inside the repo root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_root: Option<String>,
-    /// Where this host keeps the session's own task store, with `{session}`
-    /// standing in for the id the envelope carries (CLOUD-1376).
-    ///
-    /// ON THIS TABLE RATHER THAN A `[session]` ONE, and the reason is this
-    /// table's own: the transcript's format and the host's memory layout are
-    /// already "two facts about one host", and splitting them across tables
-    /// would be the widening rule 6 forbids. A third fact about the same host
-    /// joins them rather than opening a second authority over the same subject.
-    ///
-    /// A TEMPLATE, because the engine may not derive it. The store lives outside
-    /// the repository root and its layout is the HOST's — deriving it from the
-    /// transcript path would put a directory layout in the engine, which rule 1
-    /// refuses. The consumer names the shape; the engine substitutes one field it
-    /// was handed and opens what the substitution names.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<String>,
-}
-
 /// Where the engine parks a pointer at the live session's task store.
 ///
 /// DERIVED FROM `path` RATHER THAN DECLARED, on the same reasoning that put
@@ -2191,31 +2183,6 @@ pub fn tasks_dir(template: &str, session: &str, home: Option<&std::ffi::OsStr>) 
         Some(home) if !home.is_empty() => format!("{}/{rest}", home.to_string_lossy()),
         _ => substituted,
     }
-}
-
-/// Validate the table at load, the way every other config table is.
-///
-/// Takes an `Option` to match [`crate::budget::validate`]'s signature: `[budget]`
-/// and `[transcript]` are both tables rather than lists, so neither is reached by
-/// the `Vec<T>` census in `config.rs`, and both are called explicitly from
-/// `parse_ungated` for that reason.
-///
-/// # Errors
-///
-/// [`UsageError`] when a declared path is empty — a key present and blank is a
-/// different claim from a key absent, and the blank one is a mistake rather than
-/// a repository opting out. Left unchecked it would join to the repository root
-/// and be read as a directory, which surfaces as "undecodable transcript".
-pub fn validate(config: Option<&TranscriptConfig>) -> Result<()> {
-    let Some(config) = config else {
-        return Ok(());
-    };
-    if config.path.as_deref().is_some_and(str::is_empty) {
-        return Err(UsageError::raise(
-            "transcript.path: declared but empty; omit the key to opt out".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 /// The path a run should read, if any.

@@ -45,6 +45,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::exec::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -128,7 +129,7 @@ impl Fixture {
             .take()
             .expect("stdin")
             .write_all(stdin.as_bytes());
-        let out = child.wait_with_output().expect("run the resolver");
+        let out = child.streamed_wait().expect("run the resolver");
         (
             out.status.code(),
             String::from_utf8_lossy(&out.stdout).trim_end().to_owned(),

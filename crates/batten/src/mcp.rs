@@ -77,230 +77,17 @@
 use std::path::Path;
 
 use crate::Result;
-use crate::error::UsageError;
 use crate::facts::{Format, Look, Node, TOKEN_MAX};
-
-/// The `[mcp]` table: where the wiring lives, and what to return instead of a
-/// payload.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct McpConfig {
-    /// Where a harness keeps its MCP wiring, in precedence order.
-    ///
-    /// A LIST rather than one row because one repository is worked in from
-    /// several harnesses, and each keeps its wiring somewhere else. The first row
-    /// that resolves a server wins, so the order is a statement about which
-    /// harness to believe when two are installed.
-    #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<Source>,
-    /// What to return instead of a method's full response.
-    ///
-    /// A method with no row here is dispatched and returned whole.
-    #[serde(default, rename = "result", skip_serializing_if = "Vec::is_empty")]
-    pub results: Vec<ResultRow>,
-    /// Server names whose committed permission rules apply under WHATEVER key the
-    /// host exposes the server as this session (CLOUD-191, CLOUD-843).
-    ///
-    /// Each is a name some `[[mcp.source]]` row's `endpoint_contains` declares,
-    /// because the endpoint is the only thing that identifies a renamed server:
-    /// `mcp grant` finds the exposed key's endpoint, matches it to one of these
-    /// names, and applies the committed `permissions` rules written for that name.
-    /// `mcp posture` reads the same list for the grants a connector would still
-    /// prompt for.
-    ///
-    /// **A LIST, and deliberately not every `endpoint_contains` name.** A name here
-    /// turns a committed allow rule into a pre-approval under a key nobody
-    /// committed. A server the host authorises at its own connector layer must not
-    /// be translated, or the translation grants what the host did not — so the
-    /// consumer states which servers its permission file governs, rather than the
-    /// engine inferring it from a selector written for dispatch.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub permission_aliases: Vec<String>,
-}
-
-/// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
-/// and headers.
-///
-/// The shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,
-/// same reason — with a `node` because a wiring file holds every server the
-/// harness knows and the row has to say which subtree is the server map.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct Source {
-    /// The key this source is named by in a report.
-    ///
-    /// The id and never the resolved path: a resolved path is a machine's home
-    /// directory, and non-negotiable rule 4 keeps one out of every finding.
-    pub id: String,
-    /// The NAME of the environment variable holding the directory `path`
-    /// resolves beneath, or absent for a path relative to the repository root.
-    ///
-    /// A name, never a value, and never a directory this crate knows. Unset or
-    /// empty on this machine is could-not-look, never an absent file: "this host
-    /// does not have that root" and "the file is not there" are different
-    /// answers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    /// A base this crate knows how to name without an operator's help.
-    ///
-    /// Mutually exclusive with `root`, and refused at load if both appear. Absent
-    /// with `root` absent is the repository root, exactly as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<Base>,
-    /// The path beneath that root.
-    ///
-    /// Relative and downward — an absolute path or a `..` component is refused at
-    /// load, so a declaration cannot walk back out of the root it named.
-    ///
-    /// # `${VAR}` expands, and that is what makes a per-session file nameable
-    ///
-    /// A launcher that mints its wiring per session writes it under a name
-    /// carrying the session id, so the FILENAME is not writable in advance even
-    /// where the directory is. A row spells the id where it appears:
-    ///
-    /// ```text
-    /// path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
-    /// ```
-    ///
-    /// **Expansion is not a glob, and the difference is the whole reason this is
-    /// allowed where a glob was declined (CLOUD-1251).** A glob's three fatal
-    /// objections were that the match count is not one, that the engine would have
-    /// to walk a filesystem, and that a row's id cannot be authored for a name
-    /// that does not exist yet. Expansion has none of them: the result is exactly
-    /// one path, the engine expands a variable rather than looking around, and the
-    /// id is the row's own. `[[rule.external]]`'s discipline is unchanged — *the
-    /// engine expands a variable; it does not scan*.
-    ///
-    /// Only `${NAME}` is a placeholder. A bare `$NAME` is a literal, because a
-    /// path is allowed to contain a `$` and guessing where such a name ends is how
-    /// one spelling becomes two.
-    pub path: String,
-    /// Where the server map sits inside the parsed document, in [`Node::at`]'s
-    /// spelling. An empty string is the document itself.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub node: String,
-    /// Server names this source resolves by ENDPOINT rather than by map key.
-    ///
-    /// Keyed by the name a caller types, valued by a substring the entry's
-    /// endpoint must carry.
-    ///
-    /// **A launcher that mints its server key per registration episode leaves
-    /// that key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one
-    /// connector exposed as three different tool prefixes across episodes;
-    /// [`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a
-    /// `__`-delimited segment. Dispatch has no such analogue — the key IS the
-    /// name — so a row naming one episode's key resolves nothing in the next, and
-    /// a remedy citing it is a command that cannot run. Measured 2026-09-02: the
-    /// same connector was keyed `Linear` in one container and by a UUID in
-    /// another, at the same address.
-    ///
-    /// The ADDRESS is what does not move, which is why the selector is over the
-    /// endpoint and not over anything else the entry carries.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub endpoint_contains: std::collections::BTreeMap<String, String>,
-    /// The credential this source's servers authenticate with, if they need one.
-    ///
-    /// **Absent is the default and it is byte-identical to no credential at all**
-    /// — a wiring file whose headers already authenticate needs nothing here, and
-    /// adding this key must not change what such a source does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<Credential>,
-}
-
-/// A directory the crate can name on its own, for a source whose file does not
-/// live under the repository or under a directory an operator exports.
-///
-/// A closed set of ONE, deliberately. Every member has to be a location the
-/// platform itself defines, because the alternative is this crate learning a
-/// harness's layout — non-negotiable rule 1's violation — and because a member
-/// nobody can predict is a scan wearing an enum's clothes.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Base {
-    /// The OS temporary directory, as the platform defines it.
-    ///
-    /// **Named rather than spelled `/tmp`**, which is what keeps it portable and
-    /// keeps a literal path out of a config. It is where a launcher that mints a
-    /// per-session file puts it, and the one location an operator has no variable
-    /// for — `TMPDIR` is unset on a great many hosts, so a row naming it as a
-    /// `root` silently does not resolve there.
-    Temp,
-}
-
-/// One `[mcp.source.credential]` table: WHICH credential a source spends, never
-/// the credential (CLOUD-1261).
-///
-/// # The whole point is the indirection
-///
-/// `batten.toml` is committed, so a value here would be a secret in git. What a
-/// row carries is a **name**: the name of an environment variable, or the name of
-/// an environment variable whose value is a path. That is `[[rule.external]]`'s
-/// root discipline applied to key material — *the engine expands a variable; it
-/// does not scan* — and it is what lets a public config say "this server needs
-/// the operator's token" without saying what the token is.
-///
-/// # Every resolved value is a [`Secret`], which has no route to a `String`
-///
-/// The negative half is the load-bearing one, so it is enforced by type rather
-/// than by remembering to redact: [`Secret`] has no `Display`, its `Debug` prints
-/// a fixed marker, and the only thing that consumes it is the header list handed
-/// to the transport. A failure path cannot render it because there is no method
-/// that would.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct Credential {
-    /// The header the credential is sent in.
-    ///
-    /// Declared rather than assumed: `Authorization` is the common answer and the
-    /// default, but a session-scoped endpoint may want its own name, and guessing
-    /// one produces a 401 that says nothing about why.
-    #[serde(default = "authorization")]
-    pub header: String,
-    /// The scheme prefixed to the value, space-separated. Empty sends the value
-    /// alone, which is what a bare token header wants.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub scheme: String,
-    /// The NAME of an environment variable holding the credential itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<String>,
-    /// The NAME of an environment variable holding the PATH of a file that holds
-    /// the credential.
-    ///
-    /// The two-hop spelling is deliberate and it is the one a harness actually
-    /// offers: a launcher that mints a per-session token writes it to a file and
-    /// exports the path, so the path is not writable in advance while the variable
-    /// name is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_from: Option<String>,
-    /// The NAME of a key in the server's own wiring entry whose value is a
-    /// command that prints the request headers as a JSON object.
-    ///
-    /// Claude Code's spelling is `headersHelper`: a local `~/.claude.json` entry
-    /// for an HTTP server authenticates by running it (measured 2026-10-25, the
-    /// GitHub server's helper prints `{"Authorization":"Bearer …"}` from `gh auth
-    /// token`), and carries no static `headers` at all, so a row with neither
-    /// `env` nor `file_from` dispatched unauthenticated and got a 401. The row
-    /// names the KEY, never the command: the command lives in the wiring file
-    /// the source names (the operator's own, for a home-rooted source; a
-    /// repo-relative source trusts that file as much as this config), and only
-    /// the `header` this row names is taken from what it prints. That value is
-    /// usually finished (`Bearer …`), so `scheme` stays empty for such a helper.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub helper: Option<String>,
-}
-
-/// The default header a credential is sent in.
-fn authorization() -> String {
-    "Authorization".to_owned()
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_check::mcp::validate;
+#[allow(unused_imports)]
+pub(crate) use crate::config_check::mcp::{
+    Part, escapes, parts, placeholders, validate_credential, validate_endpoint_selectors,
+};
+pub use crate::config_model::{
+    Base, McpConfig, McpCredential as Credential, McpSource as Source, Reduce, ResultRow,
+    authorization,
+};
 
 impl Credential {
     /// The header name and finished value this row sends a resolved value as.
@@ -335,7 +122,6 @@ impl Credential {
 /// operator's wiring) and never a byte of what it printed: an absent or
 /// non-text key, a command that will not start or exits non-zero, output that
 /// is not a JSON object, and an object without the header or with it empty.
-//MUTANT helper-exit-unread|s@^    if code != 0 {$@    if code == 0 {@|a_helper_s_printed_header_is_the_credential_sent
 fn helped(
     row: &Credential,
     id: &str,
@@ -494,7 +280,7 @@ fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(Stri
     // POINTER-ONLY IN THE REFUSAL: the io error carries the path it tried, which
     // is an absolute path on somebody's machine, so it is dropped rather than
     // formatted. What a reader needs is which variable to fix.
-    let value = std::fs::read_to_string(std::path::PathBuf::from(at))
+    let value = crate::fsio::read_to_string(std::path::PathBuf::from(at))
         .map_err(|_| {
             anyhow::anyhow!("mcp: source {id}'s credential file, named by {name}, will not read")
         })?
@@ -506,290 +292,6 @@ fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(Stri
         ));
     }
     Ok(Some(row.sent(&value)))
-}
-
-/// One `[[mcp.result]]` row: what to hand back instead of a method's response.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct ResultRow {
-    /// The method this row reduces. The consumer's vocabulary, matched exactly.
-    pub method: String,
-    /// What to make of the response.
-    pub reduce: Reduce,
-    /// The fields kept, in the order they are written.
-    ///
-    /// Top-level keys of the payload the row's `node` reaches. A declared field
-    /// the payload does not carry is ABSENT from the reduction rather than
-    /// present and null: "the row does not have this" and "the reduction dropped
-    /// it" are different answers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<String>,
-    /// Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s
-    /// spelling. An empty string is the result itself.
-    ///
-    /// Declared rather than known, because how a server frames a payload is the
-    /// server's business and this crate holds no opinion about it.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub node: String,
-    /// Whether the node's scalar text is itself a document to parse.
-    ///
-    /// A server that frames its payload as text carrying JSON is common and is
-    /// not something the engine may assume: a row says so, and a row that says so
-    /// wrongly gets could-not-look rather than a reduction over the wrong tree.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub embedded: bool,
-}
-
-/// How a [`ResultRow`] turns a response into something rule 4 permits.
-///
-/// A closed set rather than an expression language, for
-/// [`crate::facts::Reduction`]'s reason exactly: every member is bounded by
-/// construction, so no row can declare a reduction that yields the payload back.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Reduce {
-    /// The declared fields, with their values passed through as the payload
-    /// carries them.
-    ///
-    /// The read-side answer. What bounds it is the DECLARATION — a field nobody
-    /// named never leaves the store — so a consumer choosing its own field set is
-    /// choosing its own cost.
-    Project,
-    /// The declared fields, each held to a bounded SCALAR.
-    ///
-    /// The write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]
-    /// in KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],
-    /// or is a container rather than a scalar, is **absent** rather than
-    /// truncated, because a prefix of somebody's issue body is still their issue
-    /// body. So this arm structurally cannot echo a body however the row is
-    /// written, where `project` leaves that to the declaration.
-    ///
-    /// # Why the bound is length and not [`crate::facts::Reduction::Token`]'s
-    ///
-    /// That reduction additionally refuses any value carrying whitespace, and it
-    /// is right to: its product reaches the POLICY INPUT, where a module could
-    /// lift a sentence into a `subjects` pointer, so "is this already a token"
-    /// is the question worth asking. This arm's product reaches the CALLER, and
-    /// the thing being kept out is a 15k-character description — which the length
-    /// bound stops on its own.
-    ///
-    /// Copying the whitespace clause across was this row's own near-miss,
-    /// measured before it shipped: `save_issue` answers `status = "In Progress"`,
-    /// so the arm would have silently dropped the one field CLOUD-1122 names in
-    /// its remedy — `{id, status, handle}` — while every test still passed. A
-    /// bound borrowed from a surface with a different threat model is how a
-    /// reduction quietly stops answering the question it was built for.
-    Acknowledge,
-    /// [`Reduce::Project`], applied to EVERY element of an array node.
-    ///
-    /// The list-side answer (CLOUD-1380). The other two arms do one flat
-    /// field-pick against the node a row names, so a response whose payload is an
-    /// array of objects is unreducible by either: naming the array as `node` makes
-    /// every field lookup miss, and leaving `node` at the root keeps the array
-    /// whole and reduces nothing. Measured before this arm existed, a
-    /// `list_issues` call reported `undeclared` and **emitted 20,366 bytes against
-    /// 17,313 stored** — more out than in, because an undeclared result is handed
-    /// back re-serialised rather than reduced.
-    ///
-    /// `node` names the array and the declared `fields` are read from each
-    /// element, so one row describes both halves and no second field vocabulary
-    /// appears. The projected elements come back under the array's own key, which
-    /// is what lets a consumer read the reduction by the path it reads the
-    /// response by.
-    ///
-    /// # Its bound is a different KIND from the other two, stated rather than
-    /// absorbed
-    ///
-    /// `project` and `acknowledge` are bounded by the DECLARATION alone: a field
-    /// nobody named never leaves the store, so the reduction's size is fixed
-    /// whatever the payload holds. This arm is bounded per element by the
-    /// declaration and **in count by the page the caller asked for** — a function
-    /// of the request rather than of the response. That is weaker than the other
-    /// two, and it is the enum's contract met rather than dodged: no row can
-    /// declare a reduction that yields the payload back, but a caller asking for a
-    /// thousand rows does get a thousand projected rows.
-    ///
-    /// Which is why the scalar siblings are carried and containers are not:
-    /// `hasNextPage` and `cursor` are what make the page size a thing the caller
-    /// controls, so dropping them would leave paging unanswerable — the reduction
-    /// would satisfy every size predicate by destroying the one mechanism that
-    /// bounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s
-    /// reason exactly: a shape whose size the caller did not bound.
-    Each,
-}
-
-/// Refuse a `[mcp.source.credential]` row that cannot mean one thing.
-///
-/// **At LOAD rather than at dispatch**, for the reason every other shape rule
-/// here is: a row naming neither source names nothing, and a row naming both is
-/// two answers to one question. Either would resolve to no header and dispatch an
-/// unauthenticated call that reads as the server refusing — a dead gate wearing a
-/// 401's clothes.
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) naming the source id and which key is at fault.
-/// **Never a variable's VALUE** — the names are config and the values are not.
-fn validate_credential(source: &Source) -> Result<()> {
-    let Some(row) = &source.credential else {
-        return Ok(());
-    };
-    let id = &source.id;
-    if row.header.trim().is_empty() {
-        return Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential with an empty `header`; a credential with \
-             nowhere to go is a call that authenticates with nothing"
-        )));
-    }
-    let named: Vec<&String> = [&row.env, &row.file_from, &row.helper]
-        .into_iter()
-        .flatten()
-        .collect();
-    match named.as_slice() {
-        [] => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming none of `env`, `file_from` or \
-             `helper`; a row that names nothing resolves to nothing and would dispatch \
-             unauthenticated"
-        ))),
-        [_, _, ..] => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming more than one of `env`, `file_from` \
-             and `helper`; one row names one source, or which one the engine spends depends on \
-             the order it reads them"
-        ))),
-        [name] if name.trim().is_empty() => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming an empty variable or key; it is a \
-             NAME, never a value"
-        ))),
-        _ => Ok(()),
-    }
-}
-
-/// Refuse a malformed `[mcp]` table at load.
-///
-/// At load rather than at dispatch, for the reason house style §8 gives: a config
-/// fault must be reported by `config lint` and `doctor` rather than discovered by
-/// the one call that needed it.
-///
-/// # Errors
-///
-/// [`UsageError`] (→ exit `1`) for an empty or duplicated id, an empty root name,
-/// a path that would escape its root, a duplicated method, a field list that does
-/// not match the reduction it is written for, or a credential row naming neither
-/// variable or both.
-pub fn validate(config: &McpConfig) -> Result<()> {
-    let mut seen: Vec<&str> = Vec::new();
-    for source in &config.sources {
-        if source.id.trim().is_empty() {
-            return Err(UsageError::raise(
-                "mcp: a `[[mcp.source]]` row needs a non-empty `id`; it is the only name a report \
-                 may carry, because the resolved path is a machine's home directory",
-            ));
-        }
-        if source
-            .root
-            .as_ref()
-            .is_some_and(|root| root.trim().is_empty())
-        {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares an empty `root`; it is the NAME of an environment \
-                 variable, and an empty one would resolve the path against the process's working \
-                 directory. Omit the key for a repository-relative path",
-                source.id
-            )));
-        }
-        if source.base.is_some() && source.root.is_some() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares both `base` and `root`; one row has one base, or which \
-                 directory the path resolves beneath depends on the order they are read",
-                source.id
-            )));
-        }
-        if escapes(&source.path) {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} needs a `path` that is relative and stays beneath its root; an \
-                 absolute path or a `..` component would read outside the root the row declared",
-                source.id
-            )));
-        }
-        // THE PLACEHOLDER'S SYNTAX AT LOAD, its VALUE at dispatch. A malformed
-        // `${` is the author's typo and belongs to `config lint`; what a variable
-        // happens to hold on this host is not knowable here, which is why
-        // `escapes` runs a second time over the expanded path.
-        if let Err(err) = placeholders(&source.path) {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} has an unusable `path`: {err}",
-                source.id
-            )));
-        }
-        if seen.contains(&source.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "mcp: source id {:?} is declared twice; one id names one file, or which file the \
-                 engine reads depends on row order",
-                source.id
-            )));
-        }
-        validate_endpoint_selectors(source)?;
-        validate_credential(source)?;
-        seen.push(&source.id);
-    }
-    // A PERMISSION ALIAS NO SELECTOR DECLARES CAN NEVER RESOLVE, so it would read
-    // as a governed server while translating nothing — refused here rather than
-    // discovered as a prompt that never went away.
-    for alias in &config.permission_aliases {
-        if !config
-            .sources
-            .iter()
-            .any(|source| source.endpoint_contains.contains_key(alias))
-        {
-            return Err(UsageError::raise(format!(
-                "mcp: `permission_aliases` names {alias:?}, which no `[[mcp.source]]` row's \
-                 `endpoint_contains` declares; the endpoint is the only thing that identifies a \
-                 renamed server, so this name could never be resolved"
-            )));
-        }
-    }
-
-    let mut methods: Vec<&str> = Vec::new();
-    for row in &config.results {
-        if row.method.trim().is_empty() {
-            return Err(UsageError::raise(
-                "mcp: a `[[mcp.result]]` row needs a non-empty `method`; it is what selects the \
-                 reduction, and an empty one would select nothing while reading as coverage",
-            ));
-        }
-        if methods.contains(&row.method.as_str()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} carries two `[[mcp.result]]` rows; which reduction applies would \
-                 depend on row order",
-                row.method
-            )));
-        }
-        methods.push(&row.method);
-        // A REDUCTION OVER NO FIELDS IS NOT A NARROWER ANSWER, it is an empty
-        // one — and an empty object handed back where a payload was expected is
-        // the silent-filter failure this whole family is built to avoid. Refused
-        // at load rather than discovered by the caller that got `{}`.
-        if row.fields.is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares no `fields`, so its reduction would be empty — which is \
-                 a dropped payload wearing the costume of a projection. Name the fields the \
-                 caller needs",
-                row.method
-            )));
-        }
-        if let Some(blank) = row.fields.iter().find(|field| field.trim().is_empty()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares an empty field name ({blank:?}); a field that names \
-                 nothing can never be found and reads as a projection that dropped it",
-                row.method
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Expand every `${NAME}` in `path` from the environment.
@@ -821,109 +323,6 @@ fn expand(path: &str) -> Result<Option<String>> {
         }
     }
     Ok(Some(out))
-}
-
-/// One piece of a declared path: text as written, or a variable to expand.
-enum Part<'a> {
-    /// Text that reaches the resolved path unchanged.
-    Literal(&'a str),
-    /// A `${NAME}` placeholder, by name.
-    Variable(&'a str),
-}
-
-/// Check a declared path's placeholder SYNTAX, touching no environment.
-///
-/// The load-time half of [`expand`], and it is a separate entry point rather than
-/// a flag because the two questions have different homes: a malformed `${` is the
-/// author's typo and `config lint` must report it on every host, while what a
-/// variable holds is knowable only where the call is made.
-///
-/// # Errors
-///
-/// As [`parts`].
-fn placeholders(path: &str) -> Result<()> {
-    parts(path).map(|_| ())
-}
-
-/// Split a declared path into literals and `${NAME}` placeholders.
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) for an unclosed `${`, or a name that is not
-/// `[A-Za-z_][A-Za-z0-9_]*`. Reading either as a literal would resolve a path
-/// nobody wrote, which is the failure this refuses rather than tolerates.
-fn parts(path: &str) -> Result<Vec<Part<'_>>> {
-    let mut found = Vec::new();
-    let mut rest = path;
-    while let Some(open) = rest.find("${") {
-        if open > 0 {
-            found.push(Part::Literal(&rest[..open]));
-        }
-        let after = &rest[open + 2..];
-        let close = after.find('}').ok_or_else(|| {
-            UsageError::raise(format!(
-                "path {path:?} opens `${{` and never closes it; a placeholder that does not end \
-                 cannot name a variable"
-            ))
-        })?;
-        let name = &after[..close];
-        if !name
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return Err(UsageError::raise(format!(
-                "path {path:?} names {name:?}, which is not an environment variable name"
-            )));
-        }
-        found.push(Part::Variable(name));
-        rest = &after[close + 1..];
-    }
-    if !rest.is_empty() {
-        found.push(Part::Literal(rest));
-    }
-    Ok(found)
-}
-
-/// Whether a declared path would leave the root it is resolved beneath.
-///
-/// [`crate::facts::Rooted::escapes`]'s predicate, and it is spelled here rather
-/// than borrowed because the two families' rows are different types and sharing
-/// the check would mean sharing the type. The rule is the same one: rooted, or
-/// any upward component.
-///
-/// **Run TWICE since CLOUD-1251's expansion landed**: once at load over the
-/// literal, and again over the EXPANDED path, because a variable's value is
-/// runtime input. A row spelling `${ID}.json` passes the load-time check whatever
-/// `ID` turns out to hold, so an `ID` of `../../etc` would otherwise walk out of
-/// the base the row declared — the one place this feature could have become a
-/// file-read primitive.
-///
-/// # `is_absolute` IS THE WRONG QUESTION, and it is wrong in the dangerous
-/// direction
-///
-/// `Path::is_absolute` is platform-dependent, and on Windows it answers **false**
-/// for `/etc/passwd`: that path has a root but no drive prefix, which Rust calls
-/// relative. `Path::join` does not agree — `base.join("/etc/passwd")` there
-/// discards the base's own path and yields `C:\etc\passwd`, outside the root the
-/// row declared. So the predicate would have admitted exactly the declaration it
-/// exists to refuse, on one platform, silently.
-///
-/// Measured rather than reasoned: this shipped, `mise run verify` passed —
-/// `cross-check` TYPE-checks the Windows target and never runs a test there — and
-/// the Windows job in CI is what went red. Enumerating the components asks the
-/// portable question instead: a prefix, a root, or an upward step, any of which
-/// leaves the declared root on every platform.
-fn escapes(path: &str) -> bool {
-    Path::new(path).components().any(|part| {
-        matches!(
-            part,
-            std::path::Component::Prefix(_)
-                | std::path::Component::RootDir
-                | std::path::Component::ParentDir
-        )
-    })
 }
 
 /// A server's transport, endpoint and headers, as a declared source resolved
@@ -1163,8 +562,6 @@ pub(crate) fn percent_decoded(text: &str) -> String {
 /// nothing. This is the retired resolver's exact comparison of the wrapped
 /// upstream, without spelling the parameter a host wraps it in (non-negotiable
 /// rule 1): ANY parameter's value may be the address.
-//MUTANT upstream-prefix-accepted|s@^        if bare_address(&address) == want {$@        if bare_address(\&address).starts_with(want) {@|a_url_that_extends_the_governed_upstream_resolves_to_silence
-//MUTANT upstream-param-unread|s@^    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {$@    for address in std::iter::once(endpoint.to_owned()) {@|a_committed_allow_and_deny_reach_the_toolbox_under_a_flipped_name
 pub(crate) fn endpoint_names(endpoint: &str, needle: &str) -> bool {
     let want = bare_address(needle);
     if want.is_empty() {
@@ -1230,37 +627,6 @@ fn by_endpoint<'a>(map: &'a Node, needle: &str) -> Matched<'a> {
         (1, Some(entry)) => Matched::One(entry),
         _ => Matched::Many(count),
     }
-}
-
-/// Refuse an `endpoint_contains` map that cannot mean one thing.
-///
-/// Split out of [`validate`] rather than inlined: the two refusals below are one
-/// question about one key, and the enclosing loop already carries five others.
-fn validate_endpoint_selectors(source: &Source) -> Result<()> {
-    for (name, needle) in &source.endpoint_contains {
-        if name.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares an `endpoint_contains` entry with a blank name; it \
-                 is what a caller types, and an empty one names nothing while reading as \
-                 coverage",
-                source.id
-            )));
-        }
-        // AN EMPTY NEEDLE IS THE ONE THAT MUST BE REFUSED AT LOAD. `contains`
-        // is true of every string for an empty pattern, so the selector would
-        // match the entire server map and turn the row into first-wins over
-        // everything — the precise failure `Ambiguous` exists to prevent,
-        // tripped on every call rather than reported once here.
-        if needle.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} maps {name:?} to an empty endpoint substring; every address \
-                 contains it, so the name would select whichever server the wiring file \
-                 happens to list first",
-                source.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Resolve one server's wiring out of the declared sources.
@@ -1393,7 +759,7 @@ pub(crate) fn server_map(
         };
         path
     };
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Ok(None);
     };
     // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
@@ -1677,9 +1043,6 @@ pub fn bound_in(
 /// `mutate` runs a Rust suite as `cargo test -- <case>` across every target, so a
 /// row here reddens the posture case it names although this file's declared
 /// suite is the dispatch tier.
-//MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
-//MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
-//MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
 fn unenforceable_in(
     settings: &[std::path::PathBuf],
     server: &str,
@@ -1701,7 +1064,7 @@ fn unenforceable_in(
         .collect();
     let mut rules = std::collections::BTreeSet::new();
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -1763,7 +1126,7 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]
     let prefix = format!("mcp__{server}");
     let mut looked = false;
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -1814,9 +1177,6 @@ pub struct Payload {
     /// words for that.
     pub unwrapped: bool,
 }
-
-//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
-//MUTANT is-error-result-projected|s@== Some(true)@== Some(false)@|a_tool_level_error_result_exits_non_zero_and_names_the_method
 
 /// What a caller must do with a `tools/call` result, decided **before** any
 /// reduction runs.
@@ -2250,9 +1610,6 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // (CLOUD-2193), so both `mcp_spawn.rs` declarations in this file are needed:
 // without either, the rows under it are judged against a file that lacks
 // their cases.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
-//MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
 
 /// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
 ///
@@ -2296,7 +1653,7 @@ fn spawn_record(
     // reads. So this is a launch that records nothing and still launches.
     let git_dir = crate::git::git_dir(root).ok()?;
     let ledger = git_dir.join(SPAWN_LEDGER);
-    let load = std::fs::read_to_string("/proc/loadavg")
+    let load = crate::fsio::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|text| text.split_whitespace().next().map(str::to_owned))
         .unwrap_or_else(|| String::from("?"));
@@ -2320,7 +1677,7 @@ fn spawn_record(
 /// backwards on resume, and a negative age counted as a sibling would inflate
 /// exactly the field the hypothesis reads.
 fn siblings_within(ledger: &Path, now: u64) -> usize {
-    let Ok(text) = std::fs::read_to_string(ledger) else {
+    let Ok(text) = crate::fsio::read_to_string(ledger) else {
         return 0;
     };
     text.lines()
@@ -2362,9 +1719,6 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// Read from the LAST field, where [`SpawnRecord::exec_failed`] appends the
 /// marker to its launch line, so a field added to the launch record later
 /// cannot move the marker out from under this reader.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT exec-failure-read-by-position|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.split('\\t').nth(5) == Some(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
-//MUTANT exec-failure-read-unbounded|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.ends_with(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
     line.rsplit('\t').next() == Some(EXEC_FAILED)
@@ -2377,8 +1731,6 @@ pub struct SpawnRecord {
     line: String,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
     /// launch's record again, then [`EXEC_FAILED`].

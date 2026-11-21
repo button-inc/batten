@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config_model::Config;
 use crate::error::UsageError;
 use crate::identity::{canonical_repo_path, surface_fingerprint};
 use crate::{git, trust};
@@ -60,7 +60,7 @@ use crate::{git, trust};
 ///
 /// `batten.toml` governs every consumer by definition, so it is the honest
 /// floor: an epoch over nothing would be a constant, which attributes nothing.
-pub const DEFAULT_TRACKED: &str = crate::config::CONFIG_FILE;
+pub const DEFAULT_TRACKED: &str = crate::config_model::CONFIG_FILE;
 
 /// The paths whose bytes the epoch covers, canonicalized and sorted.
 ///
@@ -211,7 +211,6 @@ fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<crate::cache::Sta
 
 /// The key the entry is filed under: each tracked PATH and its stamp, so adding
 /// or removing a path invalidates even when every surviving file is unchanged.
-//MUTANT epoch-key-ignores-paths|s@^        fields.push(path.as_bytes());$@        let _ = path;@|adding_a_tracked_path_invalidates_even_when_no_file_changed
 fn cache_key(tracked: &[String], stamps: &[crate::cache::Stamp]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 * tracked.len());
     for (path, stamp) in tracked.iter().zip(stamps) {
@@ -250,7 +249,6 @@ fn cache_path(state: &Path) -> Option<PathBuf> {
 /// strictly older than the entry's write time may have been rewritten in the
 /// same timestamp tick, with every stamped field unchanged, so the entry cannot
 /// vouch for it.
-//MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\x7cstamp\x7c stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
 fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
     let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
     let (written, epoch) = body.split_once(' ')?;
@@ -283,8 +281,177 @@ fn write_cache(path: &Path, key: &str, epoch: &str) {
 fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
     match base_ref {
         Some(reference) => trust::load_base(dir, reference),
-        None => crate::config::load(&dir.join(crate::config::CONFIG_FILE)),
+        None => crate::config::load(&dir.join(crate::config_model::CONFIG_FILE)),
     }
+}
+
+/// The epoch an admission for `rule`/`verdict` binds (CLOUD-2779).
+///
+/// **THE SURFACE THAT DECIDES THIS RULE, NOT THE WHOLE CONFIG.** The admission
+/// epoch used to be [`describe`]'s, so any `batten.toml` edit — a comment, a
+/// pattern only another module reads — unbound every outstanding admission for
+/// every rule. Measured on #1276: narrowing one `[[pattern]]` unbound four held
+/// admissions, the `filed-row-settled` handler then refused every Edit, and a
+/// landing lap refused in tier 1. The property the epoch exists for is
+/// [`crate::admission::Binding::epoch`]'s — an admission does not survive the
+/// policy change that would have made it unnecessary — and that is a change to
+/// what decides THIS rule.
+///
+/// The value covers [`describe`]'s tracked files, read the same way, except
+/// that `batten.toml` enters as a parsed projection ([`project`]): comments and
+/// layout dropped, and of the id-keyed rows only this rule's `[[rule]]`, the
+/// `[[verdict]]` rows naming this rule or verdict, and — when the rule has a
+/// module — every `[[pattern]]`, which a module may read by id. Every other
+/// table stays whole. The rule's module, which the surface does not track, and
+/// the engine version are added.
+///
+/// # Errors
+///
+/// As [`compute`], and a `batten.toml` that will not parse as TOML.
+pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -> Result<String> {
+    let config = authority(dir, base_ref)?;
+    let tracked = tracked_paths(&config)?;
+    let mut entries = Vec::new();
+    let mut module = None;
+    for path in &tracked {
+        let contents = read_tracked(dir, path, base_ref)?;
+        if path == crate::config_model::CONFIG_FILE {
+            let (projected, declared) = project(&contents, rule, verdict)?;
+            module = declared;
+            entries.push((path.clone(), projected));
+        } else {
+            entries.push((path.clone(), contents));
+        }
+    }
+    if let Some(module) = module {
+        let path = canonical_repo_path(&module)?;
+        let contents = read_tracked(dir, &path, base_ref)?;
+        entries.push((path, contents));
+    }
+    entries.push((
+        String::from("engine"),
+        env!("CARGO_PKG_VERSION").as_bytes().to_vec(),
+    ));
+    Ok(surface_fingerprint(&entries).to_hex())
+}
+
+/// [`for_rule`], served from the cache while [`describe_cached`]'s whole-surface
+/// epoch is unchanged: the per-rule value is a function of that surface, the
+/// rule's module and the engine, so an unchanged surface key with an unchanged
+/// module answers the same value. Cold under `--config-from`, as there.
+///
+/// # Errors
+///
+/// As [`for_rule`].
+pub fn for_rule_cached(
+    dir: &Path,
+    base_ref: Option<&str>,
+    rule: &str,
+    verdict: &str,
+) -> Result<String> {
+    if base_ref.is_some() {
+        return for_rule(dir, base_ref, rule, verdict);
+    }
+    let (surface, _) = describe_cached(dir, None)?;
+    let entry = state_dir(dir)
+        .as_deref()
+        .and_then(crate::cache::root_under)
+        .map(|root| {
+            let key = surface_fingerprint(&[
+                (String::from("surface"), surface.into_bytes()),
+                (String::from("rule"), rule.as_bytes().to_vec()),
+                (String::from("verdict"), verdict.as_bytes().to_vec()),
+                (
+                    String::from("engine"),
+                    env!("CARGO_PKG_VERSION").as_bytes().to_vec(),
+                ),
+            ])
+            .to_hex();
+            root.join("epoch-rule").join(key)
+        });
+    // THE MODULE IS NOT ON THE SURFACE, so a hit is only as good as the module
+    // being unchanged. The surface in the key fixes which module the rule
+    // names, so the entry stores that path and the module's digest, and a hit
+    // re-reads the module alone — never the config it was projected from.
+    if let Some(entry) = entry.as_deref()
+        && let Ok(stored) = crate::fsio::read_to_string(entry)
+        && let Some((value, rest)) = stored.split_once('\n')
+        && let Some((module, digest)) = rest.split_once('\n')
+        && module_digest(dir, (!module.is_empty()).then_some(module)) == digest
+    {
+        return Ok(value.to_owned());
+    }
+    let value = for_rule(dir, None, rule, verdict)?;
+    let module = crate::fsio::read(dir.join(crate::config_model::CONFIG_FILE))
+        .ok()
+        .and_then(|text| project(&text, rule, verdict).ok())
+        .and_then(|(_, module)| module);
+    if let Some(entry) = entry.as_deref()
+        && let Some(parent) = entry.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+    {
+        let text = format!(
+            "{value}\n{}\n{}",
+            module.as_deref().unwrap_or_default(),
+            module_digest(dir, module.as_deref())
+        );
+        let _ = crate::durable::replace(entry, text);
+    }
+    Ok(value)
+}
+
+/// The digest of the module at `module` in the working tree, or of nothing for
+/// a rule with none; an unreadable module digests as absent, which no stored
+/// digest of a present one equals.
+fn module_digest(dir: &Path, module: Option<&str>) -> String {
+    let bytes = module
+        .and_then(|module| crate::fsio::read(dir.join(module)).ok())
+        .unwrap_or_default();
+    surface_fingerprint(&[(String::from("module"), bytes)]).to_hex()
+}
+
+/// `batten.toml` reduced to what decides `rule`/`verdict`, and the rule's
+/// module path if it declares one. See [`for_rule`].
+fn project(contents: &[u8], rule: &str, verdict: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let text = std::str::from_utf8(contents)
+        .map_err(|err| UsageError::raise(format!("batten.toml is not UTF-8: {err}")))?;
+    let mut value: toml::Table = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("batten.toml will not parse: {err}")))?;
+    let id_is = |row: &toml::Value, ids: &[&str]| {
+        row.get("id")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|id| ids.contains(&id))
+    };
+    let mut module = None;
+    if let Some(toml::Value::Array(rows)) = value.get_mut("rule") {
+        rows.retain(|row| id_is(row, &[rule]));
+        // A `bundle` names a DIRECTORY of modules, which this projection does
+        // not enumerate: the whole config stays in, as before CLOUD-2779,
+        // rather than a narrower surface that could miss what decides it.
+        if rows.iter().any(|row| row.get("bundle").is_some()) {
+            return Ok((contents.to_vec(), None));
+        }
+        module = rows
+            .iter()
+            .find_map(|row| row.get("module").and_then(toml::Value::as_str))
+            .map(str::to_owned);
+    }
+    if let Some(toml::Value::Array(rows)) = value.get_mut("verdict") {
+        rows.retain(|row| id_is(row, &[rule, verdict]));
+    }
+    // A RULE WITH NO MODULE READS NEITHER TABLE. `[[pattern]]` rows are read by
+    // id from a module, and `[[step]]` rows are the step cache's and the lap
+    // graph's, which a module may read as a tree document (`ci-parity.rego`
+    // does) and nothing else decides a verdict from. Kept whole, a step row's
+    // `ci` mapping unbound every held admission of a `command` rule, and the
+    // `filed-row-settled` handler then refused every Edit after it (#1276).
+    if module.is_none() {
+        value.remove("pattern");
+        value.remove("step");
+    }
+    let projected = serde_json::to_vec(&value)
+        .map_err(|err| UsageError::raise(format!("batten.toml will not project: {err}")))?;
+    Ok((projected, module))
 }
 
 /// One tracked file's bytes, from the working tree or from the base ref.
@@ -294,7 +461,7 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 fn read_tracked(dir: &Path, path: &str, base_ref: Option<&str>) -> Result<Vec<u8>> {
     match base_ref {
         Some(reference) => git::show(dir, reference, path).map(String::into_bytes),
-        None => std::fs::read(dir.join(path)).map_err(|err| {
+        None => crate::fsio::read(dir.join(path)).map_err(|err| {
             UsageError::raise(format!(
                 "cannot read tracked config-surface path {path}: {err}"
             ))
@@ -497,5 +664,49 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
         );
+    }
+}
+
+/// The module half of a rule's digest (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod module_digest_tests {
+    use super::module_digest;
+
+    /// Fails by: two modules, or a module and none, digesting alike.
+    #[test]
+    fn a_modules_digest_is_its_bytes() {
+        let dir = crate::scratch::scratch("epoch-module-digest");
+        std::fs::write(dir.join("a.rego"), "package a").unwrap();
+        std::fs::write(dir.join("b.rego"), "package b").unwrap();
+        let a = module_digest(&dir, Some("a.rego"));
+        assert_eq!(a, module_digest(&dir, Some("a.rego")));
+        assert_ne!(a, module_digest(&dir, Some("b.rego")));
+        assert_ne!(a, module_digest(&dir, None));
+        assert_eq!(a.len(), 64, "a hex digest");
+    }
+
+    /// A step row's edit leaves a module-less rule's epoch alone, and still
+    /// moves a module rule's, which may read the step table as a document.
+    ///
+    /// Fails by: `[[step]]` kept in a command rule's projection (every edit to
+    /// the lap graph unbinding its admissions), or dropped from a module rule's
+    /// (an admission outliving a change its module reads).
+    #[test]
+    fn a_step_row_moves_only_a_module_rules_epoch() {
+        let rows = |ci: &str| {
+            format!(
+                "version = 1\n\n[[rule]]\nid = \"plain\"\nkind = \"command\"\n\n\
+                 [[rule]]\nid = \"moduled\"\nkind = \"policy\"\nmodule = \"m.rego\"\n\n\
+                 [[step]]\nid = \"s\"\nrun = [\"true\"]\ngroup = \"g\"\nci = [\"{ci}\"]\n"
+            )
+        };
+        let (before, _) = super::project(rows("a").as_bytes(), "plain", "plain").unwrap();
+        let (after, _) = super::project(rows("b").as_bytes(), "plain", "plain").unwrap();
+        assert_eq!(before, after, "a command rule does not read the step table");
+        let (before, module) = super::project(rows("a").as_bytes(), "moduled", "moduled").unwrap();
+        let (after, _) = super::project(rows("b").as_bytes(), "moduled", "moduled").unwrap();
+        assert_eq!(module.as_deref(), Some("m.rego"));
+        assert_ne!(before, after, "a module may read the step table");
     }
 }

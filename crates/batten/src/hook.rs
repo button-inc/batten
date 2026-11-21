@@ -43,69 +43,31 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
+pub use crate::config_model::Event;
+pub use crate::config_model::Field;
+pub use crate::config_model::Harness;
+#[allow(unused_imports)]
+pub(crate) use crate::config_model::unsupported;
+#[allow(unused_imports)]
+pub(crate) use crate::config_model::{BY_GATE, LOOKTHROUGH_WRAPPERS};
+pub use crate::config_model::{GIT_HOOKS, HookDisposition, is_git_hook};
+pub(crate) use crate::config_model::{comparable, is_env_assignment, is_lookthrough_wrapper};
 use crate::receipt::Validity;
 use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{
-    CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope,
+    CallEvent, CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
+    RuleScope,
 };
 use crate::severity::{self, ReportLevel, RuleSeverity};
+#[cfg(test)]
+use crate::shell::shell_commands;
+use crate::shell::{Segment, SegmentLine, Separator, segments};
 use crate::verbs::{MutatingVerb, OperandScope};
-
-/// The harness adapters `batten hook` can speak. Each owns the decode of its
-/// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
-/// what that host consumes; the core between them is harness-blind.
-/// **THREE SPELLINGS OF ONE NAME, held together rather than trusted to agree.**
-/// `clap::ValueEnum` spells `--harness`, serde spells `[transcript] harness` in
-/// `batten.toml` (CLOUD-1624), and [`Harness::as_str`] spells it for a matrix
-/// that builds no command. `kebab-case` is what makes the serde spelling the
-/// same token as the other two, and
-/// `tests::every_harness_token_matches_its_serde_spelling` is what keeps it that
-/// way — the same guard `every_harness_token_matches_its_clap_spelling` already
-/// provides for the flag.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    clap::ValueEnum,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum Harness {
-    /// Claude Code's `PreToolUse` payload; a deny is returned as the
-    /// `hookSpecificOutput.permissionDecision` JSON object on stdout with exit
-    /// `0` — the channel the production shell guards already use.
-    ClaudeCode,
-    /// Cursor. Two payload families under one host: a generic `preToolUse` that
-    /// looks like Claude's, and specialized events (`beforeShellExecution`,
-    /// `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top
-    /// level and **no** `tool_name` at all. Session is `conversation_id`.
-    Cursor,
-    /// GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which
-    /// yields `hook_event_name` natively. The camelCase dialect omits the event
-    /// name entirely, so Batten does not speak it.
-    CopilotCli,
-    /// Gemini CLI. Claude-identical payload fields, different event names
-    /// (`BeforeTool` rather than `PreToolUse`).
-    GeminiCli,
-    /// Codex CLI, whose wire format is a near-verbatim clone of Claude Code's —
-    /// its own repo says so. No payload shim is needed; the adapter exists so
-    /// the host is nameable and its fixture is pinned against drift.
-    CodexCli,
-    /// The neutral core contract: envelope in, decision as exit code out —
-    /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
-    /// channel is an exit status. Both codes are the §7 table's, unmodified.
-    ExitCode,
-}
 
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
@@ -164,6 +126,35 @@ impl Harness {
     /// reversing it would have to invent which of the four to register.
     #[must_use]
     pub fn wiring(self) -> Option<Wiring> {
+        self.wiring_row()
+    }
+
+    /// The variable this host sets to the session owner's email (CLOUD-2659).
+    ///
+    /// Beside [`Wiring::project_dir_var`], the precedent for a per-host variable
+    /// name. Measured for Claude Code in a cloud container; every other host is
+    /// `None` until surveyed, which is could-not-look, not "sets none".
+    #[must_use]
+    pub const fn session_owner_email_var(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("CLAUDE_CODE_USER_EMAIL"),
+            _ => None,
+        }
+    }
+
+    /// Whether this host's payload at `spelling` omits `hook_event_name`, so
+    /// the registration must name the event on argv (CLOUD-2700).
+    ///
+    /// Copilot's camelCase keys select its camelCase dialect, whose payload
+    /// carries no event name (M1); two events are documented only that way.
+    /// Without the name, the decoder would assume pre-tool, which is the wrong
+    /// moment entirely.
+    #[must_use]
+    pub fn names_event_on_argv(self, spelling: &str) -> bool {
+        self == Harness::CopilotCli && spelling.starts_with(|c: char| c.is_ascii_lowercase())
+    }
+
+    fn wiring_row(self) -> Option<Wiring> {
         match self {
             // The host merges hooks across its settings files and defines no
             // hooks-only project file, so batten owns a KEY here, never the
@@ -197,7 +188,7 @@ impl Harness {
             // name at all.
             Harness::CopilotCli => Some(Wiring {
                 file: WiringFile::Whole(".github/hooks/batten.json"),
-                spellings: CLAUDE_SPELLINGS,
+                spellings: COPILOT_SPELLINGS,
                 project_dir_var: None,
             }),
             // The one host whose names are a structural gap in an otherwise
@@ -212,7 +203,20 @@ impl Harness {
                     (Event::PreTool, "BeforeTool"),
                     (Event::PostTool, "AfterTool"),
                     (Event::Stop, "AfterAgent"),
-                    (Event::SessionStart, "BeforeAgent"),
+                    // `SessionStart`, Gemini's own session-start event, never
+                    // `BeforeAgent`, which Gemini documents as after-prompt,
+                    // before planning (CLOUD-2676).
+                    (Event::SessionStart, "SessionStart"),
+                    // CLOUD-2695: `BeforeAgent` is Gemini's prompt-submit moment,
+                    // and `PreCompress` its pre-compaction.
+                    (Event::UserPromptSubmit, "BeforeAgent"),
+                    (Event::SessionEnd, "SessionEnd"),
+                    (Event::Notification, "Notification"),
+                    (Event::PreCompact, "PreCompress"),
+                    // CLOUD-2700.
+                    (Event::ModelRequest, "BeforeModel"),
+                    (Event::ModelResponse, "AfterModel"),
+                    (Event::ToolSelection, "BeforeToolSelection"),
                 ],
                 project_dir_var: None,
             }),
@@ -222,10 +226,32 @@ impl Harness {
             Harness::Cursor => Some(Wiring {
                 file: WiringFile::Whole(".cursor/hooks.json"),
                 spellings: &[
+                    // ONE MOMENT, SEVERAL HOST NAMES (CLOUD-2700): Cursor splits
+                    // pre-tool and post-tool across a generic event and
+                    // specialized ones, and a consumer's handler can be keyed on
+                    // any of them, so Batten registers on every one. The first
+                    // spelling per event is the primary one a reader takes.
                     (Event::PreTool, "preToolUse"),
+                    (Event::PreTool, "beforeShellExecution"),
+                    (Event::PreTool, "beforeMCPExecution"),
+                    (Event::PreTool, "beforeReadFile"),
                     (Event::PostTool, "afterFileEdit"),
+                    (Event::PostTool, "postToolUse"),
+                    (Event::PostTool, "afterShellExecution"),
+                    (Event::PostTool, "afterMCPExecution"),
+                    (Event::AgentResponse, "afterAgentResponse"),
+                    (Event::AgentThought, "afterAgentThought"),
+                    (Event::WorkspaceOpen, "workspaceOpen"),
+                    (Event::TabFileRead, "beforeTabFileRead"),
+                    (Event::TabFileEdit, "afterTabFileEdit"),
                     (Event::Stop, "stop"),
                     (Event::SessionStart, "sessionStart"),
+                    // CLOUD-2695.
+                    (Event::PostToolFailure, "postToolUseFailure"),
+                    (Event::SessionEnd, "sessionEnd"),
+                    (Event::SubagentStart, "subagentStart"),
+                    (Event::SubagentStop, "subagentStop"),
+                    (Event::PreCompact, "preCompact"),
                 ],
                 project_dir_var: None,
             }),
@@ -250,6 +276,25 @@ impl Harness {
     #[must_use]
     pub const fn reason_travels_in_band(self) -> bool {
         self.capabilities().reason_travels_in_band
+    }
+
+    /// How this harness states that it runs hosted: the variable it exports and
+    /// the value meaning a hosted, disposable session (CLOUD-2709), or `None`
+    /// where its hosted form states nothing and the declaration decides.
+    ///
+    /// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured
+    /// in this repository's own sessions, 2026-11-10). A harness gains a signal
+    /// here when its hosted form is measured stating one.
+    #[must_use]
+    pub const fn host_signal(self) -> Option<crate::environment::HostSignal> {
+        match self {
+            Harness::ClaudeCode => Some(("CLAUDE_CODE_REMOTE", "true")),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
+        }
     }
 
     /// The tools on this host whose call **writes the path it names**.
@@ -1284,17 +1329,34 @@ impl Wiring {
     ///
     /// Ordered by [`Event::ALL`] rather than by the table, so emission is
     /// byte-stable (§6) whatever order a row happens to list its names in.
+    /// EVERY event the host emits (owner ruling, 2026-11-09): Batten is
+    /// registered on 100% of each host's hook surface, because a consumer's
+    /// `[[hook.handler]]` can only fire on an event Batten itself is on. So this
+    /// is [`Wiring::admits`], and a wiring short of it is unregistered.
     #[must_use]
     pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
+        self.admits(harness)
+    }
+
+    /// Every event this host emits, with its name: what `doctor hooks` ADMITS
+    /// a registration under (CLOUD-2581).
+    ///
+    /// [`Wiring::registrations`] without its default filter. A registration
+    /// under an admitted event that is not registered by default is a consumer's
+    /// choice, never `hook-wiring-event-underived`.
+    #[must_use]
+    pub fn admits(&self, harness: Harness) -> Vec<(Event, &'static str)> {
         let capabilities = harness.capabilities();
         Event::ALL
             .iter()
             .filter(|event| capabilities.emits(**event))
-            .filter_map(|event| {
+            // EVERY spelling of the event, not the first (CLOUD-2700): a host
+            // that names one moment several ways is registered under each.
+            .flat_map(|event| {
                 self.spellings
                     .iter()
-                    .find(|(named, _)| named == event)
-                    .map(|(_, spelling)| (*event, *spelling))
+                    .filter(move |(named, _)| named == event)
+                    .map(move |(_, spelling)| (*event, *spelling))
             })
             .collect()
     }
@@ -1319,7 +1381,107 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     // Safe to share for the same reason, and only Claude lists it in its own
     // event set: a spelling is a NAME, not a registration.
     (Event::UserPromptSubmit, "UserPromptSubmit"),
+    // CLOUD-2581: the other 25 Claude Code events, each its host name.
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Notification, "Notification"),
+    (Event::UserPromptExpansion, "UserPromptExpansion"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::StopFailure, "StopFailure"),
+    (Event::SubagentStart, "SubagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::PostCompact, "PostCompact"),
+    (Event::PreModelSwitch, "PreModelSwitch"),
+    (Event::PostModelSwitch, "PostModelSwitch"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::PermissionDenied, "PermissionDenied"),
+    (Event::Setup, "Setup"),
+    (Event::TeammateIdle, "TeammateIdle"),
+    (Event::TaskCreated, "TaskCreated"),
+    (Event::Elicitation, "Elicitation"),
+    (Event::ElicitationResult, "ElicitationResult"),
+    (Event::WorktreeCreate, "WorktreeCreate"),
+    (Event::WorktreeRemove, "WorktreeRemove"),
+    (Event::InstructionsLoaded, "InstructionsLoaded"),
+    (Event::CwdChanged, "CwdChanged"),
+    (Event::FileChanged, "FileChanged"),
+    (Event::DirectoryAdded, "DirectoryAdded"),
+    (Event::MessageDisplay, "MessageDisplay"),
+    // CLOUD-2700: names Claude Code never sends, safe here for the reason
+    // `PostToolBatch`'s comment gives. Codex and Copilot emit them.
+    (Event::ModelRequest, "PreModelRequest"),
+    (Event::ModelResponse, "PostModelRequest"),
+    (Event::Interrupt, "Interrupt"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
 ];
+
+/// Copilot CLI's names: its `PascalCase` dialect, which is Claude's spellings,
+/// plus the two events it documents only in camelCase (CLOUD-2700), which
+/// [`Harness::names_event_on_argv`] registers with the event on argv.
+const COPILOT_SPELLINGS: &[(Event, &str)] = &[
+    (Event::PreTool, "PreToolUse"),
+    (Event::PostTool, "PostToolUse"),
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Stop, "Stop"),
+    (Event::SessionStart, "SessionStart"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::SubagentStart, "subagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::Notification, "Notification"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::UserPromptExpansion, "userPromptTransformed"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
+];
+
+/// How one registration entry is shaped on a host's committed surface
+/// (CLOUD-2694).
+///
+/// Claude Code, Codex and Gemini nest the command one level down,
+/// `[{"hooks": [{"type": "command", "command": …}]}]`. Cursor and Copilot take
+/// one flat object per entry, which is what their docs show and the only shape
+/// either host reads: a nested entry there is a hook that can never fire.
+/// `write` is the key the command is written under; `read` is every key a
+/// reader counts (Copilot's `command` is a documented cross-platform fallback,
+/// but only `bash` is honoured under its cloud agent, so `bash` is written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryShape {
+    /// `{"hooks": [{"type": "command", "command": …}]}`.
+    Nested,
+    /// `{"type": "command", "<write>": …}`.
+    Flat {
+        /// The key the command is written under.
+        write: &'static str,
+        /// Every key a reader accepts as the command.
+        read: &'static [&'static str],
+    },
+}
+
+/// Cursor's flat entry: `{"type": "command", "command": …}`.
+const CURSOR_ENTRY: EntryShape = EntryShape::Flat {
+    write: "command",
+    read: &["command"],
+};
+
+/// Copilot's flat entry: written under `bash`, read under `bash` or `command`.
+const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
+    write: "bash",
+    read: &["bash", "command"],
+};
+
+impl Harness {
+    /// The entry shape this host reads (CLOUD-2694); the one function every
+    /// writer and reader asks, so render, register, doctor and reclaim agree.
+    pub(crate) const fn entry_shape(self) -> EntryShape {
+        match self {
+            Harness::Cursor => CURSOR_ENTRY,
+            Harness::CopilotCli => COPILOT_ENTRY,
+            Harness::ClaudeCode | Harness::CodexCli | Harness::GeminiCli | Harness::ExitCode => {
+                EntryShape::Nested
+            }
+        }
+    }
+}
 
 /// The command a host's registration invokes.
 ///
@@ -1377,15 +1539,29 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // The values go through `serde_json` rather than being interpolated raw:
     // they are ASCII identifiers today, and a row that ever carries a quote or a
     // backslash would otherwise emit JSON that does not parse.
-    let command = json_string(&wiring_command(harness));
+    // Per spelling, because a registration whose payload names no event carries
+    // it on argv (CLOUD-2700).
+    let command_for = |spelling: &str| json_string(&registration_command(harness, spelling));
     let registrations = wiring.registrations(harness);
+    let shape = harness.entry_shape();
 
     // Built as lines with an explicit indent rather than through a map type:
     // key order is the contract here (§6 byte-stability), and a map would sort
     // or hash it. The indent is a parameter so the same body serves a whole file
     // and a key's value, which differ only by one level.
-    let entry = |spelling: &str, indent: &str| {
-        [
+    // ONE ENTRY IN THE SHAPE THE HOST READS (CLOUD-2694): flat on Cursor and
+    // Copilot, nested everywhere else.
+    let entry = |spelling: &str, indent: &str| match (shape, command_for(spelling)) {
+        (EntryShape::Flat { write, .. }, command) => [
+            format!("{indent}{}: [", json_string(spelling)),
+            format!("{indent}  {{"),
+            format!("{indent}    \"type\": \"command\","),
+            format!("{indent}    {}: {command}", json_string(write)),
+            format!("{indent}  }}"),
+            format!("{indent}]"),
+        ]
+        .join("\n"),
+        (EntryShape::Nested, command) => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
             format!("{indent}    \"hooks\": ["),
@@ -1397,7 +1573,7 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
             format!("{indent}  }}"),
             format!("{indent}]"),
         ]
-        .join("\n")
+        .join("\n"),
     };
 
     match wiring.file {
@@ -1416,7 +1592,17 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "    "))
                 .collect();
-            format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}", body.join(",\n"))
+            // A flat host's file carries `"version": 1` first, as both hosts
+            // document it (CLOUD-2694).
+            let version = if matches!(shape, EntryShape::Flat { .. }) {
+                "  \"version\": 1,\n"
+            } else {
+                ""
+            };
+            format!(
+                "{{\n{version}  \"hooks\": {{\n{}\n  }}\n}}",
+                body.join(",\n")
+            )
         }
     }
 }
@@ -1430,12 +1616,84 @@ fn json_string(raw: &str) -> String {
     serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""))
 }
 
-/// The events every surveyed host emits — the converged core.
-const CONVERGED_EVENTS: &[Event] = &[
+// EACH NON-CLAUDE HOST'S DOCUMENTED EVENTS THAT NAME A MOMENT BATTEN HAS A
+// VARIANT FOR (CLOUD-2695, fetched from each host's docs 2026-11-09). A
+// prompt-submit event is derived only where Batten's deny reaches the host:
+// Codex (exit 2 + stderr) and Gemini (`BeforeAgent`, exit 2). Cursor's
+// `beforeSubmitPrompt` reads `continue` where Batten writes `permission`, and
+// Copilot documents no blocking output for it, so both would fail open.
+// What stays off each surface is CLOUD-2700's.
+
+/// Codex CLI: all 14 of its documented events (CLOUD-2700 added the last three).
+const CODEX_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::Interrupt,
     Event::PreTool,
     Event::PostTool,
     Event::Stop,
     Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PermissionRequest,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::UserPromptSubmit,
+];
+
+/// Copilot CLI: 13 of 14. The one left is `UserPromptSubmit` (no documented
+/// blocking output, CLOUD-1941). The two camelCase-only events are registered
+/// with their name on argv (CLOUD-2700).
+const COPILOT_EVENTS: &[Event] = &[
+    Event::ErrorOccurred,
+    Event::SubagentStart,
+    Event::UserPromptExpansion,
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::Notification,
+    Event::PermissionRequest,
+];
+
+/// Gemini CLI: all 11 (CLOUD-2700 added the model and tool-selection three).
+const GEMINI_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::ToolSelection,
+    Event::PreTool,
+    Event::PostTool,
+    Event::Stop,
+    Event::SessionStart,
+    Event::UserPromptSubmit,
+    Event::SessionEnd,
+    Event::Notification,
+    Event::PreCompact,
+];
+
+/// Cursor: 14 moments under 20 of its 21 names. The four colliding names are
+/// extra spellings of pre-tool and post-tool (CLOUD-2700); `beforeSubmitPrompt`
+/// is left off because a deny there is ignored (CLOUD-1941).
+const CURSOR_EVENTS: &[Event] = &[
+    Event::AgentResponse,
+    Event::AgentThought,
+    Event::WorkspaceOpen,
+    Event::TabFileRead,
+    Event::TabFileEdit,
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
 ];
 
 /// The attribution row group every named host shares: nothing the evidence
@@ -1492,6 +1750,32 @@ const CLAUDE_EVENTS: &[Event] = &[
     // surveyed host emits it, and claiming it for the converged core would be
     // claiming something about hosts nobody surveyed.
     Event::UserPromptSubmit,
+    // CLOUD-2581: the rest of the 33 events Claude Code 2.1.319 emits.
+    Event::PostToolFailure,
+    Event::Notification,
+    Event::UserPromptExpansion,
+    Event::SessionEnd,
+    Event::StopFailure,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::PreModelSwitch,
+    Event::PostModelSwitch,
+    Event::PermissionRequest,
+    Event::PermissionDenied,
+    Event::Setup,
+    Event::TeammateIdle,
+    Event::TaskCreated,
+    Event::Elicitation,
+    Event::ElicitationResult,
+    Event::WorktreeCreate,
+    Event::WorktreeRemove,
+    Event::InstructionsLoaded,
+    Event::CwdChanged,
+    Event::FileChanged,
+    Event::DirectoryAdded,
+    Event::MessageDisplay,
 ];
 
 impl Harness {
@@ -1654,7 +1938,7 @@ impl Harness {
                 // found, and a name taken from a forum post is exactly what
                 // CLOUD-209's "assume it wrong without a fetch" refuses.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                events: CURSOR_EVENTS,
                 // The row that forced this column to become event-scoped
                 // (CLOUD-601). M1 records the verdict vocabulary as
                 // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
@@ -1694,7 +1978,7 @@ impl Harness {
                 // Not fetched, like the rest of this host's tool surface — the
                 // same survey gap `operation_of` records for it.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                events: COPILOT_EVENTS,
                 // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
                 // verdict exists and names the `preToolUse` output *fields*
                 // (`permissionDecision`/`permissionDecisionReason`) without
@@ -1728,7 +2012,7 @@ impl Harness {
                 // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
                 // default and disableable with `"useWriteTodos": false`.
                 plan_tools: PlanTools::Surveyed(&["write_todos"]),
-                events: CONVERGED_EVENTS,
+                events: GEMINI_EVENTS,
                 // Allow/deny only. A policy wanting confirmation must hard-deny
                 // here — degrading to *allow* would turn "ask a human" into "go
                 // ahead".
@@ -1793,7 +2077,7 @@ impl Harness {
             Harness::CodexCli => Capabilities {
                 // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
                 plan_tools: PlanTools::Surveyed(&["update_plan"]),
-                events: CONVERGED_EVENTS,
+                events: CODEX_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
                 // supported yet" in the docs. Advertised is not available, and
                 // that is a measurement rather than a gap — hence `No`.
@@ -1818,7 +2102,10 @@ impl Harness {
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
-                events: CONVERGED_EVENTS,
+                // Every moment, not the converged four: this is Batten's own
+                // envelope, so it carries whatever the core normalizes, and a
+                // handler keyed on any of them runs here (CLOUD-2674).
+                events: Event::MOMENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
                 ask: AskReach::unreachable(Declaration::No),
@@ -1994,27 +2281,6 @@ pub enum HookSource {
     Ci,
 }
 
-/// What batten does about one name in a [`HookSource`]'s vocabulary.
-///
-/// Named `HookDisposition`, never bare `Disposition`:
-/// `findings::Disposition` and `selfwrite::Disposition` are public already.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookDisposition {
-    /// Batten is registered for it; `check` is the declared verb that checks the
-    /// registration on a live checkout.
-    Registered {
-        /// A `surface::SURFACE` path.
-        check: &'static str,
-    },
-    /// Deliberately not registered; `reason` is a stable kebab id.
-    Unsupported {
-        /// Why, as a kebab id rather than prose.
-        reason: &'static str,
-    },
-}
-
-#[rustfmt::skip]
-const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };
 const BY_HOOKS: HookDisposition = HookDisposition::Registered {
     check: "doctor hooks",
 };
@@ -2025,62 +2291,33 @@ const BY_FORGE: HookDisposition = HookDisposition::Registered {
     check: "doctor forge",
 };
 
-const fn unsupported(reason: &'static str) -> HookDisposition {
-    HookDisposition::Unsupported { reason }
-}
+/// The verb that takes a catalog event (CLOUD-2690).
+const INTAKE: &str = "forge intake";
 
-/// githooks(5) for git 2.43, one row per name, alphabetical.
-///
-/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The two
-/// registered rows must equal `doctor::COMMIT_HOOKS`, which stays the runtime
-/// authority for which git hooks batten links.
-///
-/// Every reason is a stable id: `after-the-fact` refuses nothing that has not
-/// already happened (the [`Event::PostTool`] argument), `server-side` runs on a
-/// remote, `adjudicated-elsewhere` is the push — decided at the mediated call and
-/// by `land` — and `no-predicate` is a hook nothing here has a rule for yet.
-/// `pre-merge-commit` stays `no-predicate`: fast-forward landing makes no merge
-/// commits. Registering a further hook is per-source work, not this table's.
-pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
-    ("applypatch-msg", unsupported("no-predicate")),
-    ("commit-msg", BY_GATE),
-    ("fsmonitor-watchman", unsupported("not-a-gate")),
-    ("p4-changelist", unsupported("no-predicate")),
-    ("p4-post-changelist", unsupported("after-the-fact")),
-    ("p4-pre-submit", unsupported("no-predicate")),
-    ("p4-prepare-changelist", unsupported("no-predicate")),
-    ("post-applypatch", unsupported("after-the-fact")),
-    ("post-checkout", unsupported("after-the-fact")),
-    ("post-commit", unsupported("after-the-fact")),
-    ("post-index-change", unsupported("after-the-fact")),
-    ("post-merge", unsupported("after-the-fact")),
-    ("post-receive", unsupported("server-side")),
-    ("post-rewrite", unsupported("after-the-fact")),
-    ("post-update", unsupported("server-side")),
-    ("pre-applypatch", unsupported("no-predicate")),
-    ("pre-auto-gc", unsupported("no-predicate")),
-    ("pre-commit", BY_GATE),
-    ("pre-merge-commit", unsupported("no-predicate")),
-    ("pre-push", unsupported("adjudicated-elsewhere")),
-    ("pre-rebase", unsupported("no-predicate")),
-    ("pre-receive", unsupported("server-side")),
-    ("prepare-commit-msg", unsupported("no-predicate")),
-    ("proc-receive", unsupported("server-side")),
-    ("push-to-checkout", unsupported("server-side")),
-    ("reference-transaction", unsupported("no-predicate")),
-    ("sendemail-validate", unsupported("no-predicate")),
-    ("update", unsupported("server-side")),
-];
+/// A catalog event's door (CLOUD-2690).
+const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };
 
-/// What batten reads from the forge, and the two ingress shapes it refuses to be
-/// (CLOUD-204: no server, and a webhook's silence is not success).
+/// What batten reads from the forge, and the ingress shape it refuses to be
+/// (CLOUD-204: no server). Payload intake is a verb reading stdin, so `webhook`
+/// left this table when the catalog joined it (CLOUD-2689).
 const CI_READS: &[(&str, HookDisposition)] = &[
     ("poll:pull-request", BY_FORGE),
     ("poll:check-run", BY_FORGE),
     ("poll:workflow-run", BY_FORGE),
-    ("webhook", unsupported("no-server")),
     ("socket", unsupported("no-server")),
 ];
+
+/// The forge's whole vocabulary: the polls, then one entry per catalog event
+/// (CLOUD-2689), each taken by `forge intake` (CLOUD-2690).
+fn ci_vocabulary() -> Vec<(String, HookDisposition)> {
+    let mut entries = owned(CI_READS);
+    entries.extend(
+        crate::forge_event::CATALOG
+            .iter()
+            .map(|row| (row.name.to_owned(), BY_INTAKE)),
+    );
+    entries
+}
 
 fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
     table
@@ -2089,11 +2326,6 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
         .collect()
 }
 
-//MUTANT source-unenumerated|s@^        HookSource::Git,$@@|every_hook_source_is_enumerated_with_a_nonempty_vocabulary
-//MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
-//MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
-//MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
-//MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
 impl HookSource {
     /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
     /// a fifth source does not compile until it declares a vocabulary.
@@ -2128,7 +2360,7 @@ impl HookSource {
                 .collect(),
             HookSource::Harness => harness_vocabulary(),
             HookSource::Git => owned(GIT_HOOKS),
-            HookSource::Ci => owned(CI_READS),
+            HookSource::Ci => ci_vocabulary(),
         }
     }
 
@@ -2145,7 +2377,6 @@ impl HookSource {
 }
 
 /// Whether a source's findings get the once-per-cycle full arm (CLOUD-2075).
-//MUTANT harness-lifecycle-unsighted|s@^            HookSource::Harness => Lifecycle::Sighted,$@            HookSource::Harness => Lifecycle::PrintedFull,@|every_hook_source_declares_its_finding_lifecycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifecycle {
     /// Full once per context per compaction cycle, the pointer otherwise.
@@ -2170,7 +2401,7 @@ fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
             .unwrap_or_default();
         for event in Event::ALL
             .iter()
-            .filter(|event| **event != Event::Unrecognized)
+            .filter(|event| **event != Event::Unrecognized && event.host_emitted())
         {
             let disposition = if wiring.is_none() {
                 unsupported("no-wiring-surface")
@@ -2188,99 +2419,6 @@ fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
     entries
 }
 
-/// The lifecycle events the core normalizes, whatever a host spells them.
-///
-/// A vocabulary enum with a `const ALL`, the shape [`Harness`],
-/// [`crate::capture::Stream`] and [`crate::rules::RuleKind`] already use, so
-/// anything ranging over events is derived rather than re-typed — the golden
-/// census in `tests/cli.rs` reads this, which is what stops a new variant from
-/// landing with no fixture.
-///
-/// The set is what the dependent surfaces consume, not everything a host emits:
-/// which events a given host offers is the capability table's business
-/// (CLOUD-45), and per-host spellings beyond the converged ones below are the
-/// shims' (CLOUD-44).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Event {
-    /// Before a tool runs — the only point at which a deny still prevents
-    /// anything, and so the only event policy adjudicates.
-    PreTool,
-    /// After a tool ran. A deny here would refuse something that already
-    /// happened, which no host honours and none of them offer.
-    PostTool,
-    /// End of turn: the reconciliation point the stop gate uses (CLOUD-85).
-    Stop,
-    /// Start of a session.
-    SessionStart,
-    /// A task was marked complete. **Claude-only** across the surveyed hosts,
-    /// and the one Claude-exclusive capability that is load-bearing here: exit 2
-    /// prevents the completion, which is the literal machine form of Batten's
-    /// thesis about completion signals. A policy keyed on it degrades to the
-    /// Stop family elsewhere (see [`Capabilities::degrade`]).
-    TaskCompleted,
-    /// A settings file is being edited mid-session. Claude-only; a
-    /// self-protection surface no other surveyed host offers.
-    ConfigChange,
-    /// The host named an event this build does not normalize. Distinct from an
-    /// absent one: absent means nobody said, this means somebody said something
-    /// we do not know, and the two must not collapse.
-    Unrecognized,
-    // DECLARED AFTER the catch-all on purpose, which reads oddly and is the
-    // cheaper of two honest options. This enum is field-less and carries no
-    // `repr`, so a consumer may write `Event::Unrecognized as u8` and inserting
-    // ahead of it shifts that value — `cargo semver-checks` calls it
-    // `enum_no_repr_variant_discriminant_changed`. Appending keeps the change
-    // patch-compatible instead of putting a break in the changelog for a
-    // discriminant nothing observes. Reading order lives in `Event::ALL`, which
-    // is what every census and the wiring emitter iterate, so nothing but this
-    // declaration is affected.
-    /// Every tool call in a batch has resolved, before the next model request
-    /// (CLOUD-389). **Claude-only** across the surveyed hosts.
-    ///
-    /// The batch boundary [`crate::drain`] wants and, until this variant existed,
-    /// inferred with a coalescing window on every host including the one that
-    /// emits it. The window is not replaced — four of five surveyed hosts offer
-    /// no batch event, and CLOUD-79 puts the once-per-batch guarantee in the mask
-    /// rather than in any event — so this is the exact path where one exists and
-    /// the window is the fallback it was designed as. A policy keyed on it
-    /// degrades to [`Event::PostTool`] elsewhere (see [`Capabilities::degrade`]).
-    ///
-    /// No deny channel, and that is structural rather than a choice: a boundary
-    /// between batches is not a decision point, and [`adjudicate`] allows every
-    /// non-pre-tool event before any rule is consulted.
-    PostToolBatch,
-    /// A turn's prompt has been submitted, before the model sees it.
-    /// **Claude-only** across the surveyed hosts.
-    ///
-    /// Appended for the reason [`Event::PostToolBatch`] above it was: this enum
-    /// carries no `repr`, so inserting ahead of an existing variant shifts a
-    /// discriminant a consumer may have cast, which `cargo semver-checks` reports
-    /// as `enum_no_repr_variant_discriminant_changed`. Reading order is
-    /// [`Event::ALL`]'s, which is what every census and the wiring emitter
-    /// iterate.
-    ///
-    /// **It carries a deny channel, and that is measured rather than assumed**
-    /// (CLOUD-777, 2026-08-21). This repository's own wiring was the evidence:
-    /// two bash guards registered here reached `exit 2` on five paths between
-    /// them and emitted no advisory shape — deny-issuing gates on this surface,
-    /// honoured by the host. So this is **not** one of the stated no-ops beside
-    /// it: [`adjudicated`]'s arm says the channel is real and that no rule kind
-    /// selects for it yet, which is a gap with an owner rather than a decision
-    /// that there is nothing to decide.
-    ///
-    /// **The evidence moved rather than expired** (CLOUD-898). One of those two
-    /// guards is now a `[[hook.handler]]` dispatched by `batten hook` instead of
-    /// registered beside it, so the count above is history. The conclusion is
-    /// unchanged and is now demonstrated by the door itself: a handler exiting
-    /// `2` at this event produces the host's own deny document, asserted in
-    /// `tests/cli.rs`. What DID change is the advisory half — this host offers no
-    /// `additionalContext` field here, so a handler's advice at this event
-    /// degrades to the operator's stream. Deny reaches the model; advice does
-    /// not.
-    UserPromptSubmit,
-}
-
 impl Event {
     /// Every event, so a census is derived rather than hand-maintained.
     pub const ALL: &'static [Event] = &[
@@ -2295,12 +2433,61 @@ impl Event {
         // chronological start of a turn: this list is what the wiring emitter
         // iterates, so its order is a committed artifact's key order, and the
         // grouping that already holds — converged core, then the events one host
-        // alone offers — is the one a reader can check against
-        // `CONVERGED_EVENTS`. `Unrecognized` stays last because it is not a
-        // moment.
+        // alone offers — is the one a reader can check against each host's
+        // event set. `Unrecognized` stays last because it is not a moment.
         Event::UserPromptSubmit,
+        Event::PostToolFailure,
+        Event::Notification,
+        Event::UserPromptExpansion,
+        Event::SessionEnd,
+        Event::StopFailure,
+        Event::SubagentStart,
+        Event::SubagentStop,
+        Event::PreCompact,
+        Event::PostCompact,
+        Event::PreModelSwitch,
+        Event::PostModelSwitch,
+        Event::PermissionRequest,
+        Event::PermissionDenied,
+        Event::Setup,
+        Event::TeammateIdle,
+        Event::TaskCreated,
+        Event::Elicitation,
+        Event::ElicitationResult,
+        Event::WorktreeCreate,
+        Event::WorktreeRemove,
+        Event::InstructionsLoaded,
+        Event::CwdChanged,
+        Event::FileChanged,
+        Event::DirectoryAdded,
+        Event::MessageDisplay,
+        // CLOUD-2700: the moments only non-Claude hosts emit.
+        Event::ModelRequest,
+        Event::ModelResponse,
+        Event::ToolSelection,
+        Event::AgentResponse,
+        Event::AgentThought,
+        Event::Interrupt,
+        Event::ErrorOccurred,
+        Event::WorkspaceOpen,
+        Event::TabFileRead,
+        Event::TabFileEdit,
+        Event::Forge,
         Event::Unrecognized,
     ];
+
+    /// Every event that is a moment: [`Event::ALL`] without `Unrecognized`.
+    ///
+    /// Derived in const context, so a new variant in `ALL` is a moment here with
+    /// no second edit. The `panic!` arm makes "`Unrecognized` stays last" a
+    /// compile error rather than a comment, so a reordered `ALL` cannot quietly
+    /// drop a real moment. The neutral exit-code adapter declares exactly this set
+    /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
+    /// would be a statement about nobody.
+    pub const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
+        Some((Event::Unrecognized, moments)) => moments,
+        _ => panic!("Event::ALL ends with Unrecognized"),
+    };
 
     /// Whether a refusal is a thing this moment can carry at all.
     ///
@@ -2332,9 +2519,49 @@ impl Event {
     /// and [`adjudicate`]'s arms still say the same thing.
     #[must_use]
     pub const fn carries_a_verdict(self) -> bool {
+        // CLOUD-2581's pass-through events carry no verdict either: allowed
+        // before any rule until a rule needs one. The worktree pair is absent on
+        // purpose, so a handler can refuse the host's worktree request.
         !matches!(
             self,
-            Event::Stop | Event::SessionStart | Event::ConfigChange | Event::TaskCompleted
+            Event::Stop
+                | Event::SessionStart
+                | Event::ConfigChange
+                | Event::TaskCompleted
+                | Event::PostToolFailure
+                | Event::Notification
+                | Event::UserPromptExpansion
+                | Event::SessionEnd
+                | Event::StopFailure
+                | Event::SubagentStart
+                | Event::SubagentStop
+                | Event::PreCompact
+                | Event::PostCompact
+                | Event::PreModelSwitch
+                | Event::PostModelSwitch
+                | Event::PermissionRequest
+                | Event::PermissionDenied
+                | Event::Setup
+                | Event::TeammateIdle
+                | Event::TaskCreated
+                | Event::Elicitation
+                | Event::ElicitationResult
+                | Event::InstructionsLoaded
+                | Event::CwdChanged
+                | Event::FileChanged
+                | Event::DirectoryAdded
+                | Event::MessageDisplay
+                // CLOUD-2700's, for the same reason: no rule selects for them.
+                | Event::ModelRequest
+                | Event::ModelResponse
+                | Event::ToolSelection
+                | Event::AgentResponse
+                | Event::AgentThought
+                | Event::Interrupt
+                | Event::ErrorOccurred
+                | Event::WorkspaceOpen
+                | Event::TabFileRead
+                | Event::TabFileEdit
         )
     }
 
@@ -2362,6 +2589,15 @@ impl Event {
         matches!(self, Event::PreTool)
     }
 
+    /// Whether any HOST emits this moment (CLOUD-2689). Only [`Event::Forge`]
+    /// is not a host's: it arrives through `forge intake`, so it appears in no
+    /// harness vocabulary and in no wiring, and a census of host spellings
+    /// exempts it.
+    #[must_use]
+    pub const fn host_emitted(self) -> bool {
+        !matches!(self, Event::Forge)
+    }
+
     /// The normalized token. Deliberately not a host spelling — a host's own
     /// word for an event travels in [`Envelope::raw_event`] and is echoed back
     /// verbatim, so this one is free to name the concept.
@@ -2376,6 +2612,42 @@ impl Event {
             Event::ConfigChange => "config-change",
             Event::PostToolBatch => "post-tool-batch",
             Event::UserPromptSubmit => "user-prompt-submit",
+            Event::PostToolFailure => "post-tool-failure",
+            Event::Notification => "notification",
+            Event::UserPromptExpansion => "user-prompt-expansion",
+            Event::SessionEnd => "session-end",
+            Event::StopFailure => "stop-failure",
+            Event::SubagentStart => "subagent-start",
+            Event::SubagentStop => "subagent-stop",
+            Event::PreCompact => "pre-compact",
+            Event::PostCompact => "post-compact",
+            Event::PreModelSwitch => "pre-model-switch",
+            Event::PostModelSwitch => "post-model-switch",
+            Event::PermissionRequest => "permission-request",
+            Event::PermissionDenied => "permission-denied",
+            Event::Setup => "setup",
+            Event::TeammateIdle => "teammate-idle",
+            Event::TaskCreated => "task-created",
+            Event::Elicitation => "elicitation",
+            Event::ElicitationResult => "elicitation-result",
+            Event::WorktreeCreate => "worktree-create",
+            Event::WorktreeRemove => "worktree-remove",
+            Event::InstructionsLoaded => "instructions-loaded",
+            Event::CwdChanged => "cwd-changed",
+            Event::FileChanged => "file-changed",
+            Event::DirectoryAdded => "directory-added",
+            Event::MessageDisplay => "message-display",
+            Event::ModelRequest => "model-request",
+            Event::ModelResponse => "model-response",
+            Event::ToolSelection => "tool-selection",
+            Event::AgentResponse => "agent-response",
+            Event::AgentThought => "agent-thought",
+            Event::Interrupt => "interrupt",
+            Event::ErrorOccurred => "error-occurred",
+            Event::WorkspaceOpen => "workspace-open",
+            Event::TabFileRead => "tab-file-read",
+            Event::TabFileEdit => "tab-file-edit",
+            Event::Forge => "forge",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -2398,6 +2670,37 @@ impl Event {
             "ConfigChange" => Event::ConfigChange,
             "PostToolBatch" => Event::PostToolBatch,
             "UserPromptSubmit" => Event::UserPromptSubmit,
+            "PostToolUseFailure" => Event::PostToolFailure,
+            "Notification" => Event::Notification,
+            "UserPromptExpansion" => Event::UserPromptExpansion,
+            "SessionEnd" => Event::SessionEnd,
+            "StopFailure" => Event::StopFailure,
+            "SubagentStart" => Event::SubagentStart,
+            "SubagentStop" => Event::SubagentStop,
+            "PreCompact" => Event::PreCompact,
+            "PostCompact" => Event::PostCompact,
+            "PreModelSwitch" => Event::PreModelSwitch,
+            "PostModelSwitch" => Event::PostModelSwitch,
+            "PermissionRequest" => Event::PermissionRequest,
+            "PermissionDenied" => Event::PermissionDenied,
+            "Setup" => Event::Setup,
+            "TeammateIdle" => Event::TeammateIdle,
+            "TaskCreated" => Event::TaskCreated,
+            "Elicitation" => Event::Elicitation,
+            "ElicitationResult" => Event::ElicitationResult,
+            "WorktreeCreate" => Event::WorktreeCreate,
+            "WorktreeRemove" => Event::WorktreeRemove,
+            "InstructionsLoaded" => Event::InstructionsLoaded,
+            "CwdChanged" => Event::CwdChanged,
+            "FileChanged" => Event::FileChanged,
+            "DirectoryAdded" => Event::DirectoryAdded,
+            "MessageDisplay" => Event::MessageDisplay,
+            // CLOUD-2700: Codex's and Copilot's own PascalCase names, read here
+            // because both hosts ship the converged spellings.
+            "PreModelRequest" => Event::ModelRequest,
+            "PostModelRequest" => Event::ModelResponse,
+            "Interrupt" => Event::Interrupt,
+            "ErrorOccurred" => Event::ErrorOccurred,
             _ => Event::Unrecognized,
         }
     }
@@ -2410,6 +2713,23 @@ impl Event {
 /// simply omitted the field, turning a missing key into a silent bypass. Guessing
 /// pre-tool can only ever over-adjudicate, which is the safe direction.
 const ASSUMED_EVENT: &str = "PreToolUse";
+
+/// The event a registration named on argv (`adjudicate --event`, CLOUD-2700),
+/// read only when the payload names none. Set once per process, at dispatch.
+pub static NAMED_EVENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The command one registration runs: the harness's mediation command, plus
+/// `--event <spelling>` where the host's payload at that spelling names no
+/// event (CLOUD-2700).
+#[must_use]
+pub fn registration_command(harness: Harness, spelling: &str) -> String {
+    let command = wiring_command(harness);
+    if harness.names_event_on_argv(spelling) {
+        format!("{command} --event {spelling}")
+    } else {
+        command
+    }
+}
 
 /// The prefix every MCP-provided tool carries in the converged wire format.
 ///
@@ -2630,7 +2950,7 @@ pub struct Envelope {
     ///
     /// **A HOST FACT, never an inference from the user's prose.** Whether a turn
     /// may write is something the harness states; reading intent out of what the
-    /// user typed would be a model verdict, which non-negotiable rule 3 forbids.
+    /// user typed would be a gated-model verdict, which non-negotiable rule 3 forbids.
     /// So this is the token the host sent and nothing else — the same
     /// echo-the-host's-spelling posture [`Envelope::raw_event`] takes.
     ///
@@ -2645,11 +2965,18 @@ pub struct Envelope {
     /// when the host says. `resume` and `fork` keep the sighting epoch; every
     /// other source closes it (CLOUD-2145).
     pub start_source: Option<String>,
+    /// The host's id for this tool call (`tool_use_id`), shared by its
+    /// `PreToolUse` and `PostToolUse`: what keys the protected-path snapshot one
+    /// takes and the other compares (step 14). `None` where the host sends none.
+    pub call_id: Option<String>,
     /// The longest background `timeout` this host honours, in milliseconds,
     /// where the host has one to report (CLOUD-2365). Claude Code's alone today,
     /// resolved by its adapter at decode from the variables it reads; `None` on
     /// every other host, so the core carries no host's arithmetic.
     pub background_ceiling: Option<u64>,
+    /// A forge event's tokens (CLOUD-2689); `None` on every host event.
+    /// Projected as `input.call.forge`.
+    pub forge: Option<crate::forge_event::ForgeCall>,
 }
 
 /// The mode a host names when the turn may propose but not perform.
@@ -2682,7 +3009,6 @@ impl Envelope {
     }
 }
 
-//MUTANT session-less-shared|s@^        let session = self.session.as_deref()?;$@        let session = self.session.as_deref().unwrap_or("unnamed");@|a_session_less_payload_is_full_on_every_firing
 impl Envelope {
     /// The reader a sighting belongs to: the session, plus the agent id when a
     /// subagent is the reader (CLOUD-2075).
@@ -2693,10 +3019,17 @@ impl Envelope {
     #[must_use]
     pub fn context(&self) -> Option<String> {
         let session = self.session.as_deref()?;
-        Some(match self.agent.as_deref() {
-            Some(agent) => format!("{session}\u{1f}{agent}"),
-            None => session.to_owned(),
-        })
+        Some(sighting_context(session, self.agent.as_deref()))
+    }
+}
+
+/// The sighting key for `session`, and `agent` when a subagent is the reader:
+/// [`Envelope::context`]'s spelling, for a caller holding only the raw fields.
+#[must_use]
+pub fn sighting_context(session: &str, agent: Option<&str>) -> String {
+    match agent {
+        Some(agent) => format!("{session}\u{1f}{agent}"),
+        None => session.to_owned(),
     }
 }
 
@@ -2886,148 +3219,6 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     (!rendered.is_empty()).then_some(rendered)
 }
 
-/// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
-/// `[[rule]]` ceiling names a projection with `measures`, so this enum is now
-/// config vocabulary as well as CLI vocabulary — and `kebab-case` is what
-/// `ValueEnum` already renders, so `--field last-assistant-message` and
-/// `measures = "last-assistant-message"` are one spelling. Taking serde's
-/// `snake_case` default would have given the same variant two names, which is
-/// the drift the shared type is here to prevent.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum Field {
-    /// The host's own event spelling, echoed back untouched.
-    ///
-    /// UNNORMALIZED on purpose, and the reason is now the ECHO rather than a gap
-    /// in [`Event`].
-    ///
-    /// **The premise this cited is gone, re-read rather than amended a third
-    /// time (CLOUD-777, 2026-08-21).** The comment argued from absence twice: it
-    /// read *"knows neither `UserPromptSubmit` nor `PostToolBatch`"* until
-    /// `PostToolBatch` landed (CLOUD-389), was corrected to cite
-    /// `UserPromptSubmit` alone (CLOUD-817), and said in as many words that
-    /// answering CLOUD-817 *yes* would remove the premise rather than amend it.
-    /// It is answered yes: [`Event::UserPromptSubmit`] exists, so
-    /// [`Event::normalize`] now knows every spelling a supported host emits and
-    /// the absence argument has nothing left to stand on.
-    ///
-    /// What survives is a property of the CONSUMER rather than of the enum: a
-    /// hook wired to more than one event echoes this value back into its own
-    /// reply, and a host reads its own spelling there. `contract-drift` is the
-    /// registered example. Normalizing here would hand it `session-start` where
-    /// the host said `SessionStart`, so the field stays the host's token and
-    /// [`Envelope::event`] stays the concept — the same split those two fields
-    /// carry everywhere else.
-    HookEventName,
-    /// The host's session id.
-    SessionId,
-    /// The tool being mediated.
-    ToolName,
-    /// The command text, for shell-shaped tools.
-    Command,
-    /// The host's working directory.
-    Cwd,
-    /// Whether this is a re-entered `Stop` hook.
-    StopHookActive,
-    /// The assistant's last message.
-    ///
-    /// The one prose-bearing member, and it is here because `stop-guard`
-    /// already receives exactly these bytes by exactly this route — it pipes
-    /// them straight to `stop-posture-check`. Moving the read from `jq` to here
-    /// changes which process parses the payload, not what flows where; rule 4
-    /// governs what a CHECK reports, and this is a decoder, not a verdict.
-    LastAssistantMessage,
-    /// The path to the session transcript.
-    TranscriptPath,
-    /// The prompt a subagent spawn commits a fresh context window to.
-    ///
-    /// The second prose-bearing member, admitted on `LastAssistantMessage`'s
-    /// argument rather than a new one: this is a DECODER, and rule 4 governs
-    /// what a check reports. `fanout-guard` (CLOUD-287) reads these bytes to
-    /// count them and emits only a count, a cap and repo paths — never a byte of
-    /// the prompt.
-    ///
-    /// It is also the member that could not be served any other way. A spawn is
-    /// not shell-shaped, so `Command` is empty for it, and the prompt lives in
-    /// [`Envelope::input`] — which is exactly what this allowlist exists to keep
-    /// a caller from addressing by path. Naming this one projection is the
-    /// deliberate edit the type's own doc calls for.
-    ///
-    /// APPENDED, never inserted. `semver` reads a reordered variant as
-    /// `enum_no_repr_variant_discriminant_changed` — a break — and this addition
-    /// is patch-compatible only at the end. The order carries no meaning.
-    Prompt,
-    /// Whether the host was asked to run this call in the background.
-    ///
-    /// `"true"` or `"false"`, never the flag's own JSON spelling: the caller is
-    /// a shell script comparing against a literal, and a decoder that echoed
-    /// `True` or `1` for some host would move the per-harness normalization out
-    /// of here and into every script.
-    ///
-    /// THE SECOND MEMBER READ OUT OF [`Envelope::input`], and the less exposed
-    /// of the two. The allowlist's safety argument is that it can never name
-    /// [`Envelope::input`] wholesale, because a tool input is among the likeliest
-    /// places in this engine for a secret to appear (non-negotiable rule 4); a
-    /// boolean projection of one named key cannot carry one. Absent reads as
-    /// absent rather than as `false` — "the host did not say" and "the host said
-    /// no" are the same decision for every caller today, but collapsing them
-    /// here would make them inseparable for one that is not.
-    ///
-    /// CLOUD-613 named this as a fact the mediated envelope hides, which is why
-    /// `run-shape-guard`'s surviving families could not be expressed as config
-    /// rows. It is hidden no longer; growing this allowlist is the deliberate
-    /// edit the type's own doc calls for, and CLOUD-821 is the caller that
-    /// needed it.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    RunInBackground,
-    /// The `id` a structured call names its subject by (CLOUD-987).
-    ///
-    /// THE THIRD MEMBER READ OUT OF [`Envelope::input`], and it is what lets a
-    /// row tell **creating** a thing from **annotating** one. CLOUD-312's rows 1
-    /// and 3 both turn on it: a `save_issue` carrying no `id` opens a row, one
-    /// carrying an `id` edits a row that already exists, and gating the second
-    /// as though it were the first is the outcome `issue-search-guard`'s own
-    /// header says *"would get the guard switched off within a day."*
-    ///
-    /// The allowlist's safety argument is unchanged and is the reason this is a
-    /// MEMBER rather than a config-named key: it can never address
-    /// [`Envelope::input`] wholesale, so a caller cannot point a rule at an
-    /// arbitrary path in the likeliest place in the envelope for a secret. A key
-    /// somebody enumerated here cannot carry one by accident.
-    ///
-    /// A non-string value reads as absent rather than as its debug rendering,
-    /// [`Field::Prompt`]'s rule: a caller comparing identifiers must never be
-    /// handed `{"a":1}` and told it is one.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputId,
-    /// The `state` a structured call moves its subject to (CLOUD-987).
-    ///
-    /// The fourth and last member read out of [`Envelope::input`], on
-    /// [`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)
-    /// fires only when a call MOVES something rather than merely editing it, so
-    /// without this the row would gate every edit — the same over-fire
-    /// [`Field::InputId`] exists to prevent one key over.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputState,
-    /// Whether a structured call sets its subject's `draft` flag (CLOUD-2260).
-    ///
-    /// `"true"` or `"false"`, [`Field::RunInBackground`]'s rendering and its
-    /// safety argument: a boolean projection of one named key cannot carry a
-    /// secret. It exists because readying a pull request is not only a shell
-    /// command — a forge connector's update call setting `draft` to `false` fires
-    /// the same `ready_for_review` and buys the same CI matrix, and a gate keyed on
-    /// `gh pr ready` alone left that route open.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputDraft,
-}
-
 impl Field {
     /// This field's value in `envelope`, or `None` when the payload had none.
     ///
@@ -3083,7 +3274,7 @@ impl Field {
             Field::InputDraft => envelope
                 .input
                 .get("draft")
-                .and_then(Value::as_bool)
+                .and_then(draft_flag)
                 .map(|flag| flag.to_string()),
         };
         value.filter(|text| !text.is_empty())
@@ -3207,7 +3398,7 @@ pub enum Decision {
     /// Only the `silent` posture reaches here. A `retry` repair is a
     /// [`Decision::Deny`] carrying [`crate::verdict::Native::CallRetryNow`],
     /// because the call as made did not happen; reporting that as an allow is
-    /// exactly the swap `//MUTANT retry-reports-silent` exists to catch.
+    /// exactly the swap this arm's tests exist to catch.
     ///
     /// **A repair that FAILED never reaches here either.** The boundary falls
     /// back to the original class's ordinary refusal, so "the tree was repaired"
@@ -3239,7 +3430,6 @@ pub struct Repair {
     pub subject: Option<String>,
 }
 
-//MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
     /// The record line, in the finding grammar (CLOUD-2145): `batten note call
     /// fix silent at <rule>[ <subject>] (repaired <class>)` — the class this
@@ -3295,11 +3485,25 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
 /// (CLOUD-2224), which never holds the payload as one string.
 #[must_use]
 pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
+    // The payload's own name first; then the one the registration put on argv
+    // (`--event`, CLOUD-2700), for a dialect whose payload names none; then the
+    // conservative assumption.
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)
+        .or_else(|| NAMED_EVENT.get().map(String::as_str))
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
+    // The call id is set here rather than in the field list below, which sits
+    // at the function-length ceiling.
+    Some(Envelope {
+        call_id: present_str(value, "tool_use_id"),
+        ..decode_fields(harness, value, raw_event)
+    })
+}
+
+/// [`decode_value`]'s field list, for an event already named.
+fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope {
     let event = normalize_event(harness, &raw_event);
 
     // Cursor's specialized events carry the operand at top level and no
@@ -3361,7 +3565,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
 
     let reads = read_target(&operation, &input);
 
-    Some(Envelope {
+    Envelope {
         event,
         raw_event,
         raw_tool: tool,
@@ -3429,8 +3633,10 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         // CLOUD-2075: the sightings context and the SessionStart source.
         agent: present_str(value, "agent_id"),
         start_source: present_str(value, "source"),
+        call_id: None,
         background_ceiling: background_ceiling(harness),
-    })
+        forge: None,
+    }
 }
 
 /// The host's background ceiling, for the one host that reports one
@@ -3445,7 +3651,7 @@ fn background_ceiling(harness: Harness) -> Option<u64> {
 }
 
 /// One non-empty string member of a decoded payload, owned.
-fn present_str(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)
@@ -3459,7 +3665,8 @@ fn present_str(value: &Value, key: &str) -> Option<String> {
 /// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
-fn normalize_event(harness: Harness, raw: &str) -> Event {
+#[must_use]
+pub fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
         // Claude-identical payload.
@@ -3469,6 +3676,13 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // `AfterAgent` is Gemini's end-of-turn; it is the Stop family's
             // member here even though the word differs.
             "AfterAgent" => Some(Event::Stop),
+            // Its prompt-submit moment and its pre-compaction (CLOUD-2695).
+            "BeforeAgent" => Some(Event::UserPromptSubmit),
+            "PreCompress" => Some(Event::PreCompact),
+            // CLOUD-2700.
+            "BeforeModel" => Some(Event::ModelRequest),
+            "AfterModel" => Some(Event::ModelResponse),
+            "BeforeToolSelection" => Some(Event::ToolSelection),
             _ => None,
         },
         // Cursor splits pre-tool across a generic event and three specialized
@@ -3478,12 +3692,36 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" | "beforeReadFile" => {
                 Some(Event::PreTool)
             }
-            "afterFileEdit" => Some(Event::PostTool),
-            "stop" | "subagentStop" => Some(Event::Stop),
+            // Post-tool is split the same way (CLOUD-2700): the generic
+            // `postToolUse` and three specialized after-events.
+            "postToolUse" | "afterFileEdit" | "afterShellExecution" | "afterMCPExecution" => {
+                Some(Event::PostTool)
+            }
+            "afterAgentResponse" => Some(Event::AgentResponse),
+            "afterAgentThought" => Some(Event::AgentThought),
+            "workspaceOpen" => Some(Event::WorkspaceOpen),
+            "beforeTabFileRead" => Some(Event::TabFileRead),
+            "afterTabFileEdit" => Some(Event::TabFileEdit),
+            // `subagentStop` is its own moment now (CLOUD-2695): the Stop-family
+            // mapping predates the variant, and a subagent ending does not run
+            // the end-of-turn gate on Claude Code either.
+            "stop" => Some(Event::Stop),
             "sessionStart" => Some(Event::SessionStart),
+            "postToolUseFailure" => Some(Event::PostToolFailure),
+            "sessionEnd" => Some(Event::SessionEnd),
+            "subagentStart" => Some(Event::SubagentStart),
+            "subagentStop" => Some(Event::SubagentStop),
+            "preCompact" => Some(Event::PreCompact),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        // Copilot's two camelCase-only events (CLOUD-2700). Their payload names
+        // no event, so the name arrives through `--event`.
+        Harness::CopilotCli => match raw {
+            "subagentStart" => Some(Event::SubagentStart),
+            "userPromptTransformed" => Some(Event::UserPromptExpansion),
+            _ => None,
+        },
+        Harness::ClaudeCode | Harness::CodexCli | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -3532,6 +3770,16 @@ fn cursor_specialized_input(value: &Value) -> Value {
 /// ignores it — and `--config-from` is inherited for free.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
+    /// The resolved `[commit]` convention, which the commit-subject gate judges
+    /// a mediated commit's message against (CLOUD-2683). `None` arms nothing.
+    pub commit: Option<crate::commit::Commit>,
+    /// The resolved `[budget]` sets, judged at a write that would change one
+    /// (CLOUD-2661). `None` arms nothing.
+    pub budget: Option<crate::budget::Budget>,
+    /// The ratchet rows a write can be judged against (CLOUD-2692), held apart
+    /// from `shapes` because they are tree-scoped rows every `shapes` consumer
+    /// would otherwise have to filter out.
+    pub ratchets: Vec<Rule>,
     /// The host this policy is being applied on, and through it the
     /// [`Capabilities`] row a rule may branch on (CLOUD-779).
     ///
@@ -3609,7 +3857,7 @@ pub struct Policy {
     /// contractually pure, so the table travels as a value rather than being
     /// re-read at the point of use.
     mints: Vec<crate::mint::Declared>,
-    recorders: Vec<crate::recorder::Declared>,
+    recorders: Vec<crate::config_model::RecorderDeclared>,
     patterns: Vec<crate::pattern::NamedPattern>,
     programs: std::collections::BTreeMap<String, crate::recorder::Program>,
     /// The enabled policy bundles, compiled at the boundary (CLOUD-647,
@@ -3668,6 +3916,9 @@ impl Policy {
     #[must_use]
     pub fn declaring_nothing(harness: Harness) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -3821,6 +4072,14 @@ impl Policy {
                 })
             },
             facts: resolved.facts.clone(),
+            commit: resolved.commit.clone(),
+            budget: resolved.budget.clone(),
+            ratchets: resolved
+                .rules
+                .iter()
+                .filter(|rule| crate::rules::judged_at_call(rule))
+                .cloned()
+                .collect(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
             patterns: resolved.patterns.clone(),
@@ -3938,7 +4197,7 @@ impl Policy {
     /// payload, a recorder may additionally run a declared program and record
     /// what it decided.
     #[must_use]
-    pub fn declared_recorders(&self) -> &[crate::recorder::Declared] {
+    pub fn declared_recorders(&self) -> &[crate::config_model::RecorderDeclared] {
         &self.recorders
     }
 
@@ -4087,8 +4346,8 @@ impl Policy {
     pub fn field_bound_for(
         &self,
         envelope: &Envelope,
-    ) -> std::collections::BTreeMap<String, crate::rules::FieldBound> {
-        let mut bounds: std::collections::BTreeMap<String, crate::rules::FieldBound> =
+    ) -> std::collections::BTreeMap<String, crate::config_model::FieldBound> {
+        let mut bounds: std::collections::BTreeMap<String, crate::config_model::FieldBound> =
             std::collections::BTreeMap::new();
         for rule in matching_receipt_rows(self, envelope) {
             let Some(bound) = rule.requires_field.as_ref() else {
@@ -4247,6 +4506,52 @@ impl Policy {
             })
     }
 
+    /// The ratchet rows a write selects (CLOUD-2692): a `PreTool` write whose
+    /// target a blocking row's glob matches. Empty means the boundary reads
+    /// nothing for the ratchets, so a write no glob covers pays one glob match
+    /// per row and no git read.
+    #[must_use]
+    pub fn ratchets_for(&self, envelope: &Envelope) -> Vec<&Rule> {
+        let Some(target) = envelope.writes.as_deref() else {
+            return Vec::new();
+        };
+        if envelope.event != Event::PreTool || envelope.operation != Operation::Write {
+            return Vec::new();
+        }
+        self.ratchets
+            .iter()
+            .filter(|rule| {
+                blocks(rule.severity(), self.fail_on_warning)
+                    && rule
+                        .glob
+                        .as_deref()
+                        .is_some_and(|glob| crate::selector::glob_match(glob, target))
+            })
+            .collect()
+    }
+
+    /// The `[budget.*]` sets a write selects (CLOUD-2661): a `PreTool` write
+    /// whose target a set's `files` entry matches. Empty means the boundary
+    /// reads nothing for the budget.
+    #[must_use]
+    pub fn budget_sets_for(&self, envelope: &Envelope) -> Vec<&str> {
+        let (Some(budget), Some(target)) = (&self.budget, envelope.writes.as_deref()) else {
+            return Vec::new();
+        };
+        if envelope.event != Event::PreTool || envelope.operation != Operation::Write {
+            return Vec::new();
+        }
+        budget
+            .sets()
+            .filter(|(_, set)| {
+                set.files
+                    .iter()
+                    .any(|entry| crate::selector::glob_match(entry, target))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     /// The rev a `requires_key` row needs commit evidence read since, if one
     /// fires on this call at all (CLOUD-446).
     ///
@@ -4261,7 +4566,10 @@ impl Policy {
     /// tie-break everywhere else on this surface.
     #[must_use]
     pub fn key_base_for(&self, envelope: &Envelope) -> Option<&str> {
-        if envelope.event != Event::PreTool || envelope.command.is_empty() {
+        // A structured call that raises an event an `on` row keys on is judged,
+        // so its key evidence is owed too (CLOUD-2662).
+        let unjudged = envelope.command.is_empty() && call_event(envelope).is_none();
+        if envelope.event != Event::PreTool || unjudged {
             return None;
         }
         // The column test BEFORE the command parse, so "a repository declaring
@@ -4439,6 +4747,13 @@ impl Policy {
             // is the case the unit tests over `policy::deny` cannot make.
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
+            // A declared `[commit]` convention arms the commit-subject gate
+            // (CLOUD-2683), which this short-circuit would otherwise never reach.
+            && self.commit.is_none()
+            // And a `[budget]` set arms the budget gate (CLOUD-2661).
+            && self.budget.as_ref().is_none_or(crate::budget::Budget::is_empty)
+            // And a ratchet row arms the ratchet gate (CLOUD-2692).
+            && self.ratchets.is_empty()
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -4458,6 +4773,9 @@ impl Policy {
     #[must_use]
     pub fn without_hatched(&self, set: &std::collections::BTreeSet<String>) -> Policy {
         Policy {
+            commit: self.commit.clone(),
+            budget: self.budget.clone(),
+            ratchets: self.ratchets.clone(),
             shapes: self
                 .shapes
                 .iter()
@@ -4614,10 +4932,18 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // So the match below is exhaustive with no wildcard: an eighth `Event` fails
     // to compile here until somebody says what it decides. Each arm's comment is
     // the answer, not decoration — that is the whole of what this replaced.
+    // A FORGE EVENT IS JUDGED BY THE MODULES ALONE (CLOUD-2690). It carries a
+    // verdict, so a rule over `input.call.forge` decides; it names no command
+    // and no write, and the command and write gates stay `pre-tool`'s.
+    if envelope.event == Event::Forge {
+        return policy_rules(policy, envelope, facts);
+    }
     if let Some(decided) = event_decides(envelope.event) {
         return decided;
     }
-    if policy.is_empty() {
+    // An empty JUDGING policy still owes the home's reach gate (CLOUD-2672),
+    // which a target repository with no rows cannot lower by having none.
+    if policy.is_empty() && reach_refusal(facts.reach).is_none() {
         return Decision::Allow;
     }
     adjudicated_call_gates(policy, envelope, facts)
@@ -4680,6 +5006,48 @@ fn event_decides(event: Event) -> Option<Decision> {
         // design decision. CLOUD-312 owns the retirement of the two guards; when
         // a kind can key on this event, this is where it dispatches.
         | Event::UserPromptSubmit
+        // CLOUD-2581's 25: no rule kind selects for any of them yet. The worktree
+        // pair's verdict is its handlers', and its action is `run_hook`'s.
+        | Event::PostToolFailure
+        | Event::Notification
+        | Event::UserPromptExpansion
+        | Event::SessionEnd
+        | Event::StopFailure
+        | Event::SubagentStart
+        | Event::SubagentStop
+        | Event::PreCompact
+        | Event::PostCompact
+        | Event::PreModelSwitch
+        | Event::PostModelSwitch
+        | Event::PermissionRequest
+        | Event::PermissionDenied
+        | Event::Setup
+        | Event::TeammateIdle
+        | Event::TaskCreated
+        | Event::Elicitation
+        | Event::ElicitationResult
+        | Event::WorktreeCreate
+        | Event::WorktreeRemove
+        | Event::InstructionsLoaded
+        | Event::CwdChanged
+        | Event::FileChanged
+        | Event::DirectoryAdded
+        | Event::MessageDisplay
+        // CLOUD-2700's: no rule kind selects for any of them yet.
+        | Event::ModelRequest
+        | Event::ModelResponse
+        | Event::ToolSelection
+        | Event::AgentResponse
+        | Event::AgentThought
+        | Event::Interrupt
+        | Event::ErrorOccurred
+        | Event::WorkspaceOpen
+        | Event::TabFileRead
+        | Event::TabFileEdit
+        // `Forge` (CLOUD-2690): the native gate chain is `pre-tool`'s alone.
+        // A forge event is judged by the policy modules, in their own arm of
+        // `adjudicated_gates`, before this table is read.
+        | Event::Forge
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the
         // host, never a reason to refuse a call (CLOUD-45), and guessing which
@@ -4688,44 +5056,69 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+// CLOUD-2667's detach gate, below in `native_fired`, `detached_call`, `waited_on`
+// and `waits_on`.
+// CLOUD-2683's commit-subject gate: `native_fired`, `commit_subject_gate`,
+// `segment_commit_message`, and the `cat_bodies` fill in `flatten_command`.
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
 /// carries one (`resolve::apply_local`).
-fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
+///
+/// `repository-reach` is graded by the HOME's rows (CLOUD-2672), which the
+/// boundary read into [`Reach::grade`]: a target's config cannot arm or lower a
+/// gate that exists to keep a session at home.
+fn native_grade(policy: &Policy, gate: NativeGate, facts: &Facts<'_>) -> RuleSeverity {
+    if gate == NativeGate::RepositoryReach {
+        return facts.reach.grade.unwrap_or(RuleSeverity::Allow);
+    }
     crate::rules::native_grade(&policy.shapes, gate)
 }
 
 /// The first compiled gate that fired at a blocking grade, disposed as its
 /// grade says (CLOUD-2291). Lifted out of [`adjudicated_call_gates`], whose line
 /// budget the grading spent.
-fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
-    native_fired(facts).into_iter().find_map(|(gate, refusal)| {
-        let severity = native_grade(policy, gate);
-        blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
-    })
+fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Decision> {
+    native_fired(policy, envelope, facts)
+        .into_iter()
+        .find_map(|(gate, refusal)| {
+            let severity = native_grade(policy, gate, facts);
+            blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
+        })
 }
 
 /// The refusals of every compiled gate that fired at a reporting, non-blocking
-/// grade, delivered as advisories while the call is allowed (CLOUD-2291).
-fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
-    native_fired(facts)
+/// grade, each at that grade: spoken if `advise`, recorded if `record`
+/// (CLOUD-2291, CLOUD-2707).
+fn native_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
+    native_fired(policy, envelope, facts)
         .into_iter()
-        .filter(|(gate, _)| {
-            let severity = native_grade(policy, *gate);
-            severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
-        })
-        .map(|(_, refusal)| refusal)
+        .map(|(gate, refusal)| (native_grade(policy, gate, facts), refusal))
+        .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
         .collect()
+}
+
+/// A finding with the severity its row was graded at, so the boundary can tell
+/// what it SPEAKS (`advise`) from what it RECORDS (`record`) (CLOUD-2707).
+pub type Graded = (RuleSeverity, Refusal);
+
+/// Whether a grade reports without refusing: `advise` or `record`, never
+/// `allow` (off) and never a blocking grade, which is the caller's `Decision`.
+fn nonblocking(severity: RuleSeverity, fail_on_warning: bool) -> bool {
+    !matches!(severity, RuleSeverity::Allow) && !blocks(severity, fail_on_warning)
 }
 
 /// Every compiled gate that FIRED on this call, with its refusal, in the order
 /// the mediated chain has always run them (CLOUD-2291).
 ///
 /// The one place each gate's predicate is written: [`native_denial`] and
-/// [`native_advice`] differ only in which grades they take, so the deny and the
+/// [`native_nonblocking`] differ only in which grades they take, so the deny and the
 /// advisory cannot disagree about when a gate fires. Facts first, grades after
 /// — the facts are already resolved and nearly always empty.
-fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
+fn native_fired(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<(NativeGate, Refusal)> {
     let mut fired = Vec::new();
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
@@ -4773,7 +5166,286 @@ fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
     if let Some(refusal) = history_gate(facts) {
         fired.push((NativeGate::History, refusal));
     }
+    // THE DETACH GATE (CLOUD-2667): a `&` job the call does not wait on loses
+    // the session's wake-up whatever program it runs, so it is not left to a
+    // pipeline row that names only verdict-bearing programs.
+    if let Some(refusal) = detached_call(envelope) {
+        fired.push((NativeGate::Detach, refusal));
+    }
+    // THE COMMIT-SUBJECT GATE (CLOUD-2683), last: a bad subject loses nothing
+    // before landing, so every gate above outranks it.
+    if let Some(refusal) = commit_subject_gate(policy, facts) {
+        fired.push((NativeGate::CommitSubject, refusal));
+    }
+    // THE REACH GATE (CLOUD-2672), graded by the home and `allow` until armed.
+    if let Some(refusal) = reach_refusal(facts.reach) {
+        fired.push((NativeGate::RepositoryReach, refusal));
+    }
     fired
+}
+
+/// Where a call stands and what it reaches, as the boundary placed it
+/// (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// The call's start directory, canonical.
+    pub cwd: Option<String>,
+    /// The sorted, unique canonical roots of every target; empty when none is
+    /// in a repository, and `None` when one cannot be placed.
+    pub roots: Option<Vec<String>>,
+    /// The session's home, canonical, or `None` where it has none.
+    pub home: Option<String>,
+    /// The home's `repository-reach` grade, `None` where the home arms none.
+    pub grade: Option<RuleSeverity>,
+}
+
+/// The reach of a call nothing placed: no directory, no root, no home.
+pub static NO_REACH: Reach = Reach {
+    cwd: None,
+    roots: Some(Vec::new()),
+    home: None,
+    grade: None,
+};
+
+// CLOUD-2672's projection, in `call_document`.
+/// The rule id the reach gate refuses under (CLOUD-2672).
+pub const REPOSITORY_REACH: &str = "repository-reach";
+
+/// A call that leaves the home, or cannot be placed, where the home arms the
+/// gate. A target in no repository passes; containment fails closed.
+fn reach_refusal(reach: &Reach) -> Option<Refusal> {
+    reach.grade.filter(|grade| *grade != RuleSeverity::Allow)?;
+    let home = reach.home.as_deref()?;
+    let elsewhere = match &reach.roots {
+        None => Some("an unplaceable target"),
+        Some(roots) => roots.iter().map(String::as_str).find(|root| *root != home),
+    }?;
+    Some(Refusal::declared(
+        REPOSITORY_REACH,
+        crate::verdict::Native::CallReachLoose,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: home.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: elsewhere.to_owned(),
+            },
+        ],
+        Fix::declared(Some(
+            "work there from a session homed in it, or `batten override request --rule repository-reach`",
+        )),
+    ))
+}
+
+/// The rule id the commit-subject gate refuses under (CLOUD-2683).
+pub const COMMIT_SUBJECT: &str = "commit-subject";
+
+/// A mediated commit whose subject `[commit].subject_pattern` refuses, judged
+/// by [`crate::commit::Commit::judge`], the one matcher. Armed only where the
+/// table is declared and the boundary read a subject; could-not-look allows.
+fn commit_subject_gate(policy: &Policy, facts: &Facts<'_>) -> Option<Refusal> {
+    let commit = policy.commit.as_ref()?;
+    let broken = match facts.commit_subject {
+        crate::facts::Look::Is(text) => commit
+            .judge(&[crate::commit::Subject {
+                label: "pending".to_owned(),
+                text: text.clone(),
+            }])
+            .is_ok_and(|findings| !findings.is_empty()),
+        crate::facts::Look::IsNot => false,
+        crate::facts::Look::CouldNotLook => return None,
+    };
+    broken.then(commit_subject_refusal)
+}
+
+/// The refusal names the gate and the pattern's key, never the subject text.
+fn commit_subject_refusal() -> Refusal {
+    Refusal::declared(
+        COMMIT_SUBJECT,
+        crate::verdict::Native::SubjectUnconventional,
+        &[crate::verdict::Subject::Artifact {
+            artifact: "[commit].subject_pattern".to_owned(),
+        }],
+        Fix::declared(Some(
+            "reword the subject to match `[commit].subject_pattern`",
+        )),
+    )
+}
+
+/// Where a mediated `git commit` takes its message from (CLOUD-2683).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitMessage {
+    /// The message itself: `-m`, `--message`, a `cat` heredoc inside one, or
+    /// `-F -` fed by a heredoc or here-string.
+    Text(String),
+    /// A file `-F` names, resolved against the call's cwd and each `-C`.
+    File(PathBuf),
+}
+
+/// The message the first `git commit` in this call names, or `None` where it
+/// names none the boundary can read: the editor, `--amend --no-edit`, `-F -`
+/// fed by a file redirect, or a command that does not parse.
+#[must_use]
+pub fn commit_message(envelope: &Envelope) -> Option<CommitMessage> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    parsed
+        .iter()
+        .find_map(|segment| segment_commit_message(segment, envelope.cwd.as_deref()))
+}
+
+fn segment_commit_message(segment: &Segment, cwd: Option<&Path>) -> Option<CommitMessage> {
+    let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(segment.redirects.len());
+    let program = effective_program(&tokens[..handed])?;
+    if program_name(program_token(tokens[program])) != "git" {
+        return None;
+    }
+    let arguments: Vec<&str> = tokens[program + 1..handed].to_vec();
+    let verb = subcommand_index(&arguments, &GIT_VALUE_OPTIONS)?;
+    if arguments[verb] != "commit" {
+        return None;
+    }
+    let text = |operand: &str| {
+        let body = segment
+            .cat_bodies
+            .iter()
+            .find(|(spelled, _)| spelled == operand)
+            .map_or(operand, |(_, body)| body.as_str());
+        Some(CommitMessage::Text(body.to_owned()))
+    };
+    let file = |operand: &str| {
+        if operand == "-" {
+            let [fed] = segment.stdin_text.as_slice() else {
+                return None;
+            };
+            return Some(CommitMessage::Text(fed.clone()));
+        }
+        let mut path = cwd?.to_path_buf();
+        for (index, word) in arguments[..verb].iter().enumerate() {
+            if *word == "-C" {
+                path.push(arguments.get(index + 1)?);
+            }
+        }
+        path.push(operand);
+        Some(CommitMessage::File(path))
+    };
+    let (_, rest) = arguments[verb..].split_first()?;
+    for (index, word) in rest.iter().enumerate() {
+        let next = || rest.get(index + 1).copied();
+        if *word == "-m" || *word == "--message" {
+            return text(next()?);
+        } else if let Some(body) = word.strip_prefix("--message=") {
+            return text(body);
+        } else if *word == "-F" || *word == "--file" {
+            return file(next()?);
+        } else if let Some(path) = word.strip_prefix("--file=") {
+            return file(path);
+        } else if let Some(body) = word.strip_prefix("-m").filter(|body| !body.is_empty()) {
+            return text(body);
+        } else if let Some(path) = word.strip_prefix("-F").filter(|path| !path.is_empty()) {
+            return file(path);
+        }
+    }
+    None
+}
+
+/// The subject of `message`: its first line, or could-not-look where that line
+/// holds a `$`, a backtick or a backslash, any of which the shell may expand.
+#[must_use]
+pub fn commit_subject(message: &str) -> crate::facts::Look<String> {
+    let line = message.lines().next().unwrap_or_default();
+    if line.contains(['$', '`', '\\']) {
+        crate::facts::Look::CouldNotLook
+    } else {
+        crate::facts::Look::Is(line.to_owned())
+    }
+}
+
+/// The rule id the detach gate refuses under (CLOUD-2667).
+pub const DETACHED_CALL: &str = "detached-call";
+
+/// A call that backgrounds a job with `&` and does not wait on it in the same
+/// call, on a harness with a supported background option (CLOUD-2667).
+///
+/// A harness without one has no better shape to name, so the gate never fires
+/// there. Pointer-only: the refusal carries a count of detached jobs, never the
+/// command. `nohup` alone is not detaching: a foreground `nohup x` blocks until
+/// `x` exits, and `nohup x &` is caught by its `&`.
+fn detached_call(envelope: &Envelope) -> Option<Refusal> {
+    envelope.background_ceiling?;
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let backgrounded = |segment: &Segment| segment.terminator == Some(Separator::Background);
+    let jobs = parsed
+        .iter()
+        .filter(|segment| backgrounded(segment))
+        .count();
+    let detached = (0..parsed.len())
+        .filter(|&index| backgrounded(&parsed[index]) && !waited_on(&parsed, index, jobs))
+        .count();
+    (detached > 0).then(|| {
+        Refusal::declared(
+            DETACHED_CALL,
+            crate::verdict::Native::RunOrphaned,
+            &[crate::verdict::Subject::Count {
+                count: detached as u64,
+            }],
+            Fix::declared(Some(
+                "set `run_in_background` on the tool call; `a & b & wait` in one call is not detached",
+            )),
+        )
+    })
+}
+
+/// Whether a segment after `parsed[index]` waits on it.
+fn waited_on(parsed: &[Segment], index: usize, jobs: usize) -> bool {
+    let detached = &parsed[index];
+    parsed[index + 1..]
+        .iter()
+        .any(|later| waits_on(later, detached, jobs))
+}
+
+/// Whether `later` is a `wait` that covers `detached`: in the same subshell and
+/// substitution, and either waiting on every job or, where there is only one,
+/// naming it by an own-job reference.
+fn waits_on(later: &Segment, detached: &Segment, jobs: usize) -> bool {
+    if later.grouped != detached.grouped || later.nested != detached.nested {
+        return false;
+    }
+    let tokens: Vec<&str> = later.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(later.redirects.len());
+    let Some(program) = effective_program(&tokens[..handed]) else {
+        return false;
+    };
+    if program_token(tokens[program]) != "wait" {
+        return false;
+    }
+    let operands = &tokens[program + 1..handed];
+    operands.is_empty() || (jobs == 1 && operands.iter().all(|word| own_job_ref(word)))
+}
+
+/// A `wait` operand that can only name the call's own job: `-n`, `$!`, a
+/// job spec (`%`, `%%`, `%+`, `%1`) or a variable holding a pid. A literal pid
+/// names a job this call did not start.
+fn own_job_ref(word: &str) -> bool {
+    let name = |text: &str| {
+        text.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    matches!(word, "-n" | "$!" | "%" | "%%" | "%+")
+        || word
+            .strip_prefix('%')
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        || word
+            .strip_prefix("${")
+            .and_then(|rest| rest.strip_suffix('}'))
+            .is_some_and(name)
+        || word.strip_prefix('$').is_some_and(name)
 }
 
 /// The history gate (CLOUD-2144): a config row changed by a context that has
@@ -4807,7 +5479,7 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // gate that could still see it would be a second place the answer is made.
     let Facts { receipts, keys, .. } = *facts;
     // The three compiled gates, first and in their order (CLOUD-2291).
-    if let Some(denied) = native_denial(policy, facts) {
+    if let Some(denied) = native_denial(policy, envelope, facts) {
         return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -4861,6 +5533,17 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
             // gate (CLOUD-1639). Stated rather than wildcarded, the
             // way the sibling arms are.
             | Decision::Repaired(_) => {}
+    }
+    // THE BUDGET GATE (CLOUD-2661), at the write that would breach a ceiling it
+    // grows past; a write that holds or shrinks a standing breach is its repair.
+    if let Some(refusal) = budget_rules(facts) {
+        return Decision::Deny(refusal);
+    }
+    // THE RATCHET GATE (CLOUD-2692), at the write that would move a ratchet
+    // row the banned way past its base. Only a write that itself moves the
+    // banned way is judged, so a repair of a standing breach goes through.
+    if let Some(refusal) = ratchet_rules(facts) {
+        return Decision::Deny(refusal);
     }
     // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
     // works: ABOVE the `command.is_empty()` early return, which every structured
@@ -4994,7 +5677,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
     // it asked for is the answer. Falling through would let a second row overrule
     // an escalation the first one wanted, which declaration order decides.
-    if !envelope.command.is_empty() {
+    // An `on` shape row is judged here on a structured call too (CLOUD-2662).
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    if shape_gated {
         match shape_rules(policy, envelope, &envelope.command, keys) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
             Decision::Allow
@@ -5161,6 +5846,36 @@ pub type ProspectiveFacts = crate::facts::Look<String>;
 /// applied in order, and a notebook cell's replacement source. A batch shape left
 /// unread would be the widest hole a content-keyed gate can have — the same edit,
 /// spelled the other way, inspected by nothing.
+/// What a call's budgeted sets measure before and after it (CLOUD-2661).
+pub type BudgetFacts = crate::facts::Look<Vec<crate::budget::CallMeasure>>;
+
+/// The ratchet rows a write would move the banned way (CLOUD-2692), read at
+/// the boundary because the base counts are git reads.
+pub type RatchetFacts = crate::facts::Look<Vec<crate::rules::CallRatchet>>;
+
+/// The text an edit-shaped payload lands over `current`: its spans applied in
+/// order, the first occurrence each unless `replace_all` (CLOUD-2661). One edit
+/// model, shared by [`prospective_facts`] and the budget's boundary read.
+#[must_use]
+pub fn landed_from(current: &str, input: &Value) -> crate::facts::Look<String> {
+    let Some(spans) = edit_spans(input) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    let mut landed = current.to_owned();
+    for (old, new, replace_all) in spans {
+        // `replacen(.., 1)` rather than `replace`, and the default matters: the
+        // surveyed hosts replace the FIRST occurrence unless the call says
+        // otherwise, so modelling it as replace-all would decide over content
+        // the call would not actually produce.
+        landed = if replace_all {
+            landed.replace(&old, &new)
+        } else {
+            landed.replacen(&old, &new, 1)
+        };
+    }
+    crate::facts::Look::Is(landed)
+}
+
 #[must_use]
 pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> ProspectiveFacts {
     use crate::facts::Look;
@@ -5190,25 +5905,10 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     if std::fs::metadata(&target).is_ok_and(|meta| meta.len() > MAX_PROSPECTIVE_BYTES) {
         return crate::facts::Look::CouldNotLook;
     }
-    let Ok(current) = std::fs::read_to_string(&target) else {
+    let Ok(current) = crate::fsio::read_to_string(&target) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let Some(spans) = edit_spans(&envelope.input) else {
-        return crate::facts::Look::CouldNotLook;
-    };
-    let mut landed = current;
-    for (old, new, replace_all) in spans {
-        // `replacen(.., 1)` rather than `replace`, and the default matters: the
-        // surveyed hosts replace the FIRST occurrence unless the call says
-        // otherwise, so modelling it as replace-all would decide over content
-        // the call would not actually produce.
-        landed = if replace_all {
-            landed.replace(&old, &new)
-        } else {
-            landed.replacen(&old, &new, 1)
-        };
-    }
-    Look::Is(landed)
+    landed_from(&current, &envelope.input)
 }
 
 /// The largest file the prospective read will pull into memory.
@@ -5298,6 +5998,10 @@ pub struct Facts<'a> {
     /// `None` is both "this call starts no guarded task" and "nothing holds the
     /// lock", which are the same answer to the only question asked here.
     pub singleton: &'a Option<(String, String)>,
+    /// The pid of a live `land` lap on this checkout, or `None` (CLOUD-2781):
+    /// [`crate::facts::Fact::LandLive`]. Resolved at the boundary for the same
+    /// reason [`Self::singleton`] is: a lock is a file and a pid is a process.
+    pub land_live: &'a Option<String>,
     /// The commits a `git reset --hard` in this call would leave unreferenced,
     /// as short SHAs, and only those reachable from no remote (CLOUD-462).
     ///
@@ -5323,6 +6027,21 @@ pub struct Facts<'a> {
     /// blob and the receipt store — and only for a write to the authority.
     /// Could-not-look ALLOWS; empty is a real answer and allows.
     pub unread_history: &'a crate::facts::Look<Vec<String>>,
+    /// The subject of the message a mediated `git commit` names (CLOUD-2683).
+    ///
+    /// **Resolved at the boundary**, because `-F <file>` is a file read; the
+    /// judgement stays in [`native_fired`]. Could-not-look ALLOWS: no message, an
+    /// expansion in the first line, an unreadable file, or no `[commit]` table.
+    pub commit_subject: &'a crate::facts::Look<String>,
+    /// Where this call stands and what it reaches (CLOUD-2672), placed at the
+    /// boundary because placing a directory asks git.
+    pub reach: &'a Reach,
+    /// Each `[budget.*]` set this write would change, measured before and
+    /// after (CLOUD-2661), read at the boundary.
+    pub budgeted: &'a BudgetFacts,
+    /// Each ratchet row this write would move the banned way past its base
+    /// (CLOUD-2692), read at the boundary.
+    pub ratcheted: &'a RatchetFacts,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -5361,6 +6080,9 @@ pub struct Facts<'a> {
     /// comparing a call against an empty task table would refuse every command
     /// the project runs.
     pub tasks: &'a crate::taskset::TaskFacts,
+    /// Every task's body lines, from the same receipt (step 14): what
+    /// `input.call["task-programs"]` follows a `mise run` into.
+    pub task_bodies: &'a crate::taskset::TaskBodies,
     /// What a declared extractor counted in this session's transcript
     /// (CLOUD-1172).
     ///
@@ -5378,6 +6100,8 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Each pathspec a checkout or restore names, with its status (CLOUD-2684).
+    pub pathspec_status: &'a crate::facts::Look<serde_json::Value>,
 }
 
 impl<'a> Facts<'a> {
@@ -5399,6 +6123,7 @@ impl<'a> Facts<'a> {
             // No collision resolved, which for this fact is the same answer a
             // caller that looked and found a free lock would give.
             singleton: &None,
+            land_live: &None,
             // Could-not-look, never an empty list: "this reset discards nothing"
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
@@ -5406,6 +6131,10 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "every row read": a caller that resolved
             // nothing has not established what this context read (CLOUD-2144).
             unread_history: &crate::facts::Look::CouldNotLook,
+            commit_subject: &crate::facts::Look::CouldNotLook,
+            reach: &NO_REACH,
+            budgeted: &crate::facts::Look::CouldNotLook,
+            ratcheted: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -5421,6 +6150,7 @@ impl<'a> Facts<'a> {
             // tasks" is a claim about a manifest, and a caller that resolved
             // nothing is not making it.
             tasks: &crate::facts::Look::CouldNotLook,
+            task_bodies: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never an empty count set: a caller that resolved
             // nothing has not established that this session did nothing.
             extracted: &crate::facts::Look::CouldNotLook,
@@ -5430,6 +6160,7 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            pathspec_status: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -5522,8 +6253,6 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Could-not-look answers `true` — the row stays selected — for the reason
 /// [`marker_present`]'s unreadable arms give: an answer nobody could read must
 /// not switch a refusal off on exactly the checkouts least able to notice.
-//MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
-//MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
 fn head_unpushed() -> bool {
     crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)
 }
@@ -5551,31 +6280,13 @@ fn marker_present(marker: &str) -> bool {
 
 /// Where a branch-keyed marker lives.
 ///
-/// Named rather than inlined so the `//MUTANT` rows below can anchor on one line,
-/// which is also what keeps the `.exists()` — the entire decision — from being
-/// buried inside a builder chain no row could swap without touching the path
-/// derivation too.
+/// Named rather than inlined, which keeps the `.exists()` — the entire decision
+/// — from being buried inside a builder chain a mutant could not swap without
+/// touching the path derivation too.
 fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::path::PathBuf {
     git_dir
         .join("batten-receipts")
         .join(format!("{marker}.{}", branch.replace('/', "-")))
-}
-
-//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-//MUTANT offer-unread|s@    marker_path(&git_dir, marker, &branch).exists()@    false@|a_write_after_a_punt_is_refused
-//MUTANT every-ending-punts|s@    marker_path(&git_dir, marker, &branch).exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
-
-/// Fold a value for [`Rule::when_value`]'s comparison.
-///
-/// Case-insensitive, and the three separators a tracker's state parameter treats
-/// as noise are dropped. Deliberately NOT a general slug: nothing else is
-/// stripped, so a value that differs by any other character still differs.
-pub(crate) fn comparable(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
-        .flat_map(char::to_lowercase)
-        .collect()
 }
 
 fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
@@ -5590,7 +6301,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Write
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -5610,7 +6321,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
     if !envelope.raw_tool.is_empty() {
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !rule.selects_tool(&envelope.raw_tool)
                 || !modifier_admits(rule, envelope)
             {
@@ -5619,13 +6330,31 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             matched.push(rule);
         }
     }
+    // THE EVENT-KEYED ROWS (CLOUD-2662), selected on every route the engine
+    // knows raises the event, before the command walk so a structured call
+    // reaches them too.
+    let receipt_event = call_event(envelope);
+    if receipt_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt
+                || rule.on != receipt_event
+                || rule.severity() == RuleSeverity::Allow
+                || !modifier_admits(rule, envelope)
+            {
+                continue;
+            }
+            if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                matched.push(rule);
+            }
+        }
+    }
     // ABSTAIN RATHER THAN CLEAR (CLOUD-1381). A command this build cannot parse
     // is one whose shape is unknown, so no row is SELECTED over it — the same
     // abstention a module with no `missing` clause gets. Selecting rows from a
     // shape nobody could read is the silent under-denial the row is about, and
     // refusing outright is not available either: `3` never blocks a call.
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE, and this walk is the one where missing it is WORST (CLOUD-1287).
     // A receipt row is a PRECONDITION — `gh pr ready` demands a verify receipt —
@@ -5639,15 +6368,12 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         };
         // Normalised with the program, for the reason `matching_shape_rows`
         // states: a grouped command's closing paren rides the last operand.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        // Anchored at the subcommand, for the shape walk's reason (CLOUD-2666).
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Command
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -5705,6 +6431,9 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
 /// not a tidiness: this gate sees a row only if that row's own `tool` selected
 /// this call.
 fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
+    // THE STRUCTURED ROUTE of an `on` row (CLOUD-2662); a shell call's is
+    // `receipt_rules`, after the shape gate, as this header's order requires.
+    let event = structured_event(envelope);
     // Both non-answers allow, and for the same reason [`receipt_rules`] gives
     // them one arm: a boundary that had no question to ask and a boundary that
     // could not ask reach the same verdict here, and neither is evidence a
@@ -5719,7 +6448,7 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
     for rule in &policy.shapes {
         if rule.kind != RuleKind::Receipt
             || !blocks(rule.severity(), policy.fail_on_warning)
-            || !rule.selects_tool(&envelope.raw_tool)
+            || !(rule.selects_tool(&envelope.raw_tool) || on_selects(rule, event))
         {
             continue;
         }
@@ -5751,6 +6480,12 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => return Decision::Allow,
     };
     for rule in matching_receipt_rows(policy, envelope) {
+        // The selection carries `advise` and `record` rows too (CLOUD-2707), so
+        // their receipts are resolved; only a blocking row decides here, and
+        // `receipt_nonblocking` reports the rest at their own grades.
+        if !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
         // Every named receipt must be valid. An unresolved name is Missing,
         // never absent-and-therefore-fine: a boundary that answered for
         // fewer checks than the row requires has not proved the precondition.
@@ -5759,6 +6494,93 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         }
     }
     Decision::Allow
+}
+
+/// The `advise` and `record` receipt rows' findings (CLOUD-2707): a
+/// precondition the call still lacks, at the row's own grade. Before this a
+/// nonblocking receipt row was skipped at selection, so it decided nothing on
+/// any path.
+fn receipt_nonblocking(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Vec<Graded> {
+    let crate::facts::Look::Is(resolved) = facts else {
+        return Vec::new();
+    };
+    matching_receipt_rows(policy, envelope)
+        .into_iter()
+        .filter(|rule| nonblocking(rule.severity(), policy.fail_on_warning))
+        .filter_map(|rule| {
+            receipt_verdict(policy, rule, resolved).map(|refusal| (rule.severity(), refusal))
+        })
+        .collect()
+}
+
+/// Every other call gate's `advise` and `record` findings (CLOUD-2707).
+///
+/// The content, tool, ceiling, pipeline and command-shape gates each select
+/// only BLOCKING rows, so a nonblocking row of those kinds loaded and then
+/// decided nothing on any path — the silence `land_hand_stepping.rs` records.
+/// Rather than a second predicate per gate, which could drift from the deny
+/// side, the SAME gates run over those rows promoted to `deny`, and whatever
+/// they refuse is the finding, carried back at the row's own grade. Receipt
+/// rows have [`receipt_nonblocking`] (their facts are resolved per row) and
+/// native rows [`native_nonblocking`].
+fn gate_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
+    let graded: Vec<&Rule> = policy
+        .shapes
+        .iter()
+        .filter(|rule| {
+            !matches!(rule.kind, RuleKind::Receipt | RuleKind::Native)
+                && nonblocking(rule.severity(), policy.fail_on_warning)
+        })
+        .collect();
+    if graded.is_empty() {
+        return Vec::new();
+    }
+    let promoted = Policy {
+        shapes: graded
+            .iter()
+            .map(|rule| Rule {
+                severity: Some(RuleSeverity::Deny),
+                ..(*rule).clone()
+            })
+            .collect(),
+        bundles: Vec::new(),
+        ..policy.clone()
+    };
+    let mut measured = 0;
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    let mut decided = vec![
+        content_rules(&promoted, envelope, facts.prospective),
+        tool_rules(&promoted, envelope),
+        ceiling_rules(&promoted, envelope, &mut measured),
+        pipeline_rules(&promoted, envelope),
+    ];
+    if shape_gated {
+        decided.push(shape_rules(
+            &promoted,
+            envelope,
+            &envelope.command,
+            facts.keys,
+        ));
+    }
+    decided
+        .into_iter()
+        .filter_map(|decision| match decision {
+            Decision::Deny(refusal) | Decision::Ask(refusal) => {
+                // Back at the grade the row declared, found by the id the
+                // refusal carries; a refusal no graded row owns is dropped
+                // rather than guessed at.
+                let severity = graded
+                    .iter()
+                    .find(|rule| rule.id == refusal.rule())
+                    .map(|rule| rule.severity())?;
+                Some((severity, refusal))
+            }
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => None,
+        })
+        .collect()
 }
 
 /// Adjudicate one receipt row against the resolved facts (CLOUD-1297).
@@ -5948,10 +6770,6 @@ fn receipt_refusal(
     Refusal::declared(&rule.id, native, &subjects, fix)
 }
 
-//MUTANT override-subject-unchecked|s@^    if rule.kind != RuleKind::Receipt {$@    if true {@|an_override_request_naming_a_subject_no_refusal_binds_is_refused
-//MUTANT bindable-subjects-empty|s@^    Some(bindable)$@    Some(Vec::new())@|a_spent_admission_clears_a_superseded_receipt
-//MUTANT class-filter-dropped|s@^            if refusal.verdict() == Some(class) {$@            if true {@|a_receipt_rows_age_bound_binds_only_under_the_expiry_class
-//MUTANT shape-subject-unchecked|s@^    if rule.kind == RuleKind::Shape && rule.max.is_none() && rule.requires_key.is_none() {$@    if false {@|a_shape_admission_for_an_unbindable_subject_is_refused
 /// Every subject a refusal of `class` by this RECEIPT row binds, or `None` for
 /// a row of any other kind (CLOUD-1996).
 ///
@@ -6116,16 +6934,11 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // the resolved program — otherwise the wrapper that orphans the run
             // is the one token the parser hides.
             let detached_here = tokens.contains(&"nohup");
-            // NORMALISED, and the operand window is normalised with it: a grouped
-            // command's closing paren lands on the LAST token, which is a matched
-            // operand whenever the command takes no trailing argument, so
-            // `(mise run land)` would otherwise not match where `(mise run land x)`
-            // did.
-            let words: Vec<&str> = tokens[program_index + 1..]
-                .iter()
-                .map(|token| program_token(token))
-                .filter(|token| !token.starts_with('-'))
-                .collect();
+            // No bare word matches nothing, so skipping the line preserves the
+            // behaviour of the flag-dropping list this replaced.
+            let Some(words) = verdict_words(&tokens, program_index) else {
+                continue;
+            };
             if !verdicts
                 .iter()
                 .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
@@ -6313,8 +7126,6 @@ impl<'a> FirstStage<'a> {
 /// the bare `grep` was refused, because an early return on the assignment left
 /// every later element unjudged — the permissive direction, which nothing
 /// reports.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-pipe-refused|s@^            continue; // fed by a pipe$@            {}@|a_tracked_script_or_a_downstream_interpreter_is_allowed
 fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
     let mut stages = Vec::new();
     let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
@@ -6395,6 +7206,18 @@ impl Grammar {
 /// for an interpreter a consumer declared that no family describes.
 fn grammar(program: &str) -> Grammar {
     match family(program) {
+        // THE SHELLS (step 14). `-c` takes the script, bundled or alone
+        // (`bash -lc '…'`, `sh -ec '…'`), and `-o`/`-O` take an option name.
+        // Before this arm a shell read through the fallback, which never
+        // bundles — so `bash -lc 'git push --force'` handed no script to
+        // anything — and which read `-e` (errexit to a shell) as a program.
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash" => Grammar {
+            inline: "c",
+            inline_long: &[],
+            valued: "oO",
+            valued_long: &["--rcfile", "--init-file"],
+            bundles: true,
+        },
         "python" => Grammar {
             inline: "cm",
             inline_long: &[],
@@ -6453,7 +7276,6 @@ fn grammar(program: &str) -> Grammar {
 /// that text. An operand naming a variable or `~`, or a relative one with no
 /// known directory, cannot be placed and is left alone, as is every operand
 /// when the root is unknown or does not resolve.
-//MUTANT script-outside-admitted|s@^            \&\& outside_repository(\&resolved, root)$@            \&\& false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
 fn interpreter_decision(
     rule: &Rule,
     interprets: &[String],
@@ -6649,13 +7471,8 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // `Harness::capabilities`'s Claude Code `plan_tools` row (CLOUD-2400). Declared
 // here, directly above the next suite, because a suite declared before this
 // file's first one would become the suite of every row above it.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
-//MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,
@@ -6678,6 +7495,264 @@ fn followed_cd(
         return None;
     }
     shell_resolved(target, current)
+}
+
+/// The directories a call acts on (CLOUD-2672), or `None` where one of them
+/// cannot be placed.
+///
+/// Only a tool call has targets; every other event is judged by the session's
+/// home. A structured call's target is its `file_path`, `notebook_path` or
+/// `path`, joined to `start` when relative, or `start` itself where it names
+/// none. A shell call's are `start`, advanced through each followed `cd` or
+/// `pushd`; every top-level `cd`/`pushd` operand whatever its terminator; and
+/// each `git -C`, `--git-dir` and `--work-tree` operand.
+#[must_use]
+pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::PathBuf>> {
+    if !matches!(
+        envelope.event,
+        Event::PreTool | Event::PostTool | Event::PermissionRequest
+    ) {
+        return Some(Vec::new());
+    }
+    if envelope.command.is_empty() {
+        let named = ["/file_path", "/notebook_path", "/path"]
+            .iter()
+            .find_map(|pointer| envelope.input.pointer(pointer).and_then(Value::as_str));
+        return Some(vec![
+            named.map_or_else(|| start.to_path_buf(), |path| start.join(path)),
+        ]);
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut current = start.to_path_buf();
+    let mut operands = Vec::new();
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            let dir = placed_cd(segment, handed, &current)?;
+            operands.push(dir.clone());
+            // FOLLOWED ONLY ACROSS `&&` OR `;`: `placed_cd` has already refused
+            // a grouped or substituted `cd`, so the separator alone decides.
+            if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                current = dir;
+            }
+            continue;
+        }
+        operands.extend(git_dir_operands(handed, &current));
+    }
+    // The directory in effect, after every followed `cd`, judges first: `cd B
+    // && x` acts in B, while a trailing `cd B` only names B.
+    Some(std::iter::once(current).chain(operands).collect())
+}
+
+/// One `git checkout`/`git restore` program: the directory it runs in and the
+/// pathspecs it names, as written (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathspecCall {
+    /// The directory the program runs in: the call's directory after every
+    /// followed `cd`, joined with each `-C`.
+    pub dir: std::path::PathBuf,
+    /// The pathspecs, relative to `dir`.
+    pub pathspecs: Vec<String>,
+}
+
+/// What a call's checkout and restore programs name (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pathspecs {
+    /// The call runs no checkout or restore.
+    Absent,
+    /// One of them cannot be placed: an unfollowed `cd`, an expansion, a
+    /// `--git-dir`/`--work-tree`, a `--pathspec-from-file`, or a `.` checkout
+    /// with no `--` (argv cannot tell a ref from a path).
+    Unplaceable,
+    /// Every one of them, placed.
+    Placed(Vec<PathspecCall>),
+}
+
+/// The checkout and restore programs of a call, walked from `base` through
+/// each followed `cd` with CLOUD-2672's resolver. A pipe-fed restore still
+/// discards, so no stage is skipped.
+#[must_use]
+pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return Pathspecs::Absent;
+    };
+    let mut current = base.to_path_buf();
+    let mut calls = Vec::new();
+    let (mut found, mut unplaceable) = (false, false);
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            match placed_cd(segment, handed, &current) {
+                // As in `call_targets`: `placed_cd` refused a grouped or
+                // substituted `cd`, so the separator alone decides.
+                Some(dir) => {
+                    if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+                        current = dir;
+                    }
+                }
+                None => unplaceable = true, // an unfollowed cd: unplaceable
+            }
+            continue;
+        }
+        match git_pathspecs(handed, &current) {
+            Pathspecs::Absent => {}
+            Pathspecs::Unplaceable => (found, unplaceable) = (true, true),
+            Pathspecs::Placed(mut placed) => {
+                found = true;
+                calls.append(&mut placed);
+            }
+        }
+    }
+    match (found, unplaceable) {
+        (false, _) => Pathspecs::Absent,
+        (true, true) => Pathspecs::Unplaceable,
+        (true, false) => Pathspecs::Placed(calls),
+    }
+}
+
+/// One segment's checkout or restore, if it runs one.
+fn git_pathspecs(tokens: &[&str], current: &Path) -> Pathspecs {
+    let expands = |word: &str| word.contains(['$', '`']);
+    let Some(program) = effective_program(tokens) else {
+        return Pathspecs::Absent;
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Pathspecs::Absent;
+    }
+    let arguments = &tokens[program + 1..];
+    let Some(verb) = subcommand_index(arguments, &GIT_VALUE_OPTIONS) else {
+        return Pathspecs::Absent;
+    };
+    let subcommand = arguments[verb];
+    if !matches!(subcommand, "checkout" | "restore") {
+        return Pathspecs::Absent;
+    }
+    let mut dir = current.to_path_buf();
+    for (index, word) in arguments[..verb].iter().enumerate() {
+        if word.starts_with("--git-dir") || word.starts_with("--work-tree") {
+            return Pathspecs::Unplaceable;
+        }
+        if *word == "-C" {
+            let Some(value) = arguments.get(index + 1).filter(|value| !expands(value)) else {
+                return Pathspecs::Unplaceable;
+            };
+            dir = shell_resolved(value, Some(&dir)).unwrap_or(dir);
+        }
+    }
+    let rest = &arguments[verb + 1..];
+    if rest
+        .iter()
+        .any(|word| word.starts_with("--pathspec-from-file"))
+    {
+        return Pathspecs::Unplaceable;
+    }
+    let dash = rest.iter().position(|word| *word == "--");
+    let after = dash.map_or(&[][..], |at| &rest[at + 1..]);
+    let mut pathspecs: Vec<&str> = Vec::new();
+    if subcommand == "checkout" {
+        if dash.is_none() && rest.contains(&".") {
+            return Pathspecs::Unplaceable;
+        }
+    } else {
+        let before = &rest[..dash.unwrap_or(rest.len())];
+        let mut index = 0;
+        while index < before.len() {
+            let word = before[index];
+            if matches!(word, "-s" | "--source") {
+                index += 2;
+                continue;
+            }
+            if !word.starts_with('-') {
+                pathspecs.push(word);
+            }
+            index += 1;
+        }
+    }
+    pathspecs.extend(after.iter().copied());
+    if pathspecs.iter().any(|word| expands(word)) {
+        return Pathspecs::Unplaceable;
+    }
+    Pathspecs::Placed(vec![PathspecCall {
+        dir,
+        pathspecs: pathspecs.into_iter().map(str::to_owned).collect(),
+    }])
+}
+
+/// A segment whose program, read through `command`, `builtin` and the
+/// keywords that may stand before it, is `cd` or `pushd`.
+fn is_cd_segment(tokens: &[&str]) -> bool {
+    tokens
+        .iter()
+        .find(|word| {
+            !matches!(
+                **word,
+                "command" | "builtin" | "if" | "then" | "do" | "{" | "!"
+            )
+        })
+        .is_some_and(|word| matches!(*word, "cd" | "pushd"))
+}
+
+/// The directory a `cd`/`pushd` segment names, or `None` where it cannot be
+/// placed: a prefix before it, a flag, `-`, an expansion or a glob, or a
+/// group or substitution around it.
+fn placed_cd(segment: &Segment, tokens: &[&str], current: &Path) -> Option<std::path::PathBuf> {
+    if segment.grouped || segment.nested || segment.construct.is_some() {
+        return None;
+    }
+    let [verb, target] = tokens else {
+        return None;
+    };
+    if !matches!(*verb, "cd" | "pushd")
+        || !placeable(target)
+        || target.starts_with('-')
+        || target.contains(['*', '?', '['])
+    {
+        return None;
+    }
+    shell_resolved(target, Some(current))
+}
+
+/// The directories a git program's own options point it at: `-C <dir>`, and
+/// `--git-dir`/`--work-tree` in either spelling. A `.git` directory names its
+/// checkout.
+fn git_dir_operands(tokens: &[&str], current: &Path) -> Vec<std::path::PathBuf> {
+    let Some(program) = effective_program(tokens) else {
+        return Vec::new();
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Vec::new();
+    }
+    let arguments = &tokens[program + 1..];
+    let end = subcommand_index(arguments, &GIT_VALUE_OPTIONS).unwrap_or(arguments.len());
+    let mut operands = Vec::new();
+    let mut index = 0;
+    while index < end {
+        let word = arguments[index];
+        let value = match word {
+            "-C" | "--git-dir" | "--work-tree" => arguments.get(index + 1).copied(),
+            _ => word
+                .strip_prefix("--git-dir=")
+                .or_else(|| word.strip_prefix("--work-tree=")),
+        };
+        if let Some(dir) = value.and_then(|value| shell_resolved(value, Some(current))) {
+            let named_git_dir = dir.file_name().is_some_and(|name| name == ".git");
+            operands.push(if named_git_dir {
+                dir.parent().map_or(dir.clone(), Path::to_path_buf)
+            } else {
+                dir
+            });
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    operands
 }
 
 /// A shell word naming a path, resolved against the directory in effect, or
@@ -7271,6 +8346,69 @@ fn disposed_at(severity: RuleSeverity, refusal: Refusal) -> Decision {
 ///
 /// Pointer-only (rule 4): the refusal names the rule and the path. The matched
 /// bytes are not carried, and `Refusal` has no field one could occupy.
+/// The first budgeted set this write breaches and grows past (CLOUD-2661).
+fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
+    let crate::facts::Look::Is(measures) = facts.budgeted else {
+        return None;
+    };
+    for measure in measures {
+        if let Some((count, max)) = crate::budget::breach(measure) {
+            return Some(budget_refusal(&measure.name, count, max));
+        }
+    }
+    None
+}
+
+/// The id the budget gate's refusal leads with (CLOUD-2661): one native id, so
+/// `policy explain` resolves it whatever the set is called; the set itself is
+/// the first subject.
+pub const BUDGET_CALL: &str = "budget-call";
+
+/// The first ratchet row this write would breach (CLOUD-2692), refused under
+/// the row's own id so a waiver keyed on it answers the call as it answers
+/// `check`. Could-not-look admits: the write is judged by `check` regardless.
+fn ratchet_rules(facts: &Facts<'_>) -> Option<Refusal> {
+    let crate::facts::Look::Is(moved) = facts.ratcheted else {
+        return None;
+    };
+    moved.first().map(|found| {
+        Refusal::declared(
+            found.rule.clone(),
+            crate::verdict::Native::CeilingExceeded,
+            &[
+                crate::verdict::Subject::Path {
+                    path: found.path.clone(),
+                },
+                crate::verdict::Subject::Count {
+                    count: found.was as u64,
+                },
+                crate::verdict::Subject::Count {
+                    count: found.now as u64,
+                },
+            ],
+            Fix::declared(None),
+        )
+    })
+}
+
+/// A budget refusal: the set and both counts, pointer-only.
+fn budget_refusal(name: &str, count: usize, max: usize) -> Refusal {
+    Refusal::declared(
+        BUDGET_CALL,
+        crate::verdict::Native::CeilingExceeded,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: format!("budget.{name}"),
+            },
+            crate::verdict::Subject::Count {
+                count: count as u64,
+            },
+            crate::verdict::Subject::Count { count: max as u64 },
+        ],
+        Fix::declared(None),
+    )
+}
+
 fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &ProspectiveFacts) -> Decision {
     let crate::facts::Look::Is(content) = prospective else {
         return Decision::Allow;
@@ -7380,8 +8518,13 @@ pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> O
     // that would be a lie: that projection opens `Refused by`, and nothing here
     // refuses. The id, the cause and the remedy all travel, so the fix clause is
     // present exactly as that contract insists.
-    let (_, refusal) = policy_refusal(policy, envelope, facts)?;
-    Some(refusal)
+    //
+    // EVERY GRADE BUT A TRIAL SPEAKS HERE (CLOUD-2707). Stop cannot refuse, so a
+    // `deny` or `advise` module's nudge is its whole voice; a `record` module's
+    // violation is written to the store through [`nonblocking_findings`] and
+    // never spoken.
+    let (severity, refusal) = policy_refusal(policy, envelope, facts)?;
+    (severity != RuleSeverity::Record).then_some(refusal)
 }
 
 /// The policy gate: hand every registered module the call's facts and read back
@@ -7411,10 +8554,9 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     // said otherwise. `blocks` is the same predicate every typed rule kind here
     // consults, so the two now answer one question.
     //
-    // A NON-BLOCKING VIOLATION IS NOT DISCARDED, it is demoted — `policy_advice`
-    // renders the same refusal as text, and `run_hook` puts it on the advisory
-    // channel. A sensor with no reader is the defect this row exists inside, so
-    // the demotion and the delivery land together or neither does.
+    // A NON-BLOCKING VIOLATION IS NOT DISCARDED (CLOUD-1131, CLOUD-2707):
+    // `nonblocking_findings` returns it at its grade, and `run_hook` SPEAKS an
+    // `advise` one on the call and RECORDS a `record` one in the findings store.
     match policy_refusal(policy, envelope, facts) {
         Some((severity, refusal)) if blocks(severity, policy.fail_on_warning) => {
             Decision::Deny(refusal)
@@ -7423,34 +8565,67 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     }
 }
 
-/// The advisory half of [`policy_rules`]: every NON-blocking, non-`allow` module
-/// violation, one per bundle (CLOUD-1131, CLOUD-1470).
+/// Every nonblocking finding this call raised, each at its row's grade
+/// (CLOUD-1131, CLOUD-1470, CLOUD-2707): module violations one per bundle,
+/// native gates, receipt rows and every other call gate's rows graded
+/// `advise` or `record`. The boundary SPEAKS an `advise` finding on the call
+/// and RECORDS a `record` one in the findings store; neither is dropped.
 ///
-/// Empty for silence, for a blocking violation — that one is the caller's
-/// `Decision` and saying it twice would put one finding on two channels — and at
-/// `Stop`, where [`stop_advice`] stays the sole module producer (CLOUD-888's
-/// one-nudge bound). Every advisory is returned rather than the strongest,
-/// because two pointers on one call are two things a reader needs, and keeping
-/// only the first-declared shed the second silently.
-///
-/// Returned as [`Refusal`]s so the renderer is the caller's choice.
-//MUTANT stop-advice-multiplied|s@^    let turn_end = envelope.event == Event::Stop;$@    let turn_end = false;@|a_stop_carries_one_module_nudge_whatever_the_warn_count
+/// Empty for silence and for a blocking violation, which is the caller's
+/// `Decision`. At `Stop` it holds only a `record` module's end-of-turn
+/// violation: [`stop_advice`] speaks every other grade there. Every finding is
+/// returned rather than the strongest, because two pointers on one call are two
+/// things a reader needs.
 #[must_use]
-pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+pub fn nonblocking_findings(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<Graded> {
     let turn_end = envelope.event == Event::Stop;
     if turn_end {
-        return Vec::new();
+        // A nonblocking module's end-of-turn violation, for the RECORD:
+        // [`stop_advice`] is what speaks at Stop (an `advise` one, never a
+        // `record` one), so the boundary speaks none of these here.
+        return policy_refusal(policy, envelope, facts)
+            .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
+            .into_iter()
+            .collect();
     }
-    // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
-    // Under the chain's own conditions, so the warn side runs exactly where the
-    // deny side does.
-    let mut advice = if event_decides(envelope.event).is_none() && !policy.is_empty() {
-        native_advice(policy, facts)
+    // A compiled gate graded `advise` or `record` reports here, beside the
+    // modules (CLOUD-2291). Under the chain's own conditions, so the nonblocking
+    // side runs exactly where the deny side does.
+    let mut found = if event_decides(envelope.event).is_none()
+        && (!policy.is_empty() || reach_refusal(facts.reach).is_some())
+    {
+        native_nonblocking(policy, envelope, facts)
     } else {
         Vec::new()
     };
-    advice.extend(policy_advisories(policy, envelope, facts));
-    advice
+    found.extend(policy_advisories(policy, envelope, facts));
+    if event_decides(envelope.event).is_none() {
+        found.extend(receipt_nonblocking(policy, envelope, facts.receipts));
+        found.extend(gate_nonblocking(policy, envelope, facts));
+    }
+    found
+}
+
+/// The harness this process adjudicates for, bound once by the hook entry
+/// (CLOUD-2709): the envelope is the normalized shape every harness decodes to,
+/// so the one fact that differs per harness — where it runs — is read here.
+static HARNESS: std::sync::OnceLock<Harness> = std::sync::OnceLock::new();
+
+/// Bind the harness this process answers for. The first binding stands.
+pub fn bind_harness(harness: Harness) {
+    let _ = HARNESS.set(harness);
+}
+
+/// The exact `input` document every policy row receives for this call
+/// (CLOUD-2696): [`call_document`] itself, never a reconstruction, so what
+/// `adjudicate --show-input` shows is what the bundles were handed.
+#[must_use]
+pub fn policy_input(envelope: &Envelope, facts: &Facts<'_>) -> Option<serde_json::Value> {
+    serde_json::from_str(&call_document(envelope, facts).ok()?).ok()
 }
 
 /// The STRONGEST violation any enabled bundle raises, with the severity its
@@ -7474,7 +8649,6 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 /// An `allow` row is OFF and is skipped (CLOUD-1470): it never blocks, so this
 /// changes no decision, and it stops [`stop_advice`] nudging for a rule the
 /// consumer switched off.
-//MUTANT allow-row-nudged|s@^            if severity == RuleSeverity::Allow {$@            if false {@|an_allow_row_nudges_nothing_at_stop
 fn policy_refusal(
     policy: &Policy,
     envelope: &Envelope,
@@ -7560,9 +8734,7 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
-//MUTANT advice-strongest-only|s@^    advised$@    advised.into_iter().take(1).collect()@|two_warn_advisories_on_one_call_both_arrive
-//MUTANT allow-row-advised|s@^        if severity == RuleSeverity::Allow {$@        if false {@|an_allow_row_advises_nothing
-fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     if policy.bundles.is_empty() {
         return Vec::new();
     }
@@ -7584,12 +8756,15 @@ fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         if severity == RuleSeverity::Allow {
             continue;
         }
-        advised.push(Refusal::from_class(
-            bundle.attribute(violation),
-            &policy.verdicts,
-            &violation.verdict,
-            &violation.subjects,
-            Fix::None,
+        advised.push((
+            severity,
+            Refusal::from_class(
+                bundle.attribute(violation),
+                &policy.verdicts,
+                &violation.verdict,
+                &violation.subjects,
+                Fix::None,
+            ),
         ));
     }
     advised
@@ -7624,7 +8799,6 @@ pub fn policy_preapproval(
 
 /// A module's grant as `call grant now`, under the rule id that granted it
 /// (CLOUD-2078): a module finding id `policy explain` resolves.
-//MUTANT preapproval-misclassed|s@^    let class = crate::verdict::Native::CallGrantNow;$@    let class = crate::verdict::Native::CallFixSilent;@|a_preapproval_reason_labels_its_rule_and_verdict
 fn preapproval_refusal(id: &str) -> Refusal {
     let class = crate::verdict::Native::CallGrantNow;
     Refusal::declared(id.to_owned(), class, &[], Fix::None)
@@ -7789,6 +8963,34 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             }),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.
+            // THE ENTRIES OR `null` (CLOUD-2684): no checkout/restore, or one
+            // this cannot place, and the preset leaves the call to the host.
+            // COUNTS, NEVER CONTENT (CLOUD-2661): each selected set and whether
+            // this write breaches a ceiling it grows past.
+            crate::facts::Fact::Budgeted => Some(match facts.budgeted {
+                crate::facts::Look::Is(measures) => serde_json::json!(measures
+                    .iter()
+                    .map(|measure| serde_json::json!({
+                        "name": measure.name,
+                        "breach": crate::budget::breach(measure).is_some(),
+                    }))
+                    .collect::<Vec<_>>()),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
+            crate::facts::Fact::PathspecStatus => Some(match facts.pathspec_status {
+                crate::facts::Look::Is(status) => status.clone(),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
+            crate::facts::Fact::LandLive => Some(
+                facts
+                    .land_live
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |pid| serde_json::Value::from(pid.as_str())),
+            ),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
@@ -8070,7 +9272,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             projected_facts.insert(fact.as_str().to_owned(), value);
         }
     }
-    serde_json::to_string(&serde_json::json!({
+    let mut document = serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
             "operation": envelope.operation.as_str(),
@@ -8100,6 +9302,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // bounded and the projection cheap.
             "final-message": envelope.last_message,
             "transcript": envelope.transcript,
+            // CLOUD-2689: a forge event's tokens, `null` on every host event.
+            "forge": envelope.forge,
             // A FACT ABOUT THE CALL, NOT ABOUT THE COMMAND (CLOUD-613).
             //
             // The same class `segments` below is: something the engine already
@@ -8173,6 +9377,9 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 .map(|segment| {
                     serde_json::json!({
                         "words": segment.words,
+                        // CLOUD-2670: the redirection tokens, the suffix of
+                        // `words`, which keeps its meaning for its readers.
+                        "redirects": segment.redirects,
                         "raw": segment.raw,
                         // The operator that FOLLOWED this span, spelled as the
                         // shell spells it so a module reads what an author
@@ -8190,6 +9397,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         // `f` in a segment that runs no program at all.
                         "output-redirect": redirects_to_a_file(
                             &segment.words.iter().map(String::as_str).collect::<Vec<_>>(),
+                        ),
+                        // AND WHERE (#1276): the targets themselves, for a
+                        // module that judges where a write lands.
+                        "redirect-writes": redirect_writes(
+                            &segment.redirects.iter().map(String::as_str).collect::<Vec<_>>(),
                         ),
                         // THE CONTROL-FLOW NODE THIS SEGMENT SITS INSIDE, and
                         // which half of it (CLOUD-1381). `null` at the top
@@ -8237,7 +9449,195 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "permission-mode": envelope.mode,
         },
         "facts": projected_facts,
-    }))
+    });
+    // WHERE THE CALL STANDS AND WHAT IT REACHES (CLOUD-2672), inserted after the
+    // build for `extend_call_schema`'s reason: one more key inline exceeds the
+    // macro's recursion limit.
+    if let Some(call) = document.get_mut("call").and_then(Value::as_object_mut) {
+        call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
+        call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
+        call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
+        // THE KIND OF MACHINE (CLOUD-2709), the one fact only the environment
+        // can state (`environment`, CLOUD-1383): a practice that differs between
+        // a disposable container and a developer's machine branches on it, where
+        // a committed preset can only apply the same answer to both.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!(
+                crate::environment::host(HARNESS.get().and_then(|harness| harness.host_signal()))
+                    .as_str()
+            ),
+        );
+        // WHAT THE CALL'S TASKS RUN (step 14), from the task receipt's bodies.
+        call.insert(
+            "task-programs".to_owned(),
+            task_programs(&envelope.command, facts.task_bodies),
+        );
+        // WHAT EVERY RECEIPTED STEP RUNS (step 21): the stage set, derived.
+        call.insert("step-programs".to_owned(), step_programs(facts.task_bodies));
+    }
+    serde_json::to_string(&document)
+}
+
+/// The subcommands `mise` itself answers, which therefore never name a task.
+/// mise resolves its own commands first and only then reads an unknown word as
+/// a task (`mise build` runs `[tasks.build]`), so a word on this list is a
+/// command even where a task of that name exists.
+const MISE_COMMANDS: [&str; 52] = [
+    "activate",
+    "alias",
+    "backends",
+    "bin-paths",
+    "cache",
+    "completion",
+    "config",
+    "deactivate",
+    "doctor",
+    "en",
+    "env",
+    "exec",
+    "x",
+    "fmt",
+    "generate",
+    "help",
+    "hook-env",
+    "hook-not-found",
+    "implode",
+    "install",
+    "i",
+    "install-into",
+    "latest",
+    "link",
+    "lock",
+    "ls",
+    "list",
+    "ls-remote",
+    "mcp",
+    "outdated",
+    "plugins",
+    "p",
+    "prune",
+    "registry",
+    "reshim",
+    "run",
+    "r",
+    "search",
+    "self-update",
+    "set",
+    "settings",
+    "shell",
+    "sync",
+    "tasks",
+    "task",
+    "test-tool",
+    "tool",
+    "trust",
+    "uninstall",
+    "unset",
+    "unuse",
+    "upgrade",
+];
+
+/// The tasks one `input.call.programs` entry starts: the `tasks` [`mise_tasks`]
+/// read, or — for `mise <word>` where the word is no mise command and IS a
+/// defined task — that task, which is how mise itself resolves it.
+fn entry_tasks(
+    entry: &Value,
+    defined: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    if entry.get("name").and_then(Value::as_str) != Some("mise") {
+        return Vec::new();
+    }
+    if let Some(tasks) = entry.get("tasks").and_then(Value::as_array) {
+        return tasks
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+    entry
+        .get("subcommand")
+        .and_then(Value::as_str)
+        .filter(|word| !MISE_COMMANDS.contains(word) && defined.contains_key(*word))
+        .map(|word| vec![word.to_owned()])
+        .unwrap_or_default()
+}
+
+/// Every program the tasks this call starts reach, each carrying the `task`
+/// whose body ran it; `null` where the task receipt could not be read (step 14).
+///
+/// THE TASK IS CLASSIFIED BY WHAT IT RUNS, NEVER BY ITS NAME. A module asking
+/// "does this call rerun a stage" otherwise needs a list of task names, and a
+/// list is wrong the day a task is added or renamed. Here `mise run x` is
+/// followed into `x`'s body lines from the receipt, each line read by the same
+/// [`reach_into`] every call is read by, and any task those lines start is
+/// followed in turn — once each, so a cycle in `depends` terminates.
+///
+/// A SEPARATE KEY, NOT MORE `programs`: a task's body is the sanctioned
+/// spelling of what it runs, so a module that refuses a bare `cargo clippy`
+/// must not refuse `mise run lint` for containing one.
+pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) -> Value {
+    let crate::facts::Look::Is(bodies) = bodies else {
+        return Value::Null;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found: Vec<Value> = Vec::new();
+    let mut pending = program_reach(command);
+    while let Some(entry) = pending.pop() {
+        for task in entry_tasks(&entry, bodies) {
+            if !seen.insert(task.clone()) {
+                continue;
+            }
+            for line in bodies.get(&task).into_iter().flatten() {
+                for mut inner in reach_into(line, true, Some("task"), REACH_DEPTH) {
+                    if let Some(object) = inner.as_object_mut() {
+                        object.insert("task".to_owned(), serde_json::json!(task));
+                    }
+                    pending.push(inner.clone());
+                    found.push(inner);
+                }
+            }
+        }
+    }
+    Value::Array(found)
+}
+
+/// Every program a task body runs under `batten step run`: what a `[[step]]`
+/// receipts, which is what a land stage IS (step 21). `null` where the task
+/// receipt could not be read.
+///
+/// The stage set is DERIVED from the manifest, never listed: a step added to a
+/// task is a stage on the commit that adds it. Only a line naming `step run` is
+/// parsed, so the hook pays for the receipted lines alone, not every body.
+pub(crate) fn step_programs(bodies: &crate::taskset::TaskBodies) -> Value {
+    let crate::facts::Look::Is(bodies) = bodies else {
+        return Value::Null;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let found = bodies
+        .iter()
+        .flat_map(|(task, lines)| lines.iter().map(move |line| (task, line)))
+        .filter(|(_, line)| line.contains("step run"))
+        .flat_map(|(task, line)| {
+            reach_into(line, true, Some("task"), REACH_DEPTH)
+                .into_iter()
+                // What the step runs, minus the `cargo run` that only launches
+                // the program carrying the stage's identity.
+                .filter(|entry| entry["receipted"] == true)
+                .filter(|entry| {
+                    !(entry["name"] == "cargo"
+                        && matches!(entry["subcommand"].as_str(), Some("run" | "r")))
+                })
+                .map(move |mut entry| {
+                    if let Some(object) = entry.as_object_mut() {
+                        object.insert("task".to_owned(), serde_json::json!(task));
+                    }
+                    entry
+                })
+        })
+        .filter(|entry| seen.insert(entry.to_string()))
+        .collect();
+    Value::Array(found)
 }
 
 /// The program a token names, with any path it was reached through dropped.
@@ -8249,38 +9649,6 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
 /// binary it is rather than which program was asked for.
 fn program_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
-}
-
-/// Every command a shell text runs, each as its words with quotes resolved and
-/// comments dropped, with the here-doc and here-string text fed to its stdin,
-/// through the parse every hook judges by (CLOUD-2388); `None` when that parse
-/// could not read all of it.
-#[must_use]
-pub(crate) fn shell_commands(command: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
-    let crate::facts::Look::Is(parsed) = segments(command) else {
-        return None;
-    };
-    Some(
-        parsed
-            .into_iter()
-            .flat_map(|segment| {
-                let mut lines: Vec<(Vec<String>, Vec<String>)> = if segment.lines.is_empty() {
-                    vec![(segment.words, Vec::new())]
-                } else {
-                    segment
-                        .lines
-                        .into_iter()
-                        .map(|line| (line.words, Vec::new()))
-                        .collect()
-                };
-                // A redirection belongs to the segment, so its last line takes it.
-                if let Some(last) = lines.last_mut() {
-                    last.1 = segment.stdin_text;
-                }
-                lines
-            })
-            .collect(),
-    )
 }
 
 /// The row ids a `batten policy explain … --history` call names, when the call
@@ -8339,9 +9707,6 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 ///
 /// PURE, so it is tested without a process environment — a test cannot set one
 /// under `unsafe_code = "forbid"`.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT background-max-unclamped|s@\.clamp(7_200_000, 2_147_483_647)@.max(7_200_000)@|background_max_mirrors_the_host
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
         raw.and_then(|text| text.trim().parse::<u64>().ok())
@@ -8364,8 +9729,46 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
-    let crate::facts::Look::Is(parsed) = segments(command) else {
-        return Vec::new();
+    reach_into(command, false, None, REACH_DEPTH)
+}
+
+/// How many constructs deep [`program_reach`] follows a program into the
+/// programs it runs. A bound and not a tuning knob: each level is one more
+/// `bash -c` or `cargo run` written around the last, no real call nests eight,
+/// and the bound is what keeps a self-quoting text from recursing forever. At
+/// the bound the outer entry is still projected; only its inner text is not.
+const REACH_DEPTH: usize = 8;
+
+/// [`program_reach`] over one shell text, its entries reached through `via`
+/// and under an outer mediator when `outer_mediated`.
+///
+/// RECURSIVE BY CONSTRUCTION (step 14). A program that runs other programs —
+/// a shell's `-c` script, `eval`'s words, the binary `cargo run` starts, the
+/// argv `batten step run` executes — is followed here, once, for every module,
+/// rather than each module learning each spelling. Measured before it:
+/// `bash -c 'git push --force-with-lease origin main'` reached no module at
+/// all, while the same push inside `$(…)` was refused, because the parser
+/// descends into a substitution and nothing descended into a script.
+///
+/// A TEXT THAT WILL NOT PARSE is read by whitespace when it was reached
+/// through a construct ([`unread_reach`]); at the top level it stays no
+/// entries, as before — `input.call.segments` is `null` there and that is a
+/// module's signal.
+fn reach_into(
+    command: &str,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    let parsed = match segments(command) {
+        crate::facts::Look::Is(parsed) => parsed,
+        crate::facts::Look::CouldNotLook | crate::facts::Look::IsNot => {
+            return if via.is_some() {
+                unread_reach(command, outer_mediated, via, depth)
+            } else {
+                Vec::new()
+            };
+        }
     };
     // PER LINE, never the fused words (CLOUD-1287). A segment may span a
     // newline, and `input.call.programs` is the anchor every module is told to
@@ -8375,63 +9778,1026 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
     parsed
         .iter()
         .flat_map(|segment| segment.lines.iter())
-        .filter_map(|line| {
+        .flat_map(|line| {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
-            let index = effective_program(&tokens)?;
-            let program = program_token(tokens[index]);
-            Some(serde_json::json!({
-                "program": program,
-                // THE NAME AS WELL AS THE TOKEN, because they are different
-                // questions and a predicate about "which program is this" wants
-                // the second. `./tests/bats/bin/bats` and `bats` are one program
-                // reached two ways; a module comparing the token would answer no
-                // for the spelling that produced the incident this exists for.
-                //
-                // Resolved here rather than in Rego for the reason the whole
-                // projection exists: path splitting is argv reading, and a module
-                // doing it would be a second authority over it.
-                "name": program_name(program),
-                // WHAT THIS PROGRAM WAS HANDED, so a module can anchor on the
-                // program AND read its own argv without a join (CLOUD-1382).
-                //
-                // Without it a module correlating `programs` back to `segments`
-                // has nothing to correlate ON: the list above is `filter_map`ed,
-                // so a segment with no program yields no entry and the two
-                // indices stop agreeing. The alternative was for every module to
-                // re-find the program inside a segment's words, which is the
-                // second authority over one argv that CLOUD-857 measured and
-                // this whole projection exists to refuse.
-                // NORMALISED THE SAME WAY THE PROGRAM IS, and for the same
-                // measured reason: the closing paren of a grouped command lands
-                // on the LAST argument, which is exactly the token an exact-match
-                // predicate is decided on. `(git push origin main --force)` was
-                // allowed with `--force)` here while the same flag written
-                // earlier denied.
-                "arguments": tokens[index + 1..]
-                    .iter()
-                    .map(|token| program_token(token))
-                    .collect::<Vec<_>>(),
-                "mediated": mediator_present(
-                    crate::rules::RequireVia::Mise,
-                    &tokens[..index],
-                ),
-                // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
-                // say without running it (CLOUD-1949). Each is a table this
-                // engine already owns, so a module granting a call on them is
-                // not a second authority over what a program does:
-                // `READ_ONLY_PROGRAMS` for the floor and the surface's own
-                // declared effect for `batten`. The redirect that turns any
-                // reader into a writer is a SEGMENT key, because a bare `> f`
-                // runs no program and so has no entry here.
-                "reads-only": reads_its_operands(program_name(program)),
-                // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
-                // leading `{` the shell passes through literally, so
-                // `batten lease acquire {--help` would read as `--help` here
-                // while batten receives a positional and writes (CLOUD-2206).
-                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
-            }))
+            // A REDIRECTION IS NEVER HANDED TO THE PROGRAM (CLOUD-2670): the
+            // line's redirect tokens are the suffix of its words, so the argv
+            // is what precedes them. A line that is only redirects runs no
+            // program and so yields no entry.
+            let handed = tokens.len().saturating_sub(line.redirects.len());
+            let argv = &tokens[..handed];
+            let mut reached: Vec<serde_json::Value> = effective_program(argv)
+                .map(|index| reach_argv(argv, index, outer_mediated, via, false, depth))
+                .unwrap_or_default();
+            // `env -S '<words>'` SPLITS ITS VALUE INTO THE COMMAND, so the
+            // program is inside that one word, where the wrapper look-through
+            // steps past it as an option value.
+            if let Some(depth) = depth.checked_sub(1) {
+                for script in split_strings(argv) {
+                    reached.extend(reach_into(&script, outer_mediated, Some("script"), depth));
+                }
+            }
+            reached
         })
         .collect()
+}
+
+/// The values every `env -S`/`--split-string` in an argv's wrapper prefix
+/// carries: each is split by `env` into the command it runs.
+fn split_strings(argv: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut in_env = false;
+    let mut words = argv.iter().map(|word| program_token(word));
+    while let Some(word) = words.next() {
+        if word == "env" {
+            in_env = true;
+            continue;
+        }
+        if !in_env {
+            continue;
+        }
+        if word == "-S" || word == "--split-string" {
+            found.extend(words.next().map(str::to_owned));
+        } else if let Some(value) = word.strip_prefix("--split-string=") {
+            found.push(value.to_owned());
+        } else if let Some(value) = word.strip_prefix("-S").filter(|value| !value.is_empty()) {
+            found.push(value.to_owned());
+        } else if !word.starts_with('-') && !is_env_assignment(word) {
+            in_env = false;
+        }
+    }
+    found
+}
+
+/// A text a construct runs that [`segments`] will not parse, read the crude
+/// way: split at the shell's command separators, then at whitespace, with
+/// quote characters dropped. Every entry is flagged `unread`.
+///
+/// Over-reading is the safe direction here and under-reading is the bypass:
+/// the shell will still run whatever of this it can, so a stage named inside
+/// an unbalanced quote must still be seen.
+fn unread_reach(
+    command: &str,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    command
+        .split(['\n', ';', '&', '|', '(', ')', '`'])
+        .flat_map(|piece| {
+            let words: Vec<String> = piece
+                .split_whitespace()
+                .map(|word| word.replace(['\'', '"'], ""))
+                .filter(|word| !word.is_empty() && word != "$")
+                .collect();
+            let argv: Vec<&str> = words.iter().map(String::as_str).collect();
+            effective_program(&argv)
+                .map(|index| reach_argv(&argv, index, outer_mediated, via, true, depth))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The entry for the program at `argv[index]`, then every program it runs.
+fn reach_argv(
+    argv: &[&str],
+    index: usize,
+    outer_mediated: bool,
+    via: Option<&'static str>,
+    unread: bool,
+    depth: usize,
+) -> Vec<serde_json::Value> {
+    let program = program_token(argv[index]);
+    let name = program_name(program);
+    let arguments: Vec<&str> = argv[index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .collect();
+    // AN OUTER MEDIATOR COVERS WHAT IT RUNS: `mise exec -- bash -c 'cargo x'`
+    // runs that cargo under the pin, so the inner entry is mediated too.
+    let mediated =
+        outer_mediated || mediator_present(crate::rules::RequireVia::Mise, &argv[..index]);
+    let mut reached = vec![program_entry(
+        program,
+        &arguments,
+        &argv[index + 1..],
+        mediated,
+        via,
+        unread,
+    )];
+    let Some(depth) = depth.checked_sub(1) else {
+        return reached;
+    };
+    for script in inner_scripts(name, &arguments)
+        .into_iter()
+        .chain(shebang_script(program))
+    {
+        reached.extend(reach_into(&script, mediated, Some("script"), depth));
+    }
+    // WHAT A NON-SHELL INTERPRETER'S PROGRAM SPAWNS, and every program text
+    // nothing could read, as `opaque` entries (#1276, CLOUD-2775).
+    for spawned in interpreted_reach(name, &arguments) {
+        match spawned {
+            Spawned::Shell(text) => {
+                reached.extend(reach_into(&text, mediated, Some("script"), depth));
+            }
+            Spawned::Argv(words) => {
+                let words: Vec<&str> = words.iter().map(String::as_str).collect();
+                if let Some(at) = effective_program(&words) {
+                    reached.extend(reach_argv(
+                        &words,
+                        at,
+                        mediated,
+                        Some("script"),
+                        unread,
+                        depth,
+                    ));
+                }
+            }
+            Spawned::Opaque { source, trusted } => {
+                let mut entry = program_entry(name, &[], &[], mediated, Some("script"), unread);
+                if let Some(object) = entry.as_object_mut() {
+                    object.insert(String::from("opaque"), Value::Bool(true));
+                    object.insert(String::from("source"), Value::String(source));
+                    object.insert(String::from("trusted"), Value::Bool(trusted));
+                }
+                reached.push(entry);
+            }
+        }
+    }
+    for (inner, how) in inner_argv(name, &arguments).into_iter().chain(
+        find_execs(name, &arguments)
+            .into_iter()
+            .map(|inner| (inner, "exec")),
+    ) {
+        let inner: Vec<&str> = inner.iter().map(String::as_str).collect();
+        if let Some(at) = effective_program(&inner) {
+            let mut nested = reach_argv(&inner, at, mediated, Some(how), unread, depth);
+            // EVERYTHING A STEP RUNS IS RECEIPTED, all the way down (step 21):
+            // `step run x -- cargo run -p batten -- semver check` receipts the
+            // `batten semver check` the `cargo run` starts, not only the launcher.
+            if how == "step run" {
+                for entry in &mut nested {
+                    if let Some(object) = entry.as_object_mut() {
+                        object.insert("receipted".to_owned(), Value::Bool(true));
+                    }
+                }
+            }
+            reached.extend(nested);
+        }
+    }
+    reached
+}
+
+/// The shell texts a program runs from its own argv: a shell's `-c` script, by
+/// the interpreter [`grammar`] the protected-path scan reads (one grammar, so
+/// the two cannot disagree about what a shell's script is), and `eval`'s words
+/// joined as the shell joins them.
+fn inner_scripts(name: &str, arguments: &[&str]) -> Vec<String> {
+    match name {
+        "eval" => vec![arguments.join(" ")],
+        // `watch` hands its operands to `sh -c` joined, past its own options.
+        "watch" => {
+            const VALUED: [&str; 4] = ["-n", "--interval", "-q", "--equexit"];
+            let mut at = 0;
+            while at < arguments.len() && arguments[at].starts_with('-') {
+                at += if VALUED.contains(&arguments[at]) {
+                    2
+                } else {
+                    1
+                };
+            }
+            arguments
+                .get(at..)
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| vec![rest.join(" ")])
+                .unwrap_or_default()
+        }
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash" => {
+            let grammar = grammar(name);
+            let inline = inline_values(&grammar, arguments);
+            if !inline.is_empty() {
+                return inline;
+            }
+            // THE SCRIPT FILE A SHELL RUNS IS ITS PROGRAM TOO (#1276, step 23),
+            // read through the same `script_operand` the protected-path scan
+            // stops at, so the two cannot disagree about which file it is.
+            script_operand(&grammar, arguments)
+                .and_then(script_file_text)
+                .into_iter()
+                .collect()
+        }
+        // `source` and `.` run a file in the current shell.
+        "source" | "." => arguments
+            .first()
+            .copied()
+            .and_then(script_file_text)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The largest script file the reach reads into memory. Past it the file is
+/// not followed, as a script nested past [`REACH_DEPTH`] is not.
+const SCRIPT_FILE_MAX: u64 = 1 << 16;
+
+/// The text of the script file `operand` names, resolved where the call runs.
+///
+/// MEASURED ON #1276: every commit, push and landing of one session ran as
+/// `sh ship<N>.sh`, so every module judged `sh <path>` and nothing the file
+/// ran. The reach followed `-c`, `eval`, `exec` and `cargo run`, and never a
+/// file. `None` for a file that is absent, unreadable, not UTF-8 or past
+/// [`SCRIPT_FILE_MAX`].
+fn script_file_text(operand: &str) -> Option<String> {
+    let path = std::path::Path::new(operand);
+    if std::fs::metadata(path).ok()?.len() > SCRIPT_FILE_MAX {
+        return None;
+    }
+    crate::fsio::read_to_string(path).ok()
+}
+
+/// The shell text a program file runs when its shebang names a shell: the
+/// file itself, read whole. `None` for a program spelled without a path, a
+/// file with no shebang, or a shebang naming anything but a shell.
+fn shebang_script(program: &str) -> Option<String> {
+    if !program.contains('/') {
+        return None;
+    }
+    let text = script_file_text(program)?;
+    let line = text.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    let mut interpreter = program_name(words.next()?);
+    if interpreter == "env" {
+        interpreter = words
+            .find(|word| !word.starts_with('-'))
+            .map(program_name)?;
+    }
+    matches!(
+        interpreter,
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
+    )
+    .then_some(text)
+}
+
+/// What a program's text runs, as the reach reads it (CLOUD-2775).
+#[derive(Debug, PartialEq, Eq)]
+enum Spawned {
+    /// Shell text it hands a shell: `os.system("…")`, `` `…` ``.
+    Shell(String),
+    /// An argv it spawns directly: `subprocess.run(["git", "push"])`.
+    Argv(Vec<String>),
+    /// Something it runs that nothing here can read: a spawn whose arguments
+    /// are not all literals, or a script file present but unreadable or past
+    /// [`SCRIPT_FILE_MAX`]. `trusted` is whether `source` is a file the
+    /// repository tracks with no working-tree change.
+    Opaque { source: String, trusted: bool },
+}
+
+/// An interpreter whose spawn calls the reach reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Language {
+    Python,
+    Node,
+    Perl,
+    Ruby,
+}
+
+fn language_of(name: &str) -> Option<Language> {
+    if declares("python", name) {
+        Some(Language::Python)
+    } else if name == "node" || name == "nodejs" {
+        Some(Language::Node)
+    } else if declares("perl", name) {
+        Some(Language::Perl)
+    } else if declares("ruby", name) {
+        Some(Language::Ruby)
+    } else {
+        None
+    }
+}
+
+/// What `name`'s argv runs through program TEXT the reach can read: a
+/// non-shell interpreter's inline program and script file, and an unreadable
+/// script file for a shell too. A shell's readable text is [`inner_scripts`]'.
+///
+/// A script file that is ABSENT is not opaque: the reach does not know the
+/// stage's directory (`cd dir && sh x.sh` names `dir/x.sh`), so an absent file
+/// is usually elsewhere, not hidden. One present but unreadable or too large to
+/// read is opaque.
+fn interpreted_reach(name: &str, arguments: &[&str]) -> Vec<Spawned> {
+    let shell = matches!(
+        name,
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "yash"
+    );
+    let language = language_of(name);
+    if !shell && language.is_none() {
+        return Vec::new();
+    }
+    let grammar = grammar(name);
+    let inline = inline_values(&grammar, arguments);
+    let mut found = Vec::new();
+    if let Some(language) = language {
+        for text in &inline {
+            found.extend(spawns_in(language, text, "-c", false));
+        }
+    }
+    if !inline.is_empty() {
+        return found;
+    }
+    let Some(operand) = script_operand(&grammar, arguments) else {
+        return found;
+    };
+    let path = Path::new(operand);
+    if !path.is_file() {
+        return found;
+    }
+    let trusted = tracked_clean(path);
+    match (script_file_text(operand), language) {
+        (Some(text), Some(language)) => found.extend(spawns_in(language, &text, operand, trusted)),
+        (Some(_), None) => {}
+        (None, _) => found.push(Spawned::Opaque {
+            source: operand.to_owned(),
+            trusted,
+        }),
+    }
+    found
+}
+
+/// Whether `path` is a file its repository tracks with no working-tree change,
+/// by the index facts every content-keyed step reads ([`crate::git::index_facts`]).
+/// Anything that cannot be established is untrusted.
+fn tracked_clean(path: &Path) -> bool {
+    let Ok(absolute) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Some(root) = absolute
+        .parent()
+        .and_then(|dir| crate::git::repo_root(dir).ok())
+        .and_then(|root| std::fs::canonicalize(root).ok())
+    else {
+        return false;
+    };
+    let Ok(relative) = absolute.strip_prefix(&root) else {
+        return false;
+    };
+    let spec = relative.to_string_lossy().replace('\\', "/");
+    crate::git::index_facts(&root, std::slice::from_ref(&spec))
+        .ok()
+        .and_then(|facts| facts.get(&spec).cloned())
+        .is_some_and(|fact| {
+            !fact.entries.is_empty() && fact.diverged.is_empty() && fact.untracked.is_empty()
+        })
+}
+
+/// One argument of a spawn call, as written.
+#[derive(Debug)]
+enum Arg {
+    /// A string literal with no interpolation.
+    Literal(String),
+    /// A `[…]` list whose every element is such a literal.
+    List(Vec<String>),
+    /// Anything else, kept as written so `shell=True` can be recognised.
+    Other(String),
+}
+
+/// Every spawn call in `text`, a `language` program read from `source`.
+///
+/// LITERALS ONLY, AND THAT IS THE WHOLE CONTRACT. A call whose arguments are
+/// string literals (or a list of them) is reached exactly as written; any other
+/// argument — a variable, an f-string, a template with `${…}`, interpolation, a
+/// concatenation — is [`Spawned::Opaque`], never guessed at. A call is
+/// recognised by its spelling, so a comment naming one is skipped by its line's
+/// comment marker and a spawn a program builds by reflection is not seen.
+fn spawns_in(language: Language, text: &str, source: &str, trusted: bool) -> Vec<Spawned> {
+    let opaque = || Spawned::Opaque {
+        source: source.to_owned(),
+        trusted,
+    };
+    let mut found = Vec::new();
+    for (at, call) in spawn_calls(language, text) {
+        // THE CALL'S OWN LINE, up to the call: a marker on it comments it out.
+        let line = text[..at].rsplit('\n').next().unwrap_or_default();
+        let marker = if language == Language::Node {
+            "//"
+        } else {
+            "#"
+        };
+        if line.contains(marker) {
+            continue;
+        }
+        let spawned = match call {
+            Call::Backtick(body) => literal_body(language, &body).map(Spawned::Shell),
+            Call::Named { name, open } => {
+                let args = call_args(language, text, open);
+                decide(language, &name, &args)
+            }
+        };
+        found.push(spawned.unwrap_or_else(opaque));
+    }
+    found
+}
+
+/// A spawn call's spelling: a named function and where its arguments begin,
+/// or a backtick (`` `…` ``, `qx(…)`, `%x(…)`) and its body.
+enum Call {
+    Named { name: String, open: usize },
+    Backtick(String),
+}
+
+/// The spawn calls `language`'s text spells, in order.
+fn spawn_calls(language: Language, text: &str) -> Vec<(usize, Call)> {
+    let named: &str = match language {
+        Language::Python => {
+            r"\b(?:subprocess\.|os\.)?(run|call|check_call|check_output|Popen|getoutput|getstatusoutput|system|popen)\s*\("
+        }
+        Language::Node => {
+            r"(?:\bchild_process\.|\bcp\.|^|[^.\w])(execSync|exec|spawnSync|spawn|execFileSync|execFile)\s*\("
+        }
+        Language::Perl | Language::Ruby => r"(?:^|[^.\w])(system|exec|spawn)\b\s*\(?",
+    };
+    let Ok(named) = regex::Regex::new(named) else {
+        return Vec::new();
+    };
+    // A bare name is a spawn only where its module is in scope.
+    let bare_ok = match language {
+        Language::Python => {
+            text.contains("from subprocess import") || text.contains("from os import")
+        }
+        Language::Node => text.contains("child_process"),
+        Language::Perl | Language::Ruby => true,
+    };
+    let mut calls: Vec<(usize, Call)> = Vec::new();
+    for found in named.captures_iter(text) {
+        let (Some(whole), Some(name)) = (found.get(0), found.get(1)) else {
+            continue;
+        };
+        let prefixed = text[whole.start()..name.start()].contains('.');
+        let qualified = match language {
+            Language::Python => {
+                let module = &text[whole.start()..name.start()];
+                match name.as_str() {
+                    "system" | "popen" => module.starts_with("os."),
+                    _ => module.starts_with("subprocess."),
+                }
+            }
+            Language::Node => prefixed,
+            Language::Perl | Language::Ruby => true,
+        };
+        if !(qualified || bare_ok) {
+            continue;
+        }
+        calls.push((
+            name.start(),
+            Call::Named {
+                name: name.as_str().to_owned(),
+                open: whole.end(),
+            },
+        ));
+    }
+    // Backticks run a shell in Perl and Ruby; in JavaScript they are a template
+    // string, which only a named call above can hand to a shell.
+    if matches!(language, Language::Perl | Language::Ruby) {
+        let mut rest = text.char_indices().peekable();
+        while let Some((at, c)) = rest.next() {
+            if c == '`' {
+                let body: String = rest
+                    .by_ref()
+                    .map(|(_, c)| c)
+                    .take_while(|c| *c != '`')
+                    .collect();
+                calls.push((at, Call::Backtick(body)));
+            }
+        }
+    }
+    if matches!(language, Language::Perl | Language::Ruby) {
+        let quoted = if language == Language::Perl {
+            r"\bqx\(([^)]*)\)"
+        } else {
+            r"%x\(([^)]*)\)"
+        };
+        if let Ok(quoted) = regex::Regex::new(quoted) {
+            for found in quoted.captures_iter(text) {
+                if let (Some(whole), Some(body)) = (found.get(0), found.get(1)) {
+                    calls.push((whole.start(), Call::Backtick(body.as_str().to_owned())));
+                }
+            }
+        }
+    }
+    calls.sort_by_key(|(at, _)| *at);
+    calls
+}
+
+/// The arguments of the call whose argument list opens at `open`: up to the
+/// matching `)`, or for a parenthesis-less Perl or Ruby call to the end of the
+/// statement, split at top-level commas.
+fn call_args(language: Language, text: &str, open: usize) -> Vec<Arg> {
+    let parenthesised = text[..open].ends_with('(');
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in text[open..].chars() {
+        if let Some(q) = quote {
+            current.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' | ']' | '}' if depth > 0 => {
+                depth -= 1;
+                current.push(c);
+            }
+            ')' if parenthesised => break,
+            ';' | '\n' if !parenthesised && depth == 0 => break,
+            ',' if depth == 0 => parts.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    parts.push(current);
+    parts
+        .iter()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|part| classify_arg(language, part))
+        .collect()
+}
+
+fn classify_arg(language: Language, part: &str) -> Arg {
+    if let Some(value) = string_literal(language, part) {
+        return Arg::Literal(value);
+    }
+    if let Some(inner) = part
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let elements: Option<Vec<String>> = call_args_inner(language, inner)
+            .into_iter()
+            .map(|element| string_literal(language, &element))
+            .collect();
+        if let Some(elements) = elements {
+            return Arg::List(elements);
+        }
+    }
+    Arg::Other(part.split_whitespace().collect())
+}
+
+/// `inner`'s top-level comma-separated elements, quotes respected.
+fn call_args_inner(_language: Language, inner: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in inner.chars() {
+        if let Some(q) = quote {
+            current.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => {
+                quote = Some(c);
+                current.push(c);
+            }
+            ',' => parts.push(std::mem::take(&mut current).trim().to_owned()),
+            _ => current.push(c),
+        }
+    }
+    let last = current.trim().to_owned();
+    if !last.is_empty() {
+        parts.push(last);
+    }
+    parts
+}
+
+/// `part` as a string literal with no interpolation, unescaped, or `None`.
+fn string_literal(language: Language, part: &str) -> Option<String> {
+    let (raw, body) = match language {
+        Language::Python => {
+            let prefix_len = part
+                .chars()
+                .take_while(|c| matches!(c, 'r' | 'R' | 'b' | 'B' | 'u' | 'U'))
+                .count();
+            let prefix = &part[..prefix_len];
+            (prefix.contains(['r', 'R']), &part[prefix_len..])
+        }
+        _ => (false, part),
+    };
+    let quote = body.chars().next()?;
+    if !matches!(quote, '\'' | '"' | '`') || body.len() < 2 || !body.ends_with(quote) {
+        return None;
+    }
+    let inner = &body[1..body.len() - 1];
+    let interpolated = match (language, quote) {
+        // Not a string literal in Python, and a shell command in Perl and Ruby.
+        (Language::Python | Language::Perl | Language::Ruby, '`') => return None,
+        (Language::Node, '`') => inner.contains("${"),
+        (Language::Perl, '"') => inner.contains(['$', '@']),
+        (Language::Ruby, '"') => inner.contains("#{"),
+        _ => false,
+    };
+    if interpolated {
+        return None;
+    }
+    let mut value = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == quote {
+            // An unescaped quote inside means this was not one literal.
+            return None;
+        }
+        if c == '\\' && !raw {
+            match chars.next()? {
+                'n' => value.push('\n'),
+                't' => value.push('\t'),
+                other => value.push(other),
+            }
+        } else {
+            value.push(c);
+        }
+    }
+    Some(value)
+}
+
+/// A backtick body as shell text, or `None` where it interpolates.
+fn literal_body(language: Language, body: &str) -> Option<String> {
+    let interpolated = match language {
+        Language::Node => body.contains("${"),
+        Language::Perl => body.contains(['$', '@']),
+        Language::Ruby => body.contains("#{"),
+        Language::Python => true,
+    };
+    (!interpolated).then(|| body.to_owned())
+}
+
+/// What one named spawn call runs, or `None` where its arguments are not the
+/// literals its form needs.
+fn decide(language: Language, name: &str, args: &[Arg]) -> Option<Spawned> {
+    let shell_flag = args
+        .iter()
+        .any(|arg| matches!(arg, Arg::Other(text) if text == "shell=True"));
+    match (language, name) {
+        (Language::Python, "getoutput" | "getstatusoutput" | "system" | "popen")
+        | (Language::Node, "execSync" | "exec") => match args.first()? {
+            Arg::Literal(text) => Some(Spawned::Shell(text.clone())),
+            _ => None,
+        },
+        (Language::Python, _) => match args.first()? {
+            Arg::List(words) => Some(Spawned::Argv(words.clone())),
+            Arg::Literal(text) if shell_flag => Some(Spawned::Shell(text.clone())),
+            Arg::Literal(text) => Some(Spawned::Argv(vec![text.clone()])),
+            Arg::Other(_) => None,
+        },
+        (Language::Node, _) => {
+            let Arg::Literal(program) = args.first()? else {
+                return None;
+            };
+            let mut words = vec![program.clone()];
+            match args.get(1) {
+                None => {}
+                Some(Arg::List(rest)) => words.extend(rest.iter().cloned()),
+                // An options object after no argv list is the call's own.
+                Some(Arg::Other(options)) if options.starts_with('{') => {}
+                Some(_) => return None,
+            }
+            Some(Spawned::Argv(words))
+        }
+        (Language::Perl | Language::Ruby, _) => {
+            let words: Option<Vec<String>> = args
+                .iter()
+                .map(|arg| match arg {
+                    Arg::Literal(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            let words = words?;
+            match words.as_slice() {
+                [] => None,
+                [one] => Some(Spawned::Shell(one.clone())),
+                _ => Some(Spawned::Argv(words)),
+            }
+        }
+    }
+}
+
+/// The argv a program starts as a child, with how it was reached: the binary
+/// `cargo run` builds (named by `--bin`, `--example`, or the `-p` package, in
+/// cargo's own order of precedence) handed what follows `--`, and the command
+/// after `--` in `batten step run` and `batten ci step`. `None` for anything
+/// else, and for a `cargo run` naming no binary — which one runs is then the
+/// manifest's answer, not the argv's.
+fn inner_argv(name: &str, arguments: &[&str]) -> Option<(Vec<String>, &'static str)> {
+    let after_separator = |from: &[&str]| -> Vec<String> {
+        from.iter()
+            .position(|word| *word == "--")
+            .map(|at| {
+                from[at + 1..]
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let verb = subcommand_of(name, arguments)?;
+    let rest = &arguments[verb + 1..];
+    match (name, arguments[verb]) {
+        ("cargo", "run" | "r") => {
+            let own = rest
+                .iter()
+                .position(|word| *word == "--")
+                .map_or(rest, |at| &rest[..at]);
+            let named = |long: &str, short: Option<&str>| -> Option<String> {
+                own.iter().enumerate().find_map(|(at, word)| {
+                    if Some(*word) == short || *word == long {
+                        own.get(at + 1).map(|value| (*value).to_owned())
+                    } else {
+                        word.strip_prefix(long)
+                            .and_then(|tail| tail.strip_prefix('='))
+                            .map(ToOwned::to_owned)
+                    }
+                })
+            };
+            let binary = named("--bin", None)
+                .or_else(|| named("--example", None))
+                .or_else(|| named("--package", Some("-p")))
+                .or_else(|| default_binary(named("--manifest-path", None).as_deref()))?;
+            let mut inner = vec![binary];
+            inner.extend(after_separator(rest));
+            Some((inner, "cargo run"))
+        }
+        ("batten", "step" | "ci")
+            if subcommand_index(rest, &[]).is_some_and(|at| {
+                matches!(
+                    (arguments[verb], rest[at]),
+                    ("step", "run") | ("ci", "step")
+                )
+            }) =>
+        {
+            // `ci step` keeps no receipt, so it is reached as itself (step 21).
+            let how = if arguments[verb] == "step" {
+                "step run"
+            } else {
+                "ci step"
+            };
+            let inner = after_separator(rest);
+            (!inner.is_empty()).then_some((inner, how))
+        }
+        _ => None,
+    }
+}
+
+/// Every argv `find` runs through `-exec`, `-execdir`, `-ok` or `-okdir`, each
+/// up to its `;` or `+` (step 14).
+fn find_execs(name: &str, arguments: &[&str]) -> Vec<Vec<String>> {
+    if name != "find" {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        if matches!(*word, "-exec" | "-execdir" | "-ok" | "-okdir") {
+            let inner: Vec<String> = words
+                .by_ref()
+                .take_while(|word| !matches!(**word, ";" | "\\;" | "+"))
+                .map(|word| (*word).to_owned())
+                .collect();
+            if !inner.is_empty() {
+                found.push(inner);
+            }
+        }
+    }
+    found
+}
+
+/// The binary a `cargo run` naming none starts, read from the manifest the way
+/// cargo reads it (step 14): the package's `default-run`, else its one binary;
+/// in a workspace, the `default-members` (else `members`) that resolve to one
+/// binary between them. `None` where that is not exactly one — cargo then
+/// refuses to guess too. Read from the working directory's manifest, or the
+/// `--manifest-path` the argv names, and cached per manifest for the process.
+fn default_binary(manifest: Option<&str>) -> Option<String> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<std::path::PathBuf, Option<String>>>,
+    > = std::sync::OnceLock::new();
+    let path = manifest.map_or_else(
+        || std::path::PathBuf::from("Cargo.toml"),
+        std::path::PathBuf::from,
+    );
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(known) = cache.lock().ok()?.get(&path) {
+        return known.clone();
+    }
+    let resolved = manifest_binary(&path);
+    cache.lock().ok()?.insert(path, resolved.clone());
+    resolved
+}
+
+/// [`default_binary`]'s reading of one manifest.
+fn manifest_binary(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: toml::Table = toml::from_str(&text).ok()?;
+    let dir = path.parent().unwrap_or_else(|| Path::new(""));
+    let mut binaries: Vec<String> = Vec::new();
+    if let Some(package) = doc.get("package").and_then(toml::Value::as_table) {
+        if let Some(run) = package.get("default-run").and_then(toml::Value::as_str) {
+            return Some(run.to_owned());
+        }
+        binaries.extend(package_binaries(&doc, package, dir));
+    } else if let Some(workspace) = doc.get("workspace").and_then(toml::Value::as_table) {
+        let members = workspace
+            .get("default-members")
+            .or_else(|| workspace.get("members"))
+            .and_then(toml::Value::as_array)?;
+        for member in members.iter().filter_map(toml::Value::as_str) {
+            for member_dir in expand_member(dir, member) {
+                if let Some(binary) = manifest_binary(&member_dir.join("Cargo.toml")) {
+                    binaries.push(binary);
+                }
+            }
+        }
+    }
+    binaries.sort();
+    binaries.dedup();
+    match binaries.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// A package's binaries: its `[[bin]]` names, else its own name when
+/// `src/main.rs` exists.
+fn package_binaries(doc: &toml::Table, package: &toml::Table, dir: &Path) -> Vec<String> {
+    let declared: Vec<String> = doc
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bin| {
+            bin.get("name")
+                .and_then(toml::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    if !declared.is_empty() {
+        return declared;
+    }
+    package
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .filter(|_| dir.join("src").join("main.rs").is_file())
+        .map(|name| vec![name.to_owned()])
+        .unwrap_or_default()
+}
+
+/// A workspace member entry as directories: a literal path, or a trailing `*`
+/// expanded one level, which is the glob cargo manifests use in practice.
+fn expand_member(dir: &Path, member: &str) -> Vec<std::path::PathBuf> {
+    let Some(parent) = member.strip_suffix("/*") else {
+        return vec![dir.join(member)];
+    };
+    std::fs::read_dir(dir.join(parent))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .collect()
+}
+
+/// One `input.call.programs` entry: the program, what it was handed, and every
+/// reading the boundary owns about it.
+fn program_entry(
+    program: &str,
+    arguments: &[&str],
+    raw: &[&str],
+    mediated: bool,
+    via: Option<&'static str>,
+    unread: bool,
+) -> serde_json::Value {
+    // THE SUBCOMMAND, PROJECTED ONCE (CLOUD-2354): the first bare word
+    // past the program's own value-taking options, by the resolver the
+    // verdict matcher uses. Four presets each carried a Rego copy of
+    // git's option table, and they disagreed with git: `git -C -c reset`
+    // read `-c` as an option. `null` for a program with no table.
+    let name = program_name(program);
+    let (subcommand, global_options, nested) = match subcommand_table(name) {
+        None => (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+        Some(options) => {
+            let verb = subcommand_of(name, arguments);
+            let nested = verb.and_then(|at| {
+                let rest = &arguments[at + 1..];
+                subcommand_index(rest, options).map(|next| rest[next])
+            });
+            (
+                serde_json::json!(verb.map(|at| arguments[at])),
+                serde_json::json!(&arguments[..verb.unwrap_or(arguments.len())]),
+                serde_json::json!(nested),
+            )
+        }
+    };
+    let tasks = if name == "mise" {
+        serde_json::json!(mise_tasks(arguments))
+    } else {
+        serde_json::Value::Null
+    };
+    serde_json::json!({
+        "program": program,
+        // THE NAME AS WELL AS THE TOKEN, because they are different
+        // questions and a predicate about "which program is this" wants
+        // the second. `./tests/bats/bin/bats` and `bats` are one program
+        // reached two ways; a module comparing the token would answer no
+        // for the spelling that produced the incident this exists for.
+        //
+        // Resolved here rather than in Rego for the reason the whole
+        // projection exists: path splitting is argv reading, and a module
+        // doing it would be a second authority over it.
+        "name": program_name(program),
+        // WHAT THIS PROGRAM WAS HANDED, so a module can anchor on the
+        // program AND read its own argv without a join (CLOUD-1382).
+        //
+        // Without it a module correlating `programs` back to `segments`
+        // has nothing to correlate ON: the list above is `filter_map`ed,
+        // so a segment with no program yields no entry and the two
+        // indices stop agreeing. The alternative was for every module to
+        // re-find the program inside a segment's words, which is the
+        // second authority over one argv that CLOUD-857 measured and
+        // this whole projection exists to refuse.
+        // NORMALISED THE SAME WAY THE PROGRAM IS, and for the same
+        // measured reason: the closing paren of a grouped command lands
+        // on the LAST argument, which is exactly the token an exact-match
+        // predicate is decided on. `(git push origin main --force)` was
+        // allowed with `--force)` here while the same flag written
+        // earlier denied.
+        "arguments": arguments,
+        // The words before `subcommand`, verbatim, so a module can judge
+        // what they do (`-c core.pager=sh` runs a program) without
+        // parsing them. The whole argv where there is no subcommand.
+        "subcommand": subcommand,
+        "global-options": global_options,
+        "mediated": mediated,
+        // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
+        // say without running it (CLOUD-1949). Each is a table this
+        // engine already owns, so a module granting a call on them is
+        // not a second authority over what a program does:
+        // `READ_ONLY_PROGRAMS` for the floor and the surface's own
+        // declared effect for `batten`. The redirect that turns any
+        // reader into a writer is a SEGMENT key, because a bare `> f`
+        // runs no program and so has no entry here.
+        "reads-only": reads_its_operands(program_name(program)),
+        // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
+        // leading `{` the shell passes through literally, so
+        // `batten lease acquire {--help` would read as `--help` here
+        // while batten receives a positional and writes (CLOUD-2206).
+        "batten-effect": batten_effect(program_name(program), raw),
+        // HOW THIS PROGRAM WAS REACHED (step 14): `null` where the call wrote
+        // it, otherwise the construct that runs it — `script` for a shell's
+        // `-c` text or `eval`'s words, `cargo run` for the binary cargo builds
+        // and starts, `step run` for the argv `batten step run` executes. A
+        // module judging what runs needs none of it; a reader auditing why an
+        // entry exists does.
+        "via": via,
+        // `true` only where the text this entry came from would NOT PARSE, so
+        // it was read by whitespace instead (step 14). A shell's `-c` script
+        // that `rable` refuses still runs; abstaining on it would make the
+        // unparseable spelling the bypass, so the entry is a best-effort
+        // reading flagged as one rather than no entry at all.
+        "unread": unread,
+        // `true` for everything reached inside a `batten step run`, whose
+        // receipt the run writes (step 21); set by the reach, `false` here.
+        "receipted": false,
+        // THE VERB AFTER THE SUBCOMMAND (step 14): the next bare word past the
+        // same options, so `batten land lap` is `land`/`lap` and `cargo nextest
+        // run` is `nextest`/`run`. `null` where there is none or no table.
+        "nested": nested,
+        // THE TASKS A `mise` RUNS, by [`mise_tasks`] (step 14); `null` for any
+        // other program or a `mise` that runs no task.
+        "tasks": tasks,
+    })
 }
 
 /// Does this line send output into a file (CLOUD-1949)?
@@ -8441,9 +10807,24 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
 /// target counts, including one this function cannot resolve — the direction a
 /// pre-approval must err in is "not proven read-only".
 fn redirects_to_a_file(tokens: &[&str]) -> bool {
-    redirect_targets(tokens)
+    redirect_writes(tokens)
         .iter()
-        .any(|(_, target)| !target.starts_with('&') && *target != "/dev/null")
+        .any(|target| *target != "/dev/null")
+}
+
+/// The targets a line's output redirections write, as written: never an
+/// operator token and never a descriptor duplication (`2>&1`).
+///
+/// THE TARGET, NOT THE TOKEN (#1276). A segment's `redirects` are the raw
+/// tokens, operators included, so `2>/dev/null` and a lone `>` read as relative
+/// paths to a module judging targets, and `lap-tree-held` refused every read
+/// that discarded its stderr while a lap was live.
+fn redirect_writes<'a>(tokens: &[&'a str]) -> Vec<&'a str> {
+    redirect_targets(tokens)
+        .into_iter()
+        .map(|(_, target)| target)
+        .filter(|target| !target.starts_with('&'))
+        .collect()
 }
 
 /// The effect [`crate::surface`] declares for a `batten` argv, or `None` for any
@@ -8515,8 +10896,21 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 /// supposed to fire.
 fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
+    // THE EVENT-KEYED ROWS (CLOUD-2662), before the walk, on every route.
+    let shape_event = call_event(envelope);
+    if shape_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind == RuleKind::Shape
+                && rule.on == shape_event
+                && blocks(rule.severity(), policy.fail_on_warning)
+                && modifier_admits(rule, envelope)
+            {
+                matched.push(rule);
+            }
+        }
+    }
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE (CLOUD-1287). A shape row keyed on a program is evaded outright by
     // writing an innocuous first line: `words` concatenates across the newline, so
@@ -8528,6 +10922,16 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
+        // The argv the program was handed (CLOUD-2669): its redirections are the
+        // exact suffix of `words` (CLOUD-2670), so a redirect target is no word.
+        // `get` answers `None` for a reversed range, so a program inside its own
+        // redirections (`> f`) reads as an empty argv rather than a panic.
+        let spoken = tokens.len().saturating_sub(line.redirects.len());
+        let argv: &[&str] = tokens
+            .get(..spoken)
+            .and_then(|handed| handed.get(program_index..))
+            .and_then(<[&str]>::split_first)
+            .map_or(&[][..], |(_, argv)| argv);
         // Subcommand words with flags dropped. A value-taking flag leaves its
         // value behind, but the blocked words are adjacent, so that never hides
         // a real match (`gh -R o/r pr merge` still matches; `gh pr view
@@ -8537,11 +10941,12 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         // LAST token — which is a matched operand whenever the command takes no
         // trailing argument, so `(gh pr merge)` would not match where
         // `(gh pr merge 42)` did.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        //
+        // ANCHORED AT THE SUBCOMMAND (CLOUD-2666): `verdict_words` steps past
+        // the program's global value options to the subcommand, so `git -C d
+        // push` is `push`, and `git stash push` is `stash push`, which a row
+        // keyed on `git push` must not match.
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             // Kind-filtered, not scope-filtered: `receipt` rows are
             // `mediated_call`-scoped too and carry a `pattern`, so without this
@@ -8614,10 +11019,186 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             {
                 continue;
             }
+            // Whole words of THIS LINE's argv (CLOUD-2669), in both polarities.
+            // Fail closed either way: an expression that does not compile (load
+            // already refused it) fires the deny and grants no exemption.
+            if let Some(word) = rule.word.as_deref()
+                && !has_word(argv, word).unwrap_or(true)
+            {
+                continue;
+            }
+            if let Some(exemption) = rule.unless_word.as_deref()
+                && has_word(argv, exemption).unwrap_or(false)
+            {
+                continue;
+            }
             matched.push(rule);
         }
     }
     matched
+}
+
+/// The event this call raises, on any route the engine knows (CLOUD-2662).
+pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        shell_event(envelope)
+    }
+}
+
+/// [`call_event`] on the structured route only: `None` for any shell call.
+fn structured_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        None
+    }
+}
+
+/// Whether `rule` is keyed on `event`, which it must name.
+fn on_selects(rule: &Rule, event: Option<CallEvent>) -> bool {
+    rule.on.is_some() && rule.on == event
+}
+
+/// A JSON draft flag, as a bool or its exact string spelling.
+fn draft_flag(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The forge connector's routes: a create that is not a draft (absent counts
+/// as ready, the forge's default), and an update that undrafts or reopens.
+fn connector_event(envelope: &Envelope) -> Option<CallEvent> {
+    let raw = &envelope.raw_tool;
+    let draft = Field::InputDraft.read(envelope);
+    if crate::rules::selects_tool_name("create_pull_request", raw) {
+        let drafted = draft.as_deref() == Some("true");
+        return (!drafted).then_some(CallEvent::PullRequestReady);
+    }
+    if crate::rules::selects_tool_name("update_pull_request", raw) {
+        let undrafts = draft.as_deref() == Some("false");
+        let reopens = draft.as_deref() != Some("true")
+            && Field::InputState
+                .read(envelope)
+                .is_some_and(|state| comparable(&state) == "open");
+        return (undrafts || reopens).then_some(CallEvent::PullRequestReady);
+    }
+    None
+}
+
+/// The shell routes, per line over the line's own unquoted words with its
+/// redirections dropped, split into operands and flags.
+fn shell_event(envelope: &Envelope) -> Option<CallEvent> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    per_line(&parsed)
+        .into_iter()
+        .any(|(_, _, line)| line_readies(line))
+        .then_some(CallEvent::PullRequestReady)
+}
+
+fn line_readies(line: &SegmentLine) -> bool {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+    let Some(program) = effective_program(handed) else {
+        return false;
+    };
+    if program_name(program_token(handed[program])) != "gh" {
+        return false;
+    }
+    let (flags, operands) = gh_flags_and_operands(&handed[program + 1..]);
+    match operands.as_slice() {
+        ["pr", "ready", ..] => !flagged(&flags, "--undo"),
+        ["pr", "create", ..] => !drafted_flag(&flags),
+        ["pr", "reopen", ..] => true,
+        ["api", ..] => api_readies(&operands[1..], &flags),
+        _ => false,
+    }
+}
+
+/// gh's options that take the next word as their value. A value is an operand
+/// whatever it spells: `--title "--draft"` names a title, not the flag.
+const GH_VALUE_FLAGS: [&str; 22] = [
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-B",
+    "--base",
+    "-H",
+    "--head",
+    "-a",
+    "--assignee",
+    "-l",
+    "--label",
+    "-m",
+    "--milestone",
+    "-r",
+    "--reviewer",
+    "-R",
+    "--repo",
+    "-X",
+    "--method",
+];
+
+/// A gh argv split into flags and operands, a value flag's value an operand.
+fn gh_flags_and_operands<'a>(arguments: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+    let (mut flags, mut operands) = (Vec::new(), Vec::new());
+    let mut value_next = false;
+    for token in arguments {
+        let word = program_token(token);
+        if value_next || !word.starts_with('-') {
+            operands.push(word);
+            value_next = false;
+        } else {
+            flags.push(word);
+            value_next = GH_VALUE_FLAGS.contains(&word);
+        }
+    }
+    (flags, operands)
+}
+
+fn flagged(flags: &[&str], flag: &str) -> bool {
+    flags
+        .iter()
+        .any(|word| *word == flag || *word == format!("{flag}=true"))
+}
+
+fn drafted_flag(flags: &[&str]) -> bool {
+    flagged(flags, "--draft") || flags.contains(&"-d")
+}
+
+/// `gh api` raises the event when it names the ready mutation, the REST ready
+/// route, or a GraphQL query the hook cannot read (from a file).
+fn api_readies(operands: &[&str], flags: &[&str]) -> bool {
+    operands
+        .iter()
+        .any(|word| word.contains("markPullRequestReadyForReview"))
+        || operands.iter().any(|word| {
+            word.split('?')
+                .next()
+                .is_some_and(|path| path.ends_with("/ready_for_review"))
+        })
+        || (operands.contains(&"graphql")
+            && (flags.iter().any(|flag| flag.starts_with("--input"))
+                || operands.iter().any(|word| word.contains("=@"))))
+}
+
+/// Whether any word of `argv`, normalised by [`program_token`], matches `shape`
+/// anchored as `^(?:shape)$` (CLOUD-2669). `None` when `shape` does not compile.
+fn has_word(argv: &[&str], shape: &str) -> Option<bool> {
+    let anchored = regex::Regex::new(&format!("^(?:{shape})$")).ok()?;
+    Some(
+        argv.iter()
+            .any(|word| anchored.is_match(program_token(word))),
+    )
 }
 
 /// The id the derived protected-path gate denies under.
@@ -8796,7 +11377,6 @@ fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> D
 ///
 /// The path and the declared remedy. Never a byte of the file, which for a
 /// memory is exactly the content a read gate must not become a mirror of.
-//MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = envelope.reads.as_deref() else {
         return Decision::Allow;
@@ -9082,9 +11662,15 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     // text only, so `echo`, a `for` word or a commit message still
                     // mentions freely — the false positive that reverted the wide
                     // scan cannot recur here.
+                    //
+                    // AND ONLY WHERE THE TEXT CAN WRITE (#1276, CLOUD-2775): a
+                    // program text naming the path with no mutating operation in
+                    // it reads, or searches for the string, and was refused as an
+                    // unknown write.
                     if own.is_none()
                         && let Some(path) = script_texts(program, &arguments, &segment.stdin_text)
                             .into_iter()
+                            .filter(|text| text_mutates(text))
                             .find_map(|text| protected_in_text(policy, &text))
                     {
                         return Decision::Deny(unknown_program_refusal(program, &path));
@@ -9108,8 +11694,6 @@ fn script_texts(program: &str, arguments: &[&str], stdin: &[String]) -> Vec<Stri
 
 /// The first protected path a script names, split on the characters that
 /// cannot be part of a path a program spells as a literal.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-text-unread|s@^    .find(\x7cword\x7c protects(policy, word))$@    .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
 fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     text.split(|c: char| {
         c.is_whitespace()
@@ -9135,6 +11719,35 @@ fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     .filter(|word| !word.is_empty())
     .find(|word| protects(policy, word))
     .map(ToOwned::to_owned)
+}
+
+/// Whether a program text carries any operation that writes, moves or deletes a
+/// file, in any language the interpreter grammar reads (#1276, CLOUD-2775).
+///
+/// THE DIRECTION IS FAIL-CLOSED. This is not "does it write THAT path", which
+/// the text cannot settle without running it: any mutator anywhere in the text
+/// keeps the protected-path refusal, and only a text with none — `print`,
+/// `open(p)` to read, `re.search` over the string — is let through as a read. A
+/// shell redirect counts, so `a > b` in a comparison over-refuses, which is
+/// the side this scan must err on.
+fn text_mutates(text: &str) -> bool {
+    const MUTATORS: &str = concat!(
+        // Python: an `open` mode that writes, appends, creates or updates.
+        r#"\bopen\s*\([^)]*['"][rbt]*[wax+][rwabxt+]*['"]"#,
+        r"|\.write_text\s*\(|\.write_bytes\s*\(|\.unlink\s*\(|\.rmdir\s*\(|\.touch\s*\(",
+        r"|\.rename\s*\(|\.mkdir\s*\(|\bos\.(remove|unlink|rename|replace|rmdir|truncate|makedirs)\s*\(",
+        r"|\bshutil\.",
+        // Node.
+        r"|\b(writeFile|appendFile|unlink|rm|rmdir|rename|copyFile|truncate|mkdir)(Sync)?\s*\(",
+        r"|\bcreateWriteStream\s*\(",
+        // Ruby and Perl.
+        r"|\bFile\.(write|delete|unlink|rename|truncate|open\s*\([^)]*['\x22][wa+])",
+        r"|\bFileUtils\.|\bunlink\b|\brename\b|\bmkdir\b|\brmdir\b",
+        // A shell redirect, or a shell mutator, in any text it runs.
+        r"|>>?\s*['\x22]?[\w./~-]",
+        r"|\b(sed\s+-i|tee|dd|cp|mv|rm|truncate|install|ln)\b",
+    );
+    regex::Regex::new(MUTATORS).is_ok_and(|mutators| mutators.is_match(text))
 }
 
 /// Refuse a protected path named by a program neither table classifies.
@@ -9383,6 +11996,161 @@ fn protects(policy: &Policy, path: &str) -> bool {
     policy.protected.encloses(normalise(&relative))
 }
 
+/// Every file `protected` covers under `root`, each with its stat fingerprint
+/// (step 14).
+///
+/// # The escape this closes
+///
+/// [`protected_mutation`] judges the operands a command NAMES, which is the
+/// right question before a call and the only one a pure gate can ask. A program
+/// that writes a path its command line never spells — `python3 x.py`, a
+/// script, `cp -r` of a parent, a redirect inside a `-c` text the parser
+/// refuses — passes it, and did: an agent session wrote registered modules
+/// through `python3 <script>` with nothing refusing. So the same protected set
+/// is also compared ACROSS the call: its `PreToolUse` records this state and
+/// its `PostToolUse` records it again, and any difference is a protected
+/// write the command did not name.
+///
+/// # Why a stat and not a hash
+///
+/// This runs on every shell call. A fingerprint of length, modification time
+/// and inode is a `stat` per covered file and reads no content, so the cost is
+/// bounded by the size of the protected set alone — the derived module paths
+/// and whatever the consumer declared, never the tree. Any write that changes
+/// a file's bytes moves its mtime; a rename over it moves its inode.
+///
+/// A glob is walked from its literal prefix, never from the root, and the walk
+/// is bounded: a protected set reaching past the bound is read as far as the
+/// bound, which can only miss a file, never invent a change.
+pub(crate) fn protected_state(
+    root: &Path,
+    protected: &crate::rules::PathSet,
+) -> std::collections::BTreeMap<String, String> {
+    const GLOB: [char; 4] = ['*', '?', '[', '{'];
+    let mut state = std::collections::BTreeMap::new();
+    for pattern in protected.include_patterns() {
+        let start = match pattern.find(GLOB) {
+            None => pattern,
+            Some(at) => pattern[..at].rsplit_once('/').map_or("", |(dir, _)| dir),
+        };
+        walk_protected(root, start, protected, &mut state);
+    }
+    state
+}
+
+/// The most entries [`protected_state`] visits per pattern.
+const PROTECTED_WALK_BOUND: usize = 20_000;
+
+/// Record `start` (a file, or every protected file under a directory).
+fn walk_protected(
+    root: &Path,
+    start: &str,
+    protected: &crate::rules::PathSet,
+    state: &mut std::collections::BTreeMap<String, String>,
+) {
+    let mut pending = vec![start.trim_end_matches('/').to_owned()];
+    let mut visited = 0;
+    while let Some(relative) = pending.pop() {
+        visited += 1;
+        if visited > PROTECTED_WALK_BOUND {
+            return;
+        }
+        let path = if relative.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&relative)
+        };
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            if relative == ".git" || relative.ends_with("/.git") {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                pending.push(if relative.is_empty() {
+                    name
+                } else {
+                    format!("{relative}/{name}")
+                });
+            }
+        } else if protected.contains(&relative) {
+            state.insert(relative, fingerprint(&meta));
+        }
+    }
+}
+
+/// A file's identity for [`protected_state`]: length, modification time and,
+/// on unix, inode.
+fn fingerprint(meta: &std::fs::Metadata) -> String {
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(meta);
+    #[cfg(not(unix))]
+    let inode = 0_u64;
+    format!("{}:{modified}:{inode}", meta.len())
+}
+
+/// The protected paths that differ between two [`protected_state`] readings:
+/// changed, created or removed, in path order.
+pub(crate) fn protected_changes(
+    before: &std::collections::BTreeMap<String, String>,
+    after: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+impl Policy {
+    /// The repository root, the protected patterns and their current
+    /// [`protected_state`], for a shell call's pre-call snapshot; `None` where
+    /// there is no root or nothing is protected.
+    pub(crate) fn protected_snapshot(
+        &self,
+    ) -> Option<(
+        std::path::PathBuf,
+        Vec<String>,
+        std::collections::BTreeMap<String, String>,
+    )> {
+        let root = self.root.clone()?;
+        if self.protected.is_empty() {
+            return None;
+        }
+        let patterns = self
+            .protected
+            .include_patterns()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        let state = protected_state(&root, &self.protected);
+        Some((root, patterns, state))
+    }
+}
+
+/// [`protected_state`] over patterns a snapshot carried, rebuilt into the set
+/// they came from; `None` when they no longer compile.
+pub(crate) fn protected_state_of(
+    root: &Path,
+    patterns: &[String],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let set = crate::rules::PathSet::includes("protected", patterns).ok()?;
+    Some(protected_state(root, &set))
+}
+
 /// Compose the protected-path refusal: what was aimed where, and what to run.
 ///
 /// The path is a *pointer* and rule 4 permits it — it is what the caller already
@@ -9444,7 +12212,9 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
 /// `deny` mean the same thing at the mediation channel as in the checks
 /// pipeline. One interpretation, two surfaces.
 fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
-    severity::promote(severity::row_for_rule(severity).report, fail_on_warning) == ReportLevel::Fail
+    // Through `report_for`, which owns the trial carve-out (CLOUD-2707): a
+    // `record` row never blocks, `--fail-on-warning` included.
+    severity::report_for(severity, fail_on_warning) == ReportLevel::Fail
 }
 
 /// Compose a shape row's refusal: the rule that refused, why, and what to run.
@@ -9464,9 +12234,6 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
     // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
@@ -9543,926 +12310,6 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
     )
 }
 
-/// One shell-separated span of a mediated command, in the two forms policy needs.
-///
-/// `words` is the span split into arguments with quoting resolved, so a quoted
-/// operand survives as a single **word** rather than being thrown away. `raw` is
-/// the same span exactly as written, for the one kind of predicate that must
-/// look *inside* a quoted span.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Segment {
-    /// The span's arguments, quotes resolved and escapes applied.
-    words: Vec<String>,
-    /// The span exactly as written, quotes and all.
-    raw: String,
-    /// The operator that FOLLOWED this span, or `None` where the command ended.
-    ///
-    /// Retained since CLOUD-443, and the reason is that three predicates are
-    /// about the structure a command sits in rather than about its words: what
-    /// its status is handed to, what replaces it, whether it was detached. The
-    /// parser used to split on exactly these operators and discard them, so the
-    /// structure was destroyed before any rule could see it.
-    terminator: Option<Separator>,
-    /// Whether this span binds an input redirection — `<`, `<<` or `<<<`.
-    ///
-    /// **Per SEGMENT, which is the entire predicate** (CLOUD-613). A heredoc
-    /// opener binds to the element it is written in, so
-    /// `git commit -F - && mise run land <<'EOF'` hands the message to `land`
-    /// and leaves git reading the harness's `/dev/null`. The command STRING
-    /// carries an opener either way; only the segment that owns it can tell
-    /// those two apart, which is why this is a field here rather than a
-    /// question a module could ask of [`crate::hook`]'s `command`.
-    ///
-    /// Read outside quoted spans only, so a `<` written inside a commit message
-    /// is not a redirection — and heredoc BODIES are gone by the time this is
-    /// set, so prose in a body cannot set it either.
-    input_redirect: bool,
-    /// The text this span's own stdin redirections hand it: every heredoc body
-    /// and here-string bound here.
-    ///
-    /// **Read by one gate only, and only as PROGRAM TEXT** (CLOUD-2231). An
-    /// unclassified interpreter handed `python3 - <<'EOF'` runs its body as
-    /// code, so a protected path named there is a path that code acts on — the
-    /// same fact an operand states, in a place argv never shows. Measured: a
-    /// write to a registered policy module through exactly that shape was
-    /// admitted while `python3 /dev/null <module>` was refused.
-    stdin_text: Vec<String>,
-    /// Each CONSTITUENT command's own words, where a newline joined several into
-    /// this one segment.
-    ///
-    /// **Two things need to stay apart here and collapsing them is a defect in
-    /// both directions** (CLOUD-1287, and CLOUD-1381 which re-made the mistake).
-    /// A newline is whitespace for SEGMENT identity, because promoting it would
-    /// move every landed `verdict-not-discarded` verdict — `mise run verify` and
-    /// `| tail -1` on the next line is one segment, so the pager still discards
-    /// the status and the call is still refused. But it is a boundary for
-    /// PROGRAM identity, because `cd /tmp` on line one must not own line two's
-    /// operands; that was measured as `stat` refused while naming `cd`.
-    ///
-    /// So the segment spans the newline and this carries the per-command split
-    /// the mutation and unknown-program walks read. It is derived from the parse
-    /// rather than by re-splitting `raw`, which is what the walk had to do.
-    ///
-    /// Not projected to the policy input: no module asks this, and adding a key
-    /// no predicate reads would be schema surface with no consumer.
-    lines: Vec<SegmentLine>,
-    /// The control-flow node this segment sits inside, and which half of it.
-    ///
-    /// `None` at the top level. `Some(("until", "condition"))` for the test of
-    /// an `until` loop, `Some(("until", "body"))` for a command in its body.
-    ///
-    /// **This exists so a module can decide from STRUCTURE rather than from a
-    /// keyword** (CLOUD-1381). `run-shape.rego` used to establish "this call
-    /// waits on a condition" by finding the literal word `until` or `while` in
-    /// some segment's `words` — which the character walk supplied only because
-    /// it split on `;` and had no idea what a loop was. A parse has no such
-    /// token: the keyword IS the node type. Projecting the node type is both
-    /// what makes the module expressible again and a tightening — `for` is
-    /// excluded because it is a different node rather than because a list of
-    /// words happens to omit it, and a `!` between the keyword and the test no
-    /// longer has to be filtered out by hand.
-    construct: Option<(&'static str, &'static str)>,
-    /// Did this segment come from INSIDE a word rather than from command
-    /// position — a `$(…)`, a `` `…` `` or a `<(…)`?
-    ///
-    /// Private and unprojected, like [`Segment::lines`]: no module asks it. It
-    /// exists because the per-line split walks two readings of one command
-    /// positionally, and a nested segment lands at a DIFFERENT position in each
-    /// — the unjoined parse emits it between the lines it sits between, the
-    /// joined parse after the command that fused them. A nested command is also
-    /// not a LINE of the one containing it, so it is excluded from both sides of
-    /// that walk rather than merely tolerated.
-    nested: bool,
-    /// Did this segment come from inside a `( … )` subshell (CLOUD-1690)?
-    ///
-    /// Private and unprojected, like [`Segment::nested`]. The walk flattens a
-    /// subshell's body into ordinary segments, which is right for every predicate
-    /// about WHAT runs — but a `cd` inside one does not outlive the parentheses,
-    /// so the one reader that follows a `cd` has to be able to tell.
-    grouped: bool,
-}
-
-/// One constituent command of a segment: its own words, and its own span.
-///
-/// **The `raw` half is what makes `contains` decidable per line**, and it is the
-/// reason this is a struct rather than the bare word list it replaced. A `shape`
-/// row's extra literal is matched against the span AS WRITTEN, because the thing
-/// it looks for lives inside a quoted argument and so is not one of the words. If
-/// that match reads the whole SEGMENT, line one's text qualifies line two's
-/// program: `echo origin/main` followed by `git rebase --continue` satisfies a
-/// row keyed on `origin/main` and the second line is refused for a string it
-/// never contained. That is an over-deny, which is the direction that gets a
-/// guard switched off rather than the sanctioned one.
-///
-/// Pairing them in one type rather than carrying two lists is deliberate: a
-/// parallel `Vec` of spans is a second reading that can desync from the words it
-/// describes, and nothing would notice.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SegmentLine {
-    /// This command's arguments, quotes resolved and escapes applied.
-    words: Vec<String>,
-    /// This command's own span, exactly as written.
-    raw: String,
-}
-
-/// The shell operator between two segments — what happens to the first one's
-/// exit status.
-///
-/// A vocabulary rather than a boolean because the four answers differ in the one
-/// way that matters here. [`Separator::And`] is the only one that **preserves** a
-/// failure: it short-circuits, so a non-zero status propagates and there is no
-/// false green to stop. The other three each substitute something — the next
-/// stage's status, the next element's, or nothing at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Separator {
-    /// `|` — the pipeline exits with the LAST stage's status.
-    Pipe,
-    /// `;` — the list exits with the last element's status.
-    Semi,
-    /// `||` — the list exits with the last element that ran.
-    Or,
-    /// `&&` — short-circuits, so a failure still propagates. Not a defect.
-    And,
-    /// `&` — detaches; the call returns before the work does.
-    Background,
-}
-
-impl Separator {
-    /// The operator as the shell spells it, for the policy input (CLOUD-857).
-    ///
-    /// The SHELL's spelling rather than the variant's name, so a module reads
-    /// what an author wrote: a predicate about `&&` is written `"&&"`. Naming
-    /// the variants would oblige every module to learn a second vocabulary for
-    /// something the command line already states.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pipe => "|",
-            Self::Semi => ";",
-            Self::Or => "||",
-            Self::And => "&&",
-            Self::Background => "&",
-        }
-    }
-}
-
-/// Split a command into shell-separated segments, over a real bash PARSE.
-///
-/// **This was a character walk until CLOUD-1381, and the replacement is the
-/// row's whole point.** The walk hand-rolled quoting, escapes, heredoc bodies,
-/// here-strings and a positional test for whether an `&` belonged to a
-/// redirection. Every one of those is a place a shell grammar already has an
-/// answer for, and the walk's answers were *unfalsifiable*: it could not fail,
-/// so a command it mis-split produced a confident wrong shape that no gate could
-/// tell from a correct one. CLOUD-857 is that measured — `git push --force`
-/// denied while `cd /tmp && git push --force` was allowed, with a green suite
-/// over it — and CLOUD-269 was an earlier patch to the same loop, which is the
-/// pattern this replaces rather than continues.
-///
-/// [`rable`] is a GNU Bash 5.3-compatible recursive-descent parser. What it buys
-/// is not tidiness, it is the two properties a scanner cannot have:
-///
-/// * **It can say it does not know.** An unparseable command is
-///   [`Look::CouldNotLook`] rather than a plausible `Vec`, so under-denial stops
-///   being byte-identical to a clean read. That is the direction CLOUD-1381
-///   calls bypass.
-/// * **It descends.** `$(...)`, `<(...)`, a subshell and a compound body all
-///   carry real commands, and the walk was blind to every one of them
-///   (CLOUD-1257). Each inner command is a segment here, so a protected write
-///   inside a substitution is judged rather than missed.
-///
-/// **THE PARSER DELIMITS WORDS; IT DOES NOT REMOVE QUOTES**, and that boundary
-/// is stated rather than absorbed because it is where a reader will expect more
-/// than arrived. Measured: `echo "gh pr merge"` yields one word whose value is
-/// `"gh pr merge"` — quote characters included. [`unquote`] is what resolves
-/// them, and it stays hand-written on purpose. It is a leaf operation over a
-/// token whose extent the parser has already decided, which is a different risk
-/// class from deciding the extent: a mistake there changes one word, where a
-/// mistake in the walk changed the command's shape.
-///
-/// The quoting contract is unchanged from CLOUD-269's: a quoted span stays ONE
-/// word with its contents intact, so `rm "some/guarded path"` is still an
-/// operand a path gate can see, and `git commit -m "gh pr merge"` is still one
-/// word that never equals the adjacent pair a `gh` policy matches on.
-///
-/// **A NEWLINE IS STILL WHITESPACE HERE, NOT A SEPARATOR**, and it is preserved
-/// deliberately across the swap. bash disagrees and so does [`rable`], which
-/// returns one top-level node per line; those are rejoined below. Promoting a
-/// newline to a [`Separator::Semi`] would move every landed
-/// `verdict-not-discarded` verdict — `mise run verify` on one line and anything
-/// at all on the next becomes a discarded status — which is a decision about
-/// that rule's reach and not about this parser. Changing it here would have been
-/// a behaviour change smuggled inside a substrate change.
-//MUTANT newline-node-unsequenced|s@        if position + 1 < reading.len()@        if false \&\& position + 1 < reading.len()@|a_commit_followed_by_a_newline_has_its_status_replaced
-fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
-    // `extglob` off: this is a pre-execution gate over what an agent wrote, and
-    // the shell that will run it is not guaranteed to have the option set.
-    let Ok(nodes) = rable::parse(command, false) else {
-        // THE ARM THE CHARACTER WALK COULD NOT HAVE. A refusal here would block
-        // a call on a parse failure, which the exit table forbids (`3` never
-        // blocks); a clean `Vec` would be the silent under-denial the row is
-        // about. Abstention is the third answer, and it is recorded.
-        return crate::facts::Look::CouldNotLook;
-    };
-    // AND A PARSE THAT SUCCEEDED IS NOT YET A PARSE THAT READ EVERYTHING.
-    //
-    // Measured on `rable` 0.2.1: `rm "unclosed path` returns Ok with the word
-    // silently GONE — one command, one word, `rm`. A protected operand written
-    // with an unbalanced quote would be judged as a bare `rm`, which is the same
-    // silent under-denial this row replaced a character walk to remove, arriving
-    // through the parser instead of through the walk. Adopting a dependency is
-    // not the same as trusting its every arm, so the conservation is checked
-    // here rather than assumed.
-    if !covered(&nodes, command) {
-        return crate::facts::Look::CouldNotLook;
-    }
-    // A NEWLINE IS WHITESPACE FOR SEGMENT IDENTITY, AND A BOUNDARY FOR PROGRAM
-    // IDENTITY — two answers over one character, and the tree pins both.
-    //
-    // `mediated_verbs::a_newline_did_not_become_a_separator` pins the first:
-    // `mise run verify` with `| tail -1` on the next line must stay ONE
-    // pipeline, so the pager discards the status and the call is refused.
-    // CLOUD-1287 pins the second, measured over the shipped binary: `cd /tmp`
-    // on line one must not own line two's operands, or `stat` is refused while
-    // the refusal names `cd`.
-    //
-    // **Merging the parsed halves cannot produce the first, and that is the
-    // mistake this replaces.** `rable` reads the newline as bash does, so
-    // `mise run verify\n| tail -1` is TWO top-level nodes rather than an error;
-    // concatenating their words fuses the text but loses the structure, and
-    // segment one comes out with no terminator where it needs a `Pipe`. The
-    // relationship lives between the nodes, so no merge of their outputs
-    // recovers it.
-    //
-    // So the JOINED text is parsed, once, and that parse decides segments —
-    // which is what the character walk did implicitly by never treating a
-    // newline as a separator in the first place. Per-line words come from the
-    // ORIGINAL parse, so both answers are the same parser's and neither is
-    // re-derived by splitting a string.
-    // THE SOURCE MUST BE THE STRING THE SPANS WERE COMPUTED AGAINST. `flatten`
-    // slices `raw` out of it by span, so handing it the original text while
-    // reading nodes parsed from the joined text is a latent mis-slice. It
-    // happens to be harmless today — the join replaces one `\n` with one space,
-    // so every offset is preserved — but that is an accident of this particular
-    // join, not a property anything holds, and an earlier revision wrote
-    // `map_or(command, |_| command)`, which returned the original from both arms
-    // and so could never have used the joined text at all.
-    let joined = joined_parse(command, &nodes);
-    let (reading, source) = joined
-        .as_ref()
-        .map_or((&nodes, command), |(text, parsed)| (parsed, text.as_str()));
-    let mut out: Vec<Segment> = Vec::new();
-    for (position, node) in reading.iter().enumerate() {
-        let first = out.len();
-        flatten(node, source, None, &mut out);
-        // A NEWLINE BETWEEN TWO TOP-LEVEL COMMANDS IS A `;` (CLOUD-2234). The
-        // joined reading folds such lines into one segment, but a heredoc keeps
-        // the parse as written, and there the next command is its own node: the
-        // element before it ended with no terminator, so a verdict on it read as
-        // the list's last and its replaced status went unseen. Measured: a
-        // refused `git commit -F - <<'EOF'` with `git log` after `EOF`
-        // reported exit 0.
-        if position + 1 < reading.len()
-            && let Some(last) = out[first..]
-                .iter_mut()
-                .rev()
-                .find(|segment| !segment.nested)
-            && last.terminator.is_none()
-        {
-            last.terminator = Some(Separator::Semi);
-        }
-    }
-    // Where the join happened, `flatten` gave every segment one `lines` entry
-    // over the FUSED words. Replace it with the per-line reading, segment by
-    // segment, which is the split CLOUD-1287 needs.
-    //
-    // **EVERY SEGMENT, and the `out.len() == 1` guard this replaces is why it is
-    // spelled out.** That guard was right for the case it was written against
-    // and silently wrong for the common one: a multi-line call carrying an
-    // operator, or one whose word holds a substitution, produces more than one
-    // segment and kept its fused list. `protected_mutation` then walked that
-    // single line, `effective_program` resolved the FIRST line's program, and
-    // line two's operand was judged as its own — CLOUD-1287's measured over-deny
-    // on a protected READ, re-introduced by the change that claimed to remove
-    // it. Measured on `cd /tmp\nstat -c %s batten.toml && echo hi`.
-    //
-    // An ordered consume rather than a match on content: both readings are the
-    // same parser's over the same text, and `joined_parse` refuses the join
-    // unless their total word counts agree, so taking lines until the running
-    // count reaches each segment's own length lands on a boundary every time.
-    // Matching by value would break on a command that repeats a word.
-    if joined.is_some() {
-        // Named for what it holds rather than `per_line`, which is the helper
-        // every walk reads this through — a local shadowing that name reads as the
-        // function to anybody scanning for it.
-        let mut line_readings: Vec<SegmentLine> = Vec::new();
-        for node in &nodes {
-            let mut produced: Vec<Segment> = Vec::new();
-            flatten(node, command, None, &mut produced);
-            for segment in produced {
-                if !segment.nested {
-                    line_readings.push(SegmentLine {
-                        words: segment.words,
-                        raw: segment.raw,
-                    });
-                }
-            }
-        }
-        // ONE PASS, ALL OR NOTHING — a per-segment abstention is not available
-        // here and pretending otherwise was a defect. The line list is SHARED
-        // across segments, so a segment that keeps its fused list has already
-        // drained the entries it walked; every later segment then takes lines
-        // belonging to an earlier one, and `protected_mutation` walks a "line"
-        // that is not its command. That is a mis-assignment wearing the words of
-        // an abstention, which is worse than either.
-        //
-        // So the whole reassignment is computed first and applied only if every
-        // segment landed. If any did not, no segment's `lines` moves and all of
-        // them keep the single fused entry `flatten` gave them — which is the
-        // pre-CLOUD-1287 reading, conservative and consistent, rather than a
-        // half-applied one.
-        let mut lines = line_readings.into_iter();
-        let mut assignment: Vec<Vec<SegmentLine>> = Vec::new();
-        let mut landed = true;
-        for segment in out.iter().filter(|segment| !segment.nested) {
-            let wanted = segment.words.len();
-            let mut taken: Vec<SegmentLine> = Vec::new();
-            let mut counted = 0;
-            while counted < wanted {
-                let Some(line) = lines.next() else { break };
-                counted += line.words.len();
-                taken.push(line);
-            }
-            // TWO REFUSALS, KEPT APART: a segment that took no line and one whose
-            // count missed are each a reassignment that did not land, and neither
-            // is implied by the other where a word count can be zero.
-            if taken.is_empty() {
-                landed = false;
-                break;
-            }
-            if counted != wanted {
-                landed = false;
-                break;
-            }
-            assignment.push(taken);
-        }
-        // Applied only where every segment landed AND no line is left over.
-        if let (true, None) = (landed, lines.next()) {
-            for (segment, taken) in out
-                .iter_mut()
-                .filter(|segment| !segment.nested)
-                .zip(assignment)
-            {
-                segment.lines = taken;
-            }
-        }
-    }
-    crate::facts::Look::Is(out)
-}
-
-/// The command re-parsed with its newlines as whitespace, where that is safe.
-///
-/// `None` means read the original parse — the command is one line, or carries a
-/// heredoc, or the joined text does not parse.
-///
-/// **The heredoc guard is the load-bearing half.** A body's newlines are DATA:
-/// joining them would run the body's words together with the opener's and, worse,
-/// dissolve the delimiter line that ends it. So a command carrying one is read as
-/// parsed, and the newline-as-whitespace reading is not available there. That
-/// bound is narrower than it sounds — a heredoc's own newline already cannot
-/// separate two commands, because everything up to the delimiter belongs to the
-/// body.
-fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<(String, Vec<rable::Node>)> {
-    if !command.contains('\n') || nodes.len() < 2 || nodes.iter().any(opens_heredoc) {
-        return None;
-    }
-    // A COMMENT WOULD SWALLOW WHAT FOLLOWS IT, so a command carrying one keeps
-    // the per-line reading. Decided from the parse rather than by scanning for a
-    // `#`: a `#` inside a quoted operand is not a comment, and asking the text
-    // would be the second authority this module refuses to grow. A comment ends
-    // at a newline, so the joined text is shorter in TOKENS than the original
-    // whenever one was absorbed — and that is what this compares.
-    let joined = command.replace('\n', " ");
-    let reparsed = rable::parse(&joined, false).ok()?;
-    // The joined TEXT travels with its parse, because the caller slices spans
-    // out of it. Returning the nodes alone is what let the source and the spans
-    // come from different strings.
-    (words_in(&reparsed) == words_in(nodes)).then_some((joined, reparsed))
-}
-
-/// Every word any command in this forest carries, for the conservation check
-/// above. Order is irrelevant to it; the count is the whole question.
-fn words_in(nodes: &[rable::Node]) -> usize {
-    let mut segments = Vec::new();
-    for node in nodes {
-        flatten(node, "", None, &mut segments);
-    }
-    segments.iter().map(|segment| segment.words.len()).sum()
-}
-
-/// Did the parse account for the whole command, or did it drop a tail?
-///
-/// Spans are the parser's own, so this asks the parse about itself rather than
-/// re-reading the text: everything past the last node's end must be whitespace.
-///
-/// **A heredoc BODY legitimately lives past that end**, so a command carrying
-/// one is exempt — the body is data the parser deliberately does not span. The
-/// cost is stated rather than absorbed: an unbalanced quote in a command that
-/// ALSO opens a heredoc is not caught here. That is a miss, never a false
-/// refusal, and it is a strictly smaller hole than the one this closes.
-fn covered(nodes: &[rable::Node], command: &str) -> bool {
-    let Some(end) = nodes.iter().map(|node| node.span.end).max() else {
-        // No nodes at all: an empty or whitespace-only command reads clean, and
-        // `segments("")` giving an empty list is relied on elsewhere.
-        return command.trim().is_empty();
-    };
-    if nodes.iter().any(opens_heredoc) {
-        return true;
-    }
-    // `skip` COUNTS THE SAME UNIT THE SPAN DOES, and getting that wrong makes
-    // this guard pass on exactly the inputs it exists for. `rable`'s `Span`
-    // carries CHARACTER indices — its own doc says so, and `Node::source_text`
-    // converts them to byte offsets before slicing — so the tail has to be
-    // walked in characters too. Mixing the two overshoots on any command with a
-    // multi-byte character before the last node's end (an em-dash in a commit
-    // message, a UTF-8 path): `all()` then runs over an empty iterator, returns
-    // true vacuously, and the dropped-tail case reads clean instead of
-    // abstaining. Asserted rather than reasoned — see the unterminated-quote
-    // case, which carries a multi-byte operand for this reason.
-    // **THE TAIL IS JUDGED BY WHETHER IT COULD HOLD A DROPPED WORD, NOT BY
-    // WHETHER IT IS EMPTY**, and requiring emptiness was a total bypass.
-    //
-    // `rable` does not extend a node's span over the separator that follows it,
-    // so `rm batten.toml;` leaves `;` after the last span. Requiring the tail to
-    // be whitespace therefore made every command ending in a separator or a
-    // comment could-not-look -- and could-not-look ALLOWS on this surface.
-    // Measured over the shipped binary: `git push --force origin main;` exited
-    // 0 where the same command without the semicolon exited 2, and likewise for
-    // `rm batten.toml;`, `mise run verify | tail -1;` and `sleep 60;`. One
-    // keystroke disabled every mediated gate -- strictly worse than the
-    // character walk this row replaced, and introduced by the guard meant to
-    // make it safer.
-    //
-    // What the guard is actually for is narrow and stays: `rable` 0.2.1 returns
-    // Ok for `rm "unclosed path` with the operand silently GONE, so a protected
-    // path written with an unbalanced quote would be judged as a bare `rm`. A
-    // word is dropped because its QUOTE never closed, so a tail carrying a
-    // quote character is the signal; a tail of separators and comment text is
-    // not.
-    //
-    // The residue, stated rather than absorbed: a trailing comment that itself
-    // contains a quote (`echo x # say "hi"`) abstains where it could be read.
-    // That is an under-deny, it is recorded rather than silent, and it is many
-    // orders narrower than the one it replaces.
-    let tail: String = command.chars().skip(end).collect();
-    !tail.contains('"') && !tail.contains('\'')
-}
-
-/// Does this node, anywhere inside it, open a heredoc?
-fn opens_heredoc(node: &rable::Node) -> bool {
-    match &node.kind {
-        rable::NodeKind::HereDoc { .. } => true,
-        rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
-        rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(opens_heredoc),
-        rable::NodeKind::List { items } => items.iter().any(|item| opens_heredoc(&item.command)),
-        rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
-            opens_heredoc(body)
-        }
-        _ => false,
-    }
-}
-
-/// A redirection's tokens, as the words the old walk left in place.
-///
-/// A WHITESPACE SPLIT OF A SPAN THE PARSER DELIMITED, plus the descriptor the
-/// span leaves out. The grammar has already decided where this redirection
-/// starts and ends; what remains is which of its characters are one token, and
-/// answering that with the shell's own rules here would be the second authority
-/// this module refuses to grow.
-///
-/// **The explicit fd is restored from the typed field, because the span omits
-/// it.** Measured on `rable` 0.2.1: `2>&1` spans `>&1` and carries `fd: 2`
-/// beside it, so a split of the span alone yields `">&1"` and silently drops the
-/// descriptor the author wrote. Caught by this file's own
-/// `a_redirections_ampersand_is_not_a_separator`, whose expectation was written
-/// from the walk's output — which is what that corpus is for.
-///
-/// Measured against the walk's output on every case in this file: `> notes.md`
-/// gives `[">", "notes.md"]`, `2>&1` gives `["2>&1"]`, and `<<'EOF'` gives
-/// `["<<'EOF'"]` — identical, token for token.
-fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String> {
-    let mut tokens = redirect
-        .source_text(source)
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect::<Vec<String>>();
-    // `fd` is -1 where the author named none, and the default descriptor is not
-    // a token anybody wrote — so only an EXPLICIT one is put back.
-    if let rable::NodeKind::Redirect { fd, .. } = &redirect.kind
-        && *fd >= 0
-        && let Some(first) = tokens.first_mut()
-        && !first.starts_with(|c: char| c.is_ascii_digit())
-    {
-        first.insert_str(0, &fd.to_string());
-    }
-    tokens
-}
-
-/// Walk one AST node, appending a [`Segment`] per command it contains.
-///
-/// `after` is the operator that follows the node as a whole, handed down so that
-/// the LAST command of a nested structure carries it — `(a; b) && c` gives `b`
-/// the `&&`, which is where the status a rule reasons about actually flows.
-fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut Vec<Segment>) {
-    flatten_in(node, source, after, None, out);
-}
-
-/// One command's words AS WRITTEN, which is not what the parse files them under.
-///
-/// AN ENV ASSIGNMENT PREFIX IS A WORD HERE, and dropping it is an under-deny
-/// rather than a tidier shape. `effective_program` steps past `VAR=value` to find
-/// the program, and `hook_skip_local` reads the assignment itself —
-/// `HK_SKIP_STEPS=… git commit` is refused BECAUSE of the prefix. The parser
-/// files those under `assignments`, correctly for a grammar and wrongly for this
-/// consumer, so they go back at the front where they were written.
-///
-/// A REDIRECTION'S TOKENS ARE STILL WORDS, and restoring them is not cosmetic:
-/// `protected_mutation` reads a redirect TARGET as a mutation candidate with no
-/// program at all, so `rm > guarded.md` is judged on the target. The parser moves
-/// those tokens out of `words` and into `redirects`, which is again right for a
-/// grammar and wrong here — dropping them was an under-deny on a WRITE, measured
-/// by `a_redirect_target_is_a_mutation_even_with_no_program`.
-fn command_words(
-    assignments: &[rable::Node],
-    words: &[rable::Node],
-    redirects: &[rable::Node],
-    source: &str,
-) -> Vec<String> {
-    let mut spelled: Vec<String> = assignments
-        .iter()
-        .map(|word| unquote(&word_text(word)))
-        .chain(words.iter().map(|word| unquote(&word_text(word))))
-        .collect();
-    for redirect in redirects {
-        spelled.extend(redirect_words(redirect, source));
-    }
-    spelled
-}
-
-/// The commands nested INSIDE this one's words and redirect targets.
-///
-/// A word may CONTAIN commands: `rm $(cat list)` runs `cat`, and the character
-/// walk this replaces could not see them at all (CLOUD-1257). A redirect target
-/// may be a substitution too — `diff <(a) <(b)`.
-fn nested_commands(words: &[rable::Node], redirects: &[rable::Node], source: &str) -> Vec<Segment> {
-    let mut nested = Vec::new();
-    for word in words {
-        descend_word(word, source, &mut nested);
-    }
-    for redirect in redirects {
-        descend_redirect(redirect, source, &mut nested);
-    }
-    nested
-}
-
-/// One `Command` node as a [`Segment`], plus the commands nested in its words.
-///
-/// The node is taken whole rather than pre-destructured so this stays inside the
-/// argument ceiling; the caller has already matched the kind, so the `else` arm
-/// is unreachable and returns rather than inventing a segment.
-fn flatten_command(
-    node: &rable::Node,
-    source: &str,
-    after: Option<Separator>,
-    construct: Option<(&'static str, &'static str)>,
-    out: &mut Vec<Segment>,
-) {
-    let rable::NodeKind::Command {
-        assignments,
-        words,
-        redirects,
-    } = &node.kind
-    else {
-        return;
-    };
-    // THE SAME WORDS, AFTER the empty ones are dropped. Snapshotting the list
-    // before the retain put one in `lines` that `words` no longer matched, so the
-    // two readings of one command disagreed on token indices — and
-    // `protected_mutation` reads `lines` while everything else reads `words`.
-    let mut segment = Segment {
-        lines: Vec::new(),
-        words: command_words(assignments, words, redirects, source),
-        raw: node.source_text(source).to_owned(),
-        terminator: after,
-        input_redirect: redirects.iter().any(binds_stdin),
-        stdin_text: redirects.iter().filter_map(stdin_text).collect(),
-        construct,
-        nested: false,
-        grouped: false,
-    };
-    let mut nested = nested_commands(words, redirects, source);
-    if segment.words.iter().any(String::is_empty) {
-        segment.words.retain(|word| !word.is_empty());
-    }
-    segment.lines = vec![SegmentLine {
-        words: segment.words.clone(),
-        raw: segment.raw.clone(),
-    }];
-    // Everything the descent produced is nested, however deep: an inner `$(…)`
-    // inside an outer one is still not a line of the command that contains them.
-    for inner in &mut nested {
-        inner.nested = true;
-    }
-    out.push(segment);
-    out.append(&mut nested);
-}
-
-/// [`flatten`], carrying the control-flow node the walk is currently inside.
-fn flatten_in(
-    node: &rable::Node,
-    source: &str,
-    after: Option<Separator>,
-    construct: Option<(&'static str, &'static str)>,
-    out: &mut Vec<Segment>,
-) {
-    match &node.kind {
-        rable::NodeKind::Command { .. } => flatten_command(node, source, after, construct, out),
-        rable::NodeKind::Pipeline { commands, .. } => {
-            for (index, command) in commands.iter().enumerate() {
-                // A stage's terminator is the pipe that FOLLOWS it; the last
-                // stage inherits whatever followed the pipeline itself.
-                //
-                // BOTH PIPE SPELLINGS ARE `Pipe`, DELIBERATELY. `rable`
-                // distinguishes `|` from `|&` (`PipeSep::PipeBoth`) and this
-                // collapses them, because the only question `Separator` exists
-                // to answer is what happens to the first stage's exit STATUS —
-                // and that is identical for both: the pipeline exits with the
-                // last stage's. `|&` additionally redirects stderr, which is a
-                // question about output rather than about status and which no
-                // `pipeline` row asks.
-                //
-                // Written as a plain value rather than a lookup: an earlier
-                // revision consulted `separators.get(index)` and returned the
-                // same thing from both arms, which read as a distinction being
-                // made and was not one.
-                let follows = if index + 1 < commands.len() {
-                    Some(Separator::Pipe)
-                } else {
-                    after
-                };
-                flatten_in(command, source, follows, construct, out);
-            }
-        }
-        rable::NodeKind::List { items } => {
-            for item in items {
-                let follows = match item.operator {
-                    Some(rable::ListOperator::And) => Some(Separator::And),
-                    Some(rable::ListOperator::Or) => Some(Separator::Or),
-                    Some(rable::ListOperator::Semi) => Some(Separator::Semi),
-                    Some(rable::ListOperator::Background) => Some(Separator::Background),
-                    // The final element carries whatever followed the list, and
-                    // it is the only one `rable` leaves without an operator.
-                    None => after,
-                };
-                flatten_in(&item.command, source, follows, construct, out);
-            }
-        }
-        // A GROUPING runs its body in this call's own right, so it is walked.
-        // A SUBSHELL's body is also marked, because its `cd` dies with it; a
-        // brace group runs in this shell, so its `cd` does not.
-        rable::NodeKind::Subshell { body, .. } => {
-            let first = out.len();
-            flatten_in(body, source, after, construct, out);
-            for segment in &mut out[first..] {
-                segment.grouped = true;
-            }
-        }
-        rable::NodeKind::BraceGroup { body, .. } => {
-            flatten_in(body, source, after, construct, out);
-        }
-        // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
-        // module able to decide from structure (CLOUD-1381).
-        //
-        // An earlier revision walked these UNTAGGED, and at the time that was an
-        // over-deny: `run-shape` then exempted a `sleep` inside a condition
-        // loop, and a body command lifted into a bare segment carries nothing
-        // saying it was in a loop, so a conditioned wait was refused as a bare
-        // timer. A second revision withdrew the walk entirely, which stopped
-        // that over-deny and left the module unable to see the loop at all.
-        //
-        // CLOUD-1337 has since withdrawn the exemption, so that particular
-        // over-deny is no longer possible -- but the tagging is not vestigial:
-        // `polls-a-local-process` and `background-timer` PARTITION on what the
-        // loop body reads, and neither can see a body it was never handed.
-        //
-        // Tagging is the answer both attempts were missing. The condition and
-        // the body are DIFFERENT roles and a module needs them apart: the
-        // condition is where a process probe lives, the body is where a sleep
-        // does.
-        rable::NodeKind::While {
-            condition, body, ..
-        } => {
-            flatten_in(condition, source, None, Some(("while", "condition")), out);
-            flatten_in(body, source, after, Some(("while", "body")), out);
-        }
-        rable::NodeKind::Until {
-            condition, body, ..
-        } => {
-            flatten_in(condition, source, None, Some(("until", "condition")), out);
-            flatten_in(body, source, after, Some(("until", "body")), out);
-        }
-        rable::NodeKind::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            flatten_in(condition, source, None, Some(("if", "condition")), out);
-            flatten_in(then_body, source, None, Some(("if", "body")), out);
-            if let Some(body) = else_body {
-                flatten_in(body, source, after, Some(("if", "body")), out);
-            }
-        }
-        // `for` COUNTS rather than tests, so it is a different node and a
-        // different answer: `for i in $(seq 60); do sleep 10; done` exits on the
-        // clock like any timer. The bash guard named that a deliberate
-        // non-catch "because narrowing that costs a real parser"; it costs none
-        // now, and the narrowing is that this is not a `while`.
-        rable::NodeKind::For { body, .. } | rable::NodeKind::ForArith { body, .. } => {
-            flatten_in(body, source, after, Some(("for", "body")), out);
-        }
-        rable::NodeKind::Select { body, .. } => {
-            flatten_in(body, source, after, Some(("select", "body")), out);
-        }
-        rable::NodeKind::Case { patterns, .. } => {
-            for arm in patterns {
-                if let Some(body) = arm.body.as_ref() {
-                    flatten_in(body, source, None, Some(("case", "body")), out);
-                }
-            }
-        }
-        rable::NodeKind::Function { body, .. } => {
-            flatten_in(body, source, after, Some(("function", "body")), out);
-        }
-        // `! cmd` and `time cmd` WRAP a pipeline rather than being one, so the
-        // command is one level down. Missing these is an under-deny and was
-        // measured: `until ! pgrep -f '<pattern>'; do sleep 20; done` is the
-        // canonical process-polling wait `run-shape-guard` exists to refuse, and
-        // with the negation unwalked its `pgrep` reached no segment at all, so
-        // the guard allowed the exact command it was written for.
-        rable::NodeKind::Negation { pipeline } | rable::NodeKind::Time { pipeline, .. } => {
-            flatten_in(pipeline, source, after, construct, out);
-        }
-        rable::NodeKind::Coproc { command, .. } => {
-            flatten_in(command, source, after, construct, out);
-        }
-        // Anything else contains no command position.
-        //
-        // **A CATCH-ALL HERE IS AN UNDER-DENY GENERATOR, which is why the arms
-        // above are enumerated rather than left to it.** A node kind this walk
-        // does not name produces no segment, and no segment is byte-identical to
-        // a clean command on the decision surface — the same silence CLOUD-1381
-        // replaced a character walk to remove, arriving through an unhandled
-        // variant instead. `Negation` was exactly that, found by a landed case
-        // rather than by reading the enum.
-        //
-        // What remains here genuinely holds no command position: words and their
-        // expansions, the `[[ ]]` conditional family, arithmetic, and the
-        // separator tokens. A `$(...)` inside any of them is still reached, by
-        // `descend_word`.
-        _ => {}
-    }
-}
-
-/// A word's source text, from the parts the lexer resolved.
-fn word_text(word: &rable::Node) -> String {
-    match &word.kind {
-        rable::NodeKind::Word { value, .. } | rable::NodeKind::WordLiteral { value } => {
-            value.clone()
-        }
-        _ => String::new(),
-    }
-}
-
-/// Append a segment for every command hiding inside a word.
-///
-/// `$(...)`, `` `...` `` and `<(...)` each carry a parsed command, and each of
-/// them is a command this call will run. They are appended AFTER the command
-/// that contains them and carry no terminator: nothing takes their status.
-fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
-    match &word.kind {
-        rable::NodeKind::Word { parts, .. } => {
-            for part in parts {
-                descend_word(part, source, out);
-            }
-        }
-        rable::NodeKind::CommandSubstitution { command, .. }
-        | rable::NodeKind::ProcessSubstitution { command, .. } => {
-            flatten(command, source, None, out);
-        }
-        _ => {}
-    }
-}
-
-/// The same, for a redirection's target: `diff <(a) <(b)` runs three programs.
-fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
-    if let rable::NodeKind::Redirect { target, .. } = &redirect.kind {
-        descend_word(target, source, out);
-    }
-}
-
-/// The text a stdin redirection hands its command: a heredoc's body, or a
-/// here-string's word unquoted. A file redirect (`<`) hands a path, not text.
-///
-/// The here-string's word is read off its token value, never its source span:
-/// the parser builds a redirect target spanless (`Node::empty`), so
-/// `source_text` hands back nothing and the script would go unread.
-fn stdin_text(redirect: &rable::Node) -> Option<String> {
-    match &redirect.kind {
-        rable::NodeKind::HereDoc { content, .. } => Some(content.clone()),
-        rable::NodeKind::Redirect { op, target, .. } if op == "<<<" => match &target.kind {
-            rable::NodeKind::Word { value, .. } | rable::NodeKind::WordLiteral { value } => {
-                Some(unquote(value))
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Does this redirection bind stdin — `<`, `<<`, `<<-` or `<<<`?
-///
-/// **Per SEGMENT, which is the entire predicate** (CLOUD-613), and the reason it
-/// is a question about a typed redirection rather than about the command STRING
-/// is unchanged: `git commit -F - && mise run land <<'EOF'` hands the message to
-/// `land`, and both spellings carry an opener in the line. What has changed is
-/// that the parser decides which command owns the opener, where the walk decided
-/// it from the position of a `<` it had to prove was unquoted first.
-fn binds_stdin(redirect: &rable::Node) -> bool {
-    match &redirect.kind {
-        // A heredoc IS an input redirection, and its body is AST data rather
-        // than text this function has to skip past (CLOUD-723).
-        rable::NodeKind::HereDoc { .. } => true,
-        rable::NodeKind::Redirect { op, .. } => matches!(op.as_str(), "<" | "<<" | "<<-" | "<<<"),
-        _ => false,
-    }
-}
-
-/// Remove one level of shell quoting from a word the parser has already
-/// delimited.
-///
-/// **The parser's job ends at the word boundary and this begins there**, which
-/// is why a hand-written routine here is not the character walk CLOUD-1381
-/// retired coming back. That walk had to decide *where a word ended* while also
-/// deciding what a quote meant, in one pass, over the whole line — so a quoting
-/// mistake moved a segment boundary and changed the command's shape. This runs
-/// over a token whose extent is already settled, and its worst failure is one
-/// wrong word.
-///
-/// Single quotes are literal throughout. Double quotes let a backslash escape
-/// exactly `"`, `\`, `$` and `` ` ``, which is bash's rule and not a
-/// simplification of it. An unterminated quote keeps its tail, matching what the
-/// parser accepted.
-pub(crate) fn unquote(word: &str) -> String {
-    let mut out = String::with_capacity(word.len());
-    let mut chars = word.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => {
-                for inner in chars.by_ref() {
-                    if inner == '\'' {
-                        break;
-                    }
-                    out.push(inner);
-                }
-            }
-            '"' => {
-                while let Some(inner) = chars.next() {
-                    if inner == '"' {
-                        break;
-                    }
-                    if inner == '\\'
-                        && chars
-                            .peek()
-                            .is_some_and(|next| matches!(*next, '"' | '\\' | '$' | '`'))
-                        && let Some(next) = chars.next()
-                    {
-                        out.push(next);
-                        continue;
-                    }
-                    out.push(inner);
-                }
-            }
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// Do a row's operand words appear, adjacent and in order, in this command's
 /// words?
 ///
@@ -10481,8 +12328,14 @@ pub(crate) fn unquote(word: &str) -> String {
 /// nine days after the first was measured — a shared authority is what stops
 /// the twin recurring. The cases stay per-matcher (`rules::validate` and the
 /// tests below), because sharing the decision must not also share the evidence.
+///
+/// **A PREFIX OF THE SUBCOMMAND WORDS, NEVER A WINDOW ANYWHERE (CLOUD-2666).**
+/// The words start at the subcommand ([`verdict_words`]), so `git push` matches
+/// `git -C d push` and not `git stash push`, `git log push` or `git checkout
+/// push`. Matching anywhere was the workaround for not knowing which options
+/// take values, and it over-matched every subcommand that takes an operand.
 fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
-    wanted.is_empty() || words.windows(wanted.len()).any(|window| window == wanted)
+    words.starts_with(wanted)
 }
 
 /// Did the call reach its program through the mediator a row requires?
@@ -10501,26 +12354,78 @@ fn mediator_present(via: crate::rules::RequireVia, before_program: &[&str]) -> b
     }
 }
 
-/// The wrapper programs [`effective_program`] looks through **unconditionally**.
-///
-/// Declared once because two surfaces read it: the matcher, to step past a
-/// wrapper and judge what it wraps, and [`crate::rules::validate`], to refuse a
-/// `pattern` naming one — by the time a pattern is compared the wrapper has
-/// already been stepped past, so `pattern = "nohup rm"` is a row that can never
-/// fire (CLOUD-401). A second copy of this list in the validator would drift,
-/// and a drifted copy refuses rows the matcher would have honoured.
-///
-/// `mise` is deliberately **not** here: only `mise exec`/`mise x` is looked
-/// through, so `mise run` is judged as `mise` and `pattern = "mise run"` is a
-/// row the matcher honours.
-const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
-    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup",
+/// Each look-through wrapper's options whose VALUE is the next word, as each
+/// tool's own manual spells them (CLOUD-2687). An attached value (`-ux`,
+/// `--user=x`) is one word and needs no entry; only the separated form does.
+const WRAPPER_VALUE_OPTIONS: [(&str, &[&str]); 8] = [
+    ("exec", &["-a"]),
+    (
+        "sudo",
+        &[
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-C",
+            "--close-from",
+            "-h",
+            "--host",
+            "-p",
+            "--prompt",
+            "-U",
+            "--other-user",
+            "-r",
+            "--role",
+            "-t",
+            "--type",
+            "-D",
+            "--chdir",
+            "-R",
+            "--chroot",
+            "-T",
+            "--command-timeout",
+        ],
+    ),
+    ("doas", &["-u", "-C"]),
+    ("timeout", &["-s", "--signal", "-k", "--kill-after"]),
+    ("nice", &["-n", "--adjustment"]),
+    (
+        "env",
+        &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+    ),
+    (
+        "stdbuf",
+        &["-i", "--input", "-o", "--output", "-e", "--error"],
+    ),
+    (
+        "xargs",
+        &[
+            "-I",
+            "--replace",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-L",
+            "--max-lines",
+            "-s",
+            "--max-chars",
+            "-d",
+            "--delimiter",
+            "-E",
+            "--eof",
+            "-a",
+            "--arg-file",
+        ],
+    ),
 ];
 
-/// Is this token a program [`effective_program`] always looks through?
-#[must_use]
-pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
-    LOOKTHROUGH_WRAPPERS.contains(&token)
+/// Does `flag`, written as its own word, take the next word as its value?
+fn wrapper_option_takes_value(wrapper: &str, flag: &str) -> bool {
+    WRAPPER_VALUE_OPTIONS
+        .iter()
+        .find(|(name, _)| *name == wrapper)
+        .is_some_and(|(_, options)| options.contains(&flag))
 }
 
 /// Programs the boundary knows to leave their operands alone (CLOUD-1804).
@@ -10666,6 +12571,165 @@ const MISE_VALUE_OPTIONS: [&str; 10] = [
     "-C", "--cd", "-E", "--env", "-j", "--jobs", "-s", "--shell", "-t", "--tool",
 ];
 
+/// The words a verdict row's `subcommands` are matched against: the
+/// subcommand, then the nested verb and what follows it, flags dropped.
+///
+/// NORMALISED first, and the operand window with it: a grouped command's
+/// closing paren lands on the LAST token, which is a matched operand whenever
+/// the command takes no trailing argument, so `(mise run land)` would otherwise
+/// not match where `(mise run land x)` did.
+///
+/// PAST THE PROGRAM'S OWN LEADING OPTIONS (CLOUD-2666), at both the subcommand
+/// and the nested verb: dropping `-`-prefixed tokens left `-C`'s value as the
+/// subcommand, so `git -C /tmp push | tail` and `gh pr -R o/r comment | tail`
+/// matched no verdict row at all. `None` where the argv holds no bare word.
+fn verdict_words<'a>(tokens: &[&'a str], program_index: usize) -> Option<Vec<&'a str>> {
+    let argv: Vec<&str> = tokens[program_index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .collect();
+    let options = global_value_options(program_token(tokens[program_index]));
+    let start = subcommand_index(&argv, options)?;
+    let rest = &argv[start + 1..];
+    let nested_at = subcommand_index(rest, options).unwrap_or(rest.len());
+    Some(
+        std::iter::once(argv[start])
+            .chain(rest[nested_at..].iter().copied())
+            .filter(|token| !token.starts_with('-'))
+            .collect(),
+    )
+}
+
+/// `gh`'s options that consume the next word and may precede the subcommand or
+/// the nested verb (CLOUD-2666): `gh -R o/r pr comment` and `gh pr -R o/r
+/// comment` are one call. A declared stopgap, as [`GIT_VALUE_OPTIONS`] is.
+const GH_VALUE_OPTIONS: [&str; 2] = ["-R", "--repo"];
+
+/// The value-taking options `program` accepts ahead of its subcommand, for
+/// [`subcommand_index`]. Empty for a program this file has no list for.
+fn global_value_options(program: &str) -> &'static [&'static str] {
+    match program {
+        "git" => &GIT_VALUE_OPTIONS,
+        "mise" => &MISE_VALUE_OPTIONS,
+        "gh" => &GH_VALUE_OPTIONS,
+        _ => &[],
+    }
+}
+
+/// `cargo`'s options that consume the next word ahead of its subcommand.
+const CARGO_VALUE_OPTIONS: [&str; 4] = ["-C", "--config", "-Z", "--color"];
+
+/// The programs whose `subcommand` [`program_reach`] projects, each with the
+/// value-taking options that may precede it; `None` for a program with no
+/// table, which projects `null` rather than a guess.
+///
+/// Wider than [`global_value_options`] by `batten` and `cargo` (step 14), and
+/// deliberately not merged into it: that table also feeds [`verdict_words`],
+/// whose `[[verb]]` matching for those two programs is not this change's to move.
+/// `batten` takes no option before its verb, so its table is empty and still a
+/// table: "which batten verb does this run" is answered here, once, instead of
+/// by every module that needs it.
+fn subcommand_table(program: &str) -> Option<&'static [&'static str]> {
+    match program {
+        "git" | "mise" | "gh" => Some(global_value_options(program)),
+        "batten" => Some(&[]),
+        "cargo" => Some(&CARGO_VALUE_OPTIONS),
+        _ => None,
+    }
+}
+
+/// The index of `name`'s subcommand in `arguments`, past its own options — and,
+/// for `cargo`, past a leading `+toolchain`, which is a bare word that is not
+/// the subcommand.
+fn subcommand_of(name: &str, arguments: &[&str]) -> Option<usize> {
+    let options = subcommand_table(name)?;
+    let skip =
+        usize::from(name == "cargo" && arguments.first().is_some_and(|w| w.starts_with('+')));
+    subcommand_index(&arguments[skip..], options).map(|at| at + skip)
+}
+
+/// The tasks a `mise watch` argv runs (step 14).
+fn watched_tasks(rest: &[&str]) -> Vec<String> {
+    const VALUED: [&str; 16] = [
+        "-t",
+        "--task",
+        "-w",
+        "--watch",
+        "-e",
+        "--exts",
+        "-f",
+        "--filter",
+        "-g",
+        "--glob",
+        "--debounce",
+        "--delay",
+        "-E",
+        "--env",
+        "-C",
+        "--cd",
+    ];
+    let mut tasks = Vec::new();
+    let mut at = 0;
+    let mut bare = false;
+    while at < rest.len() {
+        let word = rest[at];
+        if word == "-t" || word == "--task" {
+            tasks.extend(rest.get(at + 1).map(|task| (*task).to_owned()));
+            at += 2;
+        } else if let Some(task) = word.strip_prefix("--task=") {
+            tasks.push(task.to_owned());
+            at += 1;
+        } else if word == "--" {
+            break;
+        } else if word.starts_with('-') {
+            at += if VALUED.contains(&word) { 2 } else { 1 };
+        } else {
+            if !bare {
+                tasks.push(word.to_owned());
+                bare = true;
+            }
+            at += 1;
+        }
+    }
+    tasks
+}
+
+/// The tasks a `mise` argv runs: every task `mise run`, `mise r`, or `mise
+/// tasks run` names, one per `:::` group; `None` when the argv runs no task by
+/// any of those spellings (step 14).
+///
+/// ONE READING, shared by [`singleton_task_started`] and the `tasks` key every
+/// module reads, so "which mise task does this run" has one answer. A task's
+/// own arguments follow its name and are not tasks; `--` is an option to
+/// [`subcommand_index`], so `mise run -- verify` names `verify`. An argv naming
+/// no task (`mise run`) is an empty list: mise then picks one itself, which is
+/// not a task this can name.
+fn mise_tasks(arguments: &[&str]) -> Option<Vec<String>> {
+    let verb = subcommand_index(arguments, &MISE_VALUE_OPTIONS)?;
+    let rest = match arguments[verb] {
+        "run" | "r" => &arguments[verb + 1..],
+        // `mise watch` RUNS a task on every change: `-t`/`--task` names it, and
+        // so does the first bare word past watch's own options.
+        "watch" | "w" => return Some(watched_tasks(&arguments[verb + 1..])),
+        "tasks" | "task" => {
+            let after = &arguments[verb + 1..];
+            let nested = subcommand_index(after, &MISE_VALUE_OPTIONS)?;
+            if !matches!(after[nested], "run" | "r") {
+                return None;
+            }
+            &after[nested + 1..]
+        }
+        _ => return None,
+    };
+    Some(
+        rest.split(|word| *word == ":::")
+            .filter_map(|group| {
+                subcommand_index(group, &MISE_VALUE_OPTIONS).map(|at| group[at].to_owned())
+            })
+            .collect(),
+    )
+}
+
 /// The singleton task this call would start a second copy of (CLOUD-438).
 ///
 /// `mise run <task>` and nothing else. `effective_program` resolves `mise` for
@@ -10679,50 +12743,34 @@ const MISE_VALUE_OPTIONS: [&str; 10] = [
 /// the first program, and moved every program anchor here. Same intent, one
 /// construct further along.
 pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
-    for entry in &program_reach(&envelope.command) {
-        if entry.get("name").and_then(serde_json::Value::as_str) != Some("mise") {
-            continue;
-        }
-        let arguments: Vec<&str> = entry
-            .get("arguments")
-            .and_then(serde_json::Value::as_array)
-            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
-            .unwrap_or_default();
-        // `mise`'S OWN OPTIONS COME BEFORE THE SUBCOMMAND, so `arguments[0]` is
-        // not the verb (CLOUD-1555). This read `arguments.first() != Some("run")`
-        // and so saw `mise run land` and nothing else: `mise -C /repo run land`
-        // and `mise -E dev run land` both START `land` and both put an option
-        // first, so the scan skipped the segment and a second `land` ran with no
-        // singleton — an under-deny on exactly the collision CLOUD-438 exists to
-        // stop. `destructive_reset_target` below was already fixed for the
-        // identical mistake; the two sat side by side taking opposite approaches
-        // to one question, which is why the resolver is now shared rather than
-        // copied.
-        let Some(verb) = subcommand_index(&arguments, &MISE_VALUE_OPTIONS) else {
-            continue;
-        };
-        if arguments[verb] != "run" {
-            continue;
-        }
-        // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1
-        // rather than economy: `land` is THIS consumer's task, and a constant
-        // naming it would put a consumer identifier in the core. The lock
-        // directory already answers which tasks are guarded — one exists only
-        // because something took it — so the boundary asks about the task this
-        // call names and lets the absence of a lock be the allow.
-        // THE TASK IS THE FIRST BARE WORD PAST `run`'S OWN OPTIONS, not the first
-        // bare word (review). `-E dev` puts `dev` where this scan looked, and the
-        // gate then asked about a task nothing holds.
-        //
-        // The SAME resolver as the verb above, one position along: the question
-        // "first bare word, skipping options and what they consume" is identical
-        // here, and answering it twice is how the two scans in this file drifted.
-        let rest = &arguments[verb + 1..];
-        if let Some(task) = subcommand_index(rest, &MISE_VALUE_OPTIONS) {
-            return Some(rest[task].to_owned());
-        }
-    }
-    None
+    // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1 rather
+    // than economy: `land` is THIS consumer's task, and a constant naming it
+    // would put a consumer identifier in the core. The lock directory already
+    // answers which tasks are guarded — one exists only because something took
+    // it — so the boundary asks about the task this call names and lets the
+    // absence of a lock be the allow.
+    //
+    // THE TASK IS READ BY [`mise_tasks`], the one reading the `tasks` key every
+    // module gets too (step 14). This scan carried its own copy — `run` and the
+    // first bare word past its options — which already took two fixes for
+    // `mise`'s own options (CLOUD-1555) and still missed `mise r land`, `mise
+    // tasks run land` and the second group of `mise run a ::: land`, each of
+    // which starts a second `land`.
+    tasks_started(envelope).into_iter().next()
+}
+
+/// Every task this call starts, in the order written: [`mise_tasks`] over each
+/// `mise` the call reaches. The singleton check asks about each of them, since
+/// `mise run a ::: land` starts a second `land` as surely as `mise run land`.
+pub(crate) fn tasks_started(envelope: &Envelope) -> Vec<String> {
+    program_reach(&envelope.command)
+        .iter()
+        .filter(|entry| entry.get("name").and_then(serde_json::Value::as_str) == Some("mise"))
+        .filter_map(|entry| entry.get("tasks").and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Whether any program this call reaches is `git push` (CLOUD-2270): the one
@@ -10957,6 +13005,12 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                         || is_env_assignment(program_token(tokens[i]))
                         || program_token(tokens[i]).starts_with(|c: char| c.is_ascii_digit()))
                 {
+                    // A FLAG WHOSE VALUE IS THE NEXT WORD takes that word with it
+                    // (CLOUD-2687): `sudo -u x git` resolved to `x`, so every
+                    // module finding git through `programs` allowed it.
+                    if wrapper_option_takes_value(wrapper, program_token(tokens[i])) {
+                        i += 1;
+                    }
                     i += 1;
                 }
             }
@@ -10980,16 +13034,6 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
             _ => return Some(i),
         }
     }
-}
-
-pub(crate) fn is_env_assignment(token: &str) -> bool {
-    let mut chars = token.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && token
-            .chars()
-            .take_while(|&c| c != '=')
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && token.contains('=')
 }
 
 /// Claude Code's verdict payload: the `hookSpecificOutput.permissionDecision`
@@ -11235,7 +13279,6 @@ pub fn encode_ask(
 /// # Errors
 ///
 /// Serialization of this fixed shape cannot practically fail.
-//MUTANT rewrite-ungated|s@^    if !harness.capabilities().rewrites_tool_output.is_capturable() {$@    if false {@|the_tool_output_rewrite_is_emitted_only_where_measured
 pub fn encode_tool_output(
     harness: Harness,
     event: &str,
@@ -11759,7 +13802,12 @@ mod tests {
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
                 singleton: &None,
+                land_live: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
+                commit_subject: &crate::facts::Look::CouldNotLook,
+                reach: &NO_REACH,
+                budgeted: &crate::facts::Look::CouldNotLook,
+                ratcheted: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -11767,10 +13815,12 @@ mod tests {
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
                 tasks: &crate::facts::Look::CouldNotLook,
+                task_bodies: &crate::facts::Look::CouldNotLook,
                 extracted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                pathspec_status: &crate::facts::Look::CouldNotLook,
             },
         )
     }
@@ -11782,110 +13832,20 @@ mod tests {
         live
     }
 
+    // THROUGH SERDE, as `Rule`'s own doc says a caller builds one: a struct
+    // literal spelled every column and needed a `too_many_lines` escape that
+    // `spawn-widening` counted as a new one (#1276).
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
-        Rule {
-            review: Vec::new(),
-            id: id.to_owned(),
-            kind: crate::rules::RuleKind::Shape,
-            glob: None,
-            severity: Some(RuleSeverity::Deny),
-            scope: RuleScope::MediatedCall,
-            pattern: Some(pattern.to_owned()),
-            regex: None,
-            exclude: None,
-            content: None,
-            tool: None,
-            measures: None,
-            counts: None,
-            max: None,
-            resolves: Vec::new(),
-            when_absent: None,
-            when_present: None,
-            when_value: None,
-            while_marker: None,
-            while_unpushed: false,
-            key_from: None,
-            key_base: None,
-            key_shape: None,
-            max_age: None,
-            requires_field: None,
-            contains: contains.map(ToOwned::to_owned),
-            unless_contains: None,
-            require_via: None,
-            requires_key: None,
-            reason: Some(format!("use the sanctioned path for {id}")),
-            policy_url: None,
-            bypass_env: None,
-            check: None,
-            fix: None,
-            produces: None,
-            exclude_paths: Vec::new(),
-            symbols: false,
-            run: None,
-            verbatim: None,
-            identity_key: None,
-            direction: None,
-            base: None,
-            retires_with: None,
-            conserves: None,
-            admits_with: None,
-            format: None,
-            node: None,
-            derives: None,
-            cites: None,
-            reads: None,
-            module: None,
-            bundle: None,
-            preset: None,
-            // No preset, so nothing here reads a CI provider (CLOUD-1625).
-            provider: None,
-            except: Vec::new(),
-            gate: None,
-            documents: Vec::new(),
-            requires_path: Vec::new(),
-            sources: Vec::new(),
-            lines: Vec::new(),
-            line_sources: Vec::new(),
-            invocations: Vec::new(),
-            invocation_sources: Vec::new(),
-            uses: Vec::new(),
-            use_sources: Vec::new(),
-            git: Vec::new(),
-            refs: Vec::new(),
-            ranges: Vec::new(),
-            commits: Vec::new(),
-            staged: Vec::new(),
-            history: Vec::new(),
-            tags: Vec::new(),
-            git_config: Vec::new(),
-            index: Vec::new(),
-            state: Vec::new(),
-            forge: Vec::new(),
-            tools: Vec::new(),
-            plan: Vec::new(),
-            minted: Vec::new(),
-            captured: Vec::new(),
-            tasks: Vec::new(),
-            extract: Vec::new(),
-            landing: Vec::new(),
-            delta_sources: Vec::new(),
-            external: Vec::new(),
-            predicate_severity: None,
-            criteria: None,
-            tier: None,
-            // A shape rule never reaches the findings store, so it is refused
-            // the remediation column (CLOUD-81).
-            no_fix_reason: None,
-            checks: None,
-            checks_any: None,
-            key: None,
-            trigger: None,
-            verdict: None,
-            filters: None,
-            substitutes: None,
-            interprets: None,
-            no_retry_reason: None,
-        }
+        serde_json::from_value::<Rule>(serde_json::json!({
+            "id": id,
+            "kind": "shape",
+            "severity": "deny",
+            "scope": "mediated_call",
+            "pattern": pattern,
+            "contains": contains,
+            "reason": format!("use the sanctioned path for {id}"),
+        }))
+        .expect("a shape row")
     }
 
     /// The `gh` lifecycle table as config, standing in for the rows this repo's
@@ -11936,6 +13896,9 @@ mod tests {
     /// The same fixture with a declared `[[redirect]]` table (CLOUD-280).
     fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -11999,6 +13962,9 @@ mod tests {
     /// ones out per case would bury the one field under test.
     fn ceiling_policy(rows: Vec<Rule>) -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12070,6 +14036,9 @@ mod tests {
 
     fn gh_policy() -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12118,6 +14087,7 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             // The Stop-path fields (CLOUD-479) are absent on a PreTool envelope,
             // which is the honest shape rather than a filler value.
@@ -12125,6 +14095,7 @@ mod tests {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -12164,11 +14135,13 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             stop_active: None,
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -12514,6 +14487,55 @@ mod tests {
         }
     }
 
+    /// CLOUD-2666's over-match. A row keyed on a subcommand matches from the
+    /// subcommand, past the program's global value options, and nowhere else:
+    /// `git stash push` is not `git push`, and `gh pr view merge` is not
+    /// `gh pr merge`.
+    #[test]
+    fn a_shape_row_matches_its_subcommand_and_never_an_operand() {
+        let push = ceiling_policy(vec![shape("no-push", "git push", None)]);
+        let decide = |policy: &Policy, command: &str| {
+            adjudicate(
+                policy,
+                &envelope(command),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for refused in [
+            "git push",
+            "git push origin main",
+            "git -C d push",
+            "git -c a=b push",
+        ] {
+            assert!(
+                matches!(decide(&push, refused), Decision::Deny(_)),
+                "{refused} is a push"
+            );
+        }
+        for admitted in ["git stash push -m x", "git log push", "git checkout push"] {
+            assert!(
+                matches!(decide(&push, admitted), Decision::Allow),
+                "{admitted} is not a push"
+            );
+        }
+        for refused in [
+            "gh pr merge 1",
+            "gh -R o/r pr merge 1",
+            "gh pr -R o/r merge 1",
+        ] {
+            assert!(
+                matches!(adjudicate_command(refused), Decision::Deny(_)),
+                "{refused} is a merge"
+            );
+        }
+        assert!(matches!(
+            adjudicate_command("gh pr view merge"),
+            Decision::Allow
+        ));
+    }
+
     fn adjudicate_command(command: &str) -> Decision {
         adjudicate(
             &gh_policy(),
@@ -12592,6 +14614,34 @@ mod tests {
         assert!(is_deny("FOO=bar gh pr merge"));
     }
 
+    /// CLOUD-2687: a wrapper option whose value is the next word takes that word
+    /// with it. Fails by: the value read as the program, which hid `git` from
+    /// every module that finds it through `programs`.
+    #[test]
+    fn a_wrapper_options_separate_value_is_not_the_program() {
+        for command in [
+            "sudo -u x git commit -n",
+            "sudo -u x -g y git commit -n",
+            "timeout -s KILL 5 git commit -n",
+            "timeout -k 2 5 git commit -n",
+            "nice -n 5 git commit -n",
+            "env -u HOME git commit -n",
+            "stdbuf -o L git commit -n",
+            "xargs -I {} git commit -n",
+            "doas -u x git commit -n",
+        ] {
+            let tokens: Vec<&str> = command.split_whitespace().collect();
+            let found = effective_program(&tokens).map(|index| tokens[index]);
+            assert_eq!(found, Some("git"), "{command}");
+        }
+        // An attached value is one word and still resolves.
+        let tokens = ["sudo", "-ux", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
+        // And a value-less flag takes nothing with it.
+        let tokens = ["sudo", "-E", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
+    }
+
     /// One program-only `shape` row and nothing else (CLOUD-401).
     ///
     /// Deliberately NOT shared with the receipt cases further down, and not
@@ -12600,6 +14650,9 @@ mod tests {
     /// one site must leave the other site's cases red.
     fn program_only_shape_policy() -> Policy {
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12767,6 +14820,9 @@ mod tests {
         let mut rule = shape("no-bare-cargo", "cargo", None);
         rule.require_via = Some(crate::rules::RequireVia::Mise);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13280,6 +15336,9 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13313,10 +15372,13 @@ mod tests {
     #[test]
     fn a_warn_shape_rule_blocks_only_once_promotion_is_on() {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13348,6 +15410,9 @@ mod tests {
         );
 
         let promoted = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13387,6 +15452,9 @@ mod tests {
         // to bottom, and any cleverer precedence would be a rule about rules the
         // config never states.
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13438,6 +15506,9 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.policy_url = Some("https://example.invalid/policy".to_owned());
         let policy = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13503,6 +15574,9 @@ mod tests {
         rule.reason = Some("run verify then linear-check, or just land".to_owned());
         rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13580,6 +15654,9 @@ mod tests {
             })
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             // A module fixture, so it protects nothing and has no membership
             // question for a root to change the answer to.
@@ -13633,6 +15710,242 @@ mod tests {
     ///
     /// Fails by: dropping a `Some(...)` arm to `None`, or inventing a `facts`
     /// key that no `Fact` variant names.
+    /// Fails by: a forge envelope's tokens not projected, or projected on an
+    /// event that is not a forge event (CLOUD-2689).
+    #[test]
+    fn a_forge_envelope_projects_its_tokens_and_no_other_event_does() {
+        let project = |envelope: &Envelope| -> serde_json::Value {
+            let document = call_document(
+                envelope,
+                &Facts::none(
+                    &crate::stop::StopFacts::default(),
+                    &crate::waiver::Live::new(),
+                ),
+            )
+            .expect("the document serializes");
+            serde_json::from_str(&document).expect("the document parses")
+        };
+        let forge = crate::forge_event::normalize_webhook(
+            "pull_request",
+            &serde_json::json!({
+                "action": "opened",
+                "pull_request": {"id": 1, "number": 2, "updated_at": "t"},
+                "repository": {"full_name": "o/r"}
+            }),
+        )
+        .expect("a catalog event");
+        let call = project(&forge);
+        assert_eq!(
+            call.pointer("/call/forge/event"),
+            Some(&serde_json::json!("pull_request"))
+        );
+        assert_eq!(
+            call.pointer("/call/forge/action"),
+            Some(&serde_json::json!("opened"))
+        );
+        let key = call
+            .pointer("/call/forge/key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(
+            project(&envelope("git status")).pointer("/call/forge"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    /// Fails by: a shebang naming another interpreter read as shell, a bare
+    /// program name read as a file, an oversized file read whole, or a shell
+    /// shebang through `env` not followed (#1276, step 23).
+    #[test]
+    fn only_a_shell_shebang_makes_a_program_file_a_script() {
+        let dir = std::env::temp_dir().join(format!("batten-shebang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let shell = file("shell", "#!/bin/sh\ngit push\n");
+        let through_env = file("env", "#!/usr/bin/env -S bash -e\ngit push\n");
+        let python = file("py", "#!/usr/bin/env python3\nprint(1)\n");
+        let plain = file("plain", "git push\n");
+        let big = file(
+            "big",
+            &format!(
+                "#!/bin/sh\n{}",
+                "#".repeat(usize::try_from(SCRIPT_FILE_MAX).unwrap())
+            ),
+        );
+        assert!(shebang_script(&shell).is_some_and(|text| text.contains("git push")));
+        assert!(shebang_script(&through_env).is_some());
+        assert_eq!(shebang_script(&python), None);
+        assert_eq!(shebang_script(&plain), None);
+        assert_eq!(shebang_script(&big), None);
+        assert_eq!(shebang_script("shell"), None);
+        assert_eq!(script_file_text(&big), None);
+        assert!(script_file_text(&plain).is_some());
+        assert_eq!(
+            script_file_text(&dir.join("absent").to_string_lossy()),
+            None
+        );
+        let reached = program_reach(&format!("sh {plain}"));
+        assert!(
+            reached
+                .iter()
+                .any(|entry| entry["name"] == "git" && entry["via"] == "script"),
+            "the file a shell runs is reached: {reached:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a literal spawn not reached (a stage hidden in a Python, Node,
+    /// Perl or Ruby program reaches no module), a computed one guessed at
+    /// instead of opaque, or a decoy read as a spawn: a commented-out call, a
+    /// method of the same name on an unrelated object, or a bare name whose
+    /// module is not in scope (CLOUD-2775).
+    #[test]
+    fn an_interpreters_literal_spawn_is_reached_and_a_computed_one_is_opaque() {
+        let py = "import subprocess, os\n\
+                  # subprocess.run(['rm', '-rf', '/'])\n\
+                  subprocess.run(['git', 'push', '--force'])\n\
+                  os.system('cargo nextest run')\n\
+                  subprocess.check_call('mise run land', shell=True)\n\
+                  subprocess.run(cmd)\n\
+                  asyncio.run(main())\n";
+        assert_eq!(
+            spawns_in(Language::Python, py, "s.py", false),
+            vec![
+                Spawned::Argv(vec!["git".into(), "push".into(), "--force".into()]),
+                Spawned::Shell("cargo nextest run".into()),
+                Spawned::Shell("mise run land".into()),
+                Spawned::Opaque {
+                    source: "s.py".into(),
+                    trusted: false
+                },
+            ]
+        );
+        let js = "const cp = require('child_process');\n\
+                  cp.execSync('git push');\n\
+                  cp.spawnSync('cargo', ['test']);\n\
+                  /re/.exec(line);\n\
+                  cp.execSync(`git ${verb}`);\n";
+        assert_eq!(
+            spawns_in(Language::Node, js, "s.js", true),
+            vec![
+                Spawned::Shell("git push".into()),
+                Spawned::Argv(vec!["cargo".into(), "test".into()]),
+                Spawned::Opaque {
+                    source: "s.js".into(),
+                    trusted: true
+                },
+            ]
+        );
+        let pl = "system('git', 'push');\nmy $x = `cargo test`;\nsystem(\"git $verb\");\n";
+        assert_eq!(
+            spawns_in(Language::Perl, pl, "s.pl", false),
+            vec![
+                Spawned::Argv(vec!["git".into(), "push".into()]),
+                Spawned::Shell("cargo test".into()),
+                Spawned::Opaque {
+                    source: "s.pl".into(),
+                    trusted: false
+                },
+            ]
+        );
+        let rb = "system('mise run land')\nout = %x(git status)\n";
+        assert_eq!(
+            spawns_in(Language::Ruby, rb, "s.rb", false),
+            vec![
+                Spawned::Shell("mise run land".into()),
+                Spawned::Shell("git status".into()),
+            ]
+        );
+        let reached =
+            program_reach("python3 -c \"import subprocess; subprocess.run(['git', 'push'])\"");
+        assert!(
+            reached
+                .iter()
+                .any(|entry| entry["name"] == "git" && entry["via"] == "script"),
+            "an inline program's literal spawn is reached: {reached:?}"
+        );
+        let opaque = program_reach("python3 -c \"import subprocess; subprocess.run(argv)\"");
+        assert!(
+            opaque
+                .iter()
+                .any(|entry| entry["opaque"] == true && entry["trusted"] == false),
+            "an inline program's computed spawn is opaque and never trusted: {opaque:?}"
+        );
+    }
+
+    /// Fails by: a redirection handed to the program as an argument, or a
+    /// redirect-only line read as a program (CLOUD-2670).
+    #[test]
+    fn program_reach_hands_no_redirection_to_the_program() {
+        let reach = program_reach("git config --get core.hooksPath 2>/dev/null");
+        assert_eq!(
+            reach[0]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+        assert_eq!(program_reach("> /tmp/f"), Vec::<serde_json::Value>::new());
+    }
+
+    /// Fails by: a joined line's redirections lost, so the line after reads
+    /// its own redirect as an argument (CLOUD-2670).
+    #[test]
+    fn a_joined_lines_redirects_stay_with_their_own_line() {
+        let reach =
+            program_reach("cd /tmp 2>/dev/null\ngit config --get core.hooksPath 2>/dev/null");
+        assert_eq!(reach[0]["arguments"], serde_json::json!(["/tmp"]));
+        assert_eq!(
+            reach[1]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+    }
+
+    /// Fails by: a segment's redirections not projected, or `words` losing
+    /// them (CLOUD-2670).
+    #[test]
+    fn the_call_document_projects_a_segments_redirections() {
+        let document = call_document(
+            &envelope("cargo build > /tmp/log 2>&1"),
+            &Facts::none(
+                &crate::stop::StopFacts::default(),
+                &crate::waiver::Live::new(),
+            ),
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value = serde_json::from_str(&document).expect("it parses");
+        assert_eq!(
+            parsed["call"]["segments"][0]["redirects"],
+            serde_json::json!([">", "/tmp/log", "2>&1"])
+        );
+        assert_eq!(
+            parsed["call"]["segments"][0]["words"],
+            serde_json::json!(["cargo", "build", ">", "/tmp/log", "2>&1"])
+        );
+        assert_eq!(
+            parsed["call"]["segments"][0]["redirect-writes"],
+            serde_json::json!(["/tmp/log"])
+        );
+    }
+
+    /// THE TARGET, NEVER THE TOKEN (#1276): a glued descriptor, a separated
+    /// operator and an append each yield the path written, a duplication none,
+    /// and an input redirection none.
+    ///
+    /// Fails by: an operator token kept (`>` or `2>/dev/null` read as a relative
+    /// path), a `&` duplication kept, or an input redirection read as a write.
+    #[test]
+    fn redirect_writes_are_targets_never_tokens() {
+        assert_eq!(super::redirect_writes(&["2>/dev/null"]), ["/dev/null"]);
+        assert_eq!(super::redirect_writes(&[">", "out.txt"]), ["out.txt"]);
+        assert_eq!(super::redirect_writes(&[">>log"]), ["log"]);
+        assert!(super::redirect_writes(&["2>&1"]).is_empty());
+        assert!(super::redirect_writes(&["<", "in.txt"]).is_empty());
+    }
+
     #[test]
     fn every_hook_resolvable_fact_is_projected_under_its_own_token() {
         let document = call_document(
@@ -14083,6 +16396,9 @@ deny contains "refused by themodule" if {
         rule.reason = Some("pipe the issue payload to `mise run claim-check`".to_owned());
         rule.checks = Some(vec!["claim".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14378,6 +16694,9 @@ deny contains "refused by themodule" if {
         rule.reason = Some("prove the toolchain first".to_owned());
         rule.checks = Some(vec!["toolchain".to_owned()]);
         Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14820,6 +17139,36 @@ deny contains "refused by themodule" if {
             guarded("python3 write.py .serena/memories/core.md"),
             Decision::Deny(_)
         ));
+    }
+
+    /// Fails by: a program text that only reads a protected path, or searches
+    /// for it as a string, refused as an unknown write, or a mutator dropped
+    /// from the scan so a write through it is admitted (#1276, CLOUD-2775).
+    #[test]
+    fn a_protected_path_an_interpreter_only_reads_is_not_refused() {
+        for command in [
+            "python3 -c \"print(open('.serena/memories/core.md').read())\"",
+            "python3 -c \"import re, sys; print(re.search('.serena/memories/core.md', sys.stdin.read()))\"",
+            "node -e 'console.log(require(\"fs\").readFileSync(\".serena/memories/core.md\", \"utf8\"))'",
+            "ruby -e 'puts File.read(\".serena/memories/core.md\")'",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Allow),
+                "{command} only reads the path"
+            );
+        }
+        for command in [
+            "python3 -c \"open('.serena/memories/core.md', 'w').write('')\"",
+            "python3 -c \"import os; os.remove('.serena/memories/core.md')\"",
+            "python3 -c \"import shutil; shutil.copy('x', '.serena/memories/core.md')\"",
+            "node -e 'require(\"fs\").unlinkSync(\".serena/memories/core.md\")'",
+            "python3 -c \"import os; os.system('echo x > .serena/memories/core.md')\"",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Deny(_)),
+                "{command} writes the path"
+            );
+        }
     }
 
     /// The two arms assert different things and must say so (CLOUD-1804).
@@ -15922,6 +18271,9 @@ deny contains "refused by themodule" if {
             Decision::Allow
         );
         let no_paths = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15995,6 +18347,9 @@ deny contains "refused by themodule" if {
         // hardcoded path could not produce that.
         let verbs = vec![verb("rm", None)];
         let guarding = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16015,6 +18370,9 @@ deny contains "refused by themodule" if {
             redirects: Vec::new(),
         };
         let elsewhere = Policy {
+            commit: None,
+            budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16571,6 +18929,19 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
+    fn moments_is_every_event_but_unrecognized() {
+        // CLOUD-2674: the const is derived, so this pins the derivation and the
+        // one row that reads it.
+        let expected: Vec<Event> = Event::ALL
+            .iter()
+            .copied()
+            .filter(|event| *event != Event::Unrecognized)
+            .collect();
+        assert_eq!(Event::MOMENTS, expected.as_slice());
+        assert_eq!(Harness::ExitCode.capabilities().events, Event::MOMENTS);
+    }
+
+    #[test]
     fn task_completed_is_claude_only_and_degrades_to_the_stop_family() {
         // The one Claude-exclusive capability that is load-bearing for Batten's
         // completion-signal thesis.
@@ -16581,11 +18952,14 @@ deny contains "refused by themodule" if {
         );
         for harness in Harness::ALL {
             let capabilities = harness.capabilities();
-            if *harness == Harness::ClaudeCode {
+            // Exit-code is Batten's envelope, not a surveyed host: it carries
+            // every moment, so it watches TaskCompleted exactly (CLOUD-2674).
+            if matches!(harness, Harness::ClaudeCode | Harness::ExitCode) {
                 assert_eq!(
                     capabilities.degrade(Event::TaskCompleted),
                     Some(Event::TaskCompleted),
-                    "the host that has it watches it"
+                    "{}: the adapter that has it watches it",
+                    harness.as_str()
                 );
                 continue;
             }
@@ -16613,6 +18987,15 @@ deny contains "refused by themodule" if {
         // event would be worse than admitting the gap.
         for harness in Harness::ALL {
             if *harness == Harness::ClaudeCode {
+                continue;
+            }
+            // Batten's own envelope carries every moment (CLOUD-2674).
+            if *harness == Harness::ExitCode {
+                assert_eq!(
+                    harness.capabilities().degrade(Event::ConfigChange),
+                    Some(Event::ConfigChange),
+                    "exit-code carries ConfigChange itself"
+                );
                 continue;
             }
             assert_eq!(
@@ -16714,9 +19097,12 @@ deny contains "refused by themodule" if {
             // event rather than failing, which is right at runtime and wrong to
             // leave unnoticed.
             let capabilities = harness.capabilities();
+            // ADMITS, not registrations: an emitted event need not be registered
+            // by default, but it must be nameable (CLOUD-2581).
+            let admitted = wiring.admits(harness);
             for event in Event::ALL.iter().filter(|e| capabilities.emits(**e)) {
                 assert!(
-                    registrations.iter().any(|(named, _)| named == event),
+                    admitted.iter().any(|(named, _)| named == event),
                     "{} emits {event:?} but its wiring names no spelling for it, so the \
                      registration would be silently dropped",
                     harness.as_str()
@@ -17065,7 +19451,7 @@ deny contains "refused by themodule" if {
 
         // A row the severity policy cannot reach buys nothing either: the gate
         // skips it, so counting it here is a file read for an unreachable verdict.
-        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Warn);
+        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Advise);
         assert!(
             !policy.reads_prospective(&write),
             "a row `blocks` says nothing about must not buy a read"
@@ -17654,11 +20040,13 @@ deny contains "refused by themodule" if {
             session: None,
             agent: None,
             start_source: None,
+            call_id: None,
             background_ceiling: None,
             stop_active: None,
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         };
         assert!(
             policy.required_checks_for(&read).is_empty(),
@@ -18129,9 +20517,24 @@ deny contains "refused by themodule" if {
             };
             for (_, spelling) in wiring.registrations(*harness) {
                 rendered_any = true;
+                // Where the host's entry shape puts the command (CLOUD-2694).
+                let command = match harness.entry_shape() {
+                    EntryShape::Flat { write, .. } => &hooks[spelling][0][write],
+                    EntryShape::Nested => &hooks[spelling][0]["hooks"][0]["command"],
+                };
+                // The registration's own command: `--event` where the host's
+                // payload names none (CLOUD-2700).
                 assert_eq!(
-                    hooks[spelling][0]["hooks"][0]["command"],
-                    Value::String(wiring_command(*harness)),
+                    *command,
+                    Value::String(registration_command(*harness, spelling)),
+                    "{}: {spelling}",
+                    harness.as_str()
+                );
+                assert_eq!(
+                    command
+                        .as_str()
+                        .is_some_and(|text| text.ends_with(&format!("--event {spelling}"))),
+                    harness.names_event_on_argv(spelling),
                     "{}: {spelling}",
                     harness.as_str()
                 );
@@ -18344,10 +20747,197 @@ deny contains "refused by themodule" if {
         for (raw, event) in [
             ("afterFileEdit", Event::PostTool),
             ("stop", Event::Stop),
-            ("subagentStop", Event::Stop),
+            // Its own moment, not the Stop family (CLOUD-2695).
+            ("subagentStop", Event::SubagentStop),
             ("sessionStart", Event::SessionStart),
+            ("postToolUseFailure", Event::PostToolFailure),
+            ("sessionEnd", Event::SessionEnd),
+            ("subagentStart", Event::SubagentStart),
+            ("preCompact", Event::PreCompact),
         ] {
             assert_eq!(normalize_event(Harness::Cursor, raw), event, "{raw}");
+        }
+    }
+
+    /// Gemini's model events and Copilot's two camelCase-only events normalize
+    /// to their concepts (CLOUD-2700).
+    ///
+    /// Fails by: dropping any arm, which reads the spelling as unrecognized.
+    #[test]
+    fn gemini_and_copilot_renamed_events_normalize() {
+        for (harness, raw, event) in [
+            (Harness::GeminiCli, "BeforeModel", Event::ModelRequest),
+            (Harness::GeminiCli, "AfterModel", Event::ModelResponse),
+            (Harness::CopilotCli, "subagentStart", Event::SubagentStart),
+            (
+                Harness::CopilotCli,
+                "userPromptTransformed",
+                Event::UserPromptExpansion,
+            ),
+        ] {
+            assert_eq!(normalize_event(harness, raw), event, "{raw}");
+        }
+    }
+
+    fn parsed(command: &str) -> Vec<Segment> {
+        let crate::facts::Look::Is(parsed) = segments(command) else {
+            panic!("`{command}` parses");
+        };
+        parsed
+    }
+
+    /// A glued `-m` message is read, and a backgrounded `wait` waits on
+    /// nothing after it, so it is itself detached.
+    #[test]
+    fn a_glued_message_is_read_and_a_backgrounded_wait_waits_on_nothing() {
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -mfix")[0], None),
+            Some(CommitMessage::Text(String::from("fix")))
+        );
+        // Fails by: a glued `-F` path refused unless empty.
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -Fmsg.txt")[0], Some(Path::new("/w"))),
+            Some(CommitMessage::File(PathBuf::from("/w/msg.txt")))
+        );
+        assert!(!waited_on(&parsed("wait &"), 0, 1));
+    }
+
+    /// Fails by: a `_`-led or `_`-holding variable refused, a name with a
+    /// non-identifier character accepted, or `%` and a non-number accepted.
+    #[test]
+    fn an_own_job_reference_names_only_the_calls_job() {
+        for (word, own) in [
+            ("%1", true),
+            ("%", true),
+            ("%x", false),
+            ("$_x", true),
+            ("${a_1}", true),
+            ("$x-y", false),
+            ("${1x}", false),
+            ("12", false),
+        ] {
+            assert_eq!(own_job_ref(word), own, "{word}");
+        }
+    }
+
+    /// A `cd` is placed only bare, literal and alone; `pushd` too.
+    #[test]
+    fn a_cd_is_placed_only_bare_and_literal() {
+        let base = Path::new("/r");
+        let placed = |command: &str| {
+            let segments = parsed(command);
+            let segment = segments
+                .iter()
+                .find(|segment| segment.words.iter().any(|w| w == "cd" || w == "pushd"))
+                .unwrap_or_else(|| panic!("`{command}` has a cd"));
+            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+            placed_cd(segment, &tokens, base)
+        };
+        assert_eq!(placed("cd sub"), Some(PathBuf::from("/r/sub")));
+        assert_eq!(placed("pushd sub"), Some(PathBuf::from("/r/sub")));
+        for refused in [
+            "(cd sub)",
+            "echo $(cd sub)",
+            "command cd",
+            "cd -",
+            "cd s*",
+            "cd $D",
+        ] {
+            assert_eq!(placed(refused), None, "{refused}");
+        }
+    }
+
+    /// A `cd` moves the directory later programs run in only across `&&` or
+    /// `;`, and a git program's `-C` with no subcommand still names its dir.
+    #[test]
+    fn a_cd_is_followed_only_across_and_or_semicolon() {
+        let targets = |command: &str| {
+            call_targets(&envelope_at(Event::PreTool, command), Path::new("/r")).unwrap()
+        };
+        let at = |dirs: &[&str]| dirs.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(targets("cd sub"), at(&["/r", "/r/sub"]));
+        assert_eq!(targets("cd sub && true"), at(&["/r/sub", "/r/sub"]));
+        assert_eq!(targets("git -C sub"), at(&["/r", "/r/sub"]));
+    }
+
+    /// Fails by: a piped `cd` followed, `-C` misread, a `--work-tree` placed,
+    /// a `--` checkout of `.` refused, or `-s <tree>` read as a pathspec.
+    #[test]
+    fn a_pathspec_is_placed_through_each_option_and_separator() {
+        let calls =
+            |command: &str| pathspec_calls(&envelope_at(Event::PreTool, command), Path::new("/r"));
+        let placed = |dir: &str, specs: &[&str]| {
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from(dir),
+                pathspecs: specs.iter().map(|spec| (*spec).to_owned()).collect(),
+            }])
+        };
+        assert_eq!(calls("cd sub | true; git restore f"), placed("/r", &["f"]));
+        assert_eq!(calls("cd sub; git restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git -C sub restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git --work-tree=w restore f"), Pathspecs::Unplaceable);
+        assert_eq!(calls("git checkout -- ."), placed("/r", &["."]));
+        assert_eq!(calls("git checkout main"), placed("/r", &[]));
+        assert_eq!(calls("git restore -s HEAD f"), placed("/r", &["f"]));
+    }
+
+    /// Only a word that is wholly a `cat` heredoc substitution, bare or
+    /// quoted, is read as its body.
+    #[test]
+    fn only_a_whole_word_cat_heredoc_is_read_as_its_body() {
+        let bodies = |command: &str| {
+            parsed(command)
+                .into_iter()
+                .flat_map(|segment| segment.cat_bodies)
+                .map(|(_, body)| body.trim_end().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bodies("git commit -m $(cat <<'EOF'\nbare\nEOF\n)"),
+            vec!["bare"]
+        );
+        assert_eq!(
+            bodies("git commit -m \"$(cat <<'EOF'\nquoted\nEOF\n)\""),
+            vec!["quoted"]
+        );
+        for refused in [
+            "git commit -m x$(cat <<'EOF'\nglued\nEOF\n)y",
+            "git commit -m \"$(tac <<'EOF'\nother\nEOF\n)\"",
+            "git commit -m \"$(X=1 cat <<'EOF'\nassigned\nEOF\n)\"",
+            // Fails by: a word quoted on one side only read as the quoted form.
+            "git commit -m \"$(cat <<'EOF'\nhalf\nEOF\n)\"y",
+            "git commit -m y\"$(cat <<'EOF'\nhalf\nEOF\n)\"",
+        ] {
+            assert!(bodies(refused).is_empty(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn mise_reads_its_value_options_ahead_of_the_subcommand() {
+        assert_eq!(
+            subcommand_index(&["-C", "d", "run", "x"], global_value_options("mise")),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn prompt_submit_is_derived_only_where_a_deny_reaches_the_host() {
+        // CLOUD-2695: Codex and Gemini honour Batten's exit-2 deny at prompt
+        // submit; Cursor reads a field Batten does not write, and Copilot
+        // documents no block, so deriving it there would fail open.
+        for (harness, derived) in [
+            (Harness::ClaudeCode, true),
+            (Harness::CodexCli, true),
+            (Harness::GeminiCli, true),
+            (Harness::Cursor, false),
+            (Harness::CopilotCli, false),
+        ] {
+            assert_eq!(
+                harness.capabilities().emits(Event::UserPromptSubmit),
+                derived,
+                "{}",
+                harness.as_str()
+            );
         }
     }
 
@@ -18779,10 +21369,14 @@ deny contains "refused by themodule" if {
         use crate::facts::Look;
         let gates = |discards| {
             with_native_facts(&discards, &Look::CouldNotLook, |f| {
-                native_fired(f)
-                    .into_iter()
-                    .map(|(gate, _)| gate)
-                    .collect::<Vec<_>>()
+                native_fired(
+                    &Policy::declaring_nothing(Harness::ExitCode),
+                    &envelope(""),
+                    f,
+                )
+                .into_iter()
+                .map(|(gate, _)| gate)
+                .collect::<Vec<_>>()
             })
         };
         assert_eq!(
@@ -18804,13 +21398,17 @@ deny contains "refused by themodule" if {
         let at = |rows: Vec<Rule>| {
             let policy = ceiling_policy(rows);
             with_native_facts(&Look::CouldNotLook, &unread(), |f| {
-                (native_denial(&policy, f), native_advice(&policy, f).len())
+                let call = envelope("");
+                (
+                    native_denial(&policy, &call, f),
+                    native_nonblocking(&policy, &call, f).len(),
+                )
             })
         };
         let (denial, advice) = at(Vec::new());
         assert!(matches!(denial, Some(Decision::Deny(_))), "{denial:?}");
         assert_eq!(advice, 0);
-        let (denial, advice) = at(vec![history_graded(RuleSeverity::Warn)]);
+        let (denial, advice) = at(vec![history_graded(RuleSeverity::Advise)]);
         assert_eq!(denial, None);
         assert_eq!(advice, 1);
         let (denial, advice) = at(vec![history_graded(RuleSeverity::Allow)]);
@@ -18950,11 +21548,21 @@ deny contains "refused by themodule" if {
             matched_ids(&ceiling_policy(vec![tool_receipt_row()]), &call),
             ["issue-receipt"]
         );
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+        // A nonblocking row is SELECTED too (CLOUD-2707), so its receipt is
+        // resolved for the record; an `allow` row, configured off, is not.
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &call).is_empty());
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &call),
+            ["issue-receipt"]
+        );
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
+            ..tool_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![off]), &call).is_empty());
         let conditioned = Rule {
             when_absent: Some(Field::SessionId),
             ..tool_receipt_row()
@@ -18964,19 +21572,29 @@ deny contains "refused by themodule" if {
         assert!(matched_ids(&ceiling_policy(vec![conditioned]), &in_session).is_empty());
     }
 
-    /// On the command walk, a receipt row that does not block, or that is
+    /// On the command walk, a receipt row configured off, or one that is
     /// triggered by a write, is not matched by its command; and the program's
     /// own name is never one of its operands.
     ///
     /// Fails by: the trigger or blocking test conjoined with the next one,
     /// or the operand words starting at the program.
     #[test]
-    fn the_command_walk_matches_only_a_blocking_command_triggered_row() {
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+    fn the_command_walk_matches_only_a_live_command_triggered_row() {
+        // Nonblocking rows are selected for the record (CLOUD-2707); only a
+        // row configured off is not.
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
             ..ready_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &envelope("gh pr ready")).is_empty());
+        assert!(matched_ids(&ceiling_policy(vec![off]), &envelope("gh pr ready")).is_empty());
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        };
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &envelope("gh pr ready")),
+            ["ready-receipt"]
+        );
         let write_triggered = Rule {
             trigger: Some(ReceiptTrigger::Write),
             ..ready_receipt_row()
@@ -19034,6 +21652,67 @@ deny contains "refused by themodule" if {
         crate::facts::Look::Is(resolved(entries))
     }
 
+    /// CLOUD-2707: a `warn` receipt row with its receipt missing is recorded at the
+    /// call and never denies; a `deny` row denies and is never also recorded.
+    ///
+    /// Fails by: the selection dropping `warn` rows again (no record), the deny
+    /// loop losing its blocking test (a `warn` row denies), or the record
+    /// losing its own (a `deny` row also recorded).
+    #[test]
+    fn a_warn_receipt_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("gh pr ready");
+        let missing = receipts(&[]);
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        }]);
+        assert_eq!(receipt_rules(&warned, &call, &missing), Decision::Allow);
+        assert_eq!(receipt_nonblocking(&warned, &call, &missing).len(), 1);
+        let (stop, waived) = (
+            crate::stop::StopFacts::default(),
+            crate::waiver::Live::new(),
+        );
+        let facts = Facts {
+            receipts: &missing,
+            ..Facts::none(&stop, &waived)
+        };
+        assert_eq!(nonblocking_findings(&warned, &call, &facts).len(), 1);
+        let denied = ceiling_policy(vec![ready_receipt_row()]);
+        assert!(matches!(
+            receipt_rules(&denied, &call, &missing),
+            Decision::Deny(_)
+        ));
+        assert!(receipt_nonblocking(&denied, &call, &missing).is_empty());
+    }
+
+    /// CLOUD-2707: a `warn` shape row is recorded at the call and allows it; the
+    /// same row at `deny` denies and is not also recorded.
+    ///
+    /// Fails by: the record pass not promoting `warn` rows (lost again), or
+    /// taking blocking rows too (a deny also recorded).
+    #[test]
+    fn a_warn_shape_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("git push origin main");
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..shape("push-warned", "git push", None)
+        }]);
+        assert_eq!(
+            no_facts(|f| super::adjudicate(&warned, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&warned, &call, f)).len(),
+            1
+        );
+        let denied = ceiling_policy(vec![shape("push-denied", "git push", None)]);
+        assert!(matches!(
+            no_facts(|f| super::adjudicate(&denied, &call, f)),
+            Decision::Deny(_)
+        ));
+        assert!(no_facts(|f| gate_nonblocking(&denied, &call, f)).is_empty());
+    }
+
     /// The tool receipt gate denies a selecting receipt row whose receipt is
     /// missing, and nothing else.
     ///
@@ -19053,7 +21732,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(shaped, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19151,6 +21830,289 @@ deny contains "refused by themodule" if {
         assert_eq!(reach[0]["arguments"], serde_json::json!(["--flag", "x"]));
     }
 
+    /// A git, gh or mise entry carries its first verb past the program's own
+    /// value-taking options, and the words before it verbatim (CLOUD-2354).
+    ///
+    /// Fails by: an empty option table (`/repo` becomes the subcommand), an
+    /// empty `global-options`, or either key projected for a program with no
+    /// table.
+    #[test]
+    fn each_git_entry_carries_its_subcommand_past_global_options() {
+        let entry = |command: &str| program_reach(command).remove(0);
+        let pushed = entry("git -C /repo push origin");
+        assert_eq!(pushed["subcommand"], "push");
+        assert_eq!(pushed["global-options"], serde_json::json!(["-C", "/repo"]));
+        let version = entry("git --version");
+        assert_eq!(version["subcommand"], serde_json::Value::Null);
+        assert_eq!(version["global-options"], serde_json::json!(["--version"]));
+        let viewed = entry("gh -R o/r pr view 1");
+        assert_eq!(viewed["subcommand"], "pr");
+        assert_eq!(viewed["global-options"], serde_json::json!(["-R", "o/r"]));
+        let read = entry("cat f");
+        assert_eq!(read["subcommand"], serde_json::Value::Null);
+        assert_eq!(read["global-options"], serde_json::Value::Null);
+    }
+
+    /// The names of every program a command reaches, in order.
+    fn reached(command: &str) -> Vec<String> {
+        program_reach(command)
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    /// Program extraction follows a program into the programs it runs, through
+    /// every construct, recursively (step 14) — tested once here, for every
+    /// module that reads `programs`.
+    ///
+    /// Fails by: any construct's arm removed (its row stops reaching `git`),
+    /// the recursion dropped (the nested row stops at the inner shell), or the
+    /// fallback for an unparseable script removed (that row reaches nothing).
+    #[test]
+    fn reach_follows_every_construct_that_runs_a_program() {
+        for command in [
+            "bash -c 'git push'",
+            "sh -c \"git push\"",
+            "bash -lc 'git push'",
+            "bash -o pipefail -c 'git push'",
+            "eval 'git push'",
+            "eval git push",
+            "exec git push",
+            "xargs git push",
+            "echo $(git push)",
+            "out=$(git push)",
+            "env -S 'git push'",
+            "watch -n 1 git push",
+            "find . -exec git push \\;",
+            "find . -okdir git push {} +",
+            "bash -c 'sh -c \"git push\"'",
+            "bash -c 'git push \"unterminated'",
+            "mise exec -- bash -c 'git push'",
+        ] {
+            assert!(
+                reached(command).iter().any(|name| name == "git"),
+                "{command} must reach git: {:?}",
+                reached(command)
+            );
+        }
+        let script = program_reach("bash -c 'git push \"unterminated'");
+        let git = script.iter().find(|entry| entry["name"] == "git").unwrap();
+        assert_eq!(git["unread"], true);
+        assert_eq!(git["via"], "script");
+        let mediated = program_reach("mise exec -- bash -c 'cargo build'");
+        let cargo = mediated
+            .iter()
+            .find(|entry| entry["name"] == "cargo")
+            .unwrap();
+        assert_eq!(
+            cargo["mediated"], true,
+            "an outer mediator covers what it runs"
+        );
+        assert_eq!(
+            reached("echo 'git push'"),
+            vec!["echo"],
+            "a mention runs nothing"
+        );
+        assert_eq!(
+            reached("bash script.sh"),
+            vec!["bash"],
+            "a script file is not a -c text"
+        );
+    }
+
+    /// `cargo run` reaches the binary it starts, named by `--bin`, `--example`
+    /// or `-p`, handed what follows `--`; `batten step run` reaches the argv
+    /// after its `--` (step 14).
+    ///
+    /// Fails by: the package, bin or separator reading dropped, or a binary
+    /// invented for a `cargo run` that names none.
+    #[test]
+    fn cargo_run_and_step_run_reach_the_program_they_start() {
+        for (command, binary, verb) in [
+            (
+                "cargo run -p batten -- enforce --half live",
+                "batten",
+                "enforce",
+            ),
+            (
+                "cargo run -q --package=batten -- enforce",
+                "batten",
+                "enforce",
+            ),
+            ("cargo +stable run --bin tool -p other -- go", "tool", "go"),
+            (
+                "mise exec -- cargo run -p batten -- check",
+                "batten",
+                "check",
+            ),
+        ] {
+            let reach = program_reach(command);
+            let inner = reach
+                .iter()
+                .find(|entry| entry["via"] == "cargo run")
+                .unwrap();
+            assert_eq!(inner["name"], binary, "{command}");
+            assert_eq!(inner["arguments"][0], verb, "{command}");
+        }
+        // NO BINARY NAMED: the manifest's one binary, as cargo resolves it, and
+        // nothing invented where no manifest answers.
+        assert_eq!(reached("cargo run -- enforce"), vec!["cargo", "batten"]);
+        assert_eq!(
+            reached("cargo run --manifest-path /no/such/Cargo.toml -- enforce"),
+            vec!["cargo"]
+        );
+        let step = program_reach("batten step run t -- cargo nextest run --workspace");
+        assert_eq!(step[1]["name"], "cargo");
+        assert_eq!(step[1]["via"], "step run");
+        assert_eq!(step[1]["subcommand"], "nextest");
+        assert_eq!(step[1]["nested"], "run");
+    }
+
+    /// Fails by: a step's program missed, a program outside `step run` taken
+    /// for a stage, a line without `step run` parsed into one, or an unread
+    /// receipt answered as an empty stage set.
+    #[test]
+    fn step_programs_are_what_the_receipted_steps_run() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                (
+                    "lint:clippy",
+                    vec![
+                        "cargo run -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=t cargo clippy --all-targets",
+                        "cargo clippy --fix",
+                    ],
+                ),
+                ("deny", vec!["batten step run deny -- cargo deny check"]),
+                (
+                    "semver",
+                    vec!["cargo run -p batten -- step run semver -- cargo run -p batten -- semver check"],
+                ),
+                ("echo", vec!["echo step"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let steps = step_programs(&bodies);
+        let found: Vec<(String, String, String)> = steps
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["task"].as_str().unwrap().to_owned(),
+                    entry["name"].as_str().unwrap().to_owned(),
+                    entry["subcommand"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("deny".to_owned(), "cargo".to_owned(), "deny".to_owned()),
+                (
+                    "lint:clippy".to_owned(),
+                    "cargo".to_owned(),
+                    "clippy".to_owned()
+                ),
+                (
+                    "semver".to_owned(),
+                    "batten".to_owned(),
+                    "semver".to_owned()
+                ),
+            ]
+        );
+        assert!(step_programs(&crate::facts::Look::CouldNotLook).is_null());
+    }
+
+    /// `batten`'s verb and its nested verb are projected; a `mise` entry
+    /// carries the tasks it starts by every run spelling (step 14).
+    ///
+    /// Fails by: `batten` given no table (its subcommand is `null`), the
+    /// nested reading dropped, or any `mise_tasks` spelling missed.
+    #[test]
+    fn batten_verbs_and_mise_tasks_are_projected_once() {
+        let land = program_reach("batten land lap main").remove(0);
+        assert_eq!(land["subcommand"], "land");
+        assert_eq!(land["nested"], "lap");
+        for (command, tasks) in [
+            ("mise run verify", vec!["verify"]),
+            ("mise r verify", vec!["verify"]),
+            ("mise run -- verify", vec!["verify"]),
+            ("mise -C /repo run -E dev land", vec!["land"]),
+            ("mise tasks run verify", vec!["verify"]),
+            ("mise run --continue-on-error a x ::: b", vec!["a", "b"]),
+            ("mise watch verify", vec!["verify"]),
+            ("mise watch -w src -t verify", vec!["verify"]),
+        ] {
+            assert_eq!(
+                program_reach(command).remove(0)["tasks"],
+                serde_json::json!(tasks),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            program_reach("mise exec -- ls").remove(0)["tasks"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            program_reach("mise ls").remove(0)["tasks"],
+            serde_json::Value::Null
+        );
+    }
+
+    /// A task is followed into its body, and into every task that body starts,
+    /// once each (step 14).
+    ///
+    /// Fails by: the follow dropped, a cycle not terminated, or the shorthand
+    /// `mise <task>` either missed or read for a mise command.
+    #[test]
+    fn task_programs_follow_a_task_into_what_it_runs() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                ("outer", vec!["mise run inner", "echo done"]),
+                (
+                    "inner",
+                    vec!["cargo run -p batten -- enforce", "mise run outer"],
+                ),
+                ("install", vec!["git push"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let names = |command: &str| -> Vec<String> {
+            task_programs(command, &bodies)
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let reached = names("mise run outer");
+        assert!(reached.contains(&"batten".to_owned()), "{reached:?}");
+        assert!(reached.contains(&"echo".to_owned()), "{reached:?}");
+        assert!(names("mise outer").contains(&"batten".to_owned()));
+        assert!(
+            names("mise install").is_empty(),
+            "a mise command is not a task"
+        );
+        assert_eq!(
+            task_programs("ls", &crate::facts::Look::CouldNotLook),
+            serde_json::Value::Null
+        );
+    }
+
     /// A redirect into a file is a write; into a descriptor or `/dev/null`
     /// it is not.
     ///
@@ -19214,7 +22176,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..task_tool_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19276,7 +22238,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..row.clone()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -19361,7 +22323,7 @@ deny contains "refused by themodule" if {
         let mixed = graded_modules(
             "mixed",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
                 ("refused by beta", RuleSeverity::Deny),
             ],
             "",
@@ -19374,8 +22336,8 @@ deny contains "refused by themodule" if {
         let ties = graded_modules(
             "ties",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
-                ("refused by beta", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
+                ("refused by beta", RuleSeverity::Advise),
             ],
             "",
         );
@@ -19384,33 +22346,57 @@ deny contains "refused by themodule" if {
         assert_eq!(strongest.verdict(), Some("refused by alpha"));
     }
 
-    /// A `warn` module allows the call and speaks as advice, except at
-    /// `Stop`, where it nudges once and only while no nudge is active.
+    /// CLOUD-2707: an `advise` module allows the call and is reported at its
+    /// grade, and nudges at `Stop`; a `record` module is reported at a call and
+    /// at `Stop` and never nudges; a `deny` module nudges at `Stop`. Each nudge
+    /// fires once, only while no nudge is active.
     ///
-    /// Fails by: denying at `warn`, losing the advice, advising at `Stop`, or
-    /// either stop guard inverted.
+    /// Fails by: denying at `advise`, losing a finding, speaking a `record`
+    /// module at `Stop` or silencing an `advise` one, or either stop guard
+    /// inverted.
     #[test]
-    fn a_warn_module_advises_and_nudges_at_stop() {
-        let warned = graded_modules("warned", &[("refused by alpha", RuleSeverity::Warn)], "");
+    fn an_advise_module_speaks_and_a_record_module_is_only_recorded() {
+        let module = |severity| graded_modules("graded", &[("refused by alpha", severity)], "");
         let call = envelope("forbidden");
+        let stop = envelope_at(Event::Stop, "forbidden");
+        let advised = module(RuleSeverity::Advise);
         assert_eq!(
-            no_facts(|f| policy_rules(&warned, &call, f)),
+            no_facts(|f| policy_rules(&advised, &call, f)),
             Decision::Allow
         );
-        assert_eq!(no_facts(|f| policy_advice(&warned, &call, f)).len(), 1);
-        let stop = envelope_at(Event::Stop, "forbidden");
-        assert!(no_facts(|f| policy_advice(&warned, &stop, f)).is_empty());
-        assert!(no_facts(|f| stop_advice(&warned, &stop, f)).is_some());
+        let found = no_facts(|f| nonblocking_findings(&advised, &call, f));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, RuleSeverity::Advise);
+        assert!(no_facts(|f| stop_advice(&advised, &stop, f)).is_some());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&advised, &stop, f)).len(),
+            1
+        );
+        let recorded = module(RuleSeverity::Record);
+        assert_eq!(
+            no_facts(|f| policy_rules(&recorded, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &call, f))[0].0,
+            RuleSeverity::Record
+        );
+        assert!(no_facts(|f| stop_advice(&recorded, &stop, f)).is_none());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &stop, f)).len(),
+            1
+        );
+        let denied = module(RuleSeverity::Deny);
+        assert!(no_facts(|f| stop_advice(&denied, &stop, f)).is_some());
         let active = Envelope {
             stop_active: Some(true),
             ..envelope_at(Event::Stop, "forbidden")
         };
-        assert!(no_facts(|f| stop_advice(&warned, &active, f)).is_none());
-        assert!(no_facts(|f| stop_advice(&warned, &call, f)).is_none());
-        let off = graded_modules("off", &[("refused by alpha", RuleSeverity::Allow)], "");
-        assert!(no_facts(|f| policy_advice(&off, &call, f)).is_empty());
+        assert!(no_facts(|f| stop_advice(&denied, &active, f)).is_none());
+        assert!(no_facts(|f| stop_advice(&denied, &call, f)).is_none());
+        let off = module(RuleSeverity::Allow);
+        assert!(no_facts(|f| nonblocking_findings(&off, &call, f)).is_empty());
     }
-
     /// A native gate graded `warn` advises on a moment the chain decides, and
     /// not on one it does not.
     ///
@@ -19419,12 +22405,12 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_warned_native_gate_advises_where_the_chain_decides() {
         use crate::facts::Look;
-        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Warn)]);
+        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Advise)]);
         let advice = |event| {
             with_native_facts(
                 &Look::CouldNotLook,
                 &Look::Is(vec![String::from("row")]),
-                |f| policy_advice(&policy, &envelope_at(event, "ls"), f).len(),
+                |f| nonblocking_findings(&policy, &envelope_at(event, "ls"), f).len(),
             )
         };
         assert_eq!(advice(Event::PreTool), 1);
@@ -19822,7 +22808,7 @@ deny contains "refused by themodule" if {
             Decision::Deny(_)
         ));
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..head()
         };
         assert_eq!(piped(warned, "mise run ci | head"), Decision::Allow);
@@ -19847,9 +22833,11 @@ deny contains "refused by themodule" if {
         assert_eq!(python.shorts("--x"), None);
         assert_eq!(python.shorts("-"), None);
         assert_eq!(python.shorts("-ce"), Some("ce"));
-        let fallback = grammar("bash");
+        let fallback = grammar("tclsh");
         assert_eq!(fallback.shorts("-c"), Some("c"));
         assert_eq!(fallback.shorts("-ab"), None);
+        // A shell has its own family since step 14, and it bundles: `-lc`.
+        assert_eq!(grammar("bash").shorts("-lc"), Some("lc"));
         assert_eq!(grammar("ruby").valued, "rIEC");
     }
 
@@ -20011,6 +22999,231 @@ deny contains "refused by themodule" if {
         assert_eq!(
             matching_shape_rows(&policy, &envelope("echo echo")).len(),
             1
+        );
+    }
+
+    /// Fails by: Claude Code's session-owner variable unnamed or misnamed, or
+    /// one claimed for a host never surveyed.
+    #[test]
+    fn only_claude_code_names_a_session_owner_variable() {
+        assert_eq!(
+            Harness::ClaudeCode.session_owner_email_var(),
+            Some("CLAUDE_CODE_USER_EMAIL")
+        );
+        assert_eq!(Harness::Cursor.session_owner_email_var(), None);
+    }
+
+    /// Fails by: a githooks(5) name not recognised, or any name recognised.
+    #[test]
+    fn a_git_hook_name_is_recognised_and_no_other() {
+        assert!(is_git_hook("pre-commit"));
+        assert!(!is_git_hook("pre-cmmit"));
+    }
+
+    /// Fails by: Gemini's pre-compaction left unmapped (CLOUD-2695).
+    #[test]
+    fn geminis_pre_compress_is_pre_compact() {
+        assert_eq!(
+            normalize_event(Harness::GeminiCli, "PreCompress"),
+            Event::PreCompact
+        );
+    }
+
+    /// Fails by: a budget set selected by a write that is not at `PreTool`
+    /// (CLOUD-2661).
+    #[test]
+    fn only_a_pre_tool_write_selects_a_budget_set() {
+        let mut policy = Policy::declaring_nothing(Harness::ExitCode);
+        policy.budget = Some(crate::budget::Budget(std::collections::BTreeMap::from([(
+            "always".to_owned(),
+            crate::budget::BudgetSet {
+                files: vec!["CLAUDE.md".to_owned()],
+                max_tokens: 1,
+                max_lines: None,
+                max_bytes_per_file: None,
+                embedded: vec![],
+            },
+        )])));
+        let write = write_envelope("Write", "CLAUDE.md");
+        assert_eq!(policy.budget_sets_for(&write), vec!["always"]);
+        let mut after = write_envelope("Write", "CLAUDE.md");
+        after.event = Event::PostTool;
+        assert!(policy.budget_sets_for(&after).is_empty());
+    }
+
+    /// Fails by: `env`'s options or assignments read as its program (an
+    /// `-S` after them missed), or an `-S` after the program read as `env`'s.
+    #[test]
+    fn only_envs_own_split_string_is_its_command() {
+        assert_eq!(
+            split_strings(&["env", "-i", "-S", "git push"]),
+            ["git push"]
+        );
+        assert_eq!(
+            split_strings(&["env", "A=1", "-S", "git push"]),
+            ["git push"]
+        );
+        assert_eq!(
+            split_strings(&["env", "prog", "-S", "x"]),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Fails by: a word the crude read emptied, or a lone `$`, taken for the
+    /// program of an unread text.
+    #[test]
+    fn an_unread_texts_program_skips_emptied_words() {
+        for text in ["'' git push", "$ git push"] {
+            let reached = unread_reach(text, false, None, REACH_DEPTH);
+            assert_eq!(
+                reached.first().map(|entry| &entry["name"]),
+                Some(&serde_json::json!("git")),
+                "{text}: {reached:?}"
+            );
+        }
+    }
+
+    /// Fails by: `watch`'s valued option read past the end of its argv.
+    #[test]
+    fn a_watch_of_only_options_runs_nothing() {
+        assert_eq!(inner_scripts("watch", &["-n", "2"]), Vec::<String>::new());
+        assert_eq!(
+            inner_scripts("watch", &["-n", "2", "git", "push"]),
+            ["git push"]
+        );
+    }
+
+    /// Fails by: a script file exactly at the bound left unread.
+    #[test]
+    fn a_script_file_at_the_bound_is_read() {
+        let dir = crate::scratch::scratch("hook-script-bound");
+        let at = dir.join("at.sh");
+        let past = dir.join("past.sh");
+        let size = usize::try_from(SCRIPT_FILE_MAX).unwrap();
+        std::fs::write(&at, "#".repeat(size)).unwrap();
+        std::fs::write(&past, "#".repeat(size + 1)).unwrap();
+        assert!(script_file_text(&at.to_string_lossy()).is_some());
+        assert!(script_file_text(&past.to_string_lossy()).is_none());
+    }
+
+    /// Fails by: either name `node` answers to left out.
+    #[test]
+    fn both_node_names_are_node() {
+        assert_eq!(language_of("node"), Some(Language::Node));
+        assert_eq!(language_of("nodejs"), Some(Language::Node));
+        assert_eq!(language_of("deno"), None);
+    }
+
+    /// Fails by: a bare spawn name read only when both modules are imported, a
+    /// quoted comma or a list's comma splitting an argument, a raw string's
+    /// prefix read as code, an empty literal refused, or a string read as a
+    /// shell command without `shell=True`.
+    #[test]
+    fn a_spawns_literals_are_read_whole() {
+        let argv = |words: &[&str]| Spawned::Argv(words.iter().map(|w| (*w).to_owned()).collect());
+        let shell = |text: &str| Spawned::Shell(text.to_owned());
+        for (text, expected) in [
+            (
+                "from os import system\nsystem('git push')\n",
+                shell("git push"),
+            ),
+            (
+                "from subprocess import run\nrun(['git', 'push'])\n",
+                argv(&["git", "push"]),
+            ),
+            ("import os\nos.system('echo a, b')\n", shell("echo a, b")),
+            ("import os\nos.system(r'a\\nb')\n", shell("a\\nb")),
+            ("import os\nos.system('')\n", shell("")),
+            (
+                "import subprocess\nsubprocess.run('git push')\n",
+                argv(&["git push"]),
+            ),
+            (
+                "import subprocess\nsubprocess.run(['git', 'push'], check=True)\n",
+                argv(&["git", "push"]),
+            ),
+            (
+                "import subprocess\nsubprocess.run(['echo', 'a,b'])\n",
+                argv(&["echo", "a,b"]),
+            ),
+            (
+                "x = 1 #\nimport os\nos.system('git push')\n",
+                shell("git push"),
+            ),
+        ] {
+            assert_eq!(
+                spawns_in(Language::Python, text, "s.py", false),
+                vec![expected],
+                "{text}"
+            );
+        }
+        // A PARENTHESIS-LESS CALL ENDS AT ITS STATEMENT, never at a `)`.
+        assert_eq!(
+            spawns_in(
+                Language::Perl,
+                "(system \"git\", \"push\");\n",
+                "s.pl",
+                false
+            ),
+            vec![Spawned::Opaque {
+                source: "s.pl".into(),
+                trusted: false
+            }]
+        );
+    }
+
+    /// Fails by: an unclosed or mismatched quote read as a literal.
+    #[test]
+    fn only_a_closed_quote_is_a_literal() {
+        assert_eq!(string_literal(Language::Node, "\"abc"), None);
+        assert_eq!(string_literal(Language::Node, "aba"), None);
+        assert_eq!(string_literal(Language::Node, "\""), None);
+        assert_eq!(string_literal(Language::Node, "\"\"").as_deref(), Some(""));
+    }
+
+    /// Fails by: a `batten step` verb other than `run` reached as a step run.
+    #[test]
+    fn only_step_run_reaches_what_follows_its_separator() {
+        let reached = program_reach("batten step record s -- git push");
+        assert!(
+            !reached.iter().any(|entry| entry["name"] == "git"),
+            "{reached:?}"
+        );
+        let reached = program_reach("batten step run s -- git push");
+        assert!(
+            reached.iter().any(|entry| entry["name"] == "git"),
+            "{reached:?}"
+        );
+    }
+
+    /// Fails by: a package's declared binaries passed over for its own name.
+    #[test]
+    fn a_packages_declared_binaries_are_its_binaries() {
+        let dir = crate::scratch::scratch("hook-package-binaries");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let declared: toml::Table =
+            toml::from_str("[package]\nname = \"pkg\"\n[[bin]]\nname = \"tool\"\n").unwrap();
+        let package = declared["package"].as_table().unwrap().clone();
+        assert_eq!(package_binaries(&declared, &package, &dir), ["tool"]);
+        let plain: toml::Table = toml::from_str("[package]\nname = \"pkg\"\n").unwrap();
+        let package = plain["package"].as_table().unwrap().clone();
+        assert_eq!(package_binaries(&plain, &package, &dir), ["pkg"]);
+    }
+
+    /// Fails by: the protected walk stopping a visit early, or never.
+    #[test]
+    fn the_protected_walk_visits_exactly_its_bound() {
+        let root = crate::scratch::scratch("hook-protected-bound");
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        for at in 0..PROTECTED_WALK_BOUND + 5 {
+            std::fs::write(root.join("d").join(at.to_string()), "").unwrap();
+        }
+        let state = protected_state_of(&root, &[String::from("d/**")]).unwrap();
+        assert_eq!(
+            state.len(),
+            PROTECTED_WALK_BOUND - 1,
+            "the directory is a visit"
         );
     }
 }

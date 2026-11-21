@@ -35,6 +35,8 @@
 // remainder is not dead code, it is another target's.
 #![allow(dead_code)]
 
+use batten::exec::Streamed as _;
+use batten::exec::StreamedChild as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[expect(
@@ -73,8 +75,15 @@ pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
 /// repositories live.
 #[must_use]
 pub(crate) fn target_tmp() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    // A RUNTIME OVERRIDE FIRST: cargo bakes `CARGO_TARGET_TMPDIR` into the
+    // binary, so a mutation sweep running one case on several workers at once
+    // gives each its own root here, or two runs would share a fixture path.
+    std::env::var_os(TEST_TMPDIR)
+        .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
+
+/// The variable a mutation sweep sets to move [`target_tmp`] per worker.
+pub(crate) const TEST_TMPDIR: &str = "BATTEN_TEST_TMPDIR";
 
 /// A committed file at the repository root, located from this crate's manifest
 /// directory.
@@ -256,10 +265,33 @@ pub(crate) fn dist_config() -> toml::Table {
 /// Read through [`at_root`], so under `mutate sweep` it is the STAGED manifest and
 /// a mutation of the body is what the suite sees.
 pub(crate) fn task_block(name: &str) -> Option<String> {
+    task_block_template(name).map(|block| rendered(&block))
+}
+
+/// [`task_block`] as the manifest spells it, `{{vars.batten}}` unrendered: for
+/// a pin on HOW a task names the engine rather than on what it runs.
+pub(crate) fn task_block_template(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
     let lines: Vec<String> = manifest.lines().map(str::to_owned).collect();
     batten::mutate::task_block(&lines, name).map(|block| block.join("\n"))
+}
+
+/// `text` with `{{vars.batten}}` rendered as mise renders it with `BATTEN_BIN`
+/// unset: the `[vars] batten` default, read from the committed manifest (step
+/// 22). A task spells batten through that var, and a tier asserting what a task
+/// runs asserts the argv mise hands the shell, not the template.
+pub(crate) fn rendered(text: &str) -> String {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    let declared = parsed["vars"]["batten"]
+        .as_str()
+        .expect("[vars] declares batten");
+    let default = declared
+        .split_once("default='")
+        .and_then(|(_, rest)| rest.split_once('\''))
+        .map_or(declared, |(value, _)| value);
+    text.replace("{{vars.batten}}", default)
 }
 
 /// One declared key's value out of a task block: a string as its contents, any
@@ -308,18 +340,20 @@ pub(crate) fn task_commands(name: &str) -> Vec<String> {
     else {
         return Vec::new();
     };
+    // RENDERED, as `task_block` is: what a task RUNS is the argv mise hands the
+    // shell, and a task spells batten through `{{vars.batten}}` (step 22).
     match run {
         toml::Value::String(body) => body
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-            .map(str::to_owned)
+            .map(rendered)
             .collect(),
         toml::Value::Array(entries) => entries
             .iter()
             .filter_map(|entry| match entry {
-                toml::Value::String(command) => Some(command.clone()),
+                toml::Value::String(command) => Some(rendered(command)),
                 toml::Value::Table(table) => table
                     .get("task")
                     .and_then(toml::Value::as_str)
@@ -352,6 +386,90 @@ pub(crate) fn task_depends(name: &str) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Every task a task reaches directly: its `depends`, each `mise run X` step, and
+/// each `::: X` member of a `mise run --continue-on-error` fan (the verify fan of
+/// 2026-11-11). A gate moved from `depends` into the fan is still reached, so a
+/// test asking "does verify run X" must not care which of the two spells it.
+pub(crate) fn task_reaches(name: &str) -> Vec<String> {
+    let mut reached = task_depends(name);
+    for line in task_body(name).lines() {
+        // A `step graph run <group>` line (CLOUD-2785) reaches every task its
+        // group's `[[step]]` rows run, which the step table holds, not the body.
+        if let Some(group) = graph_group(line) {
+            reached.extend(group_rows(&group).into_iter().filter_map(|row| row.task));
+            continue;
+        }
+        let Some(rest) = line.trim().strip_prefix("mise run ") else {
+            continue;
+        };
+        for member in rest.split(":::") {
+            if let Some(task) = member
+                .split_whitespace()
+                .find(|word| !word.starts_with('-'))
+            {
+                reached.push(task.to_owned());
+            }
+        }
+    }
+    reached
+}
+
+/// The group a `… step graph run <group>` line runs, or `None` for any other line.
+pub(crate) fn graph_group(line: &str) -> Option<String> {
+    let (_, rest) = line.split_once("step graph run ")?;
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+/// One `[[step]]` row of a graph group, as the committed `batten.toml` declares it.
+#[derive(Debug)]
+pub(crate) struct GroupRow {
+    /// The row's `id`.
+    pub id: String,
+    /// The mise task its `run` starts, where it is `mise run <task> …`.
+    pub task: Option<String>,
+    /// The rows it waits for.
+    pub depends_on: Vec<String>,
+}
+
+/// Every `[[step]]` row in `group`, in the order the committed `batten.toml`
+/// lists them.
+pub(crate) fn group_rows(group: &str) -> Vec<GroupRow> {
+    let text = fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses as TOML");
+    let words = |value: Option<&toml::Value>| -> Vec<String> {
+        value
+            .and_then(toml::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    parsed
+        .get("step")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("group").and_then(toml::Value::as_str) == Some(group))
+        .map(|row| {
+            let run = words(row.get("run"));
+            GroupRow {
+                id: row
+                    .get("id")
+                    .and_then(toml::Value::as_str)
+                    .expect("every step row has an id")
+                    .to_owned(),
+                task: (run.len() > 2 && run[0] == "mise" && run[1] == "run")
+                    .then(|| run[2].clone()),
+                depends_on: words(row.get("depends_on")),
+            }
+        })
+        .collect()
 }
 
 /// Every `BATTEN_` variable the command surface declares, derived from the
@@ -433,7 +551,6 @@ fn bypass_env_vars() -> Vec<String> {
 ///
 /// A two-field serde view rather than a `toml::Value` tree: everything but the
 /// `[[rule]]` rows' one column is skipped by the deserializer instead of built.
-//MUTANT bypass-read-drops-rows|s@^        .filter_map(\x7crule\x7c rule.bypass_env)$@        .filter_map(\x7crule\x7c rule.bypass_env.filter(\x7c_\x7c false))@|the_cheap_bypass_read_names_what_the_full_load_names
 pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     #[derive(serde::Deserialize)]
     struct Rows {
@@ -521,6 +638,44 @@ pub(crate) fn batten() -> Batten {
         batten::mutate::RUNNERS,
         batten::mutate::RUNNER,
         batten::mutate::SHARD,
+        "MUTANT_PRESETS",
+        "MUTANT_OVERLAY_ENV",
+        "MUTANT_OVERLAY_FEATURES",
+        // THE HOST SIGNALS (CLOUD-2709): a suite run inside a cloud session
+        // inherited them and decided `host` one way, and CI the other. A case
+        // that means a host sets it.
+        "CLAUDE_CODE_REMOTE",
+        "BATTEN_ENVIRONMENT",
+        // THE LAP'S GATE MARKER (CLOUD-2707): a lap exports it to the whole gate,
+        // the suite included, so a placement case would read every head as the
+        // lap's own and its refusal arm could never fail.
+        "BATTEN_LAND_GATE",
+        // THE DISK TRACE (#1276): a lap run under it to measure its collector
+        // handed it to every case, and 17 that read a child's stderr found a
+        // `disk-call` line before the one they assert. A case tracing sets it.
+        "BATTEN_DISK_TRACE",
+        // NOR THE SCHEMA SWEEP'S RECORDER (#1276): the reach baseline runs this
+        // suite with both exported, so every `batten` a case started recorded
+        // into the OUTER sweep's reach and read its tree. The cases driving a
+        // sweep of their own failed, the baseline failed with them, and no
+        // mutant was ever judged.
+        batten::mutate::schema::REACH,
+        batten::mutate::schema::TREE_ENV,
+        // NOR THE SWEEP'S CARGO SETTINGS OR NEXTEST PROFILE (#1276). The schema
+        // runs its baseline and its judging with these exported, and nextest
+        // hands every case its own profile name. A case driving `cargo` or
+        // `nextest` over a fixture then built into the sweep's shared directory
+        // or asked for `batten-cover`, a profile its fixture has none of: 13 of
+        // 10,086 baseline cases failed for it, and a failed baseline judges no
+        // mutant. `test:cargo` sets none of them.
+        "CARGO_TARGET_DIR",
+        "CARGO_BUILD_BUILD_DIR",
+        "CARGO_INCREMENTAL",
+        "CARGO_PROFILE_TEST_DEBUG",
+        "NEXTEST_PROFILE",
+        // NOT the overlay variable itself: it is how a mutated preset reaches the
+        // `batten` a suite spawns, and scrubbing it judged every preset row
+        // against the embedded, unmutated text (85 false survivors).
     ] {
         command.env_remove(name);
     }
@@ -545,7 +700,14 @@ pub(crate) fn batten() -> Batten {
     ] {
         command.env_remove(name);
     }
-    Batten(command)
+    // NOR THE REAL RELEASE HOST (CLOUD-2595). An engine that finds a config
+    // pinning nothing fetches its own release's `SHA256SUMS` to write the pin,
+    // so with network a case's starter or session start was rewritten by
+    // whatever GitHub served that minute. A loopback port nothing listens on
+    // fails the fetch at once; a case that wants a release serves its own and
+    // sets this after, as the engine suites do.
+    command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
+    Batten(command, batten::exec::Keep::NONE)
 }
 
 /// The case's own home, and the toolchain the developer's home holds pinned
@@ -636,7 +798,7 @@ pub(crate) fn homes(command: &Command) -> Vec<(String, PathBuf)> {
     clippy::disallowed_types,
     reason = "stays, and test-only: the door wraps the one spawn of the binary under test"
 )]
-pub(crate) struct Batten(Command);
+pub(crate) struct Batten(Command, batten::exec::Keep);
 
 #[expect(
     clippy::disallowed_types,
@@ -675,10 +837,6 @@ fn refuse_fall_through_at(cwd: &Path) {
     );
 }
 
-//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
-//MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
-//MUTANT task-door-unguarded|s@^        self.refuse_fall_through();$@@|a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs
-//MUTANT piped-door-unguarded|s@^    refuse_fall_through_at(dir);$@@|a_piped_spawn_into_a_fall_through_is_refused_before_it_runs
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {
@@ -741,25 +899,55 @@ impl Batten {
     /// [`std::process::Command::stdin`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdin<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdin(cfg);
+        self.1.stdin = true;
         self
     }
 
     /// [`std::process::Command::stdout`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdout<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdout(cfg);
+        self.1.stdout = true;
         self
     }
 
     /// [`std::process::Command::stderr`], returning the door so a chain keeps its refusal.
     pub(crate) fn stderr<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stderr(cfg);
+        self.1.stderr = true;
         self
     }
 
-    /// [`std::process::Command::output`], refused first where it would fall through.
-    pub(crate) fn output(&mut self) -> std::io::Result<Output> {
+    /// [`batten::stream::Streamed::streamed_output`], refused first where it would
+    /// fall through: every stream of the binary under test through the one pump.
+    pub(crate) fn streamed_output(&mut self) -> std::io::Result<Output> {
+        use batten::exec::Streamed as _;
         self.refuse_fall_through();
-        self.0.output()
+        self.0.streamed_output()
+    }
+
+    /// [`Batten::streamed_output`] under `main`'s name. Without it a body that
+    /// spells `.output()` derefs to `std`'s `Command::output`, which captures
+    /// without the pump and skips the refusal above — measured on #1276, where
+    /// the replayed base bodies of `harness_isolation` panicked on drop.
+    ///
+    /// **`std`'s `output` KEEPS A STREAM ITS CALLER SET**, and only captures the
+    /// rest; this door records each one its own setters set, so the old
+    /// spelling keeps them too — a reader that hangs up stays the reader.
+    pub(crate) fn output(&mut self) -> std::io::Result<Output> {
+        let keep = self.1;
+        self.streamed_output_keeping(keep)
+    }
+
+    /// [`batten::stream::Streamed::streamed_output_keeping`], refused first where
+    /// it would fall through: the streams this door's own `stdin`/`stdout`/
+    /// `stderr` set are kept, as `output` kept them.
+    pub(crate) fn streamed_output_keeping(
+        &mut self,
+        keep: batten::exec::Keep,
+    ) -> std::io::Result<Output> {
+        use batten::exec::Streamed as _;
+        self.refuse_fall_through();
+        self.0.streamed_output_keeping(keep)
     }
 
     /// [`std::process::Command::spawn`], refused first where it would fall through.
@@ -976,7 +1164,6 @@ fn mise_dirs() -> &'static [(&'static str, PathBuf)] {
 fn pin_mise(command: &mut Command) {
     // The declared mutation, in a plain comment because `common/` is harness
     // rather than a sweep route; its kill is shown by hand (CLOUD-2021):
-    // MUTANT state-redirect-moves-mise|s@command.env(name, dir);@let _ = (name, dir);@|a_redirected_state_root_leaves_mises_installs_where_they_are
     for (name, dir) in mise_dirs() {
         command.env(name, dir);
     }
@@ -991,8 +1178,7 @@ fn pin_mise(command: &mut Command) {
     // `session:*` task against the host, 200 processes and 78s. A case run over
     // the real repository has its manifest in its own cwd, below no ceiling.
     // The declared mutation, in a plain comment for the reason above:
-    // MUTANT fixture-mise-walks-to-checkout|s@^    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));$@@|every_spawn_stops_mises_walk_at_the_fixture_root
-    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));
+    command.env("MISE_CEILING_PATHS", target_tmp());
 }
 
 /// The mise data dir [`batten`] pins, for the case asserting a state redirect
@@ -1031,10 +1217,13 @@ pub(crate) fn task_body(name: &str) -> String {
             .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
             .to_owned(),
     };
-    body.lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    rendered(
+        &body
+            .lines()
+            .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// `[env].<name>` from the committed `mise.toml` — the one declaration a task
@@ -1077,7 +1266,7 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> Batten {
     // so a fixture that is no repository of its own falls through to this
     // checkout here exactly as it would there. Returned as a `Batten`, the check
     // reads the final directory — a caller's later `current_dir` included.
-    Batten(command)
+    Batten(command, batten::exec::Keep::NONE)
 }
 
 /// `[tasks.<task>]` ready to run in `dir` under [`batten`]'s scrubbed
@@ -1179,7 +1368,7 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
         .take()
         .expect("piped stdin")
         .write_all(stdin.as_bytes());
-    child.wait_with_output().expect("run the producer")
+    child.streamed_wait().expect("run the producer")
 }
 
 /// Whether the committed authority declares the OWNER'S protected-path set.
@@ -1246,7 +1435,7 @@ pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
     let output = std::process::Command::new("mise")
         .args(["which", bin])
         .current_dir(at_root("."))
-        .output()
+        .streamed_output()
         .expect("run `mise which`");
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     assert!(
@@ -1271,6 +1460,38 @@ pub(crate) fn committed_protected_path() -> &'static str {
     } else {
         ".batten/asked.jsonl"
     }
+}
+
+/// The `pipeline` row this repository retired (CLOUD-2698), byte for byte as it
+/// was committed.
+///
+/// The ROW is gone from `batten.toml` by owner ruling; the `pipeline` kind and
+/// the `tool run loose` class it raised stay in the engine, because a consumer
+/// may still declare one. So the suites that exercise that kind and the refusal
+/// machinery over it carry the row as a fixture instead of borrowing it from
+/// the repository's policy.
+pub(crate) const SUBSTITUTION_ROW: &str = "
+[[rule]]
+id = \"tool select other\"
+kind = \"pipeline\"
+scope = \"mediated_call\"
+severity = \"deny\"
+substitutes = [\"cat\", \"head\", \"tail\", \"sed:-n\", \"grep\", \"rg\", \"find\", \"ls\", \"wc\"]
+reason = \"Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed.\"
+";
+
+/// [`committed_fixture_with_protected`], plus [`SUBSTITUTION_ROW`]: this
+/// repository's rows with the retired substitution row declared, so the
+/// `pipeline` kind stays under test (CLOUD-2698).
+#[must_use]
+pub(crate) fn committed_fixture_with_substitution(name: &str) -> PathBuf {
+    let dir = committed_fixture_with_protected(name);
+    let path = dir.join("batten.toml");
+    let mut config = std::fs::read_to_string(&path).expect("read the fixture config");
+    config.push_str(SUBSTITUTION_ROW);
+    std::fs::write(&path, config).expect("write the fixture config");
+    git_in(&dir, &["commit", "-qam", "declare the substitution row"]);
+    dir
 }
 
 /// A fixture carrying the committed `batten.toml` and policy modules, with the
@@ -1374,6 +1595,12 @@ pub(crate) fn scratch_state_root() -> &'static Path {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let dir = target_tmp().join(format!("state-{}", std::process::id()));
+        // WIPED FIRST, LIKE EVERY SCRATCH PATH: pid_max is 32768 here and a run
+        // spawns more processes than that, so this name is a dead process's.
+        // Inherited, it kept that process's store AND its old mtime, so the disk
+        // collector dated a live root stale and removed it between a spend and
+        // the hook that read it (bypass_scrub, a mutation baseline).
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the scratch state root");
         // THIS process's own library calls resolve the same root its children
         // are pinned to, so a case that spawns and calls in-process reads one
@@ -1423,7 +1650,7 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
     batten()
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -1700,7 +1927,7 @@ pub(crate) fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input:
         );
     }
     drop(stdin);
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 /// `output.stdout` as a `String`.
@@ -1887,7 +2114,7 @@ pub(crate) fn write(dir: &Path, path: &str, contents: &str) {
 /// `core.hooksPath` cannot break a fixture, and identity comes through `-c` so
 /// the fixture's own `.git/config` stays as bare as a fresh clone's.
 pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
-    let output = git_command(dir, args).output().expect("run git");
+    let output = git_command(dir, args).streamed_output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?} failed in {}: {}",
@@ -1973,7 +2200,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", target_tmp())
         // A hook a fixture installs runs under git's PATH, so git gets the
         // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
         .env("PATH", ambient_path())
@@ -2049,7 +2276,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
 /// `.git/config` is the same values by a cheaper route. A fixture that wants a
 /// DIFFERENT identity still sets it after the copy, and one whose subject is an
 /// UNSET identity unsets it — `attribution.rs` already does exactly that.
-fn git_init_template() -> Option<&'static Path> {
+pub(crate) fn git_init_template() -> Option<&'static Path> {
     static TEMPLATE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     TEMPLATE.get_or_init(build_git_init_template).as_deref()
 }
@@ -2246,6 +2473,25 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+/// Date the shared template as used now, so the disk collector keeps it.
+///
+/// A READ IS A USE THE COLLECTOR CANNOT SEE (#1276). It keeps a `target/tmp`
+/// entry written since the earliest live test process started
+/// (`collect::fixtures_since`), dating each by its newest write. The template
+/// is written once and only read after, so once the process that published it
+/// exited, a pass dated it stale and removed it under a live mutation sweep:
+/// lap 9 failed `copy_tree`'s "read the template directory" on `NotFound`. Each
+/// copy now rewrites `HEAD`'s mtime, a child `newest_write` reads, from a
+/// process that is itself in the window. `HEAD`, not the directory: opening a
+/// directory to set its time needs write-attribute access on Windows. A failed
+/// touch is not fatal; the copy then fails where it names the cause.
+fn mark_in_use(template: &Path) {
+    let _ = fs::OpenOptions::new()
+        .write(true)
+        .open(template.join("HEAD"))
+        .and_then(|head| head.set_modified(std::time::SystemTime::now()));
+}
+
 /// Make `dir` a git repository.
 ///
 /// Under `CARGO_TARGET_TMPDIR` this copies [`git_init_template`], at zero forks.
@@ -2278,6 +2524,7 @@ pub(crate) fn init_repo(dir: &Path) {
         return;
     };
     {
+        mark_in_use(template);
         copy_tree(template, &dir.join(".git"));
         // CHECK WHAT THE COPY PRODUCED, HERE (CLOUD-1832). `copy_tree` creates
         // its destination and copies whatever it finds, so a template that was
@@ -2660,7 +2907,6 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// committed table declares `<id>`" after the committed module stopped raising
 /// it. A scratch fixture carries no `.gitignore`, so it is walked in full as
 /// before.
-// MUTANT vocabulary-reads-ignored-tree|s@batten::rules::tree_files(root).expect("the vocabulary root is walkable")@std::fs::read_dir(root).into_iter().flatten().flatten().flat_map(\x7cdir\x7c std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(move \x7cfile\x7c format!("{}/{}", dir.file_name().to_string_lossy(), file.file_name().to_string_lossy()))).collect::<Vec<_>>()@|the_declared_vocabulary_never_reads_an_ignored_directory
 #[must_use]
 pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -2739,102 +2985,25 @@ fn tokens_in(text: &str) -> Vec<String> {
     found
 }
 
-/// The text of every attribute in `source` that mentions `lint`, with the
+/// The text of every lint-level attribute in `source` naming `lint`, with the
 /// 1-based line it starts on.
 ///
-/// A bounded scan rather than a parse: an attribute opens at `#[` or `#![` and
-/// closes at the first `)]` before the NEXT opener. That bound is what makes it
-/// safe over a file that discusses annotations in prose and names a lint in a
-/// `const` — an unbounded search would stitch a doc comment to some later
-/// attribute's closer and report a finding about neither. Measured on
-/// `spawn_census.rs`: the first version of that scan flagged its own inner
-/// `allow` line.
+/// A PARSE, NOT A SCAN (#1276): `batten::codemod::lint_attributes` reads the
+/// syntax tree, so an attribute spelled in a comment, a doc line, a string or a
+/// raw string is no row, and a lint sharing a prefix is not this one. The text
+/// scan it replaces took three bounds (the next opener, a `//` line start, an
+/// odd quote count) and still read `codemod.rs`'s multi-line fixture string as
+/// four undecided rows.
 ///
-/// Enough to tell an `expect` from an `allow` and to find a `reason`, which is
-/// all any caller asks. The alternative is a proc-macro parse of the whole crate
-/// to check a property clippy has already enforced the hard half of.
-///
-/// **This lives here because there are two inventories now** — the spawn census
+/// **This lives here because there are two inventories** — the spawn census
 /// over `disallowed_types` and the delay inventory over `disallowed_methods`
-/// (CLOUD-1177) — and two copies of a scanner are two authorities that can
-/// disagree about what an annotation IS. It is parameterized by the lint for
-/// exactly that reason.
+/// (CLOUD-1177) — and two readers are two authorities that can disagree about
+/// what an annotation IS. It is parameterized by the lint for exactly that reason.
 pub(crate) fn annotations_naming(source: &str, lint: &str) -> Vec<(usize, String)> {
-    let mut found = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find("#[") {
-        // `#![` opens one character earlier; take the wider span so an inner
-        // attribute is not read as a bare one.
-        let mut open = cursor + offset;
-        if open > 0 && source.as_bytes()[open - 1] == b'!' && open > 1 {
-            open -= 1;
-        }
-        cursor = open + 2;
-        let rest = &source[open..];
-        let Some(close) = rest.find(")]") else {
-            break;
-        };
-        // The next opener bounds this one. An attribute with no `(` — a bare
-        // `#[test]`, or an annotation named without its arguments in a doc
-        // comment — has no closer of its own, so its "closer" belongs to
-        // something further down and it is skipped.
-        let next = rest[2..].find("#[").map_or(rest.len(), |at| at + 2);
-        if close + 2 > next {
-            continue;
-        }
-        // AN ATTRIBUTE INSIDE A COMMENT IS PROSE, NOT AN INVENTORY ROW.
-        //
-        // The bound above handles a doc comment naming an annotation WITHOUT its
-        // arguments — that has no closer of its own and is skipped. It does not
-        // handle one that spells it in full, and that is the shape a module
-        // explaining why its spawn was retired naturally writes: "this was a
-        // child process under `#[expect(clippy::disallowed_types)]`". Seven such
-        // sentences read as seven annotations carrying no `reason`, so the census
-        // reported the prose that RECORDS a retirement as a row that had not
-        // been decided.
-        //
-        // Keyed on the line's own opening rather than on a span search: a
-        // comment marker anywhere earlier in the file says nothing about this
-        // line, and the question is only ever whether THIS attribute is
-        // commented out.
-        let line_start = source[..open].rfind('\n').map_or(0, |at| at + 1);
-        let before = &source[line_start..open];
-        if before.trim_start().starts_with("//") {
-            continue;
-        }
-        // NOR IS ONE INSIDE A STRING LITERAL. `spawn_widening.rs` builds fixture
-        // MODULES as string constants, so the escape a case hands the gate under
-        // test is spelled in full inside quotes — and the census read three of
-        // its own fixtures as undecided rows. An odd number of quotes before the
-        // opener means this `#[` is inside one; escaped quotes do not open or
-        // close, so they are skipped rather than counted.
-        let quotes = before
-            .char_indices()
-            .filter(|&(at, ch)| ch == '"' && !before[..at].ends_with('\\'))
-            .count();
-        if quotes % 2 == 1 {
-            continue;
-        }
-        // AND AN ATTRIBUTE THAT IS NOT A LINT LEVEL IS NOT THIS INVENTORY'S.
-        //
-        // The span bound above stitches a BARE attribute — `#[test]`, which has
-        // no closer of its own — to the next `)]` further down, so a case whose
-        // body mentions the lint made its own `#[test]` a finding. Requiring the
-        // opener to be one of the four level words is what the callers actually
-        // mean by an annotation, and it decides in one comparison rather than by
-        // guessing where a bare attribute ends.
-        let opens_a_level = ["expect(", "allow(", "warn(", "deny("]
-            .iter()
-            .any(|level| rest[2..].trim_start().starts_with(level));
-        if !opens_a_level {
-            continue;
-        }
-        let attribute = &rest[..close + 2];
-        if attribute.contains(lint) {
-            found.push((source[..open].lines().count() + 1, attribute.to_owned()));
-        }
-    }
-    found
+    batten::codemod::lint_attributes(source, batten::codemod::Edition::E2024, lint)
+        .into_iter()
+        .map(|found| (found.line, found.text))
+        .collect()
 }
 
 /// The `reason` an annotation carries, as the author wrote it rather than as the
@@ -2877,8 +3046,20 @@ pub(crate) fn annotation_reason(attribute: &str) -> Option<String> {
 #[must_use]
 pub(crate) fn rust_sources() -> Vec<PathBuf> {
     let mut found = Vec::new();
-    for dir in ["crates/batten/src", "crates/batten/tests"] {
-        collect_rust(&at_root(dir), &mut found);
+    // EVERY CRATE'S SOURCES (#1276), not `batten`'s alone: a leaf split out
+    // of it (`batten-fsio`, `batten-stream`) carries the same code and must
+    // stay under the same census, or the split is a way out of every gate.
+    let crates = at_root("crates");
+    let mut members: Vec<PathBuf> = fs::read_dir(&crates)
+        .expect("the workspace's crates directory")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .collect();
+    members.sort();
+    for member in members {
+        for dir in ["src", "tests"] {
+            collect_rust(&member.join(dir), &mut found);
+        }
     }
     found.sort();
     assert!(
@@ -3004,7 +3185,7 @@ pub(crate) fn mint_ca_and_server_certificate(tls: &Path) {
         let run = Command::new("openssl")
             .args(args)
             .current_dir(tls)
-            .output()
+            .streamed_output()
             .expect("openssl is required for the TLS fixture");
         assert!(
             run.status.success(),
@@ -3100,36 +3281,56 @@ pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
     use std::process::{Command, Stdio};
 
     mint_ca_and_server_certificate(tls);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
-    )]
-    let child = Command::new("openssl")
-        .args(["s_server", "-accept", &port.to_string(), "-cert"])
-        .arg(tls.join("cert.pem"))
-        .arg("-key")
-        .arg(tls.join("key.pem"))
-        .args(["-WWW", "-quiet"])
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start the local TLS listener");
-    let mut host = TlsWww { port, child };
-    // 600 x 50ms: under the full suite's load `s_server` measured slower than
-    // the 5s `provision.rs` allowed one listener alone. A listener that EXITED is
-    // reported at once rather than waited out.
-    for _ in 0..600 {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
-            return host;
+    // The port is free when chosen and released before `s_server` takes it, so
+    // a parallel case can take it in between. `s_server` then exits 0 without
+    // listening (measured: `BIO_bind: Address already in use`, status 0), which
+    // is a lost race, not a broken listener: a fresh port is tried, a bounded
+    // number of times. Lap 24's schema sweep failed `engine_pin` on it.
+    let mut exits = Vec::new();
+    for _ in 0..TLS_PORT_TRIES {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
+        )]
+        let child = Command::new("openssl")
+            .args(["s_server", "-accept", &port.to_string(), "-cert"])
+            .arg(tls.join("cert.pem"))
+            .arg("-key")
+            .arg(tls.join("key.pem"))
+            .args(["-WWW", "-quiet"])
+            .current_dir(root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the local TLS listener");
+        match tls_listening(TlsWww { port, child }) {
+            Ok(host) => return host,
+            Err(status) => exits.push(status),
         }
+    }
+    panic!("the TLS listener exited before it bound on {TLS_PORT_TRIES} ports: {exits:?}");
+}
+
+/// Fresh ports `tls_www` tries before a listener that keeps exiting is a failure.
+const TLS_PORT_TRIES: usize = 8;
+
+/// `host` once its listener holds its port, or the status it exited with first.
+///
+/// 600 x 50ms: under the full suite's load `s_server` measured slower than the
+/// 5s `provision.rs` allowed one listener alone. The exit is read before the
+/// port, so a port some other process took is never mistaken for this one's.
+fn tls_listening(mut host: TlsWww) -> Result<TlsWww, std::process::ExitStatus> {
+    for _ in 0..600 {
         if let Ok(Some(status)) = host.child.try_wait() {
-            panic!("the TLS listener exited before it bound: {status}");
+            return Err(status);
+        }
+        if std::net::TcpListener::bind(("127.0.0.1", host.port)).is_err() {
+            return Ok(host);
         }
         #[expect(
             clippy::disallowed_methods,

@@ -245,7 +245,7 @@ fn fixture(name: &str, record: Option<(&str, &str)>, status: &str, subject_now: 
 fn check(dir: &Path) -> std::process::Output {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 #[test]
@@ -663,7 +663,9 @@ fn validate(dir: &Path) -> std::process::Output {
     command
         .current_dir(dir)
         .args(["record", "validate", "config-validator"]);
-    command.output().expect("run batten record validate")
+    command
+        .streamed_output()
+        .expect("run batten record validate")
 }
 
 #[test]

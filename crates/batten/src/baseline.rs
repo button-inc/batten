@@ -17,7 +17,7 @@
 //! * **It is declared and inspectable.** The artifact is one JSON document with a
 //!   schema, listing rule ids, hex fingerprints and counts. Nothing is suppressed
 //!   that the file does not name.
-//! * **It mints only behind a computable predicate** ([`mintable`]) — no model
+//! * **It mints only behind a computable predicate** ([`mintable`]) — no gated-model
 //!   verdict, no server state, no "is this reasonable".
 //! * **Its staleness is loud** — an entry with nothing behind it is an ordinary
 //!   [`Finding`] on the `0/1/2/3` table (§7), not a warning line somebody can
@@ -124,9 +124,10 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity::{self, CountChange, FindingKind, StoredIdentity};
-use crate::rules::{Finding, Scan};
+use crate::rules::Scan;
 use crate::severity::RuleSeverity;
 use crate::state;
 use crate::store;
@@ -314,7 +315,7 @@ pub fn load(root: &Path) -> Result<Option<Baseline>> {
     if !file.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+    let bytes = crate::fsio::read(&file).with_context(|| format!("read {}", file.display()))?;
     let baseline: Baseline = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse the baseline at {}", file.display()))?;
     if baseline.schema != BASELINE_SCHEMA {

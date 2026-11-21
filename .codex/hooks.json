@@ -1,11 +1,41 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "Interrupt": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness codex-cli"
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostModelRequest": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
           }
         ]
       }
@@ -14,18 +44,48 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness codex-cli"
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
           }
         ]
       }
     ],
-    "Stop": [
+    "PreCompact": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness codex-cli"
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreModelRequest": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
           }
         ]
       }
@@ -34,8 +94,48 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness codex-cli"
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness codex-cli",
+            "type": "command"
           }
         ]
       }

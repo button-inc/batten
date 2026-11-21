@@ -124,6 +124,14 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [
         {
+          "name": "event",
+          "short": null,
+          "long": "event",
+          "takes_value": true,
+          "positional": false,
+          "help": "The host's event name, used only when the payload names none"
+        },
+        {
           "name": "harness",
           "short": null,
           "long": "harness",
@@ -138,6 +146,14 @@ expression: stdout_of(&output)
           "takes_value": true,
           "positional": false,
           "help": "The epoch second to judge time-dependent records against, supplied as data"
+        },
+        {
+          "name": "show_input",
+          "short": null,
+          "long": "show-input",
+          "takes_value": false,
+          "positional": false,
+          "help": "Store the exact policy input this call produced and print its pointer on stderr"
         }
       ],
       "subcommands": []
@@ -1111,7 +1127,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The git ref whose published schema is the baseline (e.g. v0.0.111)"
+              "help": "The git ref whose published schema is the baseline (e.g. v0.0.111), or `latest` for the newest v* tag by version order"
             },
             {
               "name": "json",
@@ -1525,12 +1541,36 @@ expression: stdout_of(&output)
       "data_channel": true,
       "flags": [
         {
+          "name": "half",
+          "short": null,
+          "long": "half",
+          "takes_value": true,
+          "positional": false,
+          "help": "Judge only the tree half (receipt-keyed on the index) or the live half of the rows"
+        },
+        {
+          "name": "inputs_digest",
+          "short": null,
+          "long": "inputs-digest",
+          "takes_value": false,
+          "positional": false,
+          "help": "With --half tree: print a digest of the out-of-tree state that half reads, and judge nothing"
+        },
+        {
           "name": "json",
           "short": "J",
           "long": "json",
           "takes_value": false,
           "positional": false,
           "help": "Emit byte-stable JSON instead of pointer lines"
+        },
+        {
+          "name": "keyed_base",
+          "short": null,
+          "long": "keyed-base",
+          "takes_value": true,
+          "positional": false,
+          "help": "A ref whose merge base the tree half's receipt keys, admitting ratchets against it (repeatable)"
         },
         {
           "name": "rule",
@@ -1790,6 +1830,60 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "forge",
+      "id": "forge",
+      "about": "Take forge events into the hook surface",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "forge intake",
+          "id": "forge.intake",
+          "about": "Run one forge event payload from stdin through the handlers and rules a harness hook gets",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "event",
+              "short": null,
+              "long": "event",
+              "takes_value": true,
+              "positional": false,
+              "help": "The X-GitHub-Event name the webhook body on stdin arrived under"
+            },
+            {
+              "name": "from",
+              "short": null,
+              "long": "from",
+              "takes_value": true,
+              "positional": false,
+              "help": "`wake`: stdin is a harness user-prompt-submit payload carrying the event"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "forge poll",
+          "id": "forge.poll",
+          "about": "Read forge events from the first available declared source and run each through intake",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "every",
+              "short": null,
+              "long": "every",
+              "takes_value": true,
+              "positional": false,
+              "help": "Poll every this many seconds, registered with `task` as forge-poll"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "generate",
       "id": "generate",
       "about": "Emit artifacts derived from the command spec, on stdout",
@@ -1969,6 +2063,14 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [
             {
+              "name": "hold",
+              "short": null,
+              "long": "hold",
+              "takes_value": false,
+              "positional": false,
+              "help": "Stop after the first verify whose verdict is final, before the lease, push and ready"
+            },
+            {
               "name": "reference",
               "short": null,
               "long": null,
@@ -1995,6 +2097,15 @@ expression: stdout_of(&output)
               "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "land placed",
+          "id": "land.placed",
+          "about": "Advise a gate run on a committed, pushed head that land is next and reuses its receipt",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -2583,6 +2694,42 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "modules",
+      "id": "modules",
+      "about": "Measure the crate's module graph",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "modules cycle",
+          "id": "modules.cycle",
+          "about": "Print how many modules the largest cycle of the module graph holds, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when the largest cycle holds more than this many modules (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "mutate",
       "id": "mutate",
       "about": "Decide whether this repository's gates discriminate, rather than merely parse",
@@ -2590,6 +2737,15 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "mutate cargo",
+          "id": "mutate.cargo",
+          "about": "Run cargo-mutants over the change since $MUTANT_CHANGED_SINCE on as many jobs as this machine holds",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
         {
           "path": "mutate census",
           "id": "mutate.census",
@@ -4626,64 +4782,6 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
-          "path": "singleton detach",
-          "id": "singleton.detach",
-          "about": "Run a command in the background under a task's lock, and report the previous run's failure",
-          "effect": "unclassified",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "attached",
-              "short": null,
-              "long": "attached",
-              "takes_value": false,
-              "positional": false,
-              "help": "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure"
-            },
-            {
-              "name": "command",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The command to run in the background, after `--`"
-            },
-            {
-              "name": "log",
-              "short": null,
-              "long": "log",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where the background run's whole output is written"
-            },
-            {
-              "name": "marker",
-              "short": null,
-              "long": "marker",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where a failed run's pointers wait, announced and cleared by the next invocation"
-            },
-            {
-              "name": "pattern",
-              "short": null,
-              "long": "pattern",
-              "takes_value": true,
-              "positional": false,
-              "help": "The `[[pattern]]` row whose matching output lines are the failure's pointers"
-            },
-            {
-              "name": "task",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The task's name, which is what the lock is keyed by"
-            }
-          ],
-          "subcommands": []
-        },
-        {
           "path": "singleton release",
           "id": "singleton.release",
           "about": "Drop a task's lock, which its exit trap does and a kill cannot",
@@ -4862,6 +4960,40 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "step base",
+          "id": "step.base",
+          "about": "Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "paths",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The paths, after `--`: one `base <path> <id>` line each, `absent` where missing"
+            },
+            {
+              "name": "ref",
+              "short": null,
+              "long": "ref",
+              "takes_value": true,
+              "positional": false,
+              "help": "The ref whose merge base with HEAD the lines are read at"
+            },
+            {
+              "name": "ref_env",
+              "short": null,
+              "long": "ref-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "A variable whose value, when set and non-empty, replaces --ref"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "step check",
           "id": "step.check",
           "about": "Say hit or miss for a step's inputs, arguments and tools, and remember the key a record must match",
@@ -4886,6 +5018,77 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "step cover",
+          "id": "step.cover",
+          "about": "Say whether every required CI check passed at HEAD or is exempt, naming each that did not",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "step env",
+          "id": "step.env",
+          "about": "Print the sorted `env` lines a declared environment keys, the step cache's answer to the tool line",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "exclude",
+              "short": null,
+              "long": "exclude",
+              "takes_value": true,
+              "positional": false,
+              "help": "A variable a pattern matches that is never keyed, such as a per-run pid (repeatable)"
+            },
+            {
+              "name": "patterns",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The names or PREFIX* patterns, after `--`: an `env NAME=value` line per keyed variable, `env PATTERN none` where none matches"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step graph",
+          "id": "step.graph",
+          "about": "Schedule the step table's rows as a graph",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": [
+            {
+              "path": "step graph run",
+              "id": "step.graph.run",
+              "about": "Run a group's rows, dependencies first and at most --jobs at once, and exit with the worst row's code",
+              "effect": "unclassified",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "group",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "The graph to run, as the step table's `group` field names it"
+                },
+                {
+                  "name": "jobs",
+                  "short": null,
+                  "long": "jobs",
+                  "takes_value": true,
+                  "positional": false,
+                  "help": "Run at most this many of the group's rows at once (a positive integer; default: no bound)"
+                }
+              ],
+              "subcommands": []
+            }
+          ]
         },
         {
           "path": "step record",
@@ -5014,7 +5217,7 @@ expression: stdout_of(&output)
               "long": "program-root",
               "takes_value": true,
               "positional": false,
-              "help": "The directory this consumer keeps its task programs in, matched inside a live process's cmdline"
+              "help": "Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)"
             }
           ],
           "subcommands": []
@@ -5250,7 +5453,7 @@ expression: stdout_of(&output)
         {
           "path": "wiring gate",
           "id": "wiring.gate",
-          "about": "Link this clone's two commit hooks to a hook body the repository checks in",
+          "about": "Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body",
           "effect": "write",
           "data_channel": false,
           "flags": [
@@ -5260,7 +5463,15 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The hook body to link, relative to the repository root"
+              "help": "A hook body to link both commit hooks to, relative to the repository root"
+            },
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit non-zero if a git hook link is owed, and write nothing"
             }
           ],
           "subcommands": []
@@ -5298,6 +5509,14 @@ expression: stdout_of(&output)
           "effect": "write",
           "data_channel": false,
           "flags": [
+            {
+              "name": "all",
+              "short": null,
+              "long": "all",
+              "takes_value": false,
+              "positional": false,
+              "help": "Also register batten on every harness's committed wiring file"
+            },
             {
               "name": "check",
               "short": null,
@@ -5506,6 +5725,10 @@ expression: stdout_of(&output)
       "path": "hk drift"
     },
     {
+      "id": "land.placed",
+      "path": "land placed"
+    },
+    {
       "id": "landed.abandoned",
       "path": "landed abandoned"
     },
@@ -5552,6 +5775,14 @@ expression: stdout_of(&output)
     {
       "id": "mcp.posture",
       "path": "mcp posture"
+    },
+    {
+      "id": "modules",
+      "path": "modules"
+    },
+    {
+      "id": "modules.cycle",
+      "path": "modules cycle"
     },
     {
       "id": "mutate.census",
@@ -5664,6 +5895,18 @@ expression: stdout_of(&output)
     {
       "id": "state.list",
       "path": "state list"
+    },
+    {
+      "id": "step.base",
+      "path": "step base"
+    },
+    {
+      "id": "step.cover",
+      "path": "step cover"
+    },
+    {
+      "id": "step.env",
+      "path": "step env"
     },
     {
       "id": "task.alive",

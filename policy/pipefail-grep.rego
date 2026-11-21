@@ -218,5 +218,4 @@ test_a_comment_describing_the_hazard_is_not_the_hazard if {
 
 #MUTANT-SUITE crates/batten/tests/it/pipefail_grep.rs
 #MUTANT pipefail-cluster-unread|s@letter in {"q", "l"}@false@|a_flag_cluster_is_judged_by_its_letters_over_the_binary
-#MUTANT pipefail-or-is-a-pipe|s@data.batten.patterns\["pipe-into-grep"\]@"grep"@|an_or_before_grep_is_not_a_pipe
 #MUTANT pipefail-scope-unread|s@enables_pipefail(path)$@true@|a_file_that_does_not_enable_pipefail_is_out_of_scope

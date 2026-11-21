@@ -60,8 +60,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 1 | 765 | 192 | 0.3840 | 0.0384 | 1 |
-| **ratio** | | **33.64×** | **33.51×** | | | |
+| batten | 1 | 1107 | 277 | 0.5540 | 0.0554 | 1 |
+| **ratio** | | **23.24×** | **23.22×** | | | |
 
 ### log-handle — capture-once handles
 
@@ -77,8 +77,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 3 | 1226 | 307 | 0.6140 | 0.0614 | 0 |
-| **ratio** | | **20.99×** | **20.95×** | | | |
+| batten | 3 | 1568 | 392 | 0.7840 | 0.0784 | 0 |
+| **ratio** | | **16.41×** | **16.41×** | | | |
 
 ### board-gate-payload — declared field sets on tracker-payload gates
 
@@ -93,9 +93,9 @@ count for the task is the step count above.
 
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| baseline | 1 | 4433 | 1109 | 2.2180 | 0.2218 | 0 |
+| baseline | 1 | 4505 | 1127 | 2.2540 | 0.2254 | 0 |
 | batten | 1 | 58 | 15 | 0.0300 | 0.0030 | 0 |
-| **ratio** | | **76.43×** | **73.93×** | | | |
+| **ratio** | | **77.67×** | **75.13×** | | | |
 
 ## Aggregate
 
