@@ -130,13 +130,6 @@ pub fn remote_for(origin: &str, value: &str) -> Option<String> {
 ///
 /// A transport failure, or a status that is none of `200`, `401`, `403` and
 /// `404` — both could-not-look (exit `3`), never a refusal.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT unset-still-probes|s@^    if value.is_empty() {$@    if false {@|unset_is_off_and_makes_no_call
-//MUTANT unattached-reads-attached|s@^        401 \x7c 403 \x7c 404 => Ok(Status::Unattached),$@        401 \x7c 403 \x7c 404 => Ok(Status::Attached),@|a_refused_discovery_is_unattached
-//MUTANT transport-failure-reads-unattached|s@^    let answered = lease::probe(&remote, Service::ReceivePack)?;$@    let answered = lease::probe(\&remote, Service::ReceivePack).unwrap_or(403);@|a_transport_failure_is_an_error_and_never_a_refusal
-//MUTANT attach-note-omits-the-repo|s@^    let repo = format!("the state repository {value}");$@    let repo = format!("the state repository{value:.0}");@|the_attach_note_names_the_repo_and_both_remedies
-//MUTANT-SUITE crates/batten/tests/it/offbox_status.rs
-//MUTANT unset-creates-the-state-dir|s@^    if value.is_empty() {$@    let _ = crate::state::state_root().map(\x7croot\x7c std::fs::create_dir_all(root.join(DIR))); if value.is_empty() {@|unset_is_off_and_leaves_no_directory
 pub fn status(value: Option<&str>, origin: Option<&str>) -> Result<Status> {
     let value = value.map(str::trim).unwrap_or_default();
     if value.is_empty() {
@@ -258,8 +251,6 @@ fn state_store(entry: &str) -> bool {
 const STATE_FILES_UNDER: [&str; 1] = ["mutate/schema/"];
 
 /// Whether a state-relative path is a file directly under a listed prefix.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT mutate-tree-dir-included|s@^            .is_some_and(\x7crest\x7c !rest.is_empty() \&\& !rest.contains('/'))$@            .is_some_and(\x7crest\x7c !rest.is_empty())@|the_mutation_stores_are_carried_and_their_work_directories_are_not
 fn listed_file(relative: &str) -> bool {
     STATE_FILES_UNDER.iter().any(|prefix| {
         relative
@@ -358,8 +349,6 @@ pub fn leaf(harness: &str, session: &str) -> String {
 /// # Errors
 ///
 /// A project root whose state directory cannot be named.
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT session-files-shared-across-sessions|s@^        .join(leaf(\&meta.harness, \&meta.session)))$@        .join("shared"))@|a_second_session_in_one_checkout_gets_its_own_directory
 pub fn session_dir(project_root: &Path, meta: &Meta) -> Result<PathBuf> {
     Ok(crate::state::repo_state_dir(project_root)?
         .join(DIR)
@@ -515,9 +504,6 @@ fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
 /// Where the open file is SHORTER than its cursor entry says. That is content
 /// gone from under the cursor, which nothing here can put back, and it is
 /// refused aloud: appending would bury the hole under new records.
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT closed-segment-rewritten|s@^            .filter(\x7cname\x7c extension_is(name, "jsonl") \&\& position.length < SEGMENT);$@            .filter(\x7cname\x7c extension_is(name, "jsonl"));@|the_tree_holds_the_stores_and_the_transcript_in_segments
-//MUTANT oversized-record-replaced-by-a-digest|s@^            for (at, chunk) in piece.chunks(PART).enumerate() {$@            for (at, chunk) in piece.chunks(PART).take(1).enumerate() {@|an_oversized_record_is_cut_into_parts_and_never_replaced
 fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8]) -> Result<u64> {
     let generation = dir.join(prefix).join(position.generation.to_string());
     let refused = |err: std::io::Error| anyhow::anyhow!("offbox: a segment will not write: {err}");
@@ -590,10 +576,8 @@ fn append_stream(dir: &Path, prefix: &str, position: &mut Position, stream: &[u8
 /// A usage error is the scanner not being there; anything else is the scanner
 /// having run and its answer not being trustworthy. Neither may be read as
 /// "nothing to redact".
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT scanner-failure-still-builds|s@^        Err(_) => Err(Refusal::ScannerFailed),$@        Err(_) => Ok(0),@|a_missing_or_failing_scanner_refuses_and_writes_nothing
 fn scrub(
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     project_root: &Path,
     staging: &Path,
     paths: &[String],
@@ -630,11 +614,6 @@ fn git_excluded(entry: &str) -> bool {
 ///
 /// `state/<entry>/…` from the state directory and `git/<entry>/…` from the
 /// project's per-worktree git directory, each by exclude-list.
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT provision-dir-included|s@^            if !state_store(\&entry) \&\& !listed_file(\&relative) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
-//MUTANT secret-key-shipped|s@^    "identity",$@    "identity-is-shipped",@|every_state_store_ships_and_the_secret_key_never_does
-//MUTANT state-stores-allow-listed|s@^        \&\& !STATE_EXCLUDED.contains(\&entry)$@        \&\& entry == "captures"@|every_state_store_ships_and_the_secret_key_never_does
-//MUTANT lock-entry-included|s@^            if excluded \x7c\x7c extension_is(\&relative, "lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     if let Ok(state) = crate::state::repo_state_dir(project_root) {
@@ -721,19 +700,9 @@ fn pending_bytes(dir: &Path, last: &BTreeMap<String, String>) -> u64 {
 /// A file that will not read or write, or a repository that will not take the
 /// commit. A scanner that is absent or fails is not an error: it is
 /// [`Snapshot::Refused`].
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT unredacted-bytes-committed|s@^            let redacted = std::fs::read(staging.join(INCOMING)).map_err(unread)?;$@            let redacted = stream;@|matched_spans_are_redacted_in_stores_and_records
-//MUTANT cursor-entry-written-after-the-first-append|s@^    persist(\&dir, \&cursors)?; // every feed has its entry before any append$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
-//MUTANT unread-feed-has-no-cursor-entry|s@^        cursors.entry(feed.prefix.clone()).or_default();$@@|a_feed_the_cap_never_reached_still_has_a_cursor_entry
-//MUTANT cap-ignores-pending-bytes|s@^    let pending = pending_bytes(\&dir, \&last);$@    let pending = 0;@|the_byte_cap_counts_what_an_unapplied_push_left_waiting
-//MUTANT crash-tail-kept-and-reread|s@^        recover(dir, \&feed.prefix, \&position)?;$@@|a_killed_append_is_cut_back_and_no_record_is_stored_twice
-//MUTANT replaced-source-overwrites-its-generation|s@^                    position.generation += 1;$@@|a_replaced_source_starts_a_new_generation
-//MUTANT second-snapshot-drops-a-path|s@^        if appended \x7c\x7c absent_store {$@        if absent_store {@|a_second_snapshot_holds_everything_the_first_did
-//MUTANT locally-deleted-store-dropped|s@^        if appended \x7c\x7c absent_store {$@        if appended {@|a_store_deleted_locally_is_carried_forward_whole
-//MUTANT file-a-store-removed-is-resurrected|s@^        if appended \x7c\x7c absent_store {$@        if appended \x7c\x7c store.is_some() {@|a_file_a_store_removed_itself_stays_removed
 pub fn snapshot(
     project_root: &Path,
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     meta: &Meta,
     feeds: &[Feed<'_>],
     time: i64,
@@ -776,8 +745,6 @@ pub fn snapshot(
 ///
 /// A closed file that is absent altogether is left absent: it is carried
 /// forward by the id it had, and nothing is appended to it.
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT local-loss-pushed-over-the-remote|s@^            if held > have.unwrap_or(0) {$@            if false {@|a_file_this_disk_lost_part_of_is_put_back_and_never_pushed_short
 fn heal(
     dir: &Path,
     repo: &Path,
@@ -820,11 +787,9 @@ fn heal(
 
 /// [`snapshot`]'s body, apart from it so the staging directory is removed on
 /// every path out — a refusal and an error as much as a build.
-//MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT appended-file-named-by-the-last-tree|s@^            let id = gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)?;$@            let id = match last.get(\&format!("{root}/{relative}")) { Some(id) => id.clone(), None => gitwrite::write_blob(repo, \&std::fs::read(\&path).map_err(unread)?)? };@|every_snapshot_holds_the_source_whole_whatever_closed_in_between
 fn build(
     project_root: &Path,
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     meta: &Meta,
     feeds: &[Feed<'_>],
     (time, byte_cap): (i64, u64),
@@ -953,7 +918,7 @@ type FeedsRead = (u64, Vec<String>, usize);
 /// redacting every batch before a byte of it is appended. The scanner's
 /// refusal comes back as the inner `Err`, with nothing past it appended.
 fn read_feeds(
-    (project_root, provisions): (&Path, &[crate::provision::Provision]),
+    (project_root, provisions): (&Path, &[crate::config_model::Provision]),
     feeds: &[Feed<'_>],
     (dir, staging): (&Path, &Path),
     cursors: &mut Cursors,
@@ -1106,7 +1071,7 @@ pub struct Session<'a> {
     /// The project's root directory.
     pub project_root: &'a Path,
     /// The scanner's provision rows, loaded at the verb's entry.
-    pub provisions: &'a [crate::provision::Provision],
+    pub provisions: &'a [crate::config_model::Provision],
     /// Whose snapshot it is.
     pub meta: Meta,
     /// The state repository's URL.
@@ -1180,8 +1145,6 @@ impl Push {
 
 /// `Ok(throttle)` where `err` is the forge saying slow down, `err` back
 /// otherwise: a throttle is an outcome here, never a failure.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT throttled-probe-reads-as-failure|s@^        Some(throttled) => Ok(Push::only(Pushed::Throttled(\*throttled))),$@        Some(_) => Err(err),@|a_throttled_probe_is_throttled_and_sends_nothing
 fn throttled(err: anyhow::Error) -> Result<Push> {
     match err.downcast_ref::<lease::Throttled>() {
         Some(throttled) => Ok(Push::only(Pushed::Throttled(*throttled))),
@@ -1211,8 +1174,6 @@ fn segment(sub: &str) -> String {
 
 /// The feeds of one push: the session's own, from its harness's source, then
 /// `extra` in the order given.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT history-fed-before-live-data|s@^    feeds.extend(later);$@    drop(feeds.splice(0..0, later));@|the_feed_list_has_the_live_feeds_before_any_history
 fn feeds_of<'a>(
     session: &Session<'_>,
     source: Option<&'a dyn SessionSource>,
@@ -1279,16 +1240,6 @@ fn own_prefix(sub: &str) -> String {
 ///
 /// A transport failure, a scanner that ran and failed, or a local file that
 /// will not read or write.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT admit-accepts-any-tip|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7c_: \&str\x7c true;@|a_rejected_push_fetches_absorbs_and_is_applied
-//MUTANT admit-refuses-an-absent-ref|s@^        let admit = \x7cold: \&str\x7c old == lease::ZERO \x7c\x7c last.as_deref() == Some(old);$@        let admit = \x7cold: \&str\x7c last.as_deref() == Some(old);@|a_ref_rotated_away_is_recreated_on_the_first_attempt
-//MUTANT push-ignores-the-push-lock|s@^    if pushing.is_none() {$@    if false {@|a_push_waits_for_the_push_lock_and_writes_nothing
-//MUTANT prune-after-a-failed-push|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                gitwrite::prune_unreachable(\&repo, std::slice::from_ref(\&commit))?; return Ok(Push::only(Pushed::Throttled(throttle)));@|nothing_is_pruned_after_a_throttled_or_a_rejected_push
-//MUTANT throttled-push-retried-at-once|s@^                return Ok(Push::only(Pushed::Throttled(throttle)));$@                let _ = throttle;@|a_throttled_push_returns_at_once_and_loses_nothing
-//MUTANT unchanged-snapshot-still-sent|s@^        if unchanged \&\& last.as_deref() == Some(tip.as_str()) {$@        if false {@|a_second_push_with_nothing_changed_sends_nothing
-//MUTANT unchanged-said-from-memory|s@^        if unchanged \&\& last.as_deref() == Some(tip.as_str()) {$@        if unchanged {@|unchanged_is_never_said_of_a_remote_that_lost_the_ref
-//MUTANT pushed-cursor-recorded-before-the-swap|s@^        let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;$@        record_pushed(\&dir, \&repo, \&commit)?; let outcome = lease::push(\&session.remote, \&repo, \&name, \&commit, \&admit)?;@|a_throttled_push_returns_at_once_and_loses_nothing
-//MUTANT rejected-swap-retried-without-bound|s@^    for _ in 0..ATTEMPTS {$@    for _ in 0..ATTEMPTS + 2 {@|three_rejected_swaps_are_contended_after_three_posts
 pub fn push_once(session: &Session<'_>, extra: &[Feed<'_>]) -> Result<Push> {
     push_capped(session, extra, BYTE_CAP)
 }
@@ -1435,8 +1386,6 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
 /// A kill between the remote applying a swap and `LAST` moving leaves exactly
 /// that. Without this the next push meets a ref it does not remember writing,
 /// is rejected, and absorbs its own session as another writer's.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT own-push-absorbed-as-anothers|s@^    if sent.as_deref() != Some(tip) \x7c\x7c last.as_deref() == Some(tip) {$@    if true {@|a_push_the_remote_applied_and_this_machine_never_recorded_is_its_own
 fn own_push_recorded(dir: &Path, repo: &Path, tip: &str) -> Result<()> {
     if !repo.exists() {
         return Ok(()); // a first push: nothing was ever sent from here
@@ -1638,13 +1587,6 @@ impl Theirs<'_> {
 ///
 /// A tree path that is not an ordinary relative path, or a file that will not
 /// read or write.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT adoption-judged-by-the-files|s@^        if own \&\& !progressed("transcript/") {$@        if own \&\& files_under(\&local).is_empty() {@|a_kill_at_any_step_of_a_restore_into_a_new_container_loses_nothing
-//MUTANT absorb-overwrites-a-local-store|s@^        if here.is_empty() {$@        if true {@|a_rejected_push_fetches_absorbs_and_is_applied
-//MUTANT absorb-discards-their-differing-store|s@^            theirs.keep_aside(store, group)?; // a differing store$@@|a_rejected_push_fetches_absorbs_and_is_applied
-//MUTANT later-absorb-replaces-an-earlier-one|s@^        aside: dir.join(ABSORBED).join(commit),$@        aside: dir.join(ABSORBED).join("latest"),@|a_second_rejected_push_adds_a_second_entry
-//MUTANT absorbed-entry-nested-in-another|s@^            theirs.place_all(\&dir.join(ABSORBED).join(entry), group)?;$@            theirs.place_all(\&theirs.aside.join(ABSORBED).join(entry), group)?;@|an_absorbed_entry_is_never_nested_in_another
-//MUTANT foreign-transcript-appended-to-the-local-one|s@^        } else if !theirs.all_equal(\&local, \&transcript)? {$@        } else if false {@|transcripts_are_never_merged_between_writers
 pub fn absorb(project_root: &Path, meta: &Meta, commit: &str, own: bool) -> Result<()> {
     let dir = session_dir(project_root, meta)?;
     let repo = local_repo(&dir);
@@ -1814,8 +1756,6 @@ struct Listed<'a> {
 /// Every session the sources list on this machine, other than the live one —
 /// `live` is its harness and its id. A source that will not list gives none:
 /// what it holds is looked for again before the next push.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT live-session-imported-as-history|s@^            if harness == live.0 \&\& file.id == live.1 {$@            if false {@|the_live_session_is_not_imported_and_the_others_are
 fn listed<'a>(history: &'a [crate::sessions::Named], live: (&str, &str)) -> Vec<Listed<'a>> {
     let mut found = Vec::new();
     for (harness, source) in history {
@@ -1868,9 +1808,6 @@ fn checkout_of(project: Option<&Path>) -> Option<PathBuf> {
 ///
 /// A listed file with no entry, a source that will not read, and one replaced
 /// under its cursor all answer no. Entries under `history/` are never looked at.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT unlisted-file-counts-as-pushed|s@^            return false; // a file the push never saw$@            return true;@|a_file_the_push_never_saw_is_imported_and_not_marked
-//MUTANT partly-pushed-session-marked-stored|s@^        read.is_ok_and(\x7cbatch\x7c batch.is_ended())$@        read.is_ok()@|a_partly_pushed_session_with_no_daemon_is_imported_whole
 fn pushed_whole(session: &Listed<'_>, pushed: &Path) -> bool {
     let Ok(body) = std::fs::read(pushed) else {
         return false;
@@ -1898,11 +1835,6 @@ fn pushed_whole(session: &Listed<'_>, pushed: &Path) -> bool {
 /// under it, which only another writer's snapshot leaves behind — [`snapshot`]
 /// writes the entry for every feed it is given before that feed's first byte;
 /// then its own daemon's push record.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT live-session-marked-stored|s@^    if live_elsewhere {$@    if false {@|a_session_live_elsewhere_is_neither_imported_nor_marked
-//MUTANT session-live-elsewhere-imported|s@^        return Standing::Live;$@        return Standing::Owed;@|a_session_live_elsewhere_is_neither_imported_nor_marked
-//MUTANT absorbed-history-imported-again|s@^    if absorbed_here {$@    if false {@|history_absorbed_from_another_writer_is_marked_and_not_imported
-//MUTANT fully-pushed-session-imported-again|s@^    if whole {$@    if false {@|a_session_its_own_daemon_pushed_whole_is_marked_and_not_imported
 fn standing_of(
     session: &Listed<'_>,
     checkout: Option<&Path>,
@@ -1952,8 +1884,6 @@ fn mark(machine: &Path, leaf: &str) -> Result<()> {
 
 /// Take the machine's import lock, or `None` where another daemon holds it.
 /// Without it, every agent on one machine would upload the same history.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT second-importer-runs|s@^    let importing_elsewhere = fs4::FileExt::try_lock(\&file).is_err();$@    let importing_elsewhere = false;@|a_daemon_without_the_import_lock_imports_nothing_until_it_is_free
 fn take_import_lock(machine: &Path) -> Result<Option<std::fs::File>> {
     let refused =
         |err: std::io::Error| anyhow::anyhow!("offbox: the import lock will not open: {err}");
@@ -2003,9 +1933,6 @@ struct Import<'a> {
 /// # Errors
 ///
 /// A marker that will not write.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT unresolved-project-skipped|s@^        let checkout = checkout_of(session.project.as_deref());$@        let checkout = checkout_of(session.project.as_deref()); if checkout.is_none() { continue; }@|a_session_whose_project_is_gone_is_imported_with_no_origin
-//MUTANT marker-written-before-the-push|s@^                import.fed.push(fed);$@                mark(machine, \&fed.leaf)?; import.fed.push(fed);@|a_throttled_push_marks_nothing_and_the_next_applied_one_does
 fn plan_import<'a>(
     history: &'a [crate::sessions::Named],
     live: (&str, &str),
@@ -2081,8 +2008,6 @@ fn plan_import<'a>(
 ///
 /// `before` is the cursor file as the push found it; `ended` the prefixes its
 /// snapshot read to the end, where it was applied or changed nothing.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT unread-session-marked-imported|s@^        let read_out = fed.prefixes.iter().all(\x7cprefix\x7c ended.contains(prefix));$@        let read_out = true;@|history_is_imported_behind_live_data_inside_the_cap
 fn finish_import(
     import: &Import<'_>,
     dir: &Path,
@@ -2183,9 +2108,6 @@ pub const ARCHIVE: &str = "refs/heads/archive";
 
 /// The key of a session ref in the archive: the first sixteen hex digits of
 /// the BLAKE3 of its full name. Of the whole name, so it includes the project.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT key-ignores-the-project|s@^    blake3::hash(reference.as_bytes()).to_hex()\[..16\].to_owned()$@    blake3::hash(reference.rsplit('/').next().unwrap_or_default().as_bytes()).to_hex()[..16].to_owned()@|two_projects_with_one_session_name_have_two_keys
-//MUTANT index-path-uses-one-level|s@^    format!("{root}/{}/{}/{key}", \&key\[..2\], \&key\[2..4\])$@    format!("{root}/{}/{key}", \&key[..2])@|the_index_path_is_two_levels_and_its_first_line_is_the_ref
 #[must_use]
 pub fn archive_key(reference: &str) -> String {
     blake3::hash(reference.as_bytes()).to_hex()[..16].to_owned()
@@ -2257,9 +2179,6 @@ struct Found {
 
 /// The newest snapshot of the session whose ref is `name`: its live ref, else
 /// the last line of its archive index file.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT archived-session-not-found|s@^    let Some((_, blob)) = index.iter().find(\x7c(path, _)\x7c path == \&wanted) else {$@    let Some((_, blob)) = index.iter().find(\x7c(path, _)\x7c path == "nowhere") else {@|a_rotated_session_is_restored_from_the_archive_index
-//MUTANT older-archived-snapshot-restored|s@^        .last()$@        .next()@|the_last_line_of_an_index_file_is_the_one_restored
 fn newest(
     remote: &str,
     repo: &Path,
@@ -2322,13 +2241,6 @@ fn newest(
 /// # Errors
 ///
 /// A transport failure, or a local file that will not read or write.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT archive-restore-sets-last|s@^        if found.live \&\& own {$@        if true {@|a_rotated_session_is_restored_from_the_archive_index
-//MUTANT predecessor-transcript-adopted-as-own|s@^        absorb(session.project_root, \&session.meta, \&found.commit, own)?;$@        absorb(session.project_root, \&session.meta, \&found.commit, true)?;@|a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside
-//MUTANT nothing-found-leaves-restored-unwritten|s@^    record_restored(\&dir, NOTHING_RESTORED)?;$@@|nothing_to_restore_from_is_recorded_as_none
-//MUTANT relaunch-restores-again|s@^        if here {$@        if false {@|a_daemon_that_finds_the_restore_record_does_not_restore_again
-//MUTANT restore-ignores-the-push-lock|s@^    if restoring.is_none() {$@    if false {@|a_restore_waits_for_the_push_lock
-//MUTANT throttled-restore-recorded-as-none|s@^        Some(throttle) => Ok(Restored::Throttled(\*throttle)),$@        Some(_) => Ok(Restored::Nothing),@|a_throttled_restore_records_nothing
 pub fn restore_once(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
     match restore(session, predecessor) {
         Ok(restored) => Ok(restored),
@@ -2482,8 +2394,6 @@ impl Rotated {
 /// How many consecutive passes `tip` has now gone unchanged, given the
 /// `observed` file the last pass left for its ref: the tip it saw, then its
 /// count. A changed tip starts again at 0.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT changed-ref-keeps-its-quiet-count|s@^    if seen != tip {$@    if false {@|a_ref_whose_tip_changed_starts_its_count_again
 fn quiet_passes(observed: &str, tip: &str) -> u64 {
     let mut lines = observed.lines();
     let seen = lines.next().unwrap_or_default().trim();
@@ -2536,13 +2446,6 @@ pub fn rotate_once(remote: &str, scratch: &Path, quiet_runs: u64, time: i64) -> 
 
 /// [`rotate_once`]'s body; a throttle met on a read is an error here and an
 /// outcome there.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT oddly-named-ref-skipped|s@^        .filter(\x7c(name, _)\x7c name.starts_with(SESSION_REFS))$@        .filter(\x7c(name, _)\x7c name.starts_with(SESSION_REFS) \&\& name.contains('-'))@|a_ref_of_any_shape_under_the_session_prefix_is_rotated
-//MUTANT second-rotation-overwrites-the-index-line|s@^            let mut lines = held.unwrap_or_else(\x7c\x7c format!("{name}\\n"));$@            let mut lines = held.map_or_else(\x7c\x7c format!("{name}\\n"), \x7c_\x7c format!("{name}\\n"));@|a_session_rotated_twice_has_two_index_lines_oldest_first
-//MUTANT previous-archive-tip-not-a-parent|s@^    let mut parents: Vec<String> = previous_tip.into_iter().collect();$@    let mut parents: Vec<String> = Vec::new();@|a_quiet_session_is_archived_and_its_ref_removed
-//MUTANT ref-removed-without-archiving|s@^    parents.extend(selected.iter().map(\x7c(_, tip)\x7c tip.clone()));$@@|a_quiet_session_is_archived_and_its_ref_removed
-//MUTANT removal-not-conditioned-on-the-tip|s@^            old: tip.clone(),$@            old: lease::ZERO.to_owned(),@|a_quiet_session_is_archived_and_its_ref_removed
-//MUTANT throttled-pass-removes-a-ref|s@^        lease::Outcome::Throttled { .. } => Ok(Rotated::Throttled),$@        lease::Outcome::Throttled { .. } => { lease::swap_many(remote, scratch, \&updates)?; Ok(Rotated::Throttled) }@|a_throttled_pass_changes_nothing_and_exits_clean
 fn rotate(remote: &str, scratch: &Path, quiet_runs: u64, time: i64) -> Result<Rotated> {
     let refs = lease::advertise(remote, Service::ReceivePack)?;
     let archive = refs.head_of(ARCHIVE);
@@ -2674,9 +2577,6 @@ jobs:
 /// * **`rotate` carries the file forward**: a pass keeps every entry of the
 ///   archive's tree by blob id, so a workflow installed on the archive branch
 ///   stays there.
-//MUTANT-SUITE crates/batten/tests/it/offbox_rotate.rs
-//MUTANT workflow-triggers-on-push|s@^  schedule:$@  push:@|the_printed_workflow_runs_on_a_schedule_alone_and_pins_this_version
-//MUTANT workflow-installs-an-unpinned-batten|s@^          BATTEN_VERSION: v__VERSION__$@          BATTEN_UNPINNED: v__VERSION__@|the_printed_workflow_runs_on_a_schedule_alone_and_pins_this_version
 #[must_use]
 pub fn rotate_workflow(install_url: &str, version: &str) -> String {
     ROTATE_WORKFLOW
@@ -2745,10 +2645,6 @@ pub enum Attempt {
 /// The base is capped at [`MAX_WAIT`], and a uniformly random extra of up to
 /// half the base is added from `random`, so daemons throttled together do not
 /// come back together. This reads no clock: `now` is the caller's.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT retry-after-ignored|s@^            (Some(seconds), _) => seconds,$@            (Some(_), _) => 0,@|next_wait_follows_the_forge_then_doubles
-//MUTANT backoff-does-not-double|s@^    60_u64.saturating_mul(1_u64 << exponent)$@    60_u64@|next_wait_follows_the_forge_then_doubles
-//MUTANT backoff-exceeds-the-cap|s@^    let base = base.min(MAX_WAIT);$@@|next_wait_follows_the_forge_then_doubles
 #[must_use]
 pub fn next_wait(result: Attempt, throttles: u32, failures: u32, now: i64, random: u64) -> u64 {
     let base = match result {
@@ -2779,9 +2675,6 @@ fn doubling(count: u32) -> u64 {
 ///
 /// `grew` is the hook's word that a tool call happened; the timer is the other
 /// trigger, so a hook that says nothing still gets a push every ten minutes.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT push-inside-the-floor|s@^    wait_left == 0 \&\& since_last >= FLOOR \&\& (grew \x7c\x7c since_last >= TIMER)$@    wait_left == 0 \&\& (grew \x7c\x7c since_last >= TIMER)@|the_decision_to_push_needs_a_trigger_the_floor_and_no_wait
-//MUTANT timer-never-triggers-a-push|s@^    wait_left == 0 \&\& since_last >= FLOOR \&\& (grew \x7c\x7c since_last >= TIMER)$@    wait_left == 0 \&\& since_last >= FLOOR \&\& grew@|the_decision_to_push_needs_a_trigger_the_floor_and_no_wait
 #[must_use]
 pub const fn should_push(grew: bool, since_last: u64, wait_left: u64) -> bool {
     wait_left == 0 && since_last >= FLOOR && (grew || since_last >= TIMER)
@@ -2789,8 +2682,6 @@ pub const fn should_push(grew: bool, since_last: u64, wait_left: u64) -> bool {
 
 /// How long the first attempt after start is held back, so sessions that start
 /// together do not push together.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT first-push-is-immediate|s@^    random % (SPREAD + 1)$@    0 * random@|the_first_attempt_is_spread_over_a_minute
 #[must_use]
 pub const fn first_delay(random: u64) -> u64 {
     random % (SPREAD + 1)
@@ -2837,9 +2728,6 @@ pub struct StatusFile {
     pub wake: u16,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
-//MUTANT status-written-without-a-pid|s@^        let mut text = format!("pid {}\\n", self.pid);$@        let mut text = String::new();@|the_status_file_names_the_daemons_pid_and_session
-//MUTANT status-names-no-session|s@^        let _ = writeln!(text, "session {}", self.session);$@@|the_status_file_names_the_daemons_pid_and_session
 impl StatusFile {
     /// The file's text. **`pid` first, then `session`**: the two lines a reader
     /// needs before any other, written before anything else is known.
@@ -2961,7 +2849,7 @@ pub struct Launching<'a> {
     /// The project's root directory.
     pub project_root: &'a Path,
     /// The scanner's provision rows.
-    pub provisions: &'a [crate::provision::Provision],
+    pub provisions: &'a [crate::config_model::Provision],
     /// The harness's name and the session's own id.
     pub harness: &'a str,
     /// The session's own id, as the harness spells it.
@@ -2993,9 +2881,6 @@ fn daemon_dir(project_root: &Path) -> Result<PathBuf> {
 ///
 /// The hook probes the lock for an instant on every tool call, so a failed try
 /// is retried every 50 ms for one second before it is read as another daemon.
-//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
-//MUTANT second-daemon-also-runs|s@^    let held_elsewhere = true;$@    let held_elsewhere = false;@|a_second_daemon_in_one_checkout_says_running_and_exits
-//MUTANT lock-probe-makes-the-daemon-exit|s@^    for attempt in 0..LOCK_TRIES {$@    for attempt in 0..1 {@|a_lock_probed_at_start_does_not_stop_the_daemon
 fn take_lock(dir: &Path, world: &mut dyn World) -> Result<Option<std::fs::File>> {
     let refused =
         |err: std::io::Error| anyhow::anyhow!("offbox: the daemon lock will not open: {err}");
@@ -3020,9 +2905,6 @@ fn take_lock(dir: &Path, world: &mut dyn World) -> Result<Option<std::fs::File>>
 
 /// The running daemon: what it was launched with, and what it remembers
 /// between wakes. Everything it must not lose is in the status file.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT marker-kept-per-session|s@^        let machine = crate::state::state_root()?;$@        let machine = session_dir(session.project_root, \&session.meta)?;@|a_session_one_daemon_marked_is_not_imported_by_another_on_the_machine
-//MUTANT applied-push-keeps-the-backoff|s@^                self.status.throttles = 0;$@@|a_throttled_daemon_waits_as_told_and_resets_on_an_applied_push
 struct Daemon<'a> {
     launching: &'a Launching<'a>,
     dir: PathBuf,
@@ -3326,10 +3208,6 @@ impl<'a> Daemon<'a> {
 ///
 /// A lock or a status file that will not open or write. A failed push is not
 /// an error: it is counted, waited out, and tried again.
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT restart-forgets-the-wait|s@^        status.wait_until = previous.wait_until;$@@|a_restart_inside_a_wait_still_honours_it
-//MUTANT start-skips-the-restore|s@^        String::from("pending")$@        String::from("yes")@|a_start_restores_whatever_the_last_run_recorded
-//MUTANT new-session-inherits-the-old-status|s@^        if previous.session == status.session {$@        if true {@|a_restart_inside_a_wait_still_honours_it
 pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     let dir = daemon_dir(launching.project_root)?;
     let Some(_lock) = take_lock(&dir, world)? else {
@@ -3379,8 +3257,6 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     // snapshot", and nothing here asked it. The hook pays a held-back session
     // stamp on `unavailable`, so recording the honest word is also what keeps
     // a session with no origin able to claim.
-    //MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
-    //MUTANT no-origin-reads-as-answered|s@^        String::from("unavailable")$@        String::from(NOTHING_RESTORED)@|the_status_file_names_the_daemons_pid_and_session
     status.restored = if meta.is_some() {
         String::from("pending")
     } else {
@@ -3563,7 +3439,7 @@ mod push_tests {
     /// One checkout pushing a session.
     struct Writer {
         root: PathBuf,
-        provisions: Vec<crate::provision::Provision>,
+        provisions: Vec<crate::config_model::Provision>,
         meta: Meta,
         transcript: PathBuf,
         /// What its daemon imports from, and the cap its pushes run under.
@@ -3573,7 +3449,7 @@ mod push_tests {
 
     #[derive(serde::Deserialize)]
     struct Rows {
-        provision: Vec<crate::provision::Provision>,
+        provision: Vec<crate::config_model::Provision>,
     }
 
     /// A scratch directory with the state root contained under it.

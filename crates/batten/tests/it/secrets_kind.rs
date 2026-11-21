@@ -754,7 +754,7 @@ impl Staging {
         );
     }
 
-    fn provisions(&self) -> Vec<batten::provision::Provision> {
+    fn provisions(&self) -> Vec<batten::config_model::Provision> {
         batten::config::load(&self.env.repo.join("batten.toml"))
             .expect("the fixture config loads")
             .provisions

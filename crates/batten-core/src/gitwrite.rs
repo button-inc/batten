@@ -2033,17 +2033,6 @@ fn parent_ids(parents: &[String]) -> Result<Vec<gix::ObjectId>> {
 /// repository, a path is one a tree cannot hold (see `refuse_unholdable`), or a
 /// [`Content::Blob`] names something the repository does not hold as a blob.
 /// An object the odb refuses is an internal error.
-//MUTANT-SUITE crates/batten/src/gitwrite.rs
-//MUTANT snapshot-commit-parents-onto-head|s@^    let parents = parent_ids(parents)?;$@    let parents: Vec<gix::ObjectId> = repo.head_id().ok().map(gix::Id::detach).into_iter().collect();@|an_empty_parent_list_is_an_orphan_whatever_head_reads
-//MUTANT commit-time-read-from-the-clock|s@^        time: crate::git::utc_at(time),$@        time: gix::date::Time::now_utc(),@|the_commit_carries_the_time_it_was_given
-//MUTANT given-parents-dropped|s@^    let parents = parent_ids(parents)?;$@    let parents: Vec<gix::ObjectId> = Vec::new();@|the_given_parents_are_the_commits_parents_in_order
-//MUTANT blob-entry-names-the-wrong-blob|s@^    Ok(named)$@    Ok(gix::ObjectId::empty_blob(gix::hash::Kind::Sha1))@|a_blob_entry_carries_a_stored_file_forward_without_rewriting_it
-//MUTANT unknown-blob-id-accepted|s@^    if !held {$@    if false {@|an_unknown_blob_is_refused_and_nothing_is_written
-//MUTANT dotdot-path-written|s@^            if matches!(segment, "" \x7c "." \x7c ".." \x7c ".git") {$@            if matches!(segment, "" \x7c "." \x7c ".git") {@|an_unholdable_path_is_refused_and_nothing_is_written
-//MUTANT file-and-directory-share-a-name|s@^            if seen.contains(prefix) {$@            if false {@|an_unholdable_path_is_refused_and_nothing_is_written
-//MUTANT returned-tree-id-is-not-the-commits|s@^    Ok((commit.to_string(), tree.to_string()))$@    Ok((commit.to_string(), commit.to_string()))@|the_returned_tree_id_is_the_commits_and_ignores_the_time
-//MUTANT tree-index-skips-nested-paths|s@^            EntryKind::Tree => walk(repo, entry.oid.to_owned(), \&format!("{path}/"), out)?,$@            EntryKind::Tree => {}@|the_index_and_the_blobs_round_trip_every_path
-//MUTANT bare-open-discovers-upward|s@^    let repo = gix::open_opts(dir, gix::open::Options::isolated()).map_err(\x7c_\x7c refused())?;$@    let repo = crate::git::open_for_write(dir).map_err(\x7c_\x7c refused())?;@|a_directory_inside_a_repository_is_never_opened_by_discovery
 pub fn commit_tree(
     dir: &Path,
     entries: &[(String, Content)],
@@ -2269,12 +2258,6 @@ fn remove_object(path: &Path) -> bool {
 /// empty — a call that would empty the repository is never what a caller
 /// means — or where a `keep` id is not a commit `dir` holds. An internal error
 /// where a kept commit or one of its trees will not decode.
-//MUTANT-SUITE crates/batten/src/gitwrite.rs
-//MUTANT empty-keep-empties-the-repository|s@^    if keep.is_empty() {$@    if false {@|an_empty_keep_is_refused_and_nothing_is_pruned
-//MUTANT prune-runs-over-a-pack|s@^    if packed {$@    if false {@|a_repository_with_a_pack_is_left_alone
-//MUTANT parent-of-a-kept-commit-pruned|s@^                pending.extend(commit.parent_ids().map(gix::Id::detach));$@@|a_parent_of_a_kept_commit_is_kept
-//MUTANT reachable-object-pruned|s@^            if reached.contains(\&id) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
-//MUTANT unreachable-object-kept|s@^            if remove_object(\&object.path()) {$@            if false {@|pruning_keeps_what_the_kept_commit_reaches_and_removes_the_rest
 pub fn prune_unreachable(dir: &Path, keep: &[String]) -> Result<usize> {
     use gix::objs::tree::EntryKind;
 

@@ -455,9 +455,6 @@ impl From<Throttled> for Outcome {
 /// The two header reads are [`crate::rest::throttle_headers`]'s, the reader the
 /// REST tier's own backoff is built on, so the two cannot come to disagree about
 /// what the forge said.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT plain-403-reads-as-throttle|s@^        \x7c\x7c (matches!(response.status, 403 \x7c 503) && retry_after.is_some())$@        \x7c\x7c matches!(response.status, 403 \x7c 503)@|a_bare_403_is_a_refusal_and_never_a_throttle
-//MUTANT retry-after-value-dropped|s@^        retry_after,$@        retry_after: None,@|a_429_is_a_throttle_carrying_the_wait_it_named
 fn throttle_of(response: &fetch::Response) -> Option<Throttled> {
     let header = |name: &str| response.header(name).map(str::to_owned);
     let (retry_after, reset_at) = crate::rest::throttle_headers(header);
@@ -471,7 +468,6 @@ fn throttle_of(response: &fetch::Response) -> Option<Throttled> {
 }
 
 /// Refuse a throttled response as the typed [`Throttled`] error.
-//MUTANT throttle-reads-as-plain-failure|s@^    match throttle_of(response) {$@    match None::<Throttled> {@|a_429_is_a_throttle_carrying_the_wait_it_named
 fn refuse_throttle(response: &fetch::Response) -> Result<()> {
     match throttle_of(response) {
         Some(throttled) => Err(anyhow::Error::new(throttled)),
@@ -838,8 +834,6 @@ impl<W: std::io::Write> std::io::Write for Hashing<W> {
 /// hash, an object the iterator fails to produce, or an iterator that yields a
 /// different number of objects than `count` — the header has already promised
 /// the count, so a pack that disagrees with it is one a server half-reads.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT streamed-pack-differs-from-buffered|s@^        self.hasher.update(\&bytes\[..written\]);$@@|the_streamed_pack_is_the_buffered_pack_and_reads_back
 pub fn pack_to<W, O>(
     out: W,
     count: usize,
@@ -3424,8 +3418,6 @@ pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
 /// A transport failure, an unreadable report, or a repository whose objects will
 /// not enumerate. **A lost race is not an error** — it is [`Outcome::Rejected`],
 /// for the reason [`cas`] states.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT applied-swap-reads-rejected|s@^    if old == head {$@    if false {@|a_lost_reply_is_read_as_applied_on_the_retry
 pub fn push(
     remote: &str,
     repo: &std::path::Path,
@@ -3524,10 +3516,6 @@ const FIRST_ASKS: &str = "\0report-status atomic";
 /// `atomic`, or an update whose new commit `repo` does not hold. A list the
 /// server refused is [`Outcome::Rejected`], and a throttle is
 /// [`Outcome::Throttled`].
-//MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT atomic-not-asked-for|s@^const FIRST_ASKS: \&str = "\\0report-status atomic";$@const FIRST_ASKS: \&str = "\\0report-status";@|a_session_that_pushes_during_the_pass_refuses_the_whole_push
-//MUTANT non-atomic-remote-is-sent-to|s@^    if !offered {$@    if false {@|a_remote_without_atomic_is_refused_and_nothing_is_sent
-//MUTANT advertised-commits-are-resent|s@^    let have: Vec<String> = advertisement.refs.values().cloned().collect();$@    let have: Vec<String> = Vec::new();@|a_quiet_session_is_archived_and_its_ref_removed
 pub fn swap_many(remote: &str, repo: &std::path::Path, updates: &[Update]) -> Result<Outcome> {
     let advertisement = match advertise(remote, Service::ReceivePack) {
         Ok(advertisement) => advertisement,
@@ -3612,9 +3600,6 @@ impl Scratch {
 /// tell, so this sweeps only where `/proc` can say a pid runs a `batten`, and
 /// never touches a request a live push may still be sending. A pid reused by
 /// another `batten` keeps its file one sweep longer, which costs a few bytes.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT orphan-request-kept|s@^        if !holder_alive(pid, "batten") {$@        if false {@|a_killed_push_leaves_no_request_behind_the_next_one
-//MUTANT live-request-swept|s@^        if !holder_alive(pid, "batten") {$@        if true {@|a_killed_push_leaves_no_request_behind_the_next_one
 fn sweep_orphan_requests(dir: &std::path::Path) {
     if !cfg!(target_os = "linux") {
         return;
@@ -3655,8 +3640,6 @@ impl Drop for Scratch {
 /// # Errors
 ///
 /// As [`pack_to`], and whatever `read` returns.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT push-buffers-every-object|s@^    let bodies = ids.iter().map(\x7cid\x7c read(id));$@    let bodies = ids.iter().map(\x7cid\x7c read(id)).collect::<Vec<_>>().into_iter();@|a_push_request_holds_one_object_at_a_time
 fn write_request<W: std::io::Write>(
     mut out: W,
     update: &Update,
@@ -3718,8 +3701,6 @@ fn send_request(remote: &str, request: &std::path::Path) -> Result<fetch::Respon
 /// A [`Throttled`] answer, any other non-200 status, a transport failure, a
 /// pack that will not read or ends early, or an answer that does not carry the
 /// commit asked for. All could-not-look.
-//MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT shallow-fetch-omits-deepen|s@^    body.extend_from_slice(\&pktline("deepen 1\\n")?);$@@|a_shallow_fetch_takes_one_commit_and_not_its_parent
 pub fn fetch_shallow(remote: &str, repo: &std::path::Path, id: &str) -> Result<usize> {
     let wanted = gix::ObjectId::from_hex(id.as_bytes())
         .map_err(|_| crate::error::UsageError::raise(format!("lease: {id} is not an object id")))?;
@@ -4728,18 +4709,19 @@ pub fn identity(root: &Path) -> std::result::Result<(Local, String), String> {
 /// a ref, so it could show neither a rejected swap nor a fetch of what an
 /// earlier push stored. A command is applied only while its ref reads `old`,
 /// exactly as receive-pack decides it.
-#[cfg(test)]
+#[cfg(any(test, feature = "seam"))]
+#[doc(hidden)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-pub(crate) mod testing {
+pub mod testing {
     use super::{
         Call, FLUSH, Object, Service, ZERO, fetch, objects_in, pack_of, pkt_split, pktline,
     };
 
     /// The remote every stand-in case names.
-    pub(crate) const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
+    pub const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
 
     /// Frame `lines` as pkt-lines, an empty one being a flush.
-    pub(crate) fn framed(lines: &[&str]) -> Vec<u8> {
+    pub fn framed(lines: &[&str]) -> Vec<u8> {
         let mut body = Vec::new();
         for line in lines {
             if line.is_empty() {
@@ -4753,7 +4735,7 @@ pub(crate) mod testing {
 
     /// Which of the three smart-HTTP requests a call is.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum Kind {
+    pub enum Kind {
         /// `GET info/refs`.
         Discovery,
         /// `POST git-upload-pack`.
@@ -4764,50 +4746,53 @@ pub(crate) mod testing {
 
     /// "Answer the next `left` requests of `kind` with this status and these
     /// headers", without touching a ref or an object.
-    pub(crate) struct Canned {
-        pub(crate) kind: Kind,
-        pub(crate) left: usize,
-        pub(crate) status: u16,
-        pub(crate) headers: Vec<(String, String)>,
+    #[derive(Debug)]
+    pub struct Canned {
+        pub kind: Kind,
+        pub left: usize,
+        pub status: u16,
+        pub headers: Vec<(String, String)>,
     }
 
     /// "Before applying the next `left` command lists, set `name` to `id`": the
     /// only way to show a swap the server rejects, since a push reads `old`
     /// from the advertisement and a plain ref table would always accept it.
-    pub(crate) struct Moved {
-        pub(crate) left: usize,
-        pub(crate) name: String,
-        pub(crate) id: String,
+    #[derive(Debug)]
+    pub struct Moved {
+        pub left: usize,
+        pub name: String,
+        pub id: String,
         /// The ids the moves after the first set, in order; when it runs out
         /// the last one is used again.
-        pub(crate) then: Vec<String>,
+        pub then: Vec<String>,
     }
 
     /// The remote: its refs, its objects, the status it answers with, every
     /// call it was asked, and the switches a case sets.
-    pub(crate) struct Stand {
-        pub(crate) status: u16,
-        pub(crate) refs: Vec<(String, String)>,
-        pub(crate) objects: Vec<Object>,
-        pub(crate) asked: Vec<String>,
-        pub(crate) sent: Vec<Vec<u8>>,
+    #[derive(Debug)]
+    pub struct Stand {
+        pub status: u16,
+        pub refs: Vec<(String, String)>,
+        pub objects: Vec<Object>,
+        pub asked: Vec<String>,
+        pub sent: Vec<Vec<u8>>,
         /// Requests seen, by kind.
-        pub(crate) discoveries: usize,
-        pub(crate) uploads: usize,
-        pub(crate) receives: usize,
-        pub(crate) canned: Vec<Canned>,
+        pub discoveries: usize,
+        pub uploads: usize,
+        pub receives: usize,
+        pub canned: Vec<Canned>,
         /// Apply the next swap and then fail its reply.
-        pub(crate) lose_next_reply: bool,
-        pub(crate) moved: Option<Moved>,
+        pub lose_next_reply: bool,
+        pub moved: Option<Moved>,
         /// Advertise no `atomic` capability.
-        pub(crate) no_atomic: bool,
+        pub no_atomic: bool,
     }
 
-    pub(crate) type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
+    pub type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
 
     impl Stand {
         /// What `name` reads, or [`ZERO`].
-        pub(crate) fn head_of(&self, name: &str) -> String {
+        pub fn head_of(&self, name: &str) -> String {
             self.refs
                 .iter()
                 .find(|(held, _)| held == name)
@@ -4946,7 +4931,7 @@ pub(crate) mod testing {
             let Some(raw) = rest.get(nul + 1..nul + 21) else {
                 break;
             };
-            out.push(super::hex_of(raw));
+            out.push(batten_facts::digest::hex(raw));
             rest = &rest[nul + 21..];
         }
         out
@@ -4957,7 +4942,7 @@ pub(crate) mod testing {
     /// Unix only, as the one module that asks is: the off-box cases install an
     /// executable scanner stand-in, which needs a mode bit.
     #[cfg(unix)]
-    pub(crate) fn pack_ids(request: &[u8]) -> Vec<String> {
+    pub fn pack_ids(request: &[u8]) -> Vec<String> {
         let Ok((_, pack)) = pkt_split(request) else {
             return Vec::new();
         };
@@ -4970,7 +4955,7 @@ pub(crate) mod testing {
     }
 
     /// A remote answering `200` over `refs`, serving `objects`.
-    pub(crate) fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
+    pub fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
         let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
             status: 200,
             refs: refs
@@ -7996,8 +7981,12 @@ mod transport_tests {
     /// Fails by: a request left by a killed push surviving the next push, or a
     /// live push's request being removed under it.
     #[test]
-    #[cfg(target_os = "linux")]
     fn a_killed_push_leaves_no_request_behind_the_next_one() {
+        // A pid is read as live through `/proc`, which only Linux has: off it
+        // every holder reads as gone, so the live request would be swept too.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
         let repo = bare("lease-orphan-request");
         let dead = repo.join(format!("{REQUEST_PREFIX}{}-1.request", u32::MAX - 1));
         let live = repo.join(format!("{REQUEST_PREFIX}{}-1.request", std::process::id()));

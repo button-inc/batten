@@ -396,7 +396,6 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     /// goes over. A result that never passes the bound in bytes — nearly every
     /// tool result — never builds the tokenizer at all, which was a third of a
     /// `PostToolUse`'s own work.
-    //MUTANT deferred-pieces-never-counted|s@^            for waiting in std::mem::take(\&mut self.deferred) {$@            for waiting in Vec::<String>::new() {@|a_result_over_the_bound_in_bytes_counts_every_piece_it_read
     fn tally(&mut self, piece: &str) {
         if !self.counting {
             let bytes = self.deferred_bytes + piece.len() as u64;

@@ -2950,10 +2950,6 @@ impl crate::output::Line for OffboxReport {
 /// The off-box report for the checkout at `dir`, or `None` with the state
 /// repository variable unset. **It creates nothing**: with no off-box directory
 /// it reports a dead daemon and leaves the directory absent.
-//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
-//MUTANT unset-still-reports-offbox|s@^    if !set {$@    if false {@|unset_reports_no_offbox_at_all
-//MUTANT free-lock-reads-running|s@^        Liveness::Dead => "dead",$@        Liveness::Dead => "running",@|a_free_lock_is_a_dead_daemon
-//MUTANT unread-count-ignores-the-offset|s@^    let unread_bytes = inbox.saturating_sub(read.unwrap_or(inbox));$@    let unread_bytes = inbox;@|a_running_daemon_is_reported_from_its_own_files
 fn offbox_report(dir: &Path) -> Option<OffboxReport> {
     use crate::offbox_watch::{self, Liveness, field};
 

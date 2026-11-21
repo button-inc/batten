@@ -74,7 +74,6 @@ use crate::config_model::PerfExempt;
 #[cfg(test)]
 use crate::config_model::PerfLatency;
 use crate::config_model::SCHEMA_PATH;
-pub use crate::config_model::Shared;
 use crate::config_model::SUPPORTED_VERSION;
 use crate::config_model::Strictness;
 use crate::config_model::Unit;
@@ -3274,10 +3273,10 @@ fn warm_parse(path: &Path, source: &str) -> Option<Result<std::sync::Arc<Config>
 ///
 /// # Errors
 ///
-/// As [`fs::read_to_string`].
+/// As [`std::fs::read_to_string`].
 pub fn read_head(path: &Path) -> io::Result<String> {
     use std::io::BufRead as _;
-    let mut reader = io::BufReader::new(fs::File::open(path)?);
+    let mut reader = io::BufReader::new(std::fs::File::open(path)?);
     let mut head = String::new();
     loop {
         let at = head.len();

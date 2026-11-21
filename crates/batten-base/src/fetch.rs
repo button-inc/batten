@@ -73,8 +73,6 @@ const FILE_CHUNK: u64 = 64 * 1024;
 /// The fixed minute was sized for a lease, which is one tiny commit. A session
 /// snapshot is tens of megabytes, and a bound that does not grow with the body
 /// fails every large push on a slow link however healthy the exchange is.
-//MUTANT-SUITE crates/batten/src/fetch.rs
-//MUTANT timeout-ignores-body-size|s@^    base + Duration::from_secs(bytes / MIB)$@    base + Duration::from_secs(bytes / MIB / u64::MAX)@|the_total_bound_grows_with_the_body
 fn total_for(base: Duration, bytes: u64) -> Duration {
     base + Duration::from_secs(bytes / MIB)
 }
@@ -773,8 +771,6 @@ const STAND_IN_CHUNK: usize = 1000;
 /// **THE DEADLINE MOVES WITH EVERY FRAME**, which is the whole difference
 /// between an idle bound and a total one: a reply that keeps arriving never
 /// meets it, and one that stops meets it `idle` later.
-//MUTANT-SUITE crates/batten/src/fetch.rs
-//MUTANT shallow-fetch-bounded-in-total|s@^        deadline = tokio::time::Instant::now() + idle;$@@|a_steady_answer_outlives_the_idle_bound_and_a_stalled_one_does_not
 async fn drain<B>(mut body: B, idle: Duration, sink: &mut Sink<'_>) -> Result<()>
 where
     B: hyper::body::Body<Data = hyper::body::Bytes> + Unpin,

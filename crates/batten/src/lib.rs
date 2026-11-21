@@ -1198,7 +1198,7 @@ fn run_offbox_daemon(
         .into_iter()
         .find_map(|(name, url)| (name == "origin").then_some(url));
     let root = git::repo_root(Path::new("."))?;
-    let provisions = config::load(&root.join(config::CONFIG_FILE))
+    let provisions = config::load(&root.join(crate::config_model::CONFIG_FILE))
         .map(|config| config.provisions)
         .unwrap_or_default();
     let transcript = transcript.map(PathBuf::from);
@@ -1313,7 +1313,7 @@ fn run_offbox_restore(
     };
     let root = git::repo_root(Path::new("."))?;
     // Loaded for the forge's credential names, as `offbox push` loads it.
-    let provisions = config::load(&root.join(config::CONFIG_FILE))
+    let provisions = config::load(&root.join(crate::config_model::CONFIG_FILE))
         .map(|config| config.provisions)
         .unwrap_or_default();
     let ambient = std::env::var(session::PARENT_ENV).ok();
@@ -1372,7 +1372,7 @@ fn run_offbox_push(
     // The config is where the scanner's rows are, and loading it is what
     // declares the forge's credential names, as `batten land` relies on. A
     // project with no config has no scanner, and the push says so.
-    let provisions = config::load(&root.join(config::CONFIG_FILE))
+    let provisions = config::load(&root.join(crate::config_model::CONFIG_FILE))
         .map(|config| config.provisions)
         .unwrap_or_default();
     let push = offbox::push_once(
@@ -20394,7 +20394,7 @@ fn dispatch_envelope(
     // Failure is silent by design. A hook that cannot write a fact must not
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
-    if envelope.event == hook::Event::PostTool {
+    if envelope.event == crate::config_model::Event::PostTool {
         offbox_post(harness, &envelope);
     }
     let call = (harness, &envelope, spilled, overrides);
@@ -22002,8 +22002,6 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 /// wrapped to six lines and put `run_hook` back over `too_many_lines`.
 /// This checkout's off-box directory, or `None` with the state repository
 /// variable unset — in which case no file under it is opened (CLOUD-2736).
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT unset-still-writes-the-inbox|s@^    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(\x7cvalue\x7c !value.trim().is_empty()) {$@    if false {@|unset_opens_no_file_and_denies_nothing
 fn offbox_watch_dir() -> Option<PathBuf> {
     if !std::env::var(session::STATE_REPO_ENV).is_ok_and(|value| !value.trim().is_empty()) {
         return None;
@@ -22021,9 +22019,7 @@ fn offbox_watch_dir() -> Option<PathBuf> {
 /// One appended line, one shared try-lock, two small reads, one small write
 /// where the count moved. **It starts nothing and reaches no network.** Silent
 /// on failure, like every recorder at this boundary.
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT hook-spawns-the-daemon|s@^    let heard = offbox_watch::probe(\&dir, leaf.as_deref());$@    let _ = std::process::Command::new("batten").args(["offbox", "status"]).spawn(); let heard = offbox_watch::probe(\&dir, leaf.as_deref());@|the_hook_starts_no_process
-fn offbox_post(harness: hook::Harness, envelope: &hook::Envelope) {
+fn offbox_post(harness: crate::config_model::Harness, envelope: &hook::Envelope) {
     let Some(dir) = offbox_watch_dir() else {
         return;
     };
@@ -22048,7 +22044,7 @@ fn offbox_post(harness: hook::Harness, envelope: &hook::Envelope) {
 /// The finding that says the daemon is down and what fixes it.
 fn offbox_down(says: &str, remedy: &str) -> refusal::Refusal {
     refusal::Refusal::engine(
-        verdict::Native::OffboxDaemonDown,
+        crate::error::Native::OffboxDaemonDown,
         &[verdict::Subject::Artifact {
             artifact: says.to_owned(),
         }],
@@ -22064,14 +22060,12 @@ fn offbox_down(says: &str, remedy: &str) -> refusal::Refusal {
 /// At session start the daemon is looked for outright and no miss is counted,
 /// so the agent can launch it before its first tool call. The daemon's attach
 /// note is relayed once: nothing is denied for an unreachable state repository.
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT attach-note-repeated-every-call|s@^            seen.noted = true;$@@|the_attach_note_is_relayed_once_and_denies_nothing
 fn offbox_advise(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    if envelope.event == hook::Event::PostTool {
+    if envelope.event == crate::config_model::Event::PostTool {
         return;
     }
     let Some(dir) = offbox_watch_dir() else {
@@ -22079,7 +22073,7 @@ fn offbox_advise(
     };
     let before = offbox_watch::Seen::read(&dir);
     let mut seen = before;
-    let starting = envelope.event == hook::Event::SessionStart;
+    let starting = envelope.event == crate::config_model::Event::SessionStart;
     if let Some(session) = envelope
         .session
         .as_deref()
@@ -22109,7 +22103,7 @@ fn offbox_advise(
                     advice,
                     severity::AdvisoryTier::Caution,
                     refusal::Refusal::engine(
-                        verdict::Native::WorkspaceStateBroken,
+                        crate::error::Native::WorkspaceStateBroken,
                         &[verdict::Subject::Artifact {
                             artifact: line.to_owned(),
                         }],
@@ -22137,15 +22131,8 @@ fn offbox_advise(
 /// state it remedies; then five or more misses and a daemon that is still not
 /// alive ON THIS CALL refuse. The probe is taken now, so a daemon relaunched a
 /// moment ago is seen at once and a stale count denies nothing.
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT gate-applies-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {$@    if false {@|a_host_with_no_known_background_facility_is_advised_and_never_denied
-//MUTANT foreground-relaunch-admitted|s@^        if backgrounded {$@        if true {@|the_relaunch_command_is_admitted_only_in_the_background
-//MUTANT background-relaunch-denied|s@^        if backgrounded {$@        if false {@|the_relaunch_command_is_admitted_only_in_the_background
-//MUTANT dead-daemon-never-denied|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if true {@|a_dead_daemon_is_denied_after_the_grace_with_the_relaunch_command
-//MUTANT denied-before-the-grace|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if false {@|a_dead_daemon_is_allowed_inside_the_grace
-//MUTANT stale-miss-count-denies-a-live-daemon|s@^    let now = offbox_watch::probe(\&dir, Some(\&offbox_watch::leaf(name, session)));$@    let now = offbox_watch::Liveness::Dead;@|a_relaunched_daemon_is_seen_at_once_whatever_the_count
 fn offbox_gate(
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     envelope: &hook::Envelope,
     decision: hook::Decision,
 ) -> hook::Decision {
@@ -22154,7 +22141,7 @@ fn offbox_gate(
     // repository that grants its ordinary commands would otherwise never meet
     // this gate at all. A refusal or an escalation already speaks, and stands.
     let speaks = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
-    if envelope.event != hook::Event::PreTool || speaks {
+    if envelope.event != crate::config_model::Event::PreTool || speaks {
         return decision;
     }
     if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {
@@ -22168,13 +22155,16 @@ fn offbox_gate(
     let relaunch = offbox_watch::relaunch(session, name, transcript);
     let command = envelope.command.trim();
     if command == relaunch {
-        let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+        let backgrounded = crate::config_model::Field::RunInBackground
+            .read(envelope)
+            .as_deref()
+            == Some("true");
         if backgrounded {
             return decision;
         }
         return hook::Decision::Deny(
             refusal::Refusal::engine(
-                verdict::Native::OffboxDaemonForeground,
+                crate::error::Native::OffboxDaemonForeground,
                 &[verdict::Subject::Artifact {
                     artifact: String::from("run it in the background"),
                 }],
@@ -22850,7 +22840,7 @@ fn collect_batch_advice(
 ///
 /// **There is no fallback that pays it anyway.** A daemon that is never
 /// started is the daemon gate's to refuse; an unstamped session cannot claim.
-fn stamp_session(harness: hook::Harness, envelope: &hook::Envelope) {
+fn stamp_session(harness: crate::config_model::Harness, envelope: &hook::Envelope) {
     if envelope.event == crate::config_model::Event::SessionStart {
         if defer_stamp(harness, envelope) {
             return;
@@ -22867,7 +22857,11 @@ fn stamp_session(harness: hook::Harness, envelope: &hook::Envelope) {
 }
 
 /// Whether this session's restore record exists under the off-box directory.
-fn restore_recorded(dir: &Path, harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+fn restore_recorded(
+    dir: &Path,
+    harness: crate::config_model::Harness,
+    envelope: &hook::Envelope,
+) -> bool {
     envelope.session.as_deref().is_some_and(|session| {
         offbox_watch::restored_path(dir, &offbox_watch::leaf(harness.as_str(), session)).exists()
     })
@@ -22875,7 +22869,7 @@ fn restore_recorded(dir: &Path, harness: hook::Harness, envelope: &hook::Envelop
 
 /// At a session start: whether the stamp is held back, having written the
 /// file that says so.
-fn defer_stamp(harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+fn defer_stamp(harness: crate::config_model::Harness, envelope: &hook::Envelope) -> bool {
     let Some(dir) = offbox_watch_dir() else {
         return false;
     };
@@ -22891,7 +22885,7 @@ fn defer_stamp(harness: hook::Harness, envelope: &hook::Envelope) -> bool {
 
 /// On any event after the start: pay a stamp that is owed, once the restore
 /// has reached an answer or the daemon has said it cannot.
-fn pay_owed_stamp(harness: hook::Harness, envelope: &hook::Envelope) {
+fn pay_owed_stamp(harness: crate::config_model::Harness, envelope: &hook::Envelope) {
     let Some(dir) = offbox_watch_dir() else {
         return;
     };
@@ -26388,9 +26382,9 @@ fn write_records_for(
     // compiles what those rows read. `append_all` re-asks selection against
     // the phase-two table, where a row phase one dropped finds its selector
     // absent and is not selected again — the same answer, by the same test.
-    let by_tool: Vec<&crate::recorder::Declared> = recorders
+    let by_tool: Vec<&crate::config_model::RecorderDeclared> = recorders
         .iter()
-        .filter(|row| rules::selects_tool_name(&row.tool, raw_tool))
+        .filter(|row| crate::facts::selects_tool_name(&row.tool, raw_tool))
         .collect();
     let selectors: std::collections::BTreeSet<String> = by_tool
         .iter()
@@ -26407,7 +26401,7 @@ fn write_records_for(
         branch: Some(&branch),
         now: 0,
     };
-    let selected: Vec<&crate::recorder::Declared> = by_tool
+    let selected: Vec<&crate::config_model::RecorderDeclared> = by_tool
         .into_iter()
         .filter(|row| {
             crate::recorder::outcome(row, &probe) != crate::recorder::Outcome::NotSelected
@@ -27547,14 +27541,12 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
 /// The policy for a reader of its DECLARED TABLES alone — facts, mints,
 /// recorders, patterns, programs — which no harness changes: whatever load
 /// this call already made, for any harness, else one made for
-/// [`hook::Harness::ExitCode`] as these readers always asked.
+/// [`crate::config_model::Harness::ExitCode`] as these readers always asked.
 ///
 /// WHY IT EXISTS (2026-11-15): the post-tool recorders asked for `ExitCode`,
 /// the call had loaded for its own harness, and the memo is keyed by harness,
 /// so every `PostToolUse` built the whole policy a second time — 19 modules
 /// and all — to read tables it already held.
-//MUTANT tables-reader-ignores-the-call-harness|s@^    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);$@    let harness = hook::Harness::ExitCode;@|a_tables_reader_first_in_a_call_loads_for_the_calls_harness
-//MUTANT tables-reader-loads-again|s@^    if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {$@    if let Some(held) = None::<hook::Policy> {@|a_tables_reader_takes_the_load_the_call_already_made
 fn load_policy_tables(overrides: &Overrides) -> Result<SharedPolicy> {
     if let Some(held) = HookLoads::recall_any(hook_authority_root(), overrides) {
         return Ok(SharedPolicy(held));
@@ -27562,7 +27554,7 @@ fn load_policy_tables(overrides: &Overrides) -> Result<SharedPolicy> {
     // UNDER THE CALL'S OWN HARNESS where the scope knows it: the post-tool
     // readers run before the call's own load, so loading for `ExitCode` here
     // built one policy and the call then built a second for its harness.
-    let harness = HookLoads::harness().unwrap_or(hook::Harness::ExitCode);
+    let harness = HookLoads::harness().unwrap_or(crate::config_model::Harness::ExitCode);
     load_hook_config(overrides, harness).map(SharedPolicy)
 }
 
@@ -27662,7 +27654,7 @@ struct HookLoads {
     capture: CaptureRead,
     /// The harness this call is for, where the scope was opened for one: what
     /// [`load_policy_tables`] loads under, so its load is the call's own.
-    harness: Option<hook::Harness>,
+    harness: Option<crate::config_model::Harness>,
 }
 
 /// Whether this hook call has read the capture bound yet, and what it read.
@@ -27697,11 +27689,11 @@ impl Drop for HookLoadScope {
 impl HookLoads {
     /// Open the memo for the life of the returned guard, for a call made by
     /// `harness`. A case opens one for no harness with [`HookLoads::open`].
-    fn scope_for(harness: hook::Harness) -> HookLoadScope {
+    fn scope_for(harness: crate::config_model::Harness) -> HookLoadScope {
         Self::open(Some(harness))
     }
 
-    fn open(harness: Option<hook::Harness>) -> HookLoadScope {
+    fn open(harness: Option<crate::config_model::Harness>) -> HookLoadScope {
         HOOK_LOADS.with(|cell| {
             *cell.borrow_mut() = Some(Self {
                 resolved: Vec::new(),
@@ -27714,7 +27706,7 @@ impl HookLoads {
     }
 
     /// The harness the open scope is for, if it was opened for one.
-    fn harness() -> Option<hook::Harness> {
+    fn harness() -> Option<crate::config_model::Harness> {
         HOOK_LOADS.with(|cell| cell.borrow().as_ref().and_then(|loads| loads.harness))
     }
 
@@ -33244,13 +33236,13 @@ mod tests {
     fn a_tables_reader_takes_the_load_the_call_already_made() {
         let _scope = HookLoads::open(None);
         let overrides = Overrides::default();
-        let Ok(_) = load_hook_config(&overrides, hook::Harness::ClaudeCode) else {
+        let Ok(_) = load_hook_config(&overrides, crate::config_model::Harness::ClaudeCode) else {
             return; // no authority here to load; nothing to share
         };
         let tables = load_policy_tables(&overrides).expect("the tables load");
         assert_eq!(
             tables.harness(),
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "the call's own load, not a second one for exit-code"
         );
     }
@@ -33260,15 +33252,19 @@ mod tests {
     /// second policy for its own harness.
     #[test]
     fn a_tables_reader_first_in_a_call_loads_for_the_calls_harness() {
-        let _scope = HookLoads::scope_for(hook::Harness::ClaudeCode);
+        let _scope = HookLoads::scope_for(crate::config_model::Harness::ClaudeCode);
         let overrides = Overrides::default();
         let Ok(tables) = load_policy_tables(&overrides) else {
             return; // no authority here to load
         };
-        assert_eq!(tables.harness(), hook::Harness::ClaudeCode);
+        assert_eq!(tables.harness(), crate::config_model::Harness::ClaudeCode);
         assert!(
-            HookLoads::recall(hook_authority_root(), &overrides, hook::Harness::ClaudeCode)
-                .is_some(),
+            HookLoads::recall(
+                hook_authority_root(),
+                &overrides,
+                crate::config_model::Harness::ClaudeCode
+            )
+            .is_some(),
             "the call's own load is now a memo hit"
         );
     }

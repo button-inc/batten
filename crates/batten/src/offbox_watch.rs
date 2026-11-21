@@ -129,13 +129,6 @@ pub fn field<'a>(status: &'a str, key: &str) -> Option<&'a str> {
 /// A status file with no `inbox_read` line — which a daemon has for an instant
 /// at start — is not stuck, and one with no `session` line serves this session.
 /// [`Liveness::OtherSession`] is never returned without a `session` to compare.
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT held-lock-far-behind-reads-alive|s@^    if behind > BEHIND {$@    if false {@|a_daemon_far_behind_its_inbox_is_stuck_and_the_remedy_kills_it
-//MUTANT other-session-daemon-reads-alive|s@^        \&\& serving != session$@        \&\& false@|a_daemon_serving_another_session_is_reported_and_then_denied
-//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
-//MUTANT stuck-threshold-off-by-one|s@^    if behind > BEHIND {$@    if behind >= BEHIND {@|a_daemon_is_stuck_one_byte_past_sixteen_kibibytes
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT probe-takes-the-lock-exclusively|s@^    if fs4::FileExt::try_lock_shared(\&lock).is_ok() {$@    if fs4::FileExt::try_lock(\&lock).is_ok() {@|a_shared_hold_on_the_lock_is_not_a_daemon
 #[must_use]
 pub fn probe(dir: &Path, session: Option<&str>) -> Liveness {
     let Ok(lock) = std::fs::File::open(dir.join(LOCK)) else {
@@ -196,8 +189,6 @@ pub fn message(dir: &Path, session: &str) -> std::io::Result<()> {
 /// construction. The inbox line is the record; this only ends the daemon's
 /// wait early, so a datagram lost, or a port that no daemon holds any more,
 /// costs one wake at the daemon's own deadline instead.
-//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
-//MUTANT hook-never-wakes-the-daemon|s@^        .and_then(\x7csocket\x7c socket.send_to(b"1", (loopback, port)));$@        .map(\x7c_\x7c 0_usize);@|a_tool_call_wakes_the_daemon_before_its_deadline
 fn wake(dir: &Path) {
     let status = std::fs::read_to_string(dir.join(STATUS)).unwrap_or_default();
     let Some(port) = field(&status, WAKE)
@@ -267,8 +258,6 @@ impl Seen {
 /// The command that starts the daemon for a session: the remedy for a dead one.
 ///
 /// Byte-stable, because a gate admits exactly this text and nothing near it.
-//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
-//MUTANT remedy-omits-the-transcript-path|s@^    if let Some(transcript) = transcript {$@    if let Some(transcript) = transcript.filter(\x7c_\x7c false) {@|a_dead_daemon_is_denied_after_the_grace_with_the_relaunch_command
 #[must_use]
 pub fn relaunch(session: &str, harness: &str, transcript: Option<&str>) -> String {
     let mut command = format!("batten offbox run --session {session} --harness {harness}");

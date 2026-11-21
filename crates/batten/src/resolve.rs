@@ -495,7 +495,7 @@ pub struct Resolved {
     pub fail_on_warning: bool,
     /// The effective rule set: the committed rules plus any the local file adds.
     #[serde(rename = "rule")]
-    pub rules: config::Shared<Rule>,
+    pub rules: crate::config_model::Shared<Rule>,
     /// The scope path set: the authority's list, plus any `!` excludes the
     /// local file added. Raise-only — see [`merge_local_scope`] for why a local
     /// include is refused rather than appended.
@@ -1438,7 +1438,7 @@ fn declared_by(present: config::Authority, declared: bool, origin: Origin) -> Co
 /// `merge_local_*` helpers and the rule loop — and none may have a committed row
 /// redefined by the local layer.
 struct Tables {
-    rules: config::Shared<Rule>,
+    rules: crate::config_model::Shared<Rule>,
     rules_source: Contributors,
     exec_patterns: Vec<crate::config_model::OutputPattern>,
     redirects: Vec<crate::config_model::Redirect>,
