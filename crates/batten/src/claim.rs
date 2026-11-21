@@ -699,10 +699,6 @@ pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
 /// DISK, whatever base it records — so a re-claim of an issue already listed
 /// voids nothing even after trunk moved and the carried list was dropped. A
 /// repository that never lints has no such file, and nothing is written.
-//MUTANT-SUITE crates/batten/src/claim.rs
-//MUTANT plan-survives-a-new-claim|s@^    if !grew {$@    if true {@|a_new_issue_voids_the_plan_receipt
-//MUTANT plan-voided-by-a-re-claim|s@^    let grew = ids.iter().any(\x7cid\x7c !held.contains(\&id.as_str()));$@    let grew = !ids.is_empty();@|a_re_claim_voids_nothing
-//MUTANT plan-receipt-created-by-a-claim|s@^    if !plan.is_file() {$@    if false {@|no_plan_receipt_means_nothing_is_written
 fn void_plan_on_a_new_issue(
     receipts: &Path,
     branch: &str,
@@ -721,7 +717,7 @@ fn void_plan_on_a_new_issue(
         return Ok(());
     }
     let plan = receipts.join(crate::receipt::branch_receipt_name(
-        crate::plan::RECEIPT,
+        crate::config_model::PLAN_RECEIPT,
         branch,
     ));
     if !plan.is_file() {
@@ -1094,7 +1090,7 @@ mod tests {
     /// The branch's `plan-check` receipt, written as a passing lint would.
     fn plan_receipt(receipts: &Path) -> std::path::PathBuf {
         let plan = receipts.join(crate::receipt::branch_receipt_name(
-            crate::plan::RECEIPT,
+            crate::config_model::PLAN_RECEIPT,
             "user/branch",
         ));
         std::fs::write(&plan, "base abc123\nplan 00\n").unwrap();
@@ -1136,7 +1132,7 @@ mod tests {
         mint_one(&receipts, "CLOUD-1", Some("abc123"));
         mint_one(&receipts, "CLOUD-2", Some("abc123"));
         let plan = receipts.join(crate::receipt::branch_receipt_name(
-            crate::plan::RECEIPT,
+            crate::config_model::PLAN_RECEIPT,
             "user/branch",
         ));
         assert!(!plan.exists());

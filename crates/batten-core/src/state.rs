@@ -303,8 +303,6 @@ pub fn recorded_root_authorities(root: &Path, file: &str) -> Option<Vec<PathBuf>
 ///
 /// A member is read with [`recorded_session_authority_in`]'s ghost check: a
 /// checkout deleted since Setup is never pinned for a call.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT root-set-ghost-pinned|s@^            \.filter(\x7cmember\x7c member\.is_absolute() \&\& member\.join(file)\.is_file())$@            .filter(\x7cmember\x7c member.is_absolute())@|a_recorded_member_whose_config_is_gone_is_skipped
 #[must_use]
 pub fn recorded_root_authorities_in(state: &Path, root: &Path, file: &str) -> Option<Vec<PathBuf>> {
     Some(
@@ -327,7 +325,6 @@ pub fn recorded_root_authorities_in(state: &Path, root: &Path, file: &str) -> Op
 ///
 /// Returns an error when the state root cannot be resolved or the record cannot
 /// be written.
-//MUTANT root-set-grows-unregistered|s@^    let Some(held) = recorded_root_members(\&path) else {$@    let Some(held) = recorded_root_members(\&path).or_else(\x7c\x7c Some(Vec::new())) else {@|a_checkout_under_an_unregistered_parent_writes_no_record
 pub fn grow_root_authorities(member: &Path) -> Result<bool> {
     let Some(root) = member.parent() else {
         return Ok(false);

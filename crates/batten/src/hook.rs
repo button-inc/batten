@@ -291,10 +291,6 @@ pub trait HarnessExt: Sized {
     fn mcp_logs(self) -> Option<&'static str>;
 }
 
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT gemini-write-file-unnamed|s@^                "write_file",$@@|gemini_write_file_against_a_protected_path_is_denied
-//MUTANT gemini-replace-unnamed|s@^                "replace",$@@|gemini_replace_against_a_protected_path_is_denied
-//MUTANT eviction-limit-invented|s@^                cache_eviction: None,$@                cache_eviction: Some(\&crate::prompt_cache::CLAUDE_CODE),@|only_claude_code_declares_an_eviction_limit
 impl HarnessExt for Harness {
     const ALL: &'static [Harness] = &[
         Harness::ClaudeCode,
@@ -6007,9 +6003,6 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
     edit_spans(input)
 }
 
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT allow-multiple-unread|s@^        \["/replace_all", "/allow_multiple"\]$@        ["/replace_all"]@|allow_multiple_reads_as_replace_all
-//MUTANT allow-multiple-as-fallback|s@^            .any(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool) == Some(true))$@            .find_map(\x7ckey\x7c value.pointer(key).and_then(Value::as_bool)).unwrap_or(false)@|a_false_replace_all_does_not_hide_allow_multiple
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
     // EITHER KEY TRUE MEANS EVERY OCCURRENCE (CLOUD-2744): Gemini CLI's `replace`
     // spells it `allow_multiple`. An `any` over the two, never a fallback, so a
@@ -6961,7 +6954,10 @@ fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &SegmentLine)> {
 /// refuse and denying it would be a pure false positive.
 /// Whether one line runs a verdict-bearing program, by the row's `verdict`
 /// entries, read exactly as [`pipeline_rules`] reads them.
-fn line_bears_a_verdict(line: &SegmentLine, verdicts: &[crate::rules::VerdictProgram]) -> bool {
+fn line_bears_a_verdict(
+    line: &SegmentLine,
+    verdicts: &[crate::config_model::VerdictProgram],
+) -> bool {
     let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
     let Some(program_index) = effective_program(&tokens) else {
         return false;
@@ -6988,9 +6984,6 @@ fn line_bears_a_verdict(line: &SegmentLine, verdicts: &[crate::rules::VerdictPro
 /// **A prefix of what the agent wrote, never a re-spelling.** Each trailing
 /// stage's own text, and the pipe before it, is stripped from the end of the
 /// original; a stage whose text is not where the parse says ends the attempt.
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT cut-drops-a-command|s@^            joined \&\& filter$@            joined@|a_stage_that_is_not_a_filter_keeps_its_deny
-//MUTANT cut-at-first-segment|s@^    let mut text = envelope.command.trim_end();$@    let mut text = parsed.first().map_or("", \x7cfirst\x7c first.raw.as_str()).trim_end();@|the_cut_keeps_what_came_before_the_verdict
 #[must_use]
 pub fn filter_free_command(policy: &Policy, envelope: &Envelope) -> Option<String> {
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {

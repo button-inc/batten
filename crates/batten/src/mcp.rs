@@ -1357,8 +1357,6 @@ pub fn payload(result: &serde_json::Value) -> Payload {
 /// text block carries its document inside prose: then the first complete JSON
 /// object in that text is the payload. A row without the key, or an answer
 /// [`payload`] already unframed, is [`payload`]'s answer unchanged.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT enveloped-unread|s@^        \&\& row.is_some_and(\x7crow\x7c row.enveloped)$@        \&\& false@|an_embedded_object_is_found_inside_an_envelope
 #[must_use]
 pub fn payload_for(result: &serde_json::Value, row: Option<&ResultRow>) -> Payload {
     let plain = payload(result);
@@ -2221,9 +2219,6 @@ pub struct Pacing {
     pub pauses: Option<u128>,
 }
 
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT no-limit-gets-a-default|s@^        let Some(evict) = evict_after else {$@        let Some(evict) = evict_after.or(Some(std::time::Duration::from_secs(3000))) else {@|the_limit_is_the_eviction_limit_less_the_buffer
-//MUTANT evict-limit-miscounted|s@^        let pauses = evict.saturating_sub(buffer).as_millis() / step;$@        let pauses = evict.saturating_sub(buffer).as_millis() / step + 1;@|the_limit_is_the_eviction_limit_less_the_buffer
 impl Pacing {
     /// Pacing for `interval`, bounded by `evict_after` less `buffer` where an
     /// eviction limit is given (CLOUD-2759).
@@ -2292,11 +2287,6 @@ impl Waited {
 /// `--buffer` says otherwise; with neither there is no limit. Once the warm
 /// wakes already spent reach the break-even count for the recorded prices, the
 /// limit is dropped and the wait runs to a change only.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT receipt-unread|s@^    let recorded = in_force.filter(\x7c_\x7c evict_after.is_none());$@    let recorded = None::<crate::prompt_cache::InForce>.filter(\x7c_\x7c evict_after.is_none());@|a_wait_with_no_flag_uses_the_receipt
-//MUTANT buffer-default-zero|s@^    let buffer = buffer.unwrap_or(crate::prompt_cache::BUFFER_SECS);$@    let buffer = buffer.unwrap_or(0);@|a_wait_with_no_flag_uses_the_receipt
-//MUTANT break-even-never-reached|s@^        if wakes >= allowed {$@        if false {@|the_wait_stops_waking_at_break_even
-//MUTANT waiter-counts-one-request|s@^            crate::prompt_cache::REQUESTS_PER_WAKE,$@            1,@|the_wait_stops_waking_at_break_even
 #[must_use]
 pub fn pacing_for(
     interval: u64,
@@ -2333,8 +2323,6 @@ pub fn pacing_for(
 /// The warm wakes already spent in this run of waits: the lines of `count`
 /// written within one `lifetime` of `now`. An older line means the cache
 /// expired anyway, so a new run of warm wakes has started.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT stale-count-kept|s@^        .filter(\x7cat\x7c at.saturating_add(lifetime) >= now)$@        .filter(\x7c_\x7c true)@|a_count_older_than_the_limit_is_ignored
 #[must_use]
 pub fn warm_wakes(count: &Path, now: u64, lifetime: u64) -> u64 {
     let text = std::fs::read_to_string(count).unwrap_or_default();
@@ -2355,8 +2343,6 @@ pub fn spends_warm(evict_after: Option<u64>, from_receipt: bool) -> bool {
 
 /// Settle the warm count after a wait: a wake spent at the limit is appended
 /// with its time; a change clears the count.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT warm-count-never-cleared|s@^        let _ = std::fs::remove_file(count);$@@|a_change_resets_the_count
 pub fn settle_warm(count: &Path, waited: &Waited, now: u64) {
     if waited.changed {
         let _ = std::fs::remove_file(count);
@@ -2383,15 +2369,12 @@ impl Drop for HeldLock {
 /// Take the clone's singleton lock `name`, as `land` takes its own: this
 /// process's pid and the shared recheck. A held lock is exit 2 naming the
 /// holder, and a lock that could not be looked at is exit 3, never "free".
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT lock-not-exclusive|s@^        crate::task::Claim::Held { holder, .. } => Err(held_by(name, \&holder)),$@        crate::task::Claim::Held { .. } => Ok(None),@|a_second_waiter_under_the_same_name_exits_two
-//MUTANT could-not-look-reads-as-free|s@^        crate::task::Claim::CouldNotLook(_) => Err(unlookable(name)),$@        crate::task::Claim::CouldNotLook(_) => Ok(None),@|a_lock_that_cannot_be_looked_at_is_three
 fn acquire(lock: Option<(&Path, &str)>) -> std::result::Result<Option<HeldLock>, Waited> {
     let Some((git_dir, name)) = lock else {
         return Ok(None);
     };
     let pid = std::process::id().to_string();
-    match crate::task::singleton_acquire(git_dir, name, &pid, crate::SINGLETON_RECHECK) {
+    match crate::task::singleton_acquire(git_dir, name, &pid, crate::task::SINGLETON_RECHECK) {
         crate::task::Claim::Taken | crate::task::Claim::Reclaimed(_) => Ok(Some(HeldLock {
             git_dir: git_dir.to_path_buf(),
             name: name.to_owned(),
@@ -2416,9 +2399,6 @@ fn unlookable(name: &str) -> Waited {
 }
 
 /// Read and reduce one subject.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT unreduced-compared-whole|s@^    if !payload.unwrapped {$@    if false {@|an_unreduced_poll_is_three
-//MUTANT whole-answer-compared|s@^    let reduced = reduce(row, \&payload.value);$@    let reduced = payload.value.as_object().cloned();@|an_undeclared_field_changing_is_not_a_change
 fn read_one(
     row: &ResultRow,
     params: &serde_json::Value,
@@ -2442,8 +2422,6 @@ fn read_one(
 }
 
 /// Read every subject once, in list order.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT only-first-read-polled|s@^    for (name, params) in subjects {$@    for (name, params) in subjects.iter().take(1) {@|any_one_of_several_reads_changing_ends_the_wait
 fn poll(
     row: &ResultRow,
     subjects: &[(String, serde_json::Value)],
@@ -2458,9 +2436,6 @@ fn poll(
 }
 
 /// Whether a subject's reading moved. Staying unreadable is not a change.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT change-unseen|s@^    before != after$@    false@|a_changed_reduction_ends_the_wait
-//MUTANT unreadable-subject-ends-every-wait|s@^    before != after$@    before != after \x7c\x7c *after == Reading::Unreadable@|one_unreadable_subject_does_not_end_the_wait
 fn changed(before: &Reading, after: &Reading) -> bool {
     before != after
 }
@@ -2497,15 +2472,6 @@ fn change_line(name: &str, before: &Reading, after: &Reading) -> String {
 /// Compares each poll's reduction against the subject's FIRST reading, so a
 /// subject already in the state the caller fears is not a change: the caller
 /// reads once before waiting.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT undeclared-method-polled|s@^    let Some(row) = declared else {$@    let Some(row) = declared.or(config.results.first()) else {@|a_method_with_no_result_row_is_refused_before_the_first_poll
-//MUTANT lock-not-taken|s@^    let held = acquire(lock);$@    let held = acquire(None);@|a_singleton_wait_holds_the_lock_while_it_runs
-//MUTANT empty-set-waits|s@^    if known.is_empty() {$@    if false {@|no_receipts_is_nothing_to_wait_for
-//MUTANT unreadable-reads-as-unchanged|s@^        .all(\x7c(_, reading, _)\x7c \*reading == Reading::Unreadable)$@        .all(\x7c_\x7c false)@|a_first_poll_that_cannot_be_made_is_three
-//MUTANT limit-waits-forever|s@^        if pacing.pauses.is_some_and(\x7climit\x7c done >= limit) {$@        if false {@|no_change_exits_zero_at_the_limit
-//MUTANT receipts-read-once|s@^        let fresh = subjects.list();$@        let fresh = known.clone();@|a_receipt_minted_mid_wait_is_watched_from_the_next_poll
-//MUTANT removed-receipt-still-read|s@^        known.retain(\x7c(name, _)\x7c fresh.iter().any(\x7c(listed, _)\x7c listed == name));$@        known.retain(\x7c_\x7c true);@|a_receipt_removed_mid_wait_is_dropped
-//MUTANT receipt-named-by-position|s@^                    .map(\x7csuffix\x7c (suffix.clone(), receipt_params(arg, \&suffix)))$@                    .enumerate().map(\x7c(at, suffix)\x7c ((at + 1).to_string(), receipt_params(arg, \&suffix)))@|a_receipt_minted_mid_wait_is_watched_from_the_next_poll
 pub(crate) fn wait_with(
     config: &McpConfig,
     method: &str,

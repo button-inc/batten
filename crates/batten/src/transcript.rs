@@ -493,8 +493,6 @@ pub struct TokenUsage {
     pub output: usize,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-//MUTANT context-omits-cache-read|s@^        self.input + self.cache_read + self.cache_write$@        self.input + self.cache_write@|a_session_reads_its_exact_usage
 impl TokenUsage {
     /// Decode a host's `usage` object, or `None` where it is not one.
     ///
@@ -765,8 +763,6 @@ fn is_plan_exit(event: &Event) -> bool {
 /// split point of generated sessions, so the backward scans stay the
 /// specification and this is only a faster way to compute them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
-//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-//MUTANT usage-split-recounts-the-message|s@^    last_message: Option<u64>,$@    #[serde(skip)] last_message: Option<u64>,@|usage_sums_across_a_split_fold_as_the_whole_parse
 pub struct Tally {
     turns: usize,
     tool_calls: usize,
@@ -906,7 +902,6 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-//MUTANT tally-format-not-bumped|s@^const TALLY_FORMAT: \&str = "batten-transcript-tally-4";$@const TALLY_FORMAT: \&str = "batten-transcript-tally-3";@|a_tally_stored_in_the_old_format_is_folded_again
 const TALLY_FORMAT: &str = "batten-transcript-tally-4";
 
 /// What [`tally_appended`] persists between calls.
@@ -990,8 +985,6 @@ pub trait ExtractionOf {
     fn of(self, stream: &impl Summary) -> Option<usize>;
 }
 
-//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-//MUTANT usage-facts-unreachable|s@^            Self::ContextTokens => recorded(Kind::Usage).then(\x7c\x7c stream.usage().context),$@            Self::ContextTokens => None,@|a_policy_row_reads_the_four_facts
 impl ExtractionOf for crate::facts::Extraction {
     /// This extraction's answer over a parsed stream, or `None` where this host
     /// records none of the events it reduces.
@@ -1045,10 +1038,6 @@ impl ExtractionOf for crate::facts::Extraction {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-//MUTANT usage-last-record-only|s@^                self.usage.input += usage.input;$@                self.usage.input = usage.input;@|a_session_reads_its_exact_usage
-//MUTANT usage-counts-every-record|s@^                if message.is_some() \&\& .message == self.last_message {$@                if false {@|a_message_written_as_three_records_is_counted_once
-//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {

@@ -949,6 +949,14 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
     pid_exists(&holder).then_some(holder)
 }
 
+/// The pause between the two sightings a singleton reclaim requires, as every
+/// production caller passes it to [`singleton_acquire`].
+///
+/// Here beside the lock rather than in a caller since `land` and `mcp wait`
+/// both take one (CLOUD-2759): two copies of a reclaim's safety margin could
+/// drift apart.
+pub const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Take a task's lock for `pid`, or report who holds it.
 ///
 /// `recheck` is the pause between the two sightings a reclaim requires. It is an

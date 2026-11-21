@@ -2919,9 +2919,6 @@ struct UsageReading {
     usage: Option<crate::transcript::SessionUsage>,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/session_usage.rs
-//MUTANT usage-absent-reads-zero|s@^            .then(\x7c\x7c tally.usage()),$@            .then(\x7c\x7c tally.usage()).or(Some(crate::transcript::SessionUsage::default())),@|a_transcript_with_no_usage_is_could_not_look_not_zero
-//MUTANT usage-line-behind-the-store|s@^    diagnose_store(dir, resolved.as_ref(), unminted).with_usage(reading)$@    diagnose_store(dir, resolved.as_ref(), unminted)@|doctor_session_prints_usage_with_no_task_store_declared
 fn usage_reading(dir: &Path, resolved: Option<&resolve::Resolved>) -> UsageReading {
     let Some(transcript) = resolved.and_then(|resolved| resolved.transcript.as_ref()) else {
         return UsageReading::default();

@@ -736,11 +736,11 @@ pub struct Resolved {
     /// `task`'s reason: a local layer must not lift a hold the committed file
     /// states.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop: Option<crate::stop::StopTable>,
+    pub stop: Option<crate::config_model::StopTable>,
     /// The `[plan]` table (CLOUD-2766), from the committed authority alone:
     /// nothing in it is a threshold a local layer may raise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan: Option<crate::plan::PlanTable>,
+    pub plan: Option<crate::config_model::PlanTable>,
     /// Where a harness keeps its MCP wiring and what a method's reduction is
     /// (CLOUD-1260), as the authority states it.
     ///

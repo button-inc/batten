@@ -1425,7 +1425,7 @@ mod tests {
     /// The surface [`register_root`] writes under `root`, as the harness
     /// declares it rather than spelled here (non-negotiable rule 1).
     fn root_surface(root: &Path) -> PathBuf {
-        let wiring = hook::Harness::ClaudeCode
+        let wiring = crate::config_model::Harness::ClaudeCode
             .wiring()
             .expect("claude-code wires");
         match wiring.file {

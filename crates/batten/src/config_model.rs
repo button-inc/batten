@@ -634,12 +634,12 @@ pub struct Config {
     /// rows refusing a Stop while a receipt exists and a named singleton lock has
     /// no live holder. Absent holds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop: Option<crate::stop::StopTable>,
+    pub stop: Option<StopTable>,
     /// What a branch's plan must carry before `batten plan lint` writes its
     /// receipt (CLOUD-2766). Absent, `plan lint` is a usage error: there is
     /// nothing to judge a plan against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<crate::plan::PlanTable>,
+    pub plan: Option<PlanTable>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -2233,6 +2233,102 @@ pub struct McpConfig {
     /// engine inferring it from a selector written for dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_aliases: Vec<String>,
+}
+
+/// The `[stop]` table (CLOUD-2761): what must be true at the end of a turn.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct StopTable {
+    /// `[[stop.hold]]` rows, each refusing a Stop while its receipt exists and
+    /// its singleton lock has no live holder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold: Vec<Hold>,
+}
+
+/// One `[[stop.hold]]` row (CLOUD-2761): while a receipt of `while_receipt`
+/// exists, the clone's singleton lock `unless_singleton` must have a live holder
+/// at the end of a turn, and `start` is the command that takes it.
+///
+/// No name of a session, a waiter or a vendor: the row's three names are the
+/// consumer's.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Hold {
+    /// The row's id, named in the refusal and keying its counters.
+    pub id: String,
+    /// A `[[mint]]` row's `name`: the hold applies while any
+    /// `batten-receipts/<name>.*` file exists.
+    pub while_receipt: String,
+    /// The singleton lock that must have a live holder.
+    pub unless_singleton: String,
+    /// The argv that takes the lock, printed as the remedy and matched against a
+    /// backgrounded call to excuse the one Stop before it locks.
+    pub start: Vec<String>,
+}
+
+impl Hold {
+    /// The row as one comparable key, so changing any of what it guards reads as
+    /// the old row removed.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!(
+            "{} while {} unless {}",
+            self.id, self.while_receipt, self.unless_singleton
+        )
+    }
+}
+
+/// The receipt a passing `plan lint` appends to, keyed by branch (CLOUD-2766).
+pub const PLAN_RECEIPT: &str = "plan-check";
+
+/// The `[plan]` table: what a plan must carry (CLOUD-2766). No defaults, and no
+/// heading text or skill name in the engine (rule 1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanTable {
+    /// The headings a plan must carry, in order. The first lists the acceptance
+    /// items, the second the steps, the last holds the validator's reply.
+    pub sections: Vec<String>,
+    /// The exact line the last section must contain.
+    pub verdict: String,
+    /// A receipt that must exist for the branch before the lint can pass, and is
+    /// consumed by a pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<String>,
+}
+
+/// Refuse a `[plan]` table that cannot describe a plan: fewer than three
+/// sections, or the validation section listed among the first two.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming the fault.
+pub fn validate_plan(table: Option<&PlanTable>) -> Result<()> {
+    let Some(declared) = table else {
+        return Ok(());
+    };
+    if plan_partial(declared) {
+        return Err(UsageError::raise(
+            "[plan] needs at least three sections, the validation section last and neither of \
+             the first two",
+        ));
+    }
+    Ok(())
+}
+
+/// Fewer than three sections, or the validation section among the first two.
+#[must_use]
+pub fn plan_partial(table: &PlanTable) -> bool {
+    let first_two = &table.sections[..table.sections.len().min(2)];
+    table.sections.len() < 3
+        || table
+            .sections
+            .last()
+            .is_some_and(|last| first_two.contains(last))
 }
 
 /// One `[[mcp.result]]` row: what to hand back instead of a method's response.

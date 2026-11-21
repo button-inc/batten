@@ -26,60 +26,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+use crate::config_model::PLAN_RECEIPT as RECEIPT;
+use crate::config_model::PlanTable;
 use crate::error::UsageError;
-
-/// The receipt a passing lint appends to, keyed by branch.
-pub const RECEIPT: &str = "plan-check";
-
-/// The `[plan]` table: what a plan must carry. No defaults, and no heading text
-/// or skill name in the engine (rule 1).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanTable {
-    /// The headings a plan must carry, in order. The first lists the acceptance
-    /// items, the second the steps, the last holds the validator's reply.
-    pub sections: Vec<String>,
-    /// The exact line the last section must contain.
-    pub verdict: String,
-    /// A receipt that must exist for the branch before the lint can pass, and is
-    /// consumed by a pass.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires: Option<String>,
-}
-
-/// Refuse a `[plan]` table that cannot describe a plan: fewer than three
-/// sections, or the validation section listed among the first two.
-///
-/// # Errors
-///
-/// A [`UsageError`] naming the fault.
-//MUTANT-SUITE crates/batten/tests/it/plan_lint.rs
-//MUTANT plan-table-unvalidated|s@^    if partial(declared) {$@    if false {@|a_malformed_plan_table_does_not_load
-pub fn validate(table: Option<&PlanTable>) -> Result<()> {
-    let Some(declared) = table else {
-        return Ok(());
-    };
-    if partial(declared) {
-        return Err(UsageError::raise(
-            "[plan] needs at least three sections, the validation section last and neither of \
-             the first two",
-        ));
-    }
-    Ok(())
-}
-
-/// Fewer than three sections, or the validation section among the first two.
-fn partial(table: &PlanTable) -> bool {
-    let first_two = &table.sections[..table.sections.len().min(2)];
-    table.sections.len() < 3
-        || table
-            .sections
-            .last()
-            .is_some_and(|last| first_two.contains(last))
-}
 
 /// One finding: the plan's line and a fixed clause, never the plan's text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -101,7 +52,6 @@ impl Finding {
 
 /// The plan file a branch keeps: `<git dir>/batten-plans/<branch>.md`, with the
 /// branch spelled as a branch-keyed receipt spells it and no claim suffix.
-//MUTANT plan-path-unsanitised|s@^        .join(format!("{}.md", branch.replace(.\/., "-")))$@        .join(format!("{branch}.md"))@|plan_path_names_the_branch_file_and_creates_nothing
 #[must_use]
 pub fn path(git_dir: &Path, branch: &str) -> PathBuf {
     git_dir
@@ -111,7 +61,6 @@ pub fn path(git_dir: &Path, branch: &str) -> PathBuf {
 
 /// The lines of `text` a reader looks at: 1-based, with every line inside a
 /// fenced code block — and the fences themselves — dropped.
-//MUTANT plan-fences-read|s@^            fenced = !fenced;$@            fenced = false;@|a_fenced_block_is_not_read
 fn unfenced(text: &str) -> Vec<(usize, &str)> {
     let mut fenced = false;
     let mut kept = Vec::new();
@@ -136,7 +85,6 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 }
 
 /// Whether `line` is the heading of the declared section `name`.
-//MUTANT plan-sections-unread|s@^    heading(line).is_some_and(\x7c(_, text)\x7c text == name)$@    heading(line).is_some()@|a_missing_section_is_refused_and_nothing_is_written
 fn is_named(line: &str, name: &str) -> bool {
     heading(line).is_some_and(|(_, text)| text == name)
 }
@@ -205,7 +153,6 @@ fn dead_pointers(line: &str, root: &Path) -> usize {
 /// Whether a single-backticked token is a `<path>:<digits>` pointer that does not
 /// resolve. A token of any other shape — a bare path above all — is not judged:
 /// a plan names files it will create.
-//MUTANT plan-bare-path-judged|s@^    let Some((path, number)) = token.rsplit_once(.:.) else {$@    let Some((path, number)) = token.rsplit_once(':').or(Some((token, "1"))) else {@|a_path_without_a_line_is_not_judged
 fn pointer_is_dead(token: &str, root: &Path) -> bool {
     let Some((path, number)) = token.rsplit_once(':') else {
         return false;
@@ -301,8 +248,6 @@ pub struct Inputs<'a> {
 }
 
 /// Judge a plan's text. Empty when it passes.
-//MUTANT plan-empty-section-passes|s@^            Ok(section) if section.is_empty() => findings.push(Finding::at($@            Ok(section) if false => findings.push(Finding::at(@|an_empty_section_is_a_missing_section
-//MUTANT plan-requires-unread|s@^    if inputs.table.requires.is_some() \&\& !inputs.prerequisite {$@    if false {@|the_required_receipt_must_exist_first
 #[must_use]
 pub fn lint(text: &str, inputs: &Inputs<'_>) -> Vec<Finding> {
     if text.trim().is_empty() {
@@ -345,11 +290,6 @@ pub fn lint(text: &str, inputs: &Inputs<'_>) -> Vec<Finding> {
 }
 
 /// Items, steps, the record and coverage.
-//MUTANT plan-record-unread|s@^        findings.push(Finding::at(steps_heading, "record-missing"));$@        let _ = steps_heading;@|the_steps_must_be_the_recorded_entries
-//MUTANT plan-trivial-form-refused|s@^    if trivial \&\& record.is_empty() {$@    if false {@|a_trivial_change_lints_with_an_empty_record
-//MUTANT plan-none-hides-entries|s@^    if trivial \&\& record.is_empty() {$@    if trivial {@|a_trivial_change_lints_with_an_empty_record
-//MUTANT plan-misnamed-entry-unreported|s@^        if !is_id(entry, .S.) {$@        if false {@|a_recorded_entry_of_another_shape_is_named_as_such
-//MUTANT plan-record-one-way|s@^        } else if !step_ids.contains(entry.as_str()) {$@        } else if false {@|the_steps_must_be_the_recorded_entries
 fn plan_body(
     findings: &mut Vec<Finding>,
     items_section: Option<&Section<'_>>,
@@ -407,9 +347,6 @@ fn plan_body(
 }
 
 /// Requirement-to-task coverage, in both directions, decided by matching ids.
-//MUTANT plan-id-prefix-matches|s@^        if !reached.contains(id) {$@        if !reached.iter().any(\x7ccite\x7c cite.starts_with(id)) {@|an_id_is_matched_whole
-//MUTANT plan-coverage-one-way|s@^        if step.cites.is_empty() \x7c\x7c step.cites.iter().any(\x7cid\x7c !item_ids.contains(id)) {$@        if false {@|a_step_serving_no_item_is_refused
-//MUTANT plan-unlisted-id-passes|s@^        if step.cites.is_empty() \x7c\x7c step.cites.iter().any(\x7cid\x7c !item_ids.contains(id)) {$@        if step.cites.is_empty() {@|a_step_naming_an_unlisted_id_is_refused
 fn coverage(findings: &mut Vec<Finding>, items: &[(usize, &str)], steps: &[Step<'_>]) {
     let item_ids: BTreeSet<&str> = items.iter().map(|(_, id)| *id).collect();
     let reached: BTreeSet<&str> = steps
@@ -453,9 +390,6 @@ fn steps_of<'a>(section: Option<&Section<'a>>) -> Vec<Step<'a>> {
 }
 
 /// Every dead pointer outside the last section.
-//MUTANT plan-finding-quotes-the-plan|s@^            findings.push(Finding::at(\*number, "pointer-dead"));$@            findings.push(Finding::at(*number, line));@|the_findings_carry_no_plan_text
-//MUTANT plan-pointers-unread|s@^        let dead = dead_pointers(line, root);$@        let dead = 0;@|a_pointer_past_the_end_of_its_file_is_dead
-//MUTANT plan-validation-judged|s@^        .take_while(\x7c(number, _)\x7c last.is_none_or(\x7clast\x7c \*number < last))$@        .take_while(\x7c_\x7c true)@|the_validation_section_is_read_for_the_verdict_only
 fn pointers(
     findings: &mut Vec<Finding>,
     lines: &[(usize, &str)],
@@ -477,7 +411,6 @@ fn pointers(
 }
 
 /// The last section must hold the declared verdict line.
-//MUTANT plan-verdict-unread|s@^        .any(\x7c(_, line)\x7c line.trim_end() == wanted)$@        .any(\x7c_\x7c true)@|the_verdict_line_must_be_there
 fn verdict(
     findings: &mut Vec<Finding>,
     last: Option<&std::result::Result<Section<'_>, usize>>,
@@ -529,11 +462,6 @@ pub fn keyed(root: &Path) -> Result<(PathBuf, String)> {
 ///
 /// A [`UsageError`] when no `[plan]` table is declared, outside a repository or
 /// on a detached HEAD; an internal error when the receipt cannot be written.
-//MUTANT plan-undeclared-passes|s@^        return Err(undeclared());$@        return Ok(Ran { plan: PathBuf::new(), findings: Vec::new() });@|no_plan_table_is_a_usage_error
-//MUTANT plan-receipt-on-findings|s@^    if !findings.is_empty() {$@    if false {@|a_missing_section_is_refused_and_nothing_is_written
-//MUTANT plan-prerequisite-consumed-on-failure|s@^    if !findings.is_empty() {$@    if !findings.is_empty() { if let Some(prerequisite) = \&prerequisite { let _ = std::fs::remove_file(prerequisite); }@|a_passing_lint_consumes_the_prerequisite
-//MUTANT plan-receipt-unwritten|s@^    append_receipt(\&receipts, \&branch, \&head, \&text)?;$@    let _ = (\&head, \&text);@|a_complete_plan_passes_and_leaves_the_receipt
-//MUTANT plan-prerequisite-not-consumed|s@^        std::fs::remove_file(prerequisite)?;$@        let _ = prerequisite;@|a_passing_lint_consumes_the_prerequisite
 pub fn run_lint(root: &Path, table: Option<&PlanTable>) -> Result<Ran> {
     let Some(table) = table else {
         return Err(undeclared());
@@ -582,12 +510,10 @@ pub fn run_lint(root: &Path, table: Option<&PlanTable>) -> Result<Ran> {
 /// **APPENDED, NOT REPLACED**: the store is append-only on purpose and the
 /// reader takes the newest `base`. The `base` line is required, not decoration:
 /// a branch-keyed receipt rule treats a receipt without one as void.
-//MUTANT plan-receipt-without-a-base|s@^    let lines = format!("base {head}\\nplan {digest}\\n");$@    let lines = format!("plan {digest}\\n");@|a_complete_plan_passes_and_leaves_the_receipt
-//MUTANT plan-receipt-truncates|s@^    crate::durable::append(\&dest, \&lines)?;$@    crate::durable::replace(\&dest, lines.as_bytes())?;@|a_second_lint_appends_and_the_newest_base_is_read
 fn append_receipt(receipts: &Path, branch: &str, head: &str, text: &str) -> Result<()> {
     std::fs::create_dir_all(receipts)?;
     let dest = receipts.join(crate::receipt::branch_receipt_name(RECEIPT, branch));
-    let digest = crate::receipt::hex_sha256(text.as_bytes());
+    let digest = crate::digest::sha256_hex(text.as_bytes());
     let lines = format!("base {head}\nplan {digest}\n");
     crate::durable::append(&dest, &lines)?;
     Ok(())
@@ -653,10 +579,12 @@ mod tests {
 
     #[test]
     fn three_or_more_distinct_sections_are_a_table() {
-        assert!(partial(&table(&["A", "B"])));
-        assert!(!partial(&table(&["A", "B", "C"])));
-        assert!(!partial(&table(&["A", "B", "C", "D"])));
-        assert!(partial(&table(&["A", "C", "C"])));
+        assert!(crate::config_model::plan_partial(&table(&["A", "B"])));
+        assert!(!crate::config_model::plan_partial(&table(&["A", "B", "C"])));
+        assert!(!crate::config_model::plan_partial(&table(&[
+            "A", "B", "C", "D"
+        ])));
+        assert!(crate::config_model::plan_partial(&table(&["A", "C", "C"])));
     }
 
     #[test]

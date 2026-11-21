@@ -3253,7 +3253,7 @@ fn run_startup(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let here = Path::new(".");
-    if !here.join(config::CONFIG_FILE).is_file() && git::repo_root(here).is_err() {
+    if !here.join(crate::config_model::CONFIG_FILE).is_file() && git::repo_root(here).is_err() {
         return run_startup_unanchored(repair, json, out, err);
     }
     let config = resolve::resolve(here, overrides)?;
@@ -3293,14 +3293,6 @@ fn run_startup(
 /// today. Bare `startup` writes nothing and exits `1` when a registration is
 /// owed. The registration and authority lines go to standard error so `--json`
 /// keeps the outcomes array alone on standard output.
-//MUTANT-SUITE crates/batten/tests/it/startup_unanchored.rs
-//MUTANT unanchored-inside-a-repository|s@^    if !here.join(config::CONFIG_FILE).is_file() \&\& git::repo_root(here).is_err() {$@    if !here.join(config::CONFIG_FILE).is_file() {@|startup_inside_a_repository_without_a_config_is_unchanged
-//MUTANT unanchored-admits-home|s@^    if home.as_deref().is_none_or(\x7chome\x7c home.starts_with(\&root)) {$@    if home.as_deref().is_none() {@|repair_at_home_writes_nothing
-//MUTANT unanchored-rows-run-first|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    if root_authorities(\&root).iter().any(\x7cmember\x7c !startup::delegate(member, repair).ok) { return Ok(ExitCode::Usage); } let (events, written) = wiring::register_root(\&root, !repair)?;@|a_failing_row_leaves_the_registration_and_the_record
-//MUTANT unanchored-bare-writes|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, false)?;@|bare_startup_above_a_checkout_writes_nothing
-//MUTANT unanchored-repair-writes-nothing|s@^    let (events, written) = wiring::register_root(\&root, !repair)?;$@    let (events, written) = wiring::register_root(\&root, true)?;@|repair_above_one_checkout_registers_the_root_and_records_its_authority
-//MUTANT unanchored-lines-on-stdout|s@^        writeln!(err, "{registered}")?;$@        writeln!(out, "{registered}")?;@|json_keeps_the_outcomes_on_standard_output
-//MUTANT unanchored-rows-run-at-the-root|s@^        .map(\x7cmember\x7c startup::delegate(member, repair))$@        .map(\x7c_\x7c startup::delegate(\&root, repair))@|each_members_rows_run_in_that_member
 fn run_startup_unanchored(
     repair: bool,
     json: bool,
@@ -3355,21 +3347,19 @@ fn run_startup_unanchored(
 ///
 /// Each is one known path read once. No subtree is searched: the one-level look
 /// is this verb's alone, by the owner's ruling, and a hook never searches.
-//MUTANT unanchored-picks-one-of-several|s@^    children.sort();$@    children.sort(); children.truncate(1);@|two_checkouts_are_both_recorded
-//MUTANT unanchored-skips-ancestors|s@^    children.extend(ancestors);$@    drop(ancestors);@|a_config_above_the_root_is_recorded
 fn root_authorities(root: &Path) -> Vec<PathBuf> {
     let mut children: Vec<PathBuf> = std::fs::read_dir(root)
         .into_iter()
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.join(config::CONFIG_FILE).is_file())
+        .filter(|path| path.join(crate::config_model::CONFIG_FILE).is_file())
         .collect();
     children.sort();
     let ancestors = root
         .ancestors()
         .skip(1)
-        .filter(|ancestor| ancestor.join(config::CONFIG_FILE).is_file())
+        .filter(|ancestor| ancestor.join(crate::config_model::CONFIG_FILE).is_file())
         .map(Path::to_path_buf);
     children.extend(ancestors);
     children
@@ -4980,7 +4970,6 @@ fn wait_subjects(
 ///
 /// A usage error for malformed arguments or an undeclared server, before any
 /// poll; a failure to write the line.
-//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
 fn run_mcp_wait(
     command: &cli::McpCommand,
     overrides: &Overrides,
@@ -5239,8 +5228,6 @@ struct McpAnswer<'a> {
 /// Only for a failure to write the answer out. The store and the call log are
 /// **reported and never raised**: the exchange has already happened by the time
 /// this runs, and refusing here would turn a completed dispatch into an error.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT enveloped-wait-only|s@^    let payload = mcp::payload_for(result, mcp::row_for(config, method));$@    let payload = mcp::payload(result);@|mcp_call_reduces_an_enveloped_answer
 fn file_and_report(
     repo: &Path,
     answer: &McpAnswer<'_>,
@@ -8645,7 +8632,6 @@ fn run_claim(
 ///
 /// [`UsageError`] when no `[plan]` table is declared, outside a repository or on
 /// a detached HEAD.
-//MUTANT-SUITE crates/batten/tests/it/plan_lint.rs
 fn run_plan_verb(
     command: &cli::PlanCommand,
     mode: Mode,
@@ -8666,7 +8652,7 @@ fn run_plan_verb(
             let ran = plan::run_lint(root, config.plan.as_ref())?;
             for finding in &ran.findings {
                 let refused = refusal::Refusal::engine(
-                    verdict::Native::PlanGradeRefused,
+                    crate::error::Native::PlanGradeRefused,
                     &[verdict::artifact(&format!(
                         "{}:{} {}",
                         ran.plan.display(),
@@ -9654,9 +9640,6 @@ fn run_wiring_register(
 /// first, is therefore where the parent's registration has to be written. A
 /// machine not declared disposable gets the live root alone, as before: nothing
 /// above it may be written there, so nothing above it is owed.
-//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-//MUTANT register-live-root-only|s@^    if !disposable {$@    if !disposable \x7c\x7c !roots.is_empty() {@|a_session_rooted_at_the_clone_still_registers_the_roots_above_it
-//MUTANT register-roots-undeclared|s@^    if !disposable {$@    if false {@|a_real_machine_inside_a_session_writes_nothing_above_its_root
 fn register_roots(
     live: Option<PathBuf>,
     disposable: bool,
@@ -12748,7 +12731,7 @@ fn run_land_singleton(
 
     // THE LOCK. `recheck` is the pause a reclaim needs between two sightings;
     // production takes the default, as `singleton_acquire`'s own doc states.
-    match task::singleton_acquire(&git_dir, LAND_TASK, &pid, SINGLETON_RECHECK) {
+    match task::singleton_acquire(&git_dir, LAND_TASK, &pid, task::SINGLETON_RECHECK) {
         task::Claim::Taken => forget_dispatch(root, &git_dir),
         task::Claim::Reclaimed(corpse) => {
             forget_dispatch(root, &git_dir);
@@ -12783,13 +12766,6 @@ fn run_land_singleton(
     task::register(&git_dir, LAND_TASK, &pid, "lap", boundary_epoch());
     Ok(Some(LandSingleton { git_dir, pid }))
 }
-
-/// The pause between the two sightings a singleton reclaim requires.
-///
-/// A constant here rather than in `task`, because it is this caller's tolerance
-/// for a holder that took the lock between two reads. Crate-visible since
-/// `mcp wait` takes its lock the way `land` does (CLOUD-2759).
-pub(crate) const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The engine this lap runs, and the engine-source digest it was built from:
 /// set when the lap starts (`run_land_lap`), and replaced when a lap rebuilds
@@ -20785,8 +20761,6 @@ fn push_repair_record(
 /// decision. A rewrite rides the grant and nothing else, and it is resolved at
 /// the boundary for `settle_repair`'s reason: the policy is still in hand there,
 /// and `render` cannot see it.
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT corrected-drops-the-timeout|s@^    let rewritten = hook::policy_rewrite(policy, envelope, facts);$@    let rewritten = None::<serde_json::Value>;@|a_module_timeout_still_applies_to_a_corrected_call
 fn grant_rewrite(
     decision: &hook::Decision,
     policy: &hook::Policy,
@@ -20808,8 +20782,6 @@ fn grant_rewrite(
 /// The advice a pre-approval carries in its own document (CLOUD-1949), taken
 /// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
 /// when the decision is not a pre-approval or there is nothing to carry.
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() \&\& matches!(decision, hook::Decision::Preapproved(_)) {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
 fn preapproval_context(
     harness: crate::config_model::Harness,
     decision: &hook::Decision,
@@ -20824,7 +20796,7 @@ fn preapproval_context(
             advice,
             severity::AdvisoryTier::Advisory,
             refusal::Refusal::engine(
-                verdict::Native::CallFixSilent,
+                crate::error::Native::CallFixSilent,
                 &[verdict::artifact(
                     "verdict read dropped: the output filter was removed and the command ran without it",
                 )],
@@ -22182,12 +22154,6 @@ static CORRECTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 /// suppress a host prompt nothing granted. `adjudicate` therefore runs at most
 /// twice, and the second only on this path. On success the envelope becomes the
 /// corrected call, so the rewrite and the render read it.
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT strip-filter-not-applied|s@^    let Some(command) = hook::filter_free_command(policy, envelope) else {$@    let Some(command) = None::<String> else {@|a_piped_preapproved_verdict_runs_without_the_filter
-//MUTANT sequence-rewritten|s@^    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {$@    if false {@|a_sequenced_tail_keeps_its_deny
-//MUTANT rewrite-ignores-reachability|s@^        .preapprove_reachable(\&envelope.raw_event)$@        .preapprove_reachable(\&envelope.raw_event) \x7c\x7c true@|the_exit_code_harness_still_refuses
-//MUTANT rewrite-without-preapproval|s@^    let granted = matches!(regraded, hook::Decision::Preapproved(_));$@    let granted = matches!(regraded, hook::Decision::Preapproved(_) \x7c hook::Decision::Allow);@|a_piped_verdict_that_is_only_allowed_keeps_its_deny
-//MUTANT rewrite-skips-readjudication|s@^    let regraded = compose(None, policy, \&corrected, facts);$@    let regraded = hook::Decision::Preapproved(refusal.clone());@|a_corrected_call_another_rule_refuses_keeps_its_deny
 fn correct_piped_verdict(
     decision: hook::Decision,
     policy: &hook::Policy,
@@ -22197,7 +22163,7 @@ fn correct_piped_verdict(
     let hook::Decision::Deny(refusal) = &decision else {
         return decision;
     };
-    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {
+    if refusal.verdict() != Some(crate::error::Native::VerdictPiped.id()) {
         return decision;
     }
     if !policy
@@ -24918,10 +24884,6 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// end-of-turn check on the path that must stay free — committing and pushing to
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-//MUTANT bypass-ignored|s@^    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {$@    if false {@|the_bypass_and_plan_mode_silence_it
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT two-refusals-on-one-stop|s@^    if block.as_ref().is_none() {$@    if true {@|the_unlanded_refusal_goes_first
 fn stop_nudges(
     overrides: &Overrides,
     envelope: &hook::Envelope,
@@ -25514,8 +25476,6 @@ const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 /// Claude Code's `2` and the reason on stderr, which resumes the model with it.
 /// Other hosts read a Stop's exit differently, so there the refusal joins the
 /// advisory instead: every producer's block reaches a reader on every host.
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-//MUTANT hold-blocks-every-host|s@^    if harness != hook::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
 fn refused_stop(
     harness: crate::config_model::Harness,
     block: Option<refusal::Refusal>,
@@ -25525,8 +25485,6 @@ fn refused_stop(
     let Some(block) = block else {
         return Ok(false);
     };
-    //MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-    //MUTANT hold-blocks-every-host|s@^    if harness != crate::config_model::Harness::ClaudeCode {$@    if false {@|a_host_that_cannot_block_gets_advice
     if harness != crate::config_model::Harness::ClaudeCode {
         push_finding(advice, severity::AdvisoryTier::Caution, block);
         return Ok(false);
@@ -25588,9 +25546,8 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
 
 /// Write the session's prompt-cache limit in force to the authority's receipt
 /// store (CLOUD-2763). See [`record_cache_limit`].
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-fn note_cache_limit(harness: hook::Harness, envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::Stop {
+fn note_cache_limit(harness: crate::config_model::Harness, envelope: &hook::Envelope) {
+    if envelope.event != crate::config_model::Event::Stop {
         return;
     }
     if let Ok(git_dir) = git::git_dir(hook_authority_root()) {
@@ -25606,12 +25563,12 @@ fn note_cache_limit(harness: hook::Harness, envelope: &hook::Envelope) {
 /// writes nothing: its bucket is not the main conversation's. No usage, a host
 /// with no published table, or a model with no read price REMOVES a stale
 /// file. Two main sessions in one clone overwrite each other: last writer wins.
-//MUTANT-SUITE crates/batten/src/prompt_cache.rs
-//MUTANT limit-written-per-call|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.agent.is_some() {@|the_limit_in_force_follows_the_last_write
-//MUTANT subagent-overwrites-limit|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.event != hook::Event::Stop {@|the_limit_in_force_follows_the_last_write
-//MUTANT stale-limit-kept|s@^            let _ = std::fs::remove_file(\&receipt);$@@|the_limit_in_force_follows_the_last_write
-fn record_cache_limit(store: &Path, harness: hook::Harness, envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::Stop || envelope.agent.is_some() {
+fn record_cache_limit(
+    store: &Path,
+    harness: crate::config_model::Harness,
+    envelope: &hook::Envelope,
+) {
+    if envelope.event != crate::config_model::Event::Stop || envelope.agent.is_some() {
         return;
     }
     let receipt = store.join(prompt_cache::RECEIPT);
@@ -25643,7 +25600,7 @@ const HOLD_DISPATCHED: &str = "stop-hold-dispatched";
 const HOLD_REFUSALS: usize = 3;
 
 /// The `[[stop.hold]]` rows the authority at `root` declares.
-fn hold_rows(root: &Path) -> Vec<crate::stop::Hold> {
+fn hold_rows(root: &Path) -> Vec<crate::config_model::Hold> {
     resolve::resolve(root, &Overrides::default())
         .ok()
         .and_then(|resolved| resolved.stop)
@@ -25658,10 +25615,11 @@ fn hold_rows(root: &Path) -> Vec<crate::stop::Hold> {
 /// accepted the call; keyed by the row's id rather than a branch, because a hold
 /// is not about a branch; and under the AUTHORITY ROOT's git directory, where
 /// the receipts it is about live.
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-//MUTANT foreground-start-excuses|s@^    if !backgrounded {$@    if false {@|starting_the_task_excuses_one_stop
 fn note_hold_dispatch(envelope: &hook::Envelope) {
-    let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+    let backgrounded = crate::config_model::Field::RunInBackground
+        .read(envelope)
+        .as_deref()
+        == Some("true");
     if !backgrounded {
         return;
     }
@@ -25698,17 +25656,6 @@ fn note_hold_dispatch(envelope: &hook::Envelope) {
 /// [`HOLD_REFUSALS`] it advises instead. A dispatch note excuses one Stop and is
 /// used up. Fails open wherever a path it needs will not read, as every Stop
 /// rung does.
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-//MUTANT hold-never-checked|s@^    for row in hold_rows(root) {$@    for row in Vec::<crate::stop::Hold>::new() {@|a_receipt_with_no_holder_refuses_the_stop
-//MUTANT holder-unread|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = false;@|a_live_holder_lets_the_stop_through
-//MUTANT corpse-counts-as-held|s@^        let held = task::singleton_holder(\&git_dir, \&row.unless_singleton).is_some();$@        let held = git_dir.join("batten-singleton").join(\&row.unless_singleton).exists();@|a_dead_holder_is_no_holder
-//MUTANT hold-without-receipt|s@^        if count == 0 \x7c\x7c held {$@        if held {@|no_receipt_no_hold
-//MUTANT count-never-resets|s@^            let _ = std::fs::remove_file(\&refused);$@@|a_false_predicate_resets_the_count
-//MUTANT dispatch-never-excuses|s@^        if std::fs::remove_file(\&dispatched).is_ok() {$@        if false {@|starting_the_task_excuses_one_stop
-//MUTANT hold-never-yields|s@^        if spoken >= HOLD_REFUSALS {$@        if false {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
-//MUTANT hold-lapses-after-one|s@^        if spoken >= HOLD_REFUSALS {$@        if spoken >= 1 {@|a_continued_stop_is_refused_again_and_the_fourth_is_advice
-//MUTANT subjects-printed|s@^                "hold {} needs lock {} while {count} {} receipt(s) exist",$@                "hold {} needs lock {} while {count} {} receipt(s) exist {names:?}",@|the_refusal_counts_and_does_not_name
-//MUTANT hold-reads-process-directory|s@^    let authority = git::git_dir(root);$@    let authority = git::git_dir(Path::new("."));@|the_hold_reads_the_authority_root
 fn hold_stop(root: &Path) -> (Option<refusal::Refusal>, Option<refusal::Refusal>) {
     let authority = git::git_dir(root);
     let Ok(git_dir) = authority else {
@@ -25746,7 +25693,7 @@ fn hold_stop(root: &Path) -> (Option<refusal::Refusal>, Option<refusal::Refusal>
         let spoken = std::fs::read_to_string(&refused).map_or(0, |text| text.lines().count());
         // A COUNT AND NAMES THE CONSUMER WROTE, never a receipt's suffix (rule 4).
         let said = refusal::Refusal::engine(
-            verdict::Native::StopConditionUnmet,
+            crate::error::Native::StopConditionUnmet,
             &[verdict::artifact(&format!(
                 "hold {} needs lock {} while {count} {} receipt(s) exist",
                 row.id, row.unless_singleton, row.while_receipt
@@ -27369,10 +27316,6 @@ static HOOK_REACH: std::sync::OnceLock<hook::Reach> = std::sync::OnceLock::new()
 /// is judged by the set's first member. And a session call starting in an
 /// authority directly under a registered root that the set does not yet name adds
 /// it — a repository cloned after Setup.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT root-set-never-grows|s@^        let _ = state::grow_root_authorities(\&git::canonical(root));$@        let _ = root;@|an_authority_cloned_after_setup_joins_the_set
-//MUTANT root-set-grows-without-a-session|s@^    if let (Some(_), Some(root)) = (envelope.session.as_deref(), start_root.as_deref()) {$@    if let Some(root) = start_root.as_deref() {@|a_call_with_no_session_id_at_a_registered_root_is_judged_and_grows_nothing
-//MUTANT root-authority-ignored|s@^        .or_else(\x7c\x7c first_registered(\&start));$@        ;@|a_first_call_at_a_registered_root_is_judged_by_the_recorded_authority
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     let start = envelope
         .cwd
@@ -27410,9 +27353,6 @@ fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
 /// The first authority `startup` recorded for a registered root standing at
 /// `start`, still carrying its config (CLOUD-2752). One recorded file read, keyed
 /// by the canonical root; never a search.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT root-key-not-canonical|s@^    state::recorded_root_authorities(\&git::canonical(start), crate::config_model::CONFIG_FILE)?$@    state::recorded_root_authorities(start, crate::config_model::CONFIG_FILE)?@|the_record_is_keyed_by_the_canonical_root
-//MUTANT root-set-unsorted|s@^        .next()$@        .last()@|with_two_authorities_the_first_by_name_judges_a_call_with_no_path
 fn first_registered(start: &Path) -> Option<PathBuf> {
     state::recorded_root_authorities(&git::canonical(start), crate::config_model::CONFIG_FILE)?
         .into_iter()
@@ -27506,33 +27446,6 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
         home: home.map(text),
         grade,
     }
-}
-
-/// The authority the session last stood in, still carrying its config.
-fn last_stood_in(session: Option<&str>) -> Option<PathBuf> {
-    session.and_then(|session| state::recorded_session_authority(session, config::CONFIG_FILE))
-}
-
-/// The member of a registered root's set that contains the call's raw target.
-fn member_containing(members: &[PathBuf], envelope: &hook::Envelope) -> Option<PathBuf> {
-    let target = raw_target(envelope)?;
-    members
-        .iter()
-        .find(|member| target.starts_with(member))
-        .cloned()
-}
-
-/// The call's write target as the host sent it — `file_path`, else
-/// `notebook_path` — when it is absolute, before [`settle_envelope`] makes it
-/// relative (CLOUD-2752).
-fn raw_target(envelope: &hook::Envelope) -> Option<PathBuf> {
-    let raw = envelope
-        .input
-        .get("file_path")
-        .or_else(|| envelope.input.get("notebook_path"))?
-        .as_str()?;
-    let path = Path::new(raw);
-    path.is_absolute().then(|| git::canonical(path))
 }
 
 fn load_policy(

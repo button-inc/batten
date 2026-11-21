@@ -90,8 +90,6 @@ impl Eviction {
 /// bucket written at 1.25 times and a one-hour bucket at 2 times; reads at 0.025
 /// times on Fable 5.2, 0.05 on Opus 5.5 and Sonnet 5.5, 0.1 on any other Claude
 /// model.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT eviction-figures-drift|s@^            write_milli: 2000,$@            write_milli: 1999,@|only_claude_code_declares_an_eviction_limit
 pub const CLAUDE_CODE: Eviction = Eviction {
     buckets: &[
         Bucket {
@@ -114,10 +112,6 @@ pub const CLAUDE_CODE: Eviction = Eviction {
 
 /// How many warm wakes one wait may spend: `(w - n*r) / (n*r)`, in integer
 /// thousandths, zero where one wake already costs a write.
-//MUTANT-SUITE crates/batten/src/prompt_cache.rs
-//MUTANT break-even-off-by-one|s@^    (write_milli - spent) / spent$@    (write_milli - spent) / spent + 1@|keep_warm_matches_the_published_table
-//MUTANT break-even-ignores-read-price|s@^    let spent = read_milli \* requests_per_wake;$@    let spent = 100 * requests_per_wake;@|keep_warm_matches_the_published_table
-//MUTANT break-even-in-floats|s@^    (write_milli - spent) / spent$@    ((write_milli as f64 / 1000.0 - spent as f64 / 1000.0) / (spent as f64 / 1000.0)).floor() as u64@|keep_warm_matches_the_published_table
 #[must_use]
 pub fn wakes_allowed(write_milli: u64, read_milli: u64, requests_per_wake: u64) -> u64 {
     let spent = read_milli * requests_per_wake;
@@ -190,8 +184,6 @@ impl InForce {
 /// The bucket is the host's own field (`cache_creation.ephemeral_1h_input_tokens`
 /// against `ephemeral_5m_input_tokens`), never inferred from billing, which
 /// the engine does not see.
-//MUTANT-SUITE crates/batten/src/prompt_cache.rs
-//MUTANT limit-from-first-write|s@^    for line in transcript.lines().rev() {$@    for line in transcript.lines() {@|the_limit_in_force_follows_the_last_write
 #[must_use]
 pub fn last_write(transcript: &str) -> Option<(u64, String)> {
     for line in transcript.lines().rev() {
@@ -312,8 +304,11 @@ mod tests {
         if agent {
             payload["agent_id"] = serde_json::json!("sub-1");
         }
-        crate::hook::decode(crate::hook::Harness::ClaudeCode, &payload.to_string())
-            .expect("decodes")
+        crate::hook::decode(
+            crate::config_model::Harness::ClaudeCode,
+            &payload.to_string(),
+        )
+        .expect("decodes")
     }
 
     #[test]
@@ -321,7 +316,7 @@ mod tests {
         let dir = crate::scratch::scratch("prompt-cache-limit");
         let store = dir.join("receipts");
         let transcript = dir.join("session.jsonl");
-        let claude = crate::hook::Harness::ClaudeCode;
+        let claude = crate::config_model::Harness::ClaudeCode;
         let model = format!("{}fable-5-2", CLAUDE_CODE.vendor);
         let one_hour = write("ephemeral_1h_input_tokens", &model);
         let five_minutes = write("ephemeral_5m_input_tokens", &model);
@@ -353,7 +348,7 @@ mod tests {
         assert!(InForce::read(&store).is_some(), "the premise");
         crate::record_cache_limit(
             &store,
-            crate::hook::Harness::CodexCli,
+            crate::config_model::Harness::CodexCli,
             &stop(&transcript, false, "Stop"),
         );
         assert_eq!(

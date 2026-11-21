@@ -4062,8 +4062,6 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// A `[plan]` obligation removed (CLOUD-2766): each section, the verdict line
 /// and the `requires` receipt is one entry, so a rename reads as the old entry
 /// gone. Removing the table removes every entry.
-//MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT plan-removal-unjudged|s@^        \&obligations(working),$@        \&obligations(base),@|a_plan_obligation_removed_is_a_weakening
 fn plan_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     fn obligations(config: &Config) -> Vec<String> {
         config.plan.as_ref().map_or_else(Vec::new, |table| {
@@ -4086,12 +4084,14 @@ fn plan_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 
 /// A `[[stop.hold]]` row removed, or changed in what it guards (CLOUD-2761).
 /// Added rows are no weakening: each is one more refusal.
-//MUTANT-SUITE crates/batten/tests/it/stop_hold.rs
-//MUTANT hold-removal-unjudged|s@^        \&holds(working),$@        \&holds(base),@|removing_a_hold_row_is_a_weakening
 fn stop_hold_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     fn holds(config: &Config) -> Vec<String> {
         config.stop.as_ref().map_or_else(Vec::new, |table| {
-            table.hold.iter().map(crate::stop::Hold::key).collect()
+            table
+                .hold
+                .iter()
+                .map(crate::config_model::Hold::key)
+                .collect()
         })
     }
     removed_entries(

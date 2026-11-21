@@ -145,7 +145,7 @@ fn a_complete_plan_passes_and_leaves_the_receipt() {
     let plan = fs::read(git_dir(&root).join("batten-plans/work.md")).unwrap();
     assert_eq!(
         lines[1],
-        format!("plan {}", batten::receipt::hex_sha256(&plan))
+        format!("plan {}", batten::digest::sha256_hex(&plan))
     );
     assert!(!edit_denied(&root), "the receipt lifts the hold");
 }
