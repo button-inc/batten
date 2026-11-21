@@ -14,7 +14,7 @@
 
 use clap::{ArgMatches, ValueEnum};
 
-use crate::config::Strictness;
+use crate::config_model::Strictness;
 use crate::hook::{Field as HookFieldName, Harness};
 use crate::rules::ReceiptKey;
 use crate::surface;

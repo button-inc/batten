@@ -3847,7 +3847,9 @@ fn half_parser() -> ValueParser {
 }
 
 fn strictness_parser() -> ValueParser {
-    ValueParser::new(clap::builder::EnumValueParser::<crate::config::Strictness>::new())
+    ValueParser::new(clap::builder::EnumValueParser::<
+        crate::config_model::Strictness,
+    >::new())
 }
 
 fn harness_parser() -> ValueParser {

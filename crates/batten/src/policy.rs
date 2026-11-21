@@ -840,8 +840,8 @@ impl Vocabulary<'_> {
     };
 }
 
-impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
-    fn from(config: &'a crate::config::Config) -> Self {
+impl<'a> From<&'a crate::config_model::Config> for Vocabulary<'a> {
+    fn from(config: &'a crate::config_model::Config) -> Self {
         Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
