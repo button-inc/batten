@@ -6745,7 +6745,13 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[],
+        // CLOUD-2807: the lines merge into the store by id; replacing the
+        // whole store is the explicit, named exception.
+        flags: &[FlagDecl::switch(
+            "replace",
+            "replace",
+            "Replace the whole plan instead of merging these entries into it by id",
+        )],
     },
     // The same argument one layer over, and here the envelope route is not merely
     // per-harness — it is unreliable in the ordinary case. `issue file same`
