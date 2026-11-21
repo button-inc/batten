@@ -435,7 +435,7 @@ fn decide(family: &str, lines: &[String]) -> std::result::Result<Decided, String
         .iter()
         .find(|manifest| manifest.name == PRESET)
         .ok_or_else(|| format!("this build ships no `{PRESET}` preset to decide with"))?;
-    let sources = manifest.modules_at(crate::rules::RuleScope::Tree);
+    let sources = manifest.modules_at(crate::config_model::RuleScope::Tree);
     let bundle = crate::policy::compile(PRESET, &sources, &Value::Object(serde_json::Map::new()))
         .map_err(|_| format!("the `{PRESET}` preset does not compile"))?;
     let mut records = serde_json::Map::new();

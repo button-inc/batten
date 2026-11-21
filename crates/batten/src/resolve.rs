@@ -70,8 +70,8 @@ use clap::ValueEnum;
 use serde::{Serialize, Serializer};
 
 use crate::config::{self, Strictness};
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
-use crate::rules::{Rule, RuleKind};
 
 /// The git-ignored local override file, read from the same directory as the
 /// committed authority. Optional: absent simply means "no local override".
@@ -609,7 +609,7 @@ pub struct Resolved {
     /// authority rather than through [`Tables`], so the restriction is structural
     /// rather than a rule someone has to remember.
     #[serde(rename = "recorder")]
-    pub recorders: Vec<crate::recorder::Declared>,
+    pub recorders: Vec<crate::config_model::RecorderDeclared>,
     /// The verb-written record families (CLOUD-1810), from the **committed
     /// authority alone**.
     ///
@@ -618,7 +618,7 @@ pub struct Resolved {
     /// lost by refusing an override here — while a layer that could REMOVE one
     /// would disarm every rule reading that store, which is the weakening §8
     /// admits no route for. `board`'s structural guarantee, for `epoch`'s reason.
-    pub records: Vec<crate::record::Declared>,
+    pub records: Vec<crate::config_model::RecordDeclared>,
     /// The programs a recorder may run, authority-only for the same reason and
     /// separately, because the indirection is the sharper half: repointing an id
     /// here changes what every column reading it records while the recorder rows

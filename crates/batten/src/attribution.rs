@@ -62,11 +62,12 @@ use anyhow::Result;
 use regex::Regex;
 use serde::Serialize;
 
+use crate::config_model::Harness;
 pub use crate::config_model::{Attribution, Identity};
 use crate::decision::{Caller, Provenance};
 use crate::error::UsageError;
 use crate::git;
-use crate::hook::{Capability, Harness};
+use crate::hook::Capability;
 use crate::verdict::{Native, Subject as Pointer};
 
 impl Identity {

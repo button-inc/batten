@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::config_model::Rule;
 use crate::exit::ExitCode;
-use crate::rules::Rule;
 use crate::wiring::{committed_events, entries_under, same_file};
 use crate::{config, git, hook, resolve, wiring};
 
@@ -1849,7 +1849,7 @@ pub fn diagnose(dir: &Path) -> Report {
     // What it does catch is a harness added with neither a fetch nor an owner,
     // which is the moment the gap becomes invisible.
     checks.push(
-        if crate::hook::Harness::ALL.iter().any(|harness| {
+        if crate::config_model::Harness::ALL.iter().any(|harness| {
             matches!(
                 harness.capabilities().plan_tools,
                 crate::hook::PlanTools::Unsurveyed(owner) if owner.is_empty()
@@ -1906,7 +1906,7 @@ pub struct WiringFinding {
 /// Three groups. A missing file or registration is what `wiring register --all`
 /// adds; anything wrong WITH batten's entries is restored from the derivation,
 /// because `add_missing` only adds; a merged registration is `reclaim`'s.
-fn fix_for(reason: &str, harness: hook::Harness) -> String {
+fn fix_for(reason: &str, harness: crate::config_model::Harness) -> String {
     match reason {
         FILE_MISSING | EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),
         EVENT_UNDERIVED
@@ -1945,7 +1945,10 @@ const HOOK_WIRING: &str = "hook-wiring";
 /// own declared file, read off [`hook::Harness::wiring`] so the core restates
 /// no consumer path (rule 1). The session root is that host's notion.
 fn session_root_surface() -> &'static str {
-    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
+    match crate::config_model::Harness::ClaudeCode
+        .wiring()
+        .map(|wiring| wiring.file)
+    {
         Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => path,
         None => "",
     }
@@ -2241,7 +2244,7 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
 )]
 fn diagnose_harness(
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     exclusive: bool,
     session_root: Option<&Path>,
 ) -> Option<HarnessWiring> {
@@ -2272,7 +2275,7 @@ fn diagnose_harness(
     // loads, judged by the committed-surface rules. Claude Code's alone, the one
     // host `wiring register` writes a session root for.
     let rooted = session_root
-        .filter(|_| harness == hook::Harness::ClaudeCode)
+        .filter(|_| harness == crate::config_model::Harness::ClaudeCode)
         .map(|root| diagnose_session_root(root, &derived));
     let finish = |findings: &mut Vec<WiringFinding>, merged: Vec<WiringFinding>| {
         for finding in findings.iter_mut() {
@@ -2483,7 +2486,7 @@ fn diagnose_harness(
 /// Clause (a) matches on the token's file **stem**, so an absolute path and a
 /// `.exe` both pass while `batten-hook.sh` stays drift for a consumer's launcher
 /// column to answer for.
-fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
+fn reaches_engine(entry: &str, harness: crate::config_model::Harness) -> bool {
     // (b) No shell control operator anywhere in the entry. Checked over
     // characters rather than the two-character operators, so `&&` and `||` are
     // covered by `&` and `|`.
@@ -2584,7 +2587,7 @@ impl MergedTally {
 /// fuses siblings with batten's own entries.
 fn diagnose_merged(
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
@@ -2609,7 +2612,7 @@ fn diagnose_merged(
 fn merged_from(
     home: Option<&Path>,
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
@@ -2635,7 +2638,7 @@ fn merged_from(
 fn merged_under(
     home: &Path,
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
@@ -2732,7 +2735,7 @@ fn merged_under(
 /// it counted under the derived events (CLOUD-2676).
 fn diagnose_session_root(
     root: &Path,
-    derived: &[(hook::Event, &'static str)],
+    derived: &[(crate::config_model::Event, &'static str)],
 ) -> (Vec<WiringFinding>, usize) {
     let finding = |event: &str, reason| WiringFinding {
         event: event.to_owned(),
@@ -2747,7 +2750,7 @@ fn diagnose_session_root(
     let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return (vec![finding("", FILE_UNREADABLE)], 0);
     };
-    let Some(events) = hook::Harness::ClaudeCode
+    let Some(events) = crate::config_model::Harness::ClaudeCode
         .wiring()
         .and_then(|wiring| committed_events(&document, wiring.file))
     else {
@@ -2757,10 +2760,13 @@ fn diagnose_session_root(
     let mut registrations = 0;
     for (_, spelling) in derived {
         let ours = events.get(*spelling).map_or(0, |value| {
-            entries_under(value, hook::Harness::ClaudeCode.entry_shape())
-                .into_iter()
-                .filter(|(_, entry)| entry.contains("batten"))
-                .count()
+            entries_under(
+                value,
+                crate::config_model::Harness::ClaudeCode.entry_shape(),
+            )
+            .into_iter()
+            .filter(|(_, entry)| entry.contains("batten"))
+            .count()
         });
         if ours == 0 {
             findings.push(finding(spelling, EVENT_UNREGISTERED));
@@ -2806,7 +2812,7 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     let session_root = wiring::live_session_root()
         .map(|root| crate::git::canonical(&root))
         .filter(|root| *root != repo && repo.starts_with(root));
-    let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
+    let harnesses: Vec<HarnessWiring> = crate::config_model::Harness::ALL
         .iter()
         .filter_map(|harness| diagnose_harness(dir, *harness, exclusive, session_root.as_deref()))
         .collect();
@@ -2960,10 +2966,10 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
     // the mediated rows is what `hook.rs` does to build the very bundle set this
     // question is about, so asking the same way keeps one answer to "which rules
     // decide a call" rather than two that can disagree.
-    let mediated: Vec<crate::rules::Rule> = resolved
+    let mediated: Vec<crate::config_model::Rule> = resolved
         .rules
         .iter()
-        .filter(|rule| rule.scope == crate::rules::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == crate::config_model::RuleScope::MediatedCall)
         .cloned()
         .collect();
     if mediated.is_empty() {

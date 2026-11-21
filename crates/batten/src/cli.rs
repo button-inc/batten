@@ -14,9 +14,9 @@
 
 use clap::ArgMatches;
 
+use crate::config_model::ReceiptKey;
 use crate::config_model::Strictness;
-use crate::hook::{Field as HookFieldName, Harness};
-use crate::rules::ReceiptKey;
+use crate::config_model::{Field as HookFieldName, Harness};
 use crate::surface;
 pub use crate::surface_table::{SchemaSurface, SpecFormat};
 
@@ -105,7 +105,7 @@ pub struct EnforceFlags {
     /// Judge only one half of the rows (step 13a): the tree half, receipted on
     /// the index, or the live half, run every time. `None` judges every row.
     /// See `surface::ENFORCE_HALF`.
-    pub half: Option<crate::rules::Half>,
+    pub half: Option<crate::surface_table::Half>,
     /// The refs whose merge base the tree half's receipt keys, which admits a
     /// `ratchet` row against one of them to the tree half (repeatable). See
     /// `surface::ENFORCE_KEYED_BASE`.
@@ -2576,7 +2576,7 @@ pub enum GenerateCommand {
     /// Emit one harness's hook registrations (CLOUD-62).
     Hooks {
         /// The harness whose wiring to emit.
-        harness: crate::hook::Harness,
+        harness: crate::config_model::Harness,
     },
 }
 
@@ -3214,7 +3214,7 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
         }),
         ("markdown", _) => Some(GenerateCommand::Markdown),
         ("hooks", matches) => matches
-            .get_one::<crate::hook::Harness>("harness")
+            .get_one::<crate::config_model::Harness>("harness")
             .map(|harness| GenerateCommand::Hooks { harness: *harness }),
         ("schema", matches) => Some(GenerateCommand::Schema {
             surface: matches
@@ -3994,7 +3994,9 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 .get_many::<String>("rule")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
-            half: matches.get_one::<crate::rules::Half>("half").copied(),
+            half: matches
+                .get_one::<crate::surface_table::Half>("half")
+                .copied(),
             keyed_base: matches
                 .get_many::<String>("keyed_base")
                 .map(|values| values.cloned().collect())

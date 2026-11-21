@@ -61,8 +61,10 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::error::UsageError;
+use crate::findings::Finding;
+use crate::git::tree_files;
 use crate::identity::{self, FindingKind, StoredIdentity};
-use crate::rules::{Finding, glob_match, tree_files};
+use crate::rules::glob_match;
 use crate::severity::RuleSeverity;
 // The section's declaration lives with the model (CLOUD-2789).
 pub use crate::config_check::budget::validate;

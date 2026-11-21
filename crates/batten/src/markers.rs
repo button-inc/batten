@@ -130,7 +130,7 @@ pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
         return Ok(Vec::new());
     }
     let mut hits = Vec::new();
-    for path in rules::tree_files(root)? {
+    for path in crate::git::tree_files(root)? {
         let selecting: Vec<&Marker> = markers
             .iter()
             .filter(|marker| marker.selects(&path))

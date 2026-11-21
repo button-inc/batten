@@ -86,9 +86,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::config_check::transcript::validate;
+use crate::config_model::Harness;
 pub use crate::config_model::TranscriptConfig;
 use crate::error::UsageError;
-use crate::hook::{Harness, RecordShape, TranscriptShape};
+use crate::hook::{RecordShape, TranscriptShape};
 
 /// What the human channel says when a configured transcript is not there.
 ///
