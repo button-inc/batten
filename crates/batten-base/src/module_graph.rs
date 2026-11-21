@@ -389,14 +389,17 @@ fn impl_sites(parsed: &[(String, Vec<String>, SourceFile)]) -> Sites {
             let Some(name) = path.last().filter(|name| homes.contains_key(*name)) else {
                 continue;
             };
+            // Read where the impl sits: inside inline modules, their own `use`
+            // items come first and `self::`/`super::` are theirs.
+            let (at, local) = enclosing_scope(&found, module, name);
             let home = if path.len() == 1 && names.contains(name) {
                 Some(node.clone())
             } else if path.len() == 1 {
-                aliases
-                    .get(name)
-                    .and_then(|target| resolver.node_of(target, module, 2))
+                local
+                    .or_else(|| aliases.get(name).cloned())
+                    .and_then(|target| resolver.node_of(&target, &at, 2))
             } else {
-                resolver.node_of(&path, module, 2)
+                resolver.node_of(&path, &at, 2)
             };
             sites.push(ImplSite {
                 file,
@@ -729,6 +732,42 @@ fn item_start(syntax: &SyntaxNode) -> Option<usize> {
             )
         })
         .map(|child| usize::from(child.text_range().start()))
+}
+
+/// The module path where `found` sits (`module` plus each enclosing inline
+/// module, outermost first), and the `use` leaf for `name` in the nearest
+/// enclosing inline module that has one: the scope the compiler reads
+/// before the file's top level. `config_check.rs` holds its impls in inline
+/// modules (`pub mod action { use crate::config_model::Action; impl Action
+/// … }`), and reading only the top level left all seven unresolved.
+fn enclosing_scope(
+    found: &ast::Impl,
+    module: &[String],
+    name: &str,
+) -> (Vec<String>, Option<Vec<String>>) {
+    let mut chain: Vec<String> = found
+        .syntax()
+        .ancestors()
+        .filter_map(ast::Module::cast)
+        .filter_map(|inline| inline.name().map(|name| name.text().to_string()))
+        .collect();
+    chain.reverse();
+    let at: Vec<String> = module.iter().cloned().chain(chain).collect();
+    let local = found
+        .syntax()
+        .ancestors()
+        .filter_map(ast::ItemList::cast)
+        .find_map(|list| {
+            list.items()
+                .filter_map(|item| match item {
+                    ast::Item::Use(declaration) => declaration.use_tree(),
+                    _ => None,
+                })
+                .flat_map(|tree| use_leaves(&tree))
+                .find(|leaf| leaf.name == name)
+                .map(|leaf| leaf.path)
+        });
+    (at, local)
 }
 
 /// A file's top-level `use` leaves: the name each makes visible, to its path.
@@ -1509,6 +1548,31 @@ mod tests {
                 ("c.rs", "use crate::a::Pin;\nimpl Pin { fn g() {} }\n"),
             ],
             "impls-resolved",
+        );
+        assert_eq!(
+            census,
+            ImplCensus {
+                outside: 1,
+                ambiguous: 0
+            }
+        );
+    }
+
+    /// The measured seven: `config_check.rs` holds impls in inline modules
+    /// that import their type there. Fails by: an inline module's own `use`
+    /// unread, leaving the impl unresolved.
+    #[test]
+    fn an_impl_in_an_inline_module_reads_that_modules_imports() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod model;\nmod check;\n"),
+                ("model.rs", "pub struct Action;\n"),
+                (
+                    "check.rs",
+                    "pub mod action {\n    use crate::model::Action;\n    impl Action { fn f() {} }\n}\n",
+                ),
+            ],
+            "impls-inline",
         );
         assert_eq!(
             census,
