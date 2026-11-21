@@ -63,31 +63,12 @@
 //! is nothing to promote, and re-deciding a failure Batten did not diagnose would
 //! make the wrapper's verdict unreadable. Only `0` is promotable.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::capture::Stream;
 use crate::error::UsageError;
-
-/// Which captured stream a pattern is matched against.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Watched {
-    /// The child's standard output only.
-    Stdout,
-    /// The child's standard error only.
-    Stderr,
-    /// Both streams.
-    ///
-    /// The default, and deliberately the *widest* reading: a tool that moves a
-    /// warning from one stream to the other between releases would otherwise
-    /// silently stop being gated, and a pattern that quietly matches nothing is
-    /// the failure this whole feature exists to prevent.
-    #[default]
-    Both,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{OutputPattern, Watched};
 
 impl Watched {
     /// Every value, so anything ranging over the vocabulary is derived.
@@ -112,29 +93,6 @@ impl Watched {
             Watched::Stderr => matches!(stream, Stream::Stderr),
         }
     }
-}
-
-/// One declared output predicate: a literal that must not appear.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OutputPattern {
-    /// The stable identifier a match is reported under.
-    ///
-    /// Required, and it is what keeps the report pointer-only: a finding names
-    /// `stream:line` plus this id, never the line that matched. Without an id the
-    /// only way to say *which* pattern fired would be to echo the bytes.
-    pub id: String,
-    /// The case-sensitive literal that must not appear in the watched stream.
-    pub pattern: String,
-    /// Which stream to watch. Defaults to both.
-    #[serde(default)]
-    pub stream: Watched,
-    /// What the caller should do about it.
-    ///
-    /// Required, unlike on a file rule. A file finding is a `path:line` a reader
-    /// can open; a promoted exit code is all a caller gets back, so a refusal
-    /// naming only its id would be un-actionable (CLOUD-122).
-    pub reason: String,
 }
 
 /// Where a pattern matched: the stream and the 1-based line within it.

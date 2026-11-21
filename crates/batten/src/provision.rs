@@ -70,6 +70,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
 use crate::secret::Secret;
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::CredentialProbe;
 
 /// The subdirectory of the repository's out-of-tree state that holds provisioned
 /// tools.
@@ -340,46 +342,6 @@ pub struct ProvisionEnv {
     /// wrong on a machine whose proxy somebody configured deliberately.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unset: bool,
-}
-
-/// How a credential is proved usable, declared by the consumer.
-///
-/// **One field, and the control credential is NOT one of them.** A caller does
-/// not get to choose what "known bad" means: the engine sends a syntactically
-/// plausible token that must be refused, because a consumer that could name it
-/// could name one the route happens to accept and turn the control arm into a
-/// rubber stamp.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CredentialProbe {
-    /// The endpoint that answers 2xx for a good credential and refuses a bad
-    /// one.
-    ///
-    /// It must be a route the fence sends DIRECT. Pointed at one an intercepting
-    /// proxy carries, the control arm fails — the junk credential is accepted —
-    /// and the engine reports could-not-look rather than pretending to a verdict
-    /// it cannot reach.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub probe_url: Option<String>,
-    /// The variables a session credential may arrive under, most specific first.
-    ///
-    /// **Declared here rather than listed in the engine, which is non-negotiable
-    /// rule 1.** It was two GitHub-shaped literals in `crates/batten` for one
-    /// commit, and a consumer on another forge — or on a host that injects under
-    /// a third name — has neither: every candidate is then absent,
-    /// [`credential_health`] answers [`Credential::Unusable`], and every removal
-    /// is silently skipped forever. That failure is INVISIBLE, because skipping
-    /// a removal is also the correct behaviour when a credential is genuinely
-    /// bad, so the dead path and the working path look identical from outside.
-    ///
-    /// Which names belong here is a judgement only the consumer can make. A host
-    /// may inject a substitutable placeholder under the forge's conventional
-    /// names, so probing those would measure the host's credential rather than
-    /// one we hold — the exact conflation this mechanism exists to undo, and the
-    /// reason this list is deliberately not "every variable that looks like a
-    /// token". Naming none is could-not-look, not health: it authorises nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub names: Vec<String>,
 }
 
 /// Whether the credential this container was given actually works.

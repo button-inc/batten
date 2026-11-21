@@ -315,7 +315,7 @@ pub struct Config {
     ///
     /// [`MutatingVerb::redirect`]: crate::verbs::MutatingVerb::redirect
     #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
-    pub redirects: Vec<crate::redirect::Redirect>,
+    pub redirects: Vec<Redirect>,
     /// The agent-sourced facts this repository declares (CLOUD-776): a name, and
     /// the command whose output answers it.
     ///
@@ -380,13 +380,13 @@ pub struct Config {
     /// **Declared rather than swept**, which is what keeps could-not-look
     /// readable: an absent record under a declared family is "the producer did
     /// not run", where the same absence with nothing declared is not a reading at
-    /// all. [`crate::record::Declared`] carries the whole argument.
+    /// all. [`RecordDeclared`] carries the whole argument.
     ///
     /// Consumer-owned, like the two tables above it: which measurements a
     /// repository records, and what fills each, are facts about that repository
     /// and never about the engine (non-negotiable rule 1).
     #[serde(default, rename = "record", skip_serializing_if = "Vec::is_empty")]
-    pub records: Vec<crate::record::Declared>,
+    pub records: Vec<RecordDeclared>,
     /// The programs a `[[recorder]]` may run, by id.
     ///
     /// Named rather than inline so one program has one spelling, which is
@@ -410,7 +410,7 @@ pub struct Config {
         rename = "exec_pattern",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    pub exec_patterns: Vec<OutputPattern>,
     /// Output predicates that classify a landing gate's REFUSAL as the
     /// environment's rather than this tree's (CLOUD-861).
     ///
@@ -436,7 +436,7 @@ pub struct Config {
         rename = "verify_environment_pattern",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub verify_environment_patterns: Vec<crate::outputs::OutputPattern>,
+    pub verify_environment_patterns: Vec<OutputPattern>,
     /// How `batten exec` owns what it dispatched (CLOUD-427). Absent means the
     /// defaults, and the default is today's behaviour: Batten makes no process
     /// group. Authority-only by omission from [`OverrideConfig`] — an uncommitted
@@ -444,7 +444,7 @@ pub struct Config {
     /// orchestrator two levels up is built against the shape the repository
     /// declared. The type and the predicate are [`crate::exec`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exec: Option<crate::exec::ExecConfig>,
+    pub exec: Option<ExecConfig>,
     /// Where a harness keeps its MCP wiring, and what to hand back instead of a
     /// method's full response (CLOUD-1260). Absent means Batten dispatches
     /// nothing and reduces nothing.
@@ -457,7 +457,7 @@ pub struct Config {
     /// only *dispatch a declared method; reduce by a declared projection*. The
     /// type, the transport and the reductions are [`crate::mcp`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<crate::mcp::McpConfig>,
+    pub mcp: Option<McpConfig>,
     /// The bound on RESPONSE captures (CLOUD-918). Absent means the engine
     /// defaults.
     ///
@@ -471,7 +471,7 @@ pub struct Config {
     ///
     /// The type and the eviction are [`crate::capture`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capture: Option<crate::capture::CaptureConfig>,
+    pub capture: Option<CaptureConfig>,
     /// The suppression markers to count (CLOUD-36). Which comment shape waves
     /// a rule through is a property of the repository being gated, never of
     /// Batten; the type and the counting are [`crate::markers`].
@@ -502,7 +502,7 @@ pub struct Config {
     /// threshold nobody wrote down is not a threshold of zero. The type and the
     /// predicate are [`crate::budget`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<crate::budget::Budget>,
+    pub budget: Option<Budget>,
     /// What ONE emitted mediated refusal line may cost (CLOUD-1286). Absent
     /// means no ceiling is declared and none is enforced, on the same reading as
     /// `[budget]` above. The type and the predicate are [`crate::refusal`].
@@ -589,7 +589,7 @@ pub struct Config {
     /// boundary written after the code it bounds is a boundary that code has
     /// already crossed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub judge: Option<crate::judge::Judge>,
+    pub judge: Option<Judge>,
     /// The design-evidence audit's one bound (CLOUD-53): how large a single
     /// capture may be. Absent means the engine default — the corpus arrives on
     /// stdin and the predicates are the engine's, so a repository that declares
@@ -617,7 +617,7 @@ pub struct Config {
     /// nothing to decide against — a different claim from a floor of zero, which
     /// is why this is an option rather than a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prune: Option<crate::prune::Prune>,
+    pub prune: Option<Prune>,
     /// Where the task programs live and which crashed task Stop relaunches
     /// (CLOUD-2370). Absent means the watchdog is off, and `land`'s reap and
     /// `task alive` fall back to their transitional sources (the environment's
@@ -684,7 +684,7 @@ pub struct Config {
     /// Absent means the capability is not declared, which reads as
     /// could-not-look rather than as healthy: no removal is authorised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<crate::provision::CredentialProbe>,
+    pub credential: Option<CredentialProbe>,
     /// Which forge this repository is hosted on, in the two places the engine
     /// otherwise assumed one (CLOUD-1622).
     ///
@@ -718,7 +718,7 @@ pub struct Config {
     /// not about how a tool is run. The type and the predicate are
     /// [`crate::commit`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit: Option<crate::commit::Commit>,
+    pub commit: Option<Commit>,
     /// The bot lane this repository files rows for (CLOUD-1295). Absent means it
     /// runs none, and the `pr` verbs say so rather than filing against defaults —
     /// a lane assembled from engine literals would be a row asserting a bump
@@ -745,7 +745,7 @@ pub struct Config {
     /// carries the mechanism and this table carries the paths. The type, its
     /// validator and the write are [`crate::wiring`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wiring: Option<crate::wiring::Wiring>,
+    pub wiring: Option<Wiring>,
     /// The measurements this consumer declares over its own tree (CLOUD-843):
     /// where it writes shell, and which files must stay shell. Absent means the
     /// census has nothing declared to read, which `batten census shell` refuses
@@ -757,7 +757,7 @@ pub struct Config {
     /// shell" is the engine's; where to look is this table's. The type and the
     /// reading are [`crate::census`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub census: Option<crate::census::Census>,
+    pub census: Option<Census>,
     /// What `batten sbom` inventories and under which names (CLOUD-843).
     /// Absent means the verb has no subject to name, which it refuses rather
     /// than guessing one.
@@ -767,7 +767,7 @@ pub struct Config {
     /// lives are somebody's layout. The derivation is the engine's; the type and
     /// the reading are [`crate::sbom`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sbom: Option<crate::sbom::Declared>,
+    pub sbom: Option<SbomDeclared>,
     /// The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets
     /// with `batten step`, the pathspecs whose index entries key its receipt and
     /// the tool argvs whose answers do. Empty means no step is declared, so every
@@ -1610,4 +1610,1131 @@ pub struct BotLane {
     /// TOML value is unreviewable. It is also what keeps `ready-lint`'s grammar
     /// and the text it judges in one place a human edits.
     pub body_template: String,
+}
+
+// ---- `commit` (CLOUD-2789: moved from `commit`, which re-exports it) ----
+
+/// The `[commit]` table: what a commit subject must look like here.
+///
+/// Consumer-specific by nature (non-negotiable rule 1): the engine holds the
+/// matcher, this table holds the answer. Which type words a repository admits,
+/// and whether it requires a scope, are that repository's business.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Commit {
+    /// The regular expression every non-merge commit's subject must match.
+    ///
+    /// Required when the table is present: a `[commit]` declaring no pattern is
+    /// the half-change rule 2 refuses — it reads as though a convention is
+    /// recorded when nothing is.
+    pub subject_pattern: String,
+    /// Whether every commit in a judged RANGE must name the tracker row it
+    /// serves, and which commits are exempt (CLOUD-843).
+    ///
+    /// Absent is the reading every consumer had before: a range is judged for
+    /// its subjects and nothing else. Present, `commit check <base>..<head>`
+    /// refuses a commit whose message claims no row — see [`judge_claims`].
+    #[serde(default)]
+    pub claims: Option<Claims>,
+}
+
+/// The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).
+///
+/// # The server-side half of a claim
+///
+/// A claim receipt lives in the clone's own git directory and never leaves it,
+/// so no reviewer and no workflow can see it. What a server CAN see is whether
+/// each commit names the issue it serves — the half of the claim that survives a
+/// fresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in
+/// shell, one `claim keys` spawn per commit; the question is this table's now,
+/// asked in process over the range `commit check` already walks.
+///
+/// "Names a row" is `claim keys`' own reading of the WHOLE message — a closing
+/// keyword first, then the first key of each `Refs:` trailer — through the
+/// consumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).
+/// Claiming is stricter than mentioning: a commit citing a row as evidence has
+/// not thereby become work on it (CLOUD-338/CLOUD-378).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Claims {
+    /// The commits that owe no claim, each a property of the COMMIT rather than
+    /// of its wording: which paths it touched, and who authored it.
+    ///
+    /// Empty by default. An exemption keyed to the file set cannot be claimed by
+    /// a hand-written commit that merely borrows a release's subject, which is why
+    /// the subject is not a column here.
+    #[serde(default)]
+    pub unclaimed: Vec<Unclaimed>,
+}
+
+// ---- `census` (CLOUD-2789: moved from `census`, which re-exports it) ----
+
+/// The `[census]` table: the measurements a consumer declares over its own tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Census {
+    /// Where this repository writes shell, for `batten census shell`. Absent
+    /// means the census has nothing declared to read, which the verb refuses
+    /// rather than reporting a zero it did not measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<ShellCensus>,
+}
+
+/// `[census.shell]`: the homes shell may live in, and the files that must stay
+/// shell.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ShellCensus {
+    /// Manifests whose command strings are counted, one row per file.
+    #[serde(default, rename = "manifest", skip_serializing_if = "Vec::is_empty")]
+    pub manifests: Vec<Manifest>,
+    /// Workflow files whose `run:` steps are counted, as globs over tracked paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<String>,
+    /// Paths that must stay shell because nothing else can run where they do, as
+    /// globs. Still measured, reported apart, and never totalled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exempt: Vec<String>,
+}
+
+// ---- `budget` (CLOUD-2789: moved from `budget`, which re-exports it) ----
+
+/// The `[budget]` table: **named** file sets and what each may cost.
+///
+/// A map, not a struct with a field per set. The set name is the *consumer's*
+/// — `[budget.instructions]` is this repository's name for its always-loaded
+/// context, and an engine type carrying that name would be a consumer-specific
+/// identifier in `crates/batten` (non-negotiable rule 1). A second consumer
+/// budgeting a different surface declares `[budget.<their-name>]` and needs no
+/// engine change; before this it needed a new field.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct Budget(pub BTreeMap<String, BudgetSet>);
+
+/// One `[budget.<name>]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetSet {
+    /// The counted file set, as globs over repo-relative `/`-separated paths.
+    /// Every entry must match at least one file — see the module docs. Defaulted
+    /// because a set may count only `embedded` entries; the two being empty
+    /// *together* is what `measure` refuses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// The ceiling on estimated tokens over the whole set. The boundary is
+    /// `<=`: exactly at budget passes.
+    pub max_tokens: usize,
+    /// The optional ceiling on loaded lines, the second predicate the shell gate
+    /// this replaces carried. Absent means unenforced — a threshold nobody
+    /// declared is not a threshold of zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lines: Option<usize>,
+    /// The optional ceiling on ONE file's loaded bytes (CLOUD-1934).
+    ///
+    /// **A different question from `max_tokens`, not a finer one.** The total
+    /// bounds what a set costs when all of it loads, which is the right question
+    /// for an always-loaded surface. A file that is read ON DEMAND, one call at a
+    /// time, costs nothing until it is read and then fails whole if it is larger
+    /// than one read can return — so its ceiling is per file, and a set total can
+    /// be comfortably under budget while every read of its largest member fails.
+    ///
+    /// Bytes rather than estimated tokens because the ceiling it stands for is
+    /// MEASURED in bytes: the largest file a host returned whole. Absent means
+    /// unenforced, and the boundary is `<=` like every other one here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_file: Option<usize>,
+    /// Always-loaded strings carried *inside* a config file rather than in a
+    /// file of their own. Empty by default: a repository with no such surface
+    /// declares nothing (CLOUD-298).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded: Vec<EmbeddedDecl>,
+}
+
+// ---- `capture` (CLOUD-2789: moved from `capture`, which re-exports it) ----
+
+/// The bound on response captures (CLOUD-918).
+///
+/// Enforced **at write time**, and the trigger is the write — never a clock,
+/// never a schedule, never a background sweeper. That is
+/// `rules/toolchain.md`'s split between a gate and a schedule, and
+/// [`prune`]'s own doc already refuses a time-based sweeper on the same grounds.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureConfig {
+    /// Total response-capture bytes the store may hold. Absent means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+    /// Response-capture records the store may hold. Absent means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_records: Option<u64>,
+    /// The payload size at which a rendered response switches from carrying the
+    /// bytes to carrying an address (CLOUD-1367).
+    ///
+    /// **An ECONOMIC threshold and nothing else.** A payload at or under it is
+    /// cheaper to send than an address plus the round trip to resolve one; over
+    /// it, the address wins. Absent means [`DEFAULT_INLINE_MAX_BYTES`].
+    ///
+    /// It is deliberately NOT a privacy or safety cap. Those refuse to emit
+    /// content at all and are their own rows; this one only ever changes the
+    /// REPRESENTATION, and both routes carry the same semantic result. Reusing
+    /// one number for both would mean a measurement about token cost silently
+    /// deciding what may leave the process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_max_bytes: Option<u64>,
+    /// The `o200k` token count over which ANY tool's result reaches the model as
+    /// a pointer to its stored view rather than as its text (CLOUD-2223).
+    /// Absent means [`DEFAULT_RESULT_MAX_TOKENS`].
+    ///
+    /// Tokens, because the window is spent in tokens: a byte or line count is a
+    /// proxy that is 3-4x out on code and worse on dense text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_max_tokens: Option<u64>,
+}
+
+// ---- `exec` (CLOUD-2789: moved from `exec`, which re-exports it) ----
+
+/// The `[exec]` table: how `batten exec` owns what it dispatched.
+///
+/// One key today, and it is an opt-in rather than a tuning knob. `false` is not
+/// a conservative default chosen for taste — it is the *only* value that leaves
+/// the process topology byte-for-byte what it was, which is what an existing
+/// consumer's orchestrator is already built against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecConfig {
+    /// Whether Batten may put a dispatched command in its own process group and
+    /// take responsibility for tearing that group down.
+    ///
+    /// Declared rather than inferred, because the residual case is not
+    /// observable: an orchestrator two levels up intending to `kill(-pgid)` looks
+    /// exactly like one that is not. Even when this is `true`, Batten still
+    /// declines whenever mise's own two rules say an ancestor is already
+    /// managing — see [`GroupDecision`].
+    #[serde(default)]
+    pub manage_process_group: bool,
+    /// Whether the child's bytes are copied onto Batten's own streams.
+    ///
+    /// `false` is the CLOUD-429 default and the whole point: the bytes are
+    /// already stored, content-addressed and addressable, so printing them again
+    /// charges the caller a second time for output the engine has. `--tee`
+    /// restores the old behaviour verbatim.
+    #[serde(default)]
+    pub tee: bool,
+    /// How Batten's own record is encoded (hk's axis).
+    #[serde(default)]
+    pub format: OutputFormat,
+    /// How a teed child's bytes are presented, and whose output is suppressed
+    /// (mise's axis).
+    #[serde(default)]
+    pub style: OutputStyle,
+    /// How many of a `:::` bundle's commands run at once — mise's `--jobs`.
+    ///
+    /// `1` by default, which is stricter than mise's own default and chosen
+    /// rather than inherited: a bundle's commands share one working tree, and
+    /// widening concurrency a caller did not ask for is how two of them start
+    /// writing the same file. Zero is read as one.
+    #[serde(default = "one")]
+    pub jobs: usize,
+    /// Whether a bundle keeps going past a command that failed — mise's
+    /// `--continue-on-error`.
+    #[serde(default)]
+    pub continue_on_error: bool,
+    /// Echo the child's PROGRESS lines to stderr even when its bytes are not
+    /// teed (#1276): `stage <step> ran|hit <s>` and the mutant sweep's per-row
+    /// and schema lines ([`is_progress_line`]). A stored gate log is a pointer
+    /// at its end (CLOUD-2223), so without this a lap that ran for an hour said
+    /// nothing about which stage it was in. Never configuration: a caller's
+    /// own choice, so it is skipped by serde and absent from the schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub progress: ExecProgress,
+}
+
+/// hk's format axis, adopted rather than invented.
+///
+/// `hk/src/structured_output.rs` already spells these three for a tool that
+/// reports on child processes, and a caller who knows hk must not have to learn
+/// a second vocabulary to read Batten. The names are hk's; what they range over
+/// is Batten's own record.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum OutputFormat {
+    /// Pointer lines, one per fact.
+    #[default]
+    Human,
+    /// One JSON document.
+    Json,
+    /// One JSON record per line.
+    Jsonl,
+}
+
+/// mise's style axis, adopted rather than invented.
+///
+/// `mise/src/task/task_output.rs` spells these seven, and its `style_only()`
+/// separates the stream *style* from the *suppression* of the tool's own
+/// metadata — a distinction Batten needs and would otherwise have conflated into
+/// one key. [`OutputStyle::style_only`] is that function, by that name.
+///
+/// **With one command in flight, `prefix`, `replacing` and `timed` render
+/// alike.** They are still accepted, because adopting half a vocabulary is how a
+/// caller learns that Batten's version of a name means something else; what
+/// distinguishes them is a bundle of concurrent children, which is CLOUD-430's
+/// subject and not this one's.
+///
+/// **`timed` emits no wall-clock field, and that is the byte-stability answer**
+/// §6 demands rather than a limitation. A duration in Batten's own output would
+/// make the same run print differently twice, and [`crate::capture`] already
+/// refuses a timestamp for exactly that reason.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum OutputStyle {
+    /// Each line carries the child's program name.
+    Prefix,
+    /// The child's bytes, verbatim and as they arrive.
+    #[default]
+    Interleave,
+    /// Each stream whole, in a fixed order, after the child exits.
+    KeepOrder,
+    /// As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten
+    /// never assumes it has.
+    Replacing,
+    /// As [`OutputStyle::Prefix`], minus the clock — see the type's docs.
+    Timed,
+    /// Batten says nothing of its own; the child still speaks.
+    Quiet,
+    /// Nobody speaks.
+    Silent,
+}
+
+/// Whether a stream that is not teed still echoes its progress lines
+/// ([`ExecConfig::progress`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExecProgress {
+    /// Nothing but what the tee setting shows.
+    #[default]
+    Silent,
+    /// Each [`is_progress_line`] reaches stderr as it arrives.
+    Echo,
+}
+
+// ---- `mcp` (CLOUD-2789: moved from `mcp`, which re-exports it) ----
+
+/// The `[mcp]` table: where the wiring lives, and what to return instead of a
+/// payload.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    /// Where a harness keeps its MCP wiring, in precedence order.
+    ///
+    /// A LIST rather than one row because one repository is worked in from
+    /// several harnesses, and each keeps its wiring somewhere else. The first row
+    /// that resolves a server wins, so the order is a statement about which
+    /// harness to believe when two are installed.
+    #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<McpSource>,
+    /// What to return instead of a method's full response.
+    ///
+    /// A method with no row here is dispatched and returned whole.
+    #[serde(default, rename = "result", skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<ResultRow>,
+    /// Server names whose committed permission rules apply under WHATEVER key the
+    /// host exposes the server as this session (CLOUD-191, CLOUD-843).
+    ///
+    /// Each is a name some `[[mcp.source]]` row's `endpoint_contains` declares,
+    /// because the endpoint is the only thing that identifies a renamed server:
+    /// `mcp grant` finds the exposed key's endpoint, matches it to one of these
+    /// names, and applies the committed `permissions` rules written for that name.
+    /// `mcp posture` reads the same list for the grants a connector would still
+    /// prompt for.
+    ///
+    /// **A LIST, and deliberately not every `endpoint_contains` name.** A name here
+    /// turns a committed allow rule into a pre-approval under a key nobody
+    /// committed. A server the host authorises at its own connector layer must not
+    /// be translated, or the translation grants what the host did not — so the
+    /// consumer states which servers its permission file governs, rather than the
+    /// engine inferring it from a selector written for dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_aliases: Vec<String>,
+}
+
+/// One `[[mcp.result]]` row: what to hand back instead of a method's response.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ResultRow {
+    /// The method this row reduces. The consumer's vocabulary, matched exactly.
+    pub method: String,
+    /// What to make of the response.
+    pub reduce: Reduce,
+    /// The fields kept, in the order they are written.
+    ///
+    /// Top-level keys of the payload the row's `node` reaches. A declared field
+    /// the payload does not carry is ABSENT from the reduction rather than
+    /// present and null: "the row does not have this" and "the reduction dropped
+    /// it" are different answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    /// Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s
+    /// spelling. An empty string is the result itself.
+    ///
+    /// Declared rather than known, because how a server frames a payload is the
+    /// server's business and this crate holds no opinion about it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub node: String,
+    /// Whether the node's scalar text is itself a document to parse.
+    ///
+    /// A server that frames its payload as text carrying JSON is common and is
+    /// not something the engine may assume: a row says so, and a row that says so
+    /// wrongly gets could-not-look rather than a reduction over the wrong tree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embedded: bool,
+}
+
+/// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
+/// and headers.
+///
+/// The shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,
+/// same reason — with a `node` because a wiring file holds every server the
+/// harness knows and the row has to say which subtree is the server map.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct McpSource {
+    /// The key this source is named by in a report.
+    ///
+    /// The id and never the resolved path: a resolved path is a machine's home
+    /// directory, and non-negotiable rule 4 keeps one out of every finding.
+    pub id: String,
+    /// The NAME of the environment variable holding the directory `path`
+    /// resolves beneath, or absent for a path relative to the repository root.
+    ///
+    /// A name, never a value, and never a directory this crate knows. Unset or
+    /// empty on this machine is could-not-look, never an absent file: "this host
+    /// does not have that root" and "the file is not there" are different
+    /// answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// A base this crate knows how to name without an operator's help.
+    ///
+    /// Mutually exclusive with `root`, and refused at load if both appear. Absent
+    /// with `root` absent is the repository root, exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Base>,
+    /// The path beneath that root.
+    ///
+    /// Relative and downward — an absolute path or a `..` component is refused at
+    /// load, so a declaration cannot walk back out of the root it named.
+    ///
+    /// # `${VAR}` expands, and that is what makes a per-session file nameable
+    ///
+    /// A launcher that mints its wiring per session writes it under a name
+    /// carrying the session id, so the FILENAME is not writable in advance even
+    /// where the directory is. A row spells the id where it appears:
+    ///
+    /// ```text
+    /// path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
+    /// ```
+    ///
+    /// **Expansion is not a glob, and the difference is the whole reason this is
+    /// allowed where a glob was declined (CLOUD-1251).** A glob's three fatal
+    /// objections were that the match count is not one, that the engine would have
+    /// to walk a filesystem, and that a row's id cannot be authored for a name
+    /// that does not exist yet. Expansion has none of them: the result is exactly
+    /// one path, the engine expands a variable rather than looking around, and the
+    /// id is the row's own. `[[rule.external]]`'s discipline is unchanged — *the
+    /// engine expands a variable; it does not scan*.
+    ///
+    /// Only `${NAME}` is a placeholder. A bare `$NAME` is a literal, because a
+    /// path is allowed to contain a `$` and guessing where such a name ends is how
+    /// one spelling becomes two.
+    pub path: String,
+    /// Where the server map sits inside the parsed document, in [`Node::at`]'s
+    /// spelling. An empty string is the document itself.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub node: String,
+    /// Server names this source resolves by ENDPOINT rather than by map key.
+    ///
+    /// Keyed by the name a caller types, valued by a substring the entry's
+    /// endpoint must carry.
+    ///
+    /// **A launcher that mints its server key per registration episode leaves
+    /// that key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one
+    /// connector exposed as three different tool prefixes across episodes;
+    /// [`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a
+    /// `__`-delimited segment. Dispatch has no such analogue — the key IS the
+    /// name — so a row naming one episode's key resolves nothing in the next, and
+    /// a remedy citing it is a command that cannot run. Measured 2026-09-02: the
+    /// same connector was keyed `Linear` in one container and by a UUID in
+    /// another, at the same address.
+    ///
+    /// The ADDRESS is what does not move, which is why the selector is over the
+    /// endpoint and not over anything else the entry carries.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub endpoint_contains: std::collections::BTreeMap<String, String>,
+    /// The credential this source's servers authenticate with, if they need one.
+    ///
+    /// **Absent is the default and it is byte-identical to no credential at all**
+    /// — a wiring file whose headers already authenticate needs nothing here, and
+    /// adding this key must not change what such a source does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<McpCredential>,
+}
+
+// ---- `judge` (CLOUD-2789: moved from `judge`, which re-exports it) ----
+
+/// The `[judge]` table: what the judge may put in a model call.
+///
+/// Every field defaults to the refusing reading, so a `[judge]` table that
+/// merely exists sends nothing but pointers and hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Judge {
+    /// The content classes admitted **raw** into a model call. Empty — the
+    /// default — means pointer-only: no span bytes cross at all.
+    ///
+    /// A class named here is admitted and nothing else is. There is deliberately
+    /// no "all" spelling: a config that wants both classes names both, so the
+    /// diff that widens the boundary shows what it widened.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw: Vec<PayloadClass>,
+    /// The ceiling on assembled payload bytes. Absent means
+    /// [`DEFAULT_MAX_PAYLOAD_BYTES`].
+    ///
+    /// There is deliberately **no** key for what happens over the `protected`
+    /// set: one protected member refuses the invocation, full stop. See the
+    /// module docs for why that key was removed rather than defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_payload_bytes: Option<usize>,
+    /// The judge command, as a template. The first whitespace-separated token is
+    /// a program on the operator's `PATH`, **executed directly and never through
+    /// a shell** — so this is data a reviewer can read, not a script.
+    ///
+    /// Absent is legal on its own: a `[judge]` table predates the judge that
+    /// reads it (CLOUD-135 landed first), and a repository that declared a
+    /// boundary and no command must keep loading. It is a judge **row** that
+    /// cannot resolve without one — see [`argv`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The model the operator's command should use, substituted into [`Judge::run`]
+    /// at each `{{model}}` placeholder.
+    ///
+    /// **Opaque to the engine**: never parsed, never validated against a list,
+    /// never used to decide anything. Batten has no opinion about which model a
+    /// consumer judges with, and a build that shipped a roster would be stating
+    /// one — plus going stale (non-negotiable rule 1: the fact is the consumer's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// A class of content that could cross into a model call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PayloadClass {
+    /// The bytes of one matched span.
+    SpanText,
+    /// The bytes of a whole file.
+    FileText,
+}
+
+// ---- `wiring` (CLOUD-2789: moved from `wiring`, which re-exports it) ----
+
+/// The `[wiring]` table: what this consumer's launcher re-arms every spawn.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Wiring {
+    /// The declared scripts, in the order the config lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disarm: Vec<Disarm>,
+}
+
+/// One declared script to neutralise.
+///
+/// Both fields are the consumer's: this module names no script and no marker
+/// (non-negotiable rule 1). A path here is a launcher's artifact name, which is
+/// precisely what may not appear in `crates/batten`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Disarm {
+    /// The script, relative to the home directory.
+    ///
+    /// **Under `$HOME` and nowhere else**, enforced by [`Wiring::validate`] at
+    /// load. A shim over a tracked path would be this repair mutating the tree it
+    /// is supposed to be judging, and an absolute path is how that would be
+    /// written — so the refusal is at parse time, where `config lint` names the
+    /// key, rather than at the write, where it would already have happened.
+    pub path: String,
+    /// The comment the shim carries, and the whole of how a second pass knows
+    /// its own work.
+    ///
+    /// Idempotence rides on this: a body containing the marker is left BYTE for
+    /// byte, so running the verb twice writes once. Reading the file's length, or
+    /// its mtime, or whether it merely looks short would each be a proxy that
+    /// drifts; the marker is the consumer's own declared token and cannot.
+    pub marker: String,
+}
+
+// ---- `prune` (CLOUD-2789: moved from `prune`, which re-exports it) ----
+
+/// The `[prune]` table: the build tree, what to keep, and the collector's band.
+///
+/// CONSUMER CONFIG, NOT A CONST (non-negotiable rule 1): which directory a
+/// project builds into and how much free space its builds need are facts about
+/// THAT project.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Prune {
+    /// The build directory, relative to the repository root.
+    #[serde(default = "default_root")]
+    pub root: String,
+    /// Copies retained per stem. See the module header for why this is 2.
+    ///
+    /// The bound is in the SCHEMA as well as in [`Prune::validate`] (raised on
+    /// #734): an editor validating against the published schema is the surface
+    /// most consumers meet first.
+    #[serde(default = "default_keep")]
+    #[schemars(range(min = 1))]
+    pub keep: usize,
+    /// RETIRED (CLOUD-2198): the warm floor. Read and ignored, so a config
+    /// written for the floor model still loads while its pin moves; the
+    /// collector's band ([`Prune::min_free_mb`]) replaces it.
+    #[serde(default, skip_serializing)]
+    pub warm: Option<serde_json::Value>,
+    /// RETIRED (CLOUD-2198): the cold floor. Read and ignored, as `warm`.
+    #[serde(default, skip_serializing)]
+    pub cold: Option<serde_json::Value>,
+    /// RETIRED (CLOUD-2198): the escalation's regrowable roots. Read and
+    /// ignored, as `warm`: the collector never drops a cache whole.
+    #[serde(default, skip_serializing)]
+    pub regrowable: Option<serde_json::Value>,
+    /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
+    /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
+    /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
+    /// the collector runs at [`DEFAULT_FREE_BAND`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_free_mb: Option<u64>,
+    /// Once triggered, the collector frees space until this much is free, in
+    /// MB, then stops. Nix's `max-free`; above [`Prune::min_free_mb`], so the
+    /// pair is a hysteresis band rather than a threshold that re-fires at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_free_mb: Option<u64>,
+}
+
+pub fn default_root() -> String {
+    String::from("target")
+}
+
+// ---- `sbom` (CLOUD-2789: moved from `sbom`, which re-exports it) ----
+
+/// The `[sbom]` table (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "SbomDeclared")]
+#[non_exhaustive]
+pub struct SbomDeclared {
+    /// The subject's name: the documents' source name, and the stem both the
+    /// tree's documents and a binary's asset are named from.
+    pub subject: String,
+    /// Where the tree's two documents are written, relative to the repository
+    /// root unless absolute.
+    pub out_dir: String,
+    /// Where a binary's asset is written, relative to the repository root unless
+    /// absolute.
+    pub binary_out_dir: String,
+    /// Paths the tree scan skips, passed to the scanner verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// The pinned-actions licence table, repository-relative. Absent skips the
+    /// actions pass; declared and unreadable is could-not-look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<String>,
+    /// The `[[rule.tools]]` row `--record` keys its reduction under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<String>,
+    /// What `--conformance` runs and where it records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformance: Option<Conformance>,
+}
+
+/// The `[sbom.conformance]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "SbomConformance")]
+#[non_exhaustive]
+pub struct Conformance {
+    /// The record family the checker's answers are written under.
+    pub record: String,
+    /// The checker program, run as `<checker> <document> --comply <standard>
+    /// --output json --output-file <report>`.
+    pub checker: String,
+    /// The standards asked, in order. Never empty.
+    pub standards: Vec<String>,
+}
+
+// ---- `record` (CLOUD-2789: moved from `record`, which re-exports it) ----
+
+/// One family a producer writes through [`run_named`], declared by the consumer
+/// (CLOUD-1810).
+///
+/// # The gap this closes, and why neither existing surface could
+///
+/// [`run_named`] writes a branch-keyed store, and until this existed nothing
+/// could read one. [`crate::rules`]' projection builds the set of families it
+/// hands a module as the declared [`crate::recorder::Declared`] rows unioned with
+/// [`VERB_WRITTEN`], and a caller-named family is in neither:
+///
+/// - [`VERB_WRITTEN`] is a fixed list because the ENGINE owns both halves of
+///   those three stores. A consumer's family cannot join it without this crate
+///   knowing a consumer's name, which non-negotiable rule 1 forbids outright.
+/// - A `[[recorder]]` cannot express one either: [`crate::recorder::Declared`]
+///   requires `tool`, because that table selects on a mediated tool call. A
+///   family a `mise` task writes answers to no tool call at all.
+///
+/// So the store was written, the row was registered, the module read
+/// `input.tree.records["<family>"]` — and the key was absent, every rule beneath
+/// it undefined, and the gate green. Measured over `branch-age`: a record naming
+/// a 36-day branch against a two-day threshold, `batten check` exit `0`. That is
+/// CLOUD-1707's dead gate one surface over.
+///
+/// # Declared rather than swept, which is the whole design
+///
+/// The projection could have read whatever files happen to sit in the store
+/// directory. It must not, for the reason [`crate::rules`] already gives about a
+/// sibling fact: a family set cannot become an ambient sweep of whatever records
+/// happen to be on disk, because then a leftover file from a retired producer
+/// answers as a live measurement and nothing names what SHOULD be there.
+///
+/// A declaration is also what makes could-not-look readable. An absent record
+/// under a DECLARED family is "the producer did not run"; the same absence under
+/// no declaration is not a reading at all, and collapsing the two is the error in
+/// the fact model this whole store exists to avoid.
+///
+/// # Config rather than a column on the rule that reads it
+///
+/// [`crate::rules`] settles this at its own call site: the fact is what THIS
+/// repository's producers accumulated, so a per-rule declaration would be a
+/// second place for the same answer to live. Two rules reading one family is
+/// ordinary; two rules disagreeing about what writes it is not expressible.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct RecordDeclared {
+    /// The family name, which is also its file name under the store.
+    ///
+    /// Held to [`safe_component`]'s grammar at validation rather than at write
+    /// time alone, so a family that could never be written is refused while its
+    /// author is watching instead of on the first producer run.
+    pub record: String,
+    /// What writes it, as a runnable command.
+    ///
+    /// **Never executed, and that is not a gap.** House style §5 keeps the spawn
+    /// outside `check`, so this is a pointer — the job `[[verdict.route]]`'s
+    /// `target` already does. What it buys is that a declared family always says
+    /// who fills it: a store with no producer is a row that can only ever read
+    /// could-not-look, and the moment to catch that is at config load rather than
+    /// after a green run nobody questions.
+    pub writer: String,
+}
+
+// ---- `redirect` (CLOUD-2789: moved from `redirect`, which re-exports it) ----
+
+/// One declared path class and the mutation sanctioned for it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Redirect {
+    /// The path class this redirect speaks for, in the engine's one glob
+    /// dialect.
+    ///
+    /// Deliberately independent of `protected`: this table answers "what should
+    /// they run instead", never "is this guarded". A glob here matching a path
+    /// no `protected` entry covers simply never comes up, which is the harmless
+    /// direction — the alternative, deriving protection from a redirect, is the
+    /// set-collapsing CLOUD-37 exists to prevent.
+    pub glob: String,
+    /// The sanctioned mutation for that class — the "run this instead" a deny
+    /// carries.
+    pub mutation: String,
+    /// The sanctioned READ for that class, and the whole of the read-side gate
+    /// (CLOUD-1258).
+    ///
+    /// # Why a read is gated at all
+    ///
+    /// `no-tool-substitution` is `kind = "pipeline"` and decides over shell
+    /// argv, so a structured-tool call is invisible to it; `protected` crossed
+    /// with `[[verb]]` enumerates MUTATIONS, and CLOUD-442's port states "reads
+    /// stay allowed". So a generic file read of a memory was gated by nothing,
+    /// measured 2026-08-31 with the Serena server healthy and `read_memory`
+    /// loadable. That is not a style preference: a path read couples the caller
+    /// to the tree layout, and CLOUD-868 proposes moving that tree — `read_memory`
+    /// survives the move and a hardcoded path does not, so every flat-path read
+    /// is an unmigrated call site against it.
+    ///
+    /// # OPTIONAL, AND THE ABSENCE IS THE "SESSION DOES NOT OFFER IT" ARM
+    ///
+    /// The row demands that the gate allow where the tool is not available,
+    /// because a redirect naming a tool the session does not carry is CLOUD-998's
+    /// defect one layer over. The boundary cannot see whether an MCP server is
+    /// healthy — that is not a fact any mediated payload carries — so the
+    /// question is answered where it IS decidable: the consumer declares the
+    /// read remedy, and a consumer without the tool declares none and is refused
+    /// nothing. The remedy is therefore a string its own author wrote, which is
+    /// the strongest available guarantee that it names something reachable.
+    ///
+    /// A row with no `read` key gates nothing on the read side and keeps its
+    /// mutation half exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<String>,
+    /// The MCP server whose tool `read` names (CLOUD-2229).
+    ///
+    /// Declared, the read is refused only where some `[[mcp.source]]` resolves
+    /// this server, which is the question `batten mcp call` answers before it
+    /// dispatches. Measured on #1132: in a cloud session no source resolved
+    /// `serena`, so the refusal named a route the session could not take and
+    /// every memory read was refused outright. Absent, `read` refuses as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_server: Option<String>,
+}
+
+// ---- `outputs` (CLOUD-2789: moved from `outputs`, which re-exports it) ----
+
+/// One declared output predicate: a literal that must not appear.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutputPattern {
+    /// The stable identifier a match is reported under.
+    ///
+    /// Required, and it is what keeps the report pointer-only: a finding names
+    /// `stream:line` plus this id, never the line that matched. Without an id the
+    /// only way to say *which* pattern fired would be to echo the bytes.
+    pub id: String,
+    /// The case-sensitive literal that must not appear in the watched stream.
+    pub pattern: String,
+    /// Which stream to watch. Defaults to both.
+    #[serde(default)]
+    pub stream: Watched,
+    /// What the caller should do about it.
+    ///
+    /// Required, unlike on a file rule. A file finding is a `path:line` a reader
+    /// can open; a promoted exit code is all a caller gets back, so a refusal
+    /// naming only its id would be un-actionable (CLOUD-122).
+    pub reason: String,
+}
+
+/// Which captured stream a pattern is matched against.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Watched {
+    /// The child's standard output only.
+    Stdout,
+    /// The child's standard error only.
+    Stderr,
+    /// Both streams.
+    ///
+    /// The default, and deliberately the *widest* reading: a tool that moves a
+    /// warning from one stream to the other between releases would otherwise
+    /// silently stop being gated, and a pattern that quietly matches nothing is
+    /// the failure this whole feature exists to prevent.
+    #[default]
+    Both,
+}
+
+// ---- `provision` (CLOUD-2789: moved from `provision`, which re-exports it) ----
+
+/// How a credential is proved usable, declared by the consumer.
+///
+/// **One field, and the control credential is NOT one of them.** A caller does
+/// not get to choose what "known bad" means: the engine sends a syntactically
+/// plausible token that must be refused, because a consumer that could name it
+/// could name one the route happens to accept and turn the control arm into a
+/// rubber stamp.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialProbe {
+    /// The endpoint that answers 2xx for a good credential and refuses a bad
+    /// one.
+    ///
+    /// It must be a route the fence sends DIRECT. Pointed at one an intercepting
+    /// proxy carries, the control arm fails — the junk credential is accepted —
+    /// and the engine reports could-not-look rather than pretending to a verdict
+    /// it cannot reach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_url: Option<String>,
+    /// The variables a session credential may arrive under, most specific first.
+    ///
+    /// **Declared here rather than listed in the engine, which is non-negotiable
+    /// rule 1.** It was two GitHub-shaped literals in `crates/batten` for one
+    /// commit, and a consumer on another forge — or on a host that injects under
+    /// a third name — has neither: every candidate is then absent,
+    /// [`credential_health`] answers [`Credential::Unusable`], and every removal
+    /// is silently skipped forever. That failure is INVISIBLE, because skipping
+    /// a removal is also the correct behaviour when a credential is genuinely
+    /// bad, so the dead path and the working path look identical from outside.
+    ///
+    /// Which names belong here is a judgement only the consumer can make. A host
+    /// may inject a substitutable placeholder under the forge's conventional
+    /// names, so probing those would measure the host's credential rather than
+    /// one we hold — the exact conflation this mechanism exists to undo, and the
+    /// reason this list is deliberately not "every variable that looks like a
+    /// token". Naming none is could-not-look, not health: it authorises nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+/// The `jobs` default, as a function because `serde` needs one.
+pub const fn one() -> usize {
+    1
+}
+
+pub const fn default_keep() -> usize {
+    2
+}
+
+/// One class of commit that owes no claim.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Unclaimed {
+    /// The row's name, for a reader of the config — never printed per commit.
+    pub id: String,
+    /// A regular expression EVERY path the commit changed must match. A commit
+    /// that changed nothing matches vacuously, as the retired shell's filter did.
+    pub paths: String,
+    /// When set, the commit's AUTHOR address — git's `%ae` — must match this too.
+    ///
+    /// The author rather than the committer, because a forge commits an App's work
+    /// as itself and only the author half names which App wrote it.
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// One manifest whose command strings are counted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Manifest {
+    /// The manifest's repo-relative path.
+    pub path: String,
+    /// The keys whose values are commands, as they are spelled before ` = `.
+    pub keys: Vec<String>,
+    /// The header prefix that opens one named unit — a task table, say. Every
+    /// shell line between one such header and the next is that unit's. Absent,
+    /// each shell line is reported on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
+/// One `[[budget.<name>.embedded]]` entry: a string inside a config file that a
+/// host loads on every session.
+///
+/// Both fields are the **consumer's**. A host that always injects a key from its
+/// own config — Serena's project file, an editor's workspace settings — is a
+/// property of the repository using that host, not of Batten, so naming either
+/// one in `crates/batten` would be the consumer-specific identifier
+/// non-negotiable rule 1 forbids. The engine knows only "parse this file, read
+/// this key, count the string".
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddedDecl {
+    /// The repo-relative, `/`-separated path of the config file to read. A
+    /// literal path and never a glob: a key is read from one document, and a
+    /// pattern would leave "which file's key" unanswered.
+    pub path: String,
+    /// The key whose string value is counted. Dotted for a nested key
+    /// (`a.b.c`); the engine walks maps only, so a key under a sequence is a
+    /// miss rather than a guess.
+    pub key: String,
+}
+
+/// How a [`ResultRow`] turns a response into something rule 4 permits.
+///
+/// A closed set rather than an expression language, for
+/// [`crate::facts::Reduction`]'s reason exactly: every member is bounded by
+/// construction, so no row can declare a reduction that yields the payload back.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Reduce {
+    /// The declared fields, with their values passed through as the payload
+    /// carries them.
+    ///
+    /// The read-side answer. What bounds it is the DECLARATION — a field nobody
+    /// named never leaves the store — so a consumer choosing its own field set is
+    /// choosing its own cost.
+    Project,
+    /// The declared fields, each held to a bounded SCALAR.
+    ///
+    /// The write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]
+    /// in KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],
+    /// or is a container rather than a scalar, is **absent** rather than
+    /// truncated, because a prefix of somebody's issue body is still their issue
+    /// body. So this arm structurally cannot echo a body however the row is
+    /// written, where `project` leaves that to the declaration.
+    ///
+    /// # Why the bound is length and not [`crate::facts::Reduction::Token`]'s
+    ///
+    /// That reduction additionally refuses any value carrying whitespace, and it
+    /// is right to: its product reaches the POLICY INPUT, where a module could
+    /// lift a sentence into a `subjects` pointer, so "is this already a token"
+    /// is the question worth asking. This arm's product reaches the CALLER, and
+    /// the thing being kept out is a 15k-character description — which the length
+    /// bound stops on its own.
+    ///
+    /// Copying the whitespace clause across was this row's own near-miss,
+    /// measured before it shipped: `save_issue` answers `status = "In Progress"`,
+    /// so the arm would have silently dropped the one field CLOUD-1122 names in
+    /// its remedy — `{id, status, handle}` — while every test still passed. A
+    /// bound borrowed from a surface with a different threat model is how a
+    /// reduction quietly stops answering the question it was built for.
+    Acknowledge,
+    /// [`Reduce::Project`], applied to EVERY element of an array node.
+    ///
+    /// The list-side answer (CLOUD-1380). The other two arms do one flat
+    /// field-pick against the node a row names, so a response whose payload is an
+    /// array of objects is unreducible by either: naming the array as `node` makes
+    /// every field lookup miss, and leaving `node` at the root keeps the array
+    /// whole and reduces nothing. Measured before this arm existed, a
+    /// `list_issues` call reported `undeclared` and **emitted 20,366 bytes against
+    /// 17,313 stored** — more out than in, because an undeclared result is handed
+    /// back re-serialised rather than reduced.
+    ///
+    /// `node` names the array and the declared `fields` are read from each
+    /// element, so one row describes both halves and no second field vocabulary
+    /// appears. The projected elements come back under the array's own key, which
+    /// is what lets a consumer read the reduction by the path it reads the
+    /// response by.
+    ///
+    /// # Its bound is a different KIND from the other two, stated rather than
+    /// absorbed
+    ///
+    /// `project` and `acknowledge` are bounded by the DECLARATION alone: a field
+    /// nobody named never leaves the store, so the reduction's size is fixed
+    /// whatever the payload holds. This arm is bounded per element by the
+    /// declaration and **in count by the page the caller asked for** — a function
+    /// of the request rather than of the response. That is weaker than the other
+    /// two, and it is the enum's contract met rather than dodged: no row can
+    /// declare a reduction that yields the payload back, but a caller asking for a
+    /// thousand rows does get a thousand projected rows.
+    ///
+    /// Which is why the scalar siblings are carried and containers are not:
+    /// `hasNextPage` and `cursor` are what make the page size a thing the caller
+    /// controls, so dropping them would leave paging unanswerable — the reduction
+    /// would satisfy every size predicate by destroying the one mechanism that
+    /// bounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s
+    /// reason exactly: a shape whose size the caller did not bound.
+    Each,
+}
+
+/// A directory the crate can name on its own, for a source whose file does not
+/// live under the repository or under a directory an operator exports.
+///
+/// A closed set of ONE, deliberately. Every member has to be a location the
+/// platform itself defines, because the alternative is this crate learning a
+/// harness's layout — non-negotiable rule 1's violation — and because a member
+/// nobody can predict is a scan wearing an enum's clothes.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Base {
+    /// The OS temporary directory, as the platform defines it.
+    ///
+    /// **Named rather than spelled `/tmp`**, which is what keeps it portable and
+    /// keeps a literal path out of a config. It is where a launcher that mints a
+    /// per-session file puts it, and the one location an operator has no variable
+    /// for — `TMPDIR` is unset on a great many hosts, so a row naming it as a
+    /// `root` silently does not resolve there.
+    Temp,
+}
+
+/// One `[mcp.source.credential]` table: WHICH credential a source spends, never
+/// the credential (CLOUD-1261).
+///
+/// # The whole point is the indirection
+///
+/// `batten.toml` is committed, so a value here would be a secret in git. What a
+/// row carries is a **name**: the name of an environment variable, or the name of
+/// an environment variable whose value is a path. That is `[[rule.external]]`'s
+/// root discipline applied to key material — *the engine expands a variable; it
+/// does not scan* — and it is what lets a public config say "this server needs
+/// the operator's token" without saying what the token is.
+///
+/// # Every resolved value is a [`Secret`], which has no route to a `String`
+///
+/// The negative half is the load-bearing one, so it is enforced by type rather
+/// than by remembering to redact: [`Secret`] has no `Display`, its `Debug` prints
+/// a fixed marker, and the only thing that consumes it is the header list handed
+/// to the transport. A failure path cannot render it because there is no method
+/// that would.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct McpCredential {
+    /// The header the credential is sent in.
+    ///
+    /// Declared rather than assumed: `Authorization` is the common answer and the
+    /// default, but a session-scoped endpoint may want its own name, and guessing
+    /// one produces a 401 that says nothing about why.
+    #[serde(default = "authorization")]
+    pub header: String,
+    /// The scheme prefixed to the value, space-separated. Empty sends the value
+    /// alone, which is what a bare token header wants.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scheme: String,
+    /// The NAME of an environment variable holding the credential itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// The NAME of an environment variable holding the PATH of a file that holds
+    /// the credential.
+    ///
+    /// The two-hop spelling is deliberate and it is the one a harness actually
+    /// offers: a launcher that mints a per-session token writes it to a file and
+    /// exports the path, so the path is not writable in advance while the variable
+    /// name is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_from: Option<String>,
+    /// The NAME of a key in the server's own wiring entry whose value is a
+    /// command that prints the request headers as a JSON object.
+    ///
+    /// Claude Code's spelling is `headersHelper`: a local `~/.claude.json` entry
+    /// for an HTTP server authenticates by running it (measured 2026-10-25, the
+    /// GitHub server's helper prints `{"Authorization":"Bearer …"}` from `gh auth
+    /// token`), and carries no static `headers` at all, so a row with neither
+    /// `env` nor `file_from` dispatched unauthenticated and got a 401. The row
+    /// names the KEY, never the command: the command lives in the wiring file
+    /// the source names (the operator's own, for a home-rooted source; a
+    /// repo-relative source trusts that file as much as this config), and only
+    /// the `header` this row names is taken from what it prints. That value is
+    /// usually finished (`Bearer …`), so `scheme` stays empty for such a helper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper: Option<String>,
+}
+
+/// The default header a credential is sent in.
+pub fn authorization() -> String {
+    "Authorization".to_owned()
 }

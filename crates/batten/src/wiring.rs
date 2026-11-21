@@ -54,6 +54,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::{git, hook};
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Disarm, Wiring};
 
 /// The event map inside a wiring file.
 ///
@@ -813,47 +815,6 @@ fn add_missing(
 // disk shows no registration at all — so a disarm that read the disk to decide
 // what to disarm would find nothing, exactly when it is needed. The paths are the
 // consumer's to declare and this module never guesses one.
-
-/// One declared script to neutralise.
-///
-/// Both fields are the consumer's: this module names no script and no marker
-/// (non-negotiable rule 1). A path here is a launcher's artifact name, which is
-/// precisely what may not appear in `crates/batten`.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Disarm {
-    /// The script, relative to the home directory.
-    ///
-    /// **Under `$HOME` and nowhere else**, enforced by [`Wiring::validate`] at
-    /// load. A shim over a tracked path would be this repair mutating the tree it
-    /// is supposed to be judging, and an absolute path is how that would be
-    /// written — so the refusal is at parse time, where `config lint` names the
-    /// key, rather than at the write, where it would already have happened.
-    pub path: String,
-    /// The comment the shim carries, and the whole of how a second pass knows
-    /// its own work.
-    ///
-    /// Idempotence rides on this: a body containing the marker is left BYTE for
-    /// byte, so running the verb twice writes once. Reading the file's length, or
-    /// its mtime, or whether it merely looks short would each be a proxy that
-    /// drifts; the marker is the consumer's own declared token and cannot.
-    pub marker: String,
-}
-
-/// The `[wiring]` table: what this consumer's launcher re-arms every spawn.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Wiring {
-    /// The declared scripts, in the order the config lists them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disarm: Vec<Disarm>,
-}
 
 impl Wiring {
     /// Refuse a row that could write outside the home directory.
