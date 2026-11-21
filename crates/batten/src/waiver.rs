@@ -133,7 +133,6 @@ use crate::config_model::RuleKind;
 pub use crate::config_model::Waiver;
 use crate::error::UsageError;
 use crate::findings::Finding;
-use crate::rules::{self};
 
 /// A calendar date, to the day.
 ///
@@ -292,7 +291,7 @@ impl Waiver {
         }
         match &self.path {
             None => true,
-            Some(glob) => rules::glob_match(glob, &finding.path),
+            Some(glob) => crate::selector::glob_match(glob, &finding.path),
         }
     }
 

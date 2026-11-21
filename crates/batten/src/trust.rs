@@ -4336,7 +4336,7 @@ fn column_token(value: &serde_json::Value) -> String {
     if value.is_null() {
         return "absent".to_owned();
     }
-    let digest = crate::receipt::hex_sha256(value.to_string().as_bytes());
+    let digest = crate::digest::sha256_hex(value.to_string().as_bytes());
     format!("sha256:{}", &digest[..12])
 }
 

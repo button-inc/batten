@@ -202,7 +202,7 @@ pub fn owned_text(text: &str, id: &str) -> Option<String> {
 /// The digest a history receipt is checked against.
 #[must_use]
 pub fn digest(owned: &str) -> String {
-    crate::receipt::hex_sha256(owned.as_bytes())
+    crate::digest::sha256_hex(owned.as_bytes())
 }
 
 /// The byte ranges in `current` that a write replaces.
@@ -251,7 +251,7 @@ pub fn changed_ranges(
 
 /// The receipt file for one (row, context) pair.
 fn receipt_path(git_dir: &Path, id: &str, context: &str) -> PathBuf {
-    let short = |text: &str| crate::receipt::hex_sha256(text.as_bytes())[..16].to_owned();
+    let short = |text: &str| crate::digest::sha256_hex(text.as_bytes())[..16].to_owned();
     git_dir
         .join("batten-receipts")
         .join(format!("history-read.{}.{}", short(id), short(context)))
@@ -296,7 +296,7 @@ pub fn forget_context(git_dir: &Path, context: &str) -> std::io::Result<()> {
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(());
     };
-    let suffix = format!(".{}", &crate::receipt::hex_sha256(context.as_bytes())[..16]);
+    let suffix = format!(".{}", &crate::digest::sha256_hex(context.as_bytes())[..16]);
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();

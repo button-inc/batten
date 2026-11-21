@@ -16,6 +16,7 @@ pub use batten_fsio as fsio;
 pub mod token_enum;
 
 pub mod cache;
+pub mod digest;
 pub mod dispatch;
 pub mod durable;
 pub mod error;

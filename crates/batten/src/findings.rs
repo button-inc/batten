@@ -1285,6 +1285,12 @@ pub fn pointer_lines(records: &[FindingRecord]) -> Vec<String> {
     lines
 }
 
+/// Convert a byte offset into a 1-based line number.
+pub(crate) fn line_of(text: &str, offset: usize) -> usize {
+    text.get(..offset)
+        .map_or(1, |prefix| prefix.matches('\n').count() + 1)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
