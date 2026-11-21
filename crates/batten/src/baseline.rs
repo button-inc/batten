@@ -124,9 +124,10 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity::{self, CountChange, FindingKind, StoredIdentity};
-use crate::rules::{Finding, Scan};
+use crate::rules::Scan;
 use crate::severity::RuleSeverity;
 use crate::state;
 use crate::store;

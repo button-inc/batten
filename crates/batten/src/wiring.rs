@@ -379,7 +379,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
     // Planned in full before anything is written, so the record describes the
     // whole pre-repair state even if a later surface refuses the write.
     let mut planned: Vec<(PathBuf, serde_json::Value)> = Vec::new();
-    for harness in hook::Harness::ALL {
+    for harness in crate::config_model::Harness::ALL {
         let command = hook::wiring_command(*harness);
         let key = harness
             .wiring()
@@ -606,7 +606,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     };
     let (root, repo) = (git::canonical(root), git::canonical(repo));
     out.above = repo != root && repo.starts_with(&root);
-    let harness = hook::Harness::ClaudeCode;
+    let harness = crate::config_model::Harness::ClaudeCode;
     let (true, Some(wiring)) = (out.above, harness.wiring()) else {
         return Ok(out);
     };
@@ -677,9 +677,12 @@ pub fn live_session_root() -> Option<PathBuf> {
 /// # Errors
 ///
 /// When a surface parsed and cannot be written back.
-pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness, Vec<String>)>> {
+pub fn register_committed(
+    repo: &Path,
+    check: bool,
+) -> Result<Vec<(crate::config_model::Harness, Vec<String>)>> {
     let mut owed = Vec::new();
-    for harness in hook::Harness::ALL {
+    for harness in crate::config_model::Harness::ALL {
         let Some(wiring) = harness.wiring() else {
             continue;
         };
@@ -740,7 +743,7 @@ fn add_missing(
     file: hook::WiringFile,
     spellings: &[&str],
     command: &str,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
 ) -> Vec<String> {
     let shape = harness.entry_shape();
     let Some(root) = document.as_object_mut() else {

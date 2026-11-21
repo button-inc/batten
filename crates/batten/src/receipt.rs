@@ -88,10 +88,10 @@ pub(crate) use crate::config_check::receipt::safe_subject;
 #[allow(unused_imports)]
 pub(crate) use crate::config_check::receipt::validate_check_name;
 pub use crate::config_check::receipt::validate_verified_by;
+use crate::config_model::ReceiptKey;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::output::{Mode, Verbosity};
-use crate::rules::ReceiptKey;
 use crate::{config, git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
@@ -807,7 +807,7 @@ pub(crate) fn verdicts(
     subject: Option<&str>,
     key_bases: &BTreeMap<String, String>,
     max_ages: &BTreeMap<String, u64>,
-    field_bounds: &BTreeMap<String, crate::rules::FieldBound>,
+    field_bounds: &BTreeMap<String, crate::config_model::FieldBound>,
     now: std::time::SystemTime,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
@@ -2184,7 +2184,7 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
 /// of its lines carries the verdict is a different question with a different
 /// answer; a `mode = "replace"` receipt has exactly one line, which is the family
 /// this column is for.
-fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
+fn field_refutes(path: &Path, bound: &crate::config_model::FieldBound) -> bool {
     let Ok(text) = crate::fsio::read_to_string(path) else {
         return false;
     };

@@ -45,8 +45,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 
 // The section's declaration lives with the model (CLOUD-2789).

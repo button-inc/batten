@@ -572,7 +572,7 @@ pub struct OverrideConfig {
     /// Present only so the refusal can name it, for `min_batten_version`'s
     /// reason: the engine pin is the committed authority's alone (CLOUD-2061).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub engine: Option<crate::engine::Pin>,
+    pub engine: Option<crate::config_model::Pin>,
     /// Raised, never lowered: a committed `strict` cannot be relaxed here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strictness: Option<Strictness>,
