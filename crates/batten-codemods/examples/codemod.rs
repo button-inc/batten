@@ -44,6 +44,41 @@ fn main() -> std::io::Result<()> {
         let scope: Vec<String> = args.collect();
         return run_fix(&mut out, &scope);
     }
+    // `levels [src]` and `suggest [src] [n]`: the module graph's structure,
+    // as counts and module names (Lakos levels, propagation cost, and the
+    // edges whose cut shrinks the largest cycle).
+    if asked == "levels" || asked == "suggest" {
+        let src = args
+            .next()
+            .unwrap_or_else(|| String::from("crates/batten/src"));
+        let graph = batten::module_graph::read(std::path::Path::new(&src))
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if asked == "levels" {
+            let levels = graph.levels();
+            let top = levels.values().max().copied().unwrap_or(0);
+            writeln!(
+                out,
+                "levels: {} module(s), {top} level(s), largest component {}, propagation cost {:.1}%",
+                levels.len(),
+                graph.largest_component(),
+                graph.propagation_cost()
+            )?;
+            for level in 1..=top {
+                let count = levels.values().filter(|at| **at == level).count();
+                writeln!(out, "level {level}: {count}")?;
+            }
+            return Ok(());
+        }
+        let shown: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(20);
+        let largest = graph.largest_component();
+        for (from, to, left) in graph.cut_ranking().into_iter().take(shown) {
+            writeln!(
+                out,
+                "{from} -> {to}: largest component {left} (now {largest})"
+            )?;
+        }
+        return Ok(());
+    }
     if let Some(chosen) = recipe::named_tree(&asked) {
         let root = args.next().unwrap_or_else(|| String::from("."));
         return run_tree(&mut out, chosen, std::path::Path::new(&root));
@@ -185,8 +220,14 @@ fn run_fix(out: &mut impl std::io::Write, scope: &[String]) -> std::io::Result<(
     let read = |path: &str| batten::fsio::read_to_string(path).ok();
     for pass in 1..=FIX_PASSES {
         let non_test = check_stream(&["--lib", "--bins"], scope)?;
-        let test = check_stream(&["--tests", "--examples", "--benches"], scope)?;
-        let plan = recipe::fix::plan(&non_test, &test, &read);
+        let unit_test = check_stream(&["--lib", "--bins", "--profile", "test"], scope)?;
+        let other = check_stream(&["--tests", "--examples", "--benches"], scope)?;
+        let streams = recipe::fix::Streams {
+            non_test: &non_test,
+            unit_test: &unit_test,
+            other: &other,
+        };
+        let plan = recipe::fix::plan(streams, &read);
         let (mut applied, mut refused) = (0_usize, 0_usize);
         for (path, suggestions) in &plan.edits {
             let written = read(path)
