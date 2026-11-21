@@ -229,9 +229,55 @@ pub fn apply(text: &str, suggestions: &[Suggestion]) -> Result<String, rustfix::
     fix.finish()
 }
 
+/// Whether a pass may write anything: never over a build that does not compile.
+///
+/// Suggestions computed over code the compiler rejected are not trustworthy, and
+/// the unused-import judgement in particular reads "unused" off a build that may
+/// have stopped early. So one error anywhere refuses every edit in the pass.
+#[must_use]
+pub fn may_apply(plan: &Plan) -> bool {
+    plan.errors == 0
+}
+
+/// Whether a cargo run read nothing: it failed AND emitted no compiler message.
+///
+/// A bad `-p`, a broken manifest or a missing toolchain fails before any unit is
+/// compiled, so its JSON stream is empty, and an empty stream otherwise reads as
+/// "nothing to fix". A failed build that did emit messages is the ordinary case:
+/// its errors are counted by [`plan`] and refused by [`may_apply`].
+#[must_use]
+pub fn read_nothing(succeeded: bool, stream: &str) -> bool {
+    !succeeded && !stream.contains("\"reason\":\"compiler-message\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pass_over_a_build_with_an_error_applies_nothing() {
+        let clean = Plan::default();
+        assert!(may_apply(&clean));
+        let broken = Plan {
+            errors: 1,
+            ..Plan::default()
+        };
+        assert!(
+            !may_apply(&broken),
+            "one compile error must refuse every edit"
+        );
+    }
+
+    #[test]
+    fn a_failed_cargo_with_no_compiler_message_read_nothing() {
+        // `cargo check -p nonexistent`: non-zero, empty stream.
+        assert!(read_nothing(false, ""));
+        // A non-zero exit that still compiled something: errors to count, not a void.
+        let compiled = r#"{"reason":"compiler-message","message":{}}"#;
+        assert!(!read_nothing(false, compiled));
+        // A clean run with nothing to say is a judgement, not a void.
+        assert!(!read_nothing(true, ""));
+    }
 
     /// One cargo `compiler-message` line: an `unused_imports` warning whose
     /// machine-applicable fix removes `[start, end)` of `file`.
