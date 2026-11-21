@@ -258,7 +258,7 @@ pub fn refresh(root: &Path, declared: &[TaskQuery]) -> TaskFacts {
     // (CLOUD-2785): the gate set moved from task bodies into `[[step]]` rows, and
     // a reader of bodies alone would see `mise run verify` reach none of it. The
     // authority joins the keyed configs, so a row edit moves the record too.
-    let authority = root.join(crate::config::CONFIG_FILE);
+    let authority = root.join(crate::config_model::CONFIG_FILE);
     if let Some(groups) = graph_rows(&authority) {
         configs.push(authority);
         expand_graphs(&mut bodies, &groups);

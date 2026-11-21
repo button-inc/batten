@@ -699,7 +699,7 @@ pub fn sampler(path: PathBuf) -> Result<impl FnMut() -> Result<u64> + Send> {
 /// there is no override for this read to miss.
 #[must_use]
 pub fn declared_alone(dir: &Path) -> Option<Prune> {
-    let text = crate::fsio::read_to_string(dir.join(crate::config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(crate::config_model::CONFIG_FILE)).ok()?;
     let table: toml::Table = toml::from_str(&text).ok()?;
     let declared = table.get("prune")?.as_table()?;
     let prune: Prune = toml::from_str(&toml::to_string(declared).ok()?).ok()?;

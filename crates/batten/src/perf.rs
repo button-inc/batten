@@ -2076,7 +2076,7 @@ fn parse_pairs(input: &str) -> Result<Vec<Paired>> {
 /// false green this repository keeps re-meeting.
 pub fn compare(
     input: &str,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Comparison> {
     let records = parse_pairs(input)?;
@@ -2190,7 +2190,7 @@ pub enum Gate {
 pub fn gate(
     repo: &Path,
     options: Options,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Gate> {
     match pair(repo, options)? {

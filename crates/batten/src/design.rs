@@ -52,7 +52,7 @@
 //!
 //! # The ladder decides, and this is its first consumer
 //!
-//! [`crate::config::Strictness`] has resolved since the loader landed and
+//! [`crate::config_model::Strictness`] has resolved since the loader landed and
 //! nothing read it. [`blocks`] is where it starts deciding, and it reads **all
 //! three ranks** rather than special-casing `Strict`, because each variant's own
 //! doc comment already pins its meaning. Promotion runs through
@@ -67,7 +67,7 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::Strictness;
+use crate::config_model::Strictness;
 use crate::error::UsageError;
 use crate::identity::{FindingKind, StoredIdentity};
 use crate::receipt::hex_sha256;

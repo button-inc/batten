@@ -227,7 +227,7 @@ pub fn entries(result: &serde_json::Value, at: u64, head: Option<&str>) -> Vec<E
 #[must_use]
 pub fn ledger_roots(anchor: &Path) -> Vec<std::path::PathBuf> {
     let checkout = |dir: &Path| {
-        dir.join(crate::config::CONFIG_FILE).is_file() || crate::git::repo_root(dir).is_ok()
+        dir.join(crate::config_model::CONFIG_FILE).is_file() || crate::git::repo_root(dir).is_ok()
     };
     if checkout(anchor) {
         return vec![anchor.to_path_buf()];
@@ -238,7 +238,8 @@ pub fn ledger_roots(anchor: &Path) -> Vec<std::path::PathBuf> {
     let mut roots: Vec<std::path::PathBuf> = children
         .filter_map(|child| Some(child.ok()?.path()))
         .filter(|dir| {
-            dir.join(crate::config::CONFIG_FILE).is_file() && crate::git::repo_root(dir).is_ok()
+            dir.join(crate::config_model::CONFIG_FILE).is_file()
+                && crate::git::repo_root(dir).is_ok()
         })
         .collect();
     roots.sort();
