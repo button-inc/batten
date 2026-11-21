@@ -32110,9 +32110,9 @@ mod tests {
     fn a_split_request_carries_its_half_and_its_bases() {
         let only = [String::from("row")];
         let bases = [String::from("origin/main")];
-        let split =
-            super::RunRequest::spawning(true, &only).split(Some(super::rules::Half::Tree), &bases);
-        assert_eq!(split.half, Some(super::rules::Half::Tree));
+        let split = super::RunRequest::spawning(true, &only)
+            .split(Some(crate::surface_table::Half::Tree), &bases);
+        assert_eq!(split.half, Some(crate::surface_table::Half::Tree));
         assert_eq!(split.keyed_bases, bases);
         assert!(split.json);
         assert_eq!(split.only, only);

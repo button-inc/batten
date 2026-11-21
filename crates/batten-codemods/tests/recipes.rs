@@ -41,7 +41,7 @@ fn the_stream_recipe_moves_the_call_and_imports_its_trait_once() {
         CAPTURED
             .replacen(
                 "use std::process::Command;",
-                "use crate::exec::Streamed as _;\nuse std::process::Command;",
+                "use crate::capture::Streamed as _;\nuse std::process::Command;",
                 1
             )
             .replacen(
@@ -117,7 +117,7 @@ fn run() {
     let edited = (recipe.apply)(source, "batten").unwrap();
     let keeping = |stdin: bool, stdout: bool, stderr: bool| {
         format!(
-            "streamed_output_keeping(batten::exec::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
+            "streamed_output_keeping(batten::capture::Keep {{ stdin: {stdin}, stdout: {stdout}, stderr: {stderr} }})"
         )
     };
     // ONE STREAM ALONE IS ENOUGH: each of the three is its own reason to keep.
@@ -167,11 +167,11 @@ fn run() {
     assert_eq!(
         edited,
         "\
-use batten::exec::Streamed as _;
-use batten::exec::StreamedChild as _;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
 use batten::stream::pump;
 fn run() {
-    let k = batten::exec::Keep { stdin: true, ..batten::exec::Keep::NONE };
+    let k = batten::capture::Keep { stdin: true, ..batten::capture::Keep::NONE };
     let s = \"batten::stream::Keep\";
     let x = batten::stream::StreamedX;
 }
