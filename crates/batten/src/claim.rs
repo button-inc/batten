@@ -926,6 +926,7 @@ pub fn adopt(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     /// Fails by: readiness answered as a constant rather than by the one
     /// definition of Ready.

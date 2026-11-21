@@ -957,7 +957,7 @@ pub fn unmethodical(report: &str) -> Vec<Unmethodical> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn tokens_round_up_because_a_partial_token_is_paid_for() {
         assert_eq!(tokens_of(0, 4), 0);

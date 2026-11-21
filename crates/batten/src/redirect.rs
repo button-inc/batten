@@ -110,6 +110,7 @@ pub fn resolve_read<'table>(table: &'table [Redirect], path: &str) -> Option<&'t
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::error::UsageError;
 
     fn row(glob: &str, mutation: &str) -> Redirect {

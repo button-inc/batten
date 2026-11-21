@@ -495,6 +495,9 @@ pub fn run(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()

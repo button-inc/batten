@@ -64,6 +64,7 @@
 //! missing" is indistinguishable from a repository that never scanned.
 
 use crate::capture::Streamed as _;
+use crate::rules::RuleExt as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1314,6 +1315,7 @@ fn parse_line(line: &str, batch: &[&str]) -> Option<Match> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
 
     fn date() -> Date {
         Date {

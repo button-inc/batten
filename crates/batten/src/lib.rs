@@ -8,6 +8,15 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+use crate::attribution::AttributionExt as _;
+use crate::commit::CommitExt as _;
+use crate::config::ConfigExt as _;
+use crate::engine::PinExt as _;
+use crate::exec::ExecConfigExt as _;
+use crate::hook::FieldExt as _;
+use crate::rules::RuleExt as _;
+use crate::verdict::RouteKindExt as _;
+use crate::verdict::VocabularyExt as _;
 // `token_enum!` lives in `batten-facts` with `error::Native`, the first enum
 // declared through it (CLOUD-2789); `crate::config_model::NativeGate` and `lint` declare
 // through it here. Moving the crate's other hand-kept tokened enums onto it is
@@ -32100,6 +32109,9 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     /// A split request carries the half and the keyed bases it was split on,
     /// and keeps everything else of the request it narrows.
     ///

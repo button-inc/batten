@@ -839,6 +839,9 @@ const fn mebibytes(bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::attribution::AttributionExt as _;
 
     /// The volume a suite is writing to has room for more than the one MiB a
     /// constant reading would claim.

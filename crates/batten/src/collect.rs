@@ -529,6 +529,10 @@ const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + 
 #[cfg(any(windows, test))]
 mod windows_table {
     use super::Process;
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
+    #[cfg(test)]
+    use crate::verdict::VocabularyExt as _;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
@@ -1591,6 +1595,9 @@ fn await_locks(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{Kept, Process, darwin, earliest_build_start, proc_stat};
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 

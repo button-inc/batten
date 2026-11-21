@@ -2206,6 +2206,9 @@ const fn key_token(key: ReceiptKey) -> &'static str {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     /// The three-valued read, and the two arms that must ALLOW.
     ///
     /// `Refuted` is the only verdict in this module that is a statement about

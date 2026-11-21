@@ -709,6 +709,7 @@ fn append(path: &Path, line: &str) -> Option<()> {
 )]
 mod outcome_tests {
     use super::*;
+    #[cfg(test)]
 
     /// A claim of a whole bundle of keys stays a legal file name (CLOUD-2706).
     #[test]

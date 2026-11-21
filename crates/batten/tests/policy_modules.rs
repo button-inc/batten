@@ -19,6 +19,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use batten::rules::RuleExt as _;
 // THE ONE TARGET THAT STAYS SEPARATE (CLOUD-1210). `evaluator-io-check`
 // probes this file with `cargo test --test policy_modules`, and that task is
 // a governed `mise-tasks/*.sh`: `shell retire partial` gives it exactly two

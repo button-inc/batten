@@ -698,14 +698,19 @@ pub fn resolve(root: &Path) -> Look<Contract> {
 // disagreement class `.claude/rules/rust.md` records, in the one place where the
 // other authority is a program somebody else maintains.
 
-impl PlanQuery {
+/// `PlanQuery` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PlanQueryExt: Sized {
     /// Whether this row names a surface the contract does not cover.
     ///
     /// Refused at LOAD rather than answered at adjudication: a row asking about a
     /// hook nothing can plan would resolve to could-not-look forever, which reads
     /// as an unreachable gate rather than as a misconfigured one.
     #[must_use]
-    pub fn unknown_hook(&self) -> bool {
+    fn unknown_hook(&self) -> bool;
+}
+
+impl PlanQueryExt for PlanQuery {
+    fn unknown_hook(&self) -> bool {
         !SURFACES.iter().any(|argv| hook_of(argv) == self.hook)
     }
 }
@@ -1479,6 +1484,9 @@ impl Evidence {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::hk::PlanQueryExt as _;
 
     fn step(name: &str, status: &str, order: u64, group: &str) -> Step {
         Step {

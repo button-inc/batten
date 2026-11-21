@@ -3778,8 +3778,10 @@ description = "Gate: no more inherent impls sit away from their type's module th
 # resolve to one declaring module counts too, so an unread impl cannot hide.
 # Baseline when this gate landed, matching by name: 40 outside + 153 ambiguous.
 # Resolved the way each file reads the name, inline modules' own imports
-# included (CLOUD-2793): 57 outside + 0 ambiguous. CLOUD-2793 lowers it to 0.
-run = "{{vars.batten}} modules impls --root crates/batten/src --max 57"
+# included (CLOUD-2793): 57 outside + 0 ambiguous. `impl-to-extension-trait`
+# turned behaviour over lower-layer types into its layer's extension traits:
+# 24. CLOUD-2793 lowers it to 0.
+run = "{{vars.batten}} modules impls --root crates/batten/src --max 24"
 
 [tasks.modules-shims]
 description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"

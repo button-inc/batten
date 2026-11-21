@@ -303,7 +303,7 @@ fn held_by(patterns: &[NamedPattern], inputs: &BTreeMap<String, String>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{only, ordinal, payloads, rule_for};
-
+    #[cfg(test)]
     #[test]
     fn a_payload_set_needs_an_id_and_a_status_on_every_issue() {
         assert_eq!(

@@ -53,6 +53,8 @@
 //! only through a clearly explained question whose presented text and selected
 //! answer are recorded, which is what [`admissions`] now decides over.
 
+use crate::config::ConfigExt as _;
+use crate::waiver::WaiverExt as _;
 use std::fmt;
 use std::path::Path;
 
@@ -1305,6 +1307,9 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use crate::waiver::Date;
 
     /// A fixed date, so a lint verdict never depends on when the suite ran — the

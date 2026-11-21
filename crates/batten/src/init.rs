@@ -131,6 +131,9 @@ pub fn apply(dir: &Path, dry_run: bool) -> Result<Outcome> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// The template has to survive the loader it is written for. A starter that
     /// does not parse is the one defect that makes every other property moot.

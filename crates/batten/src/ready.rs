@@ -1967,6 +1967,9 @@ pub fn verdict_token(
 #[cfg(test)]
 mod issue_key_tests {
     use super::Grammar;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     /// The consumer's own key, spelled from parts so this file carries no
     /// derivation of the token — `no-tracker-key-in-core` refuses one anywhere
@@ -2074,6 +2077,9 @@ mod lint_tests {
         Grammar, Payload, Report, adjudicate, body_text, filled, lint, named_paths, owed_from,
         tokens_in, verdict_token, workspace_version,
     };
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};

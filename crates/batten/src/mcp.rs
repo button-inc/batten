@@ -96,7 +96,8 @@ use crate::config_model::ResultRow;
 use crate::config_model::authorization;
 use crate::facts::{Format, Look, Node, TOKEN_MAX};
 
-impl Credential {
+/// `Credential` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait CredentialExt: Sized {
     /// The header name and finished value this row sends a resolved value as.
     ///
     /// **A method rather than a closure inside [`credential`]**, so the scheme
@@ -104,6 +105,10 @@ impl Credential {
     /// forbids `unsafe`, `std::env::set_var` is `unsafe`, and a test that cannot
     /// arrange its own premise ends up asserting the resolution path instead of
     /// the formatting one it means to.
+    fn sent(&self, value: &str) -> (String, Secret);
+}
+
+impl CredentialExt for Credential {
     fn sent(&self, value: &str) -> (String, Secret) {
         (
             self.header.clone(),
@@ -2080,6 +2085,11 @@ fn frame(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
+    #[cfg(test)]
+    use crate::mcp::CredentialExt as _;
 
     /// A remote answering the handshake with `session` and the notification
     /// with `acknowledged`, recording the session header each call carried.

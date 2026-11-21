@@ -306,6 +306,9 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     #[test]
     fn a_runner_file_takes_the_text_only_where_one_is_named() {

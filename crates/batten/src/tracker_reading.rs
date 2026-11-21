@@ -738,6 +738,9 @@ mod tests {
         DEFAULT_WINDOW, by_ordinal, done_pr, duplicate_close, names, paragraphs, payloads,
         pull_number, without_code_spans,
     };
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::budget::BudgetExt as _;
 
     use std::collections::BTreeMap;
 

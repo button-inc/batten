@@ -100,12 +100,64 @@ pub struct TreeRecipe {
 }
 
 /// Every tree recipe, in the order they were first run.
-pub const TREE_RECIPES: &[TreeRecipe] = &[TreeRecipe {
-    name: "respell-through-shims",
-    summary: "a path through a `pub use crate::…` below a crate root names the item's home, and the shim goes private (CLOUD-2793)",
-    skip: &["mutation_markers.rs"],
-    apply: item_index::respell_through_shims,
-}];
+pub const TREE_RECIPES: &[TreeRecipe] = &[
+    TreeRecipe {
+        name: "respell-through-shims",
+        summary: "a path through a `pub use crate::…` below a crate root names the item's home, and the shim goes private (CLOUD-2793)",
+        skip: &["mutation_markers.rs"],
+        apply: item_index::respell_through_shims,
+    },
+    TreeRecipe {
+        name: "impl-to-extension-trait",
+        summary: "an inherent impl in a higher layer than its type becomes that layer's extension trait, so behaviour stays above the vocabulary (CLOUD-2793)",
+        skip: &["mutation_markers.rs"],
+        apply: impl_to_extension_trait,
+    },
+];
+
+/// `impl-to-extension-trait` over every package `manifests` declares: each
+/// package's `src/` is one run, importing the trait from outside `src/` by
+/// the package's crate name.
+fn impl_to_extension_trait(
+    files: &BTreeMap<String, String>,
+    manifests: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut changed: BTreeMap<String, String> = BTreeMap::new();
+    for (path, text) in manifests {
+        let (Some(dir), Some(name)) = (path.strip_suffix("Cargo.toml"), package_name(text)) else {
+            continue;
+        };
+        // Each run reads the tree as the runs before it left it.
+        let current: BTreeMap<String, String> = files
+            .iter()
+            .map(|(key, text)| {
+                let now = changed.get(key).unwrap_or(text);
+                (key.clone(), now.clone())
+            })
+            .collect();
+        changed.extend(batten::module_graph::impls_to_extension_traits(
+            &format!("{dir}src"),
+            &name.replace('-', "_"),
+            &current,
+        ));
+    }
+    changed
+}
+
+/// The `name` of a manifest's `[package]` table, read from its lines: the
+/// one fact this needs does not warrant a TOML dependency.
+fn package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+        } else if in_package && let Some(value) = line.strip_prefix("name") {
+            let value = value.trim_start().strip_prefix('=')?.trim();
+            return Some(value.trim_matches('"').to_owned());
+        }
+    }
+    None
+}
 
 /// The tree recipe named `name`.
 #[must_use]

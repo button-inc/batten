@@ -304,6 +304,9 @@ fn joined_text(texts: &[String]) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    #[cfg(test)]
+    use crate::preset::PresetModuleExt as _;
 
     fn entry(tier: AdvisoryTier, text: &str) -> Advice {
         Advice::new(tier, text)
