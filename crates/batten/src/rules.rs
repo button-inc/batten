@@ -5424,6 +5424,19 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
 /// consumer declaring no `[census.shell]` included (CLOUD-2628).
 const SHELL_PRESET: &str = "shell-hygiene";
 
+/// The reach `rule`'s shell fact gets: the whole tree for a row enabling
+/// [`SHELL_PRESET`], whose ban judges presence where nothing is declared, and
+/// the row's own otherwise.
+fn shell_reach<'r, 'a>(
+    rule: &Rule,
+    reach: Option<crate::census::Reach<'r, 'a>>,
+) -> Option<crate::census::Reach<'r, 'a>> {
+    reach.map(|reach| crate::census::Reach {
+        always: reach.always || rule.preset.as_deref() == Some(SHELL_PRESET),
+        ..reach
+    })
+}
+
 /// The class a copy behind its preset raises (CLOUD-2290).
 pub const MODULE_PIN_STALE: &str = "module pin stale";
 
@@ -5584,12 +5597,7 @@ fn policy_rule(
         return Some(NotObserved::RuleSkipped);
     }
     let mut resolved = resolved_of(inputs);
-    if rule.preset.as_deref() == Some(SHELL_PRESET) {
-        resolved.shell = resolved.shell.map(|reach| crate::census::Reach {
-            always: true,
-            ..reach
-        });
-    }
+    resolved.shell = shell_reach(rule, resolved.shell);
     let (input, not_acquired) = tree_document(
         documents,
         &Declared {
@@ -10562,6 +10570,35 @@ mod tests {
         // is a usage error, never a reinterpretation.
         assert!(serde_json::from_str::<Direction>("\"deny\"").is_err());
         assert!(serde_json::from_str::<Direction>("\"decreasing\"").is_err());
+    }
+
+    /// A row enabling the shell preset reads the whole tree; any other keeps
+    /// the reach it was handed (CLOUD-2628).
+    ///
+    /// Fails by: the preset compared the wrong way round, or the widening
+    /// dropped.
+    #[test]
+    fn only_the_shell_preset_widens_a_rows_reach() {
+        let root = std::path::PathBuf::from(".");
+        let tracked: Vec<String> = Vec::new();
+        let reader = crate::census::TreeReader::new(&root, &tracked);
+        let narrow = Some(crate::census::Reach {
+            reader: &reader,
+            always: false,
+        });
+        let always = |rule: &Rule| shell_reach(rule, narrow).map(|reach| reach.always);
+        let shell = Rule {
+            preset: Some(SHELL_PRESET.to_owned()),
+            ..blank("s", RuleKind::Policy)
+        };
+        let other = Rule {
+            preset: Some("ci-hygiene".to_owned()),
+            ..blank("o", RuleKind::Policy)
+        };
+        assert_eq!(always(&shell), Some(true));
+        assert_eq!(always(&other), Some(false));
+        assert_eq!(always(&blank("b", RuleKind::Policy)), Some(false));
+        assert!(shell_reach(&shell, None).is_none());
     }
 
     #[test]

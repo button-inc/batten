@@ -4466,6 +4466,21 @@ impl Policy {
             .any(|rule| rule.kind == RuleKind::Policy && modifier_admits(rule, envelope))
     }
 
+    /// Whether this call's write authors shell (CLOUD-2335), resolved only for
+    /// a pre-tool write some policy row selects — [`Policy::reads_pinned`]'s
+    /// narrowing — so every other call reads nothing and is could-not-look.
+    #[must_use]
+    pub fn shell_fact(&self, root: &std::path::Path, envelope: &Envelope) -> ShellIntroducedFacts {
+        if envelope.event == Event::PreTool
+            && envelope.operation == Operation::Write
+            && self.reads_pinned(envelope)
+        {
+            shell_introduced(root, envelope)
+        } else {
+            crate::facts::Look::CouldNotLook
+        }
+    }
+
     /// Whether any row on this call reads the task receipt (CLOUD-856).
     ///
     /// Narrower than [`Policy::reads_pinned`] by one term, deliberately: that
@@ -14467,6 +14482,101 @@ mod tests {
         }
     }
 
+    /// Each family's grammar decides where its argv carries the program, field
+    /// by field (CLOUD-2626): an inline option, a program-file option, a value
+    /// skipped, a module, or the first operand.
+    ///
+    /// Fails by: a family arm or a grammar field going unread, which moves a
+    /// case to the fallback's answer or to the bare first operand.
+    #[test]
+    fn each_familys_grammar_says_where_its_program_is_carried() {
+        use super::Carried::{Elsewhere, File, Inline, Operand};
+        let cases: &[(&str, &[&str], super::Carried)] = &[
+            // python: `-c`, `-m` module, a valued long option.
+            ("python3", &["-c", "x"], Inline),
+            ("python3", &["-m", "pytest"], Elsewhere),
+            ("python3", &["--check-hash-based-pycs", "always"], Elsewhere),
+            ("python3", &["x.py"], Operand),
+            // ruby: `-e`, and `--encoding` takes a value.
+            ("ruby", &["-e", "x"], Inline),
+            ("ruby", &["--encoding", "utf-8"], Elsewhere),
+            // The shell family: `-c` in a bundle, `-o` and `--rcfile` valued,
+            // and a value attached to its letter or not.
+            ("sh", &["-c", "x"], Inline),
+            ("bash", &["-ec", "x"], Inline),
+            ("zsh", &["-o", "pipefail"], Elsewhere),
+            ("bash", &["--rcfile", "rc"], Elsewhere),
+            ("bash", &["-opipefail", "x"], Operand),
+            ("bash", &["-eo", "pipefail"], Elsewhere),
+            ("bash", &["--", "x"], Operand),
+            ("bash", &["-", "x"], Elsewhere),
+            ("bash", &["script"], Operand),
+            // fish: both inline options, short and long, and its valued ones.
+            ("fish", &["-C", "x"], Inline),
+            ("fish", &["--init-command", "x"], Inline),
+            ("fish", &["-d", "3"], Elsewhere),
+            ("fish", &["--features", "x"], Elsewhere),
+            // awk: `-f` names a file, `-v` takes a value, else the operand.
+            ("awk", &["-f", "p.awk"], File),
+            ("mawk", &["-v", "n=1"], Elsewhere),
+            ("awk", &["{print}"], Operand),
+            // gawk: every option kind, short and long.
+            ("gawk", &["-e", "x"], Inline),
+            ("gawk", &["--source", "x"], Inline),
+            ("gawk", &["-i", "lib"], Elsewhere),
+            ("gawk", &["--include", "lib"], Elsewhere),
+            ("gawk", &["-E", "p.awk"], File),
+            ("gawk", &["--file", "p.awk"], File),
+            // sed: likewise.
+            ("sed", &["-e", "x"], Inline),
+            ("sed", &["--expression", "x"], Inline),
+            ("sed", &["-l", "5"], Elsewhere),
+            ("sed", &["--line-length", "5"], Elsewhere),
+            ("sed", &["-f", "p.sed"], File),
+            ("sed", &["--file", "p.sed"], File),
+            // The fallback: exact `-c`/`-e`/`--eval`/`--command`, no bundle.
+            ("an-interpreter", &["--command", "x"], Inline),
+            ("an-interpreter", &["-ec", "x"], Operand),
+        ];
+        for (program, arguments, expected) in cases {
+            assert_eq!(
+                super::carried(program, arguments),
+                *expected,
+                "{program} {arguments:?}"
+            );
+        }
+    }
+
+    /// A notebook write and a target that cannot be stat'ed are could-not-look,
+    /// never a fresh file (CLOUD-2627).
+    ///
+    /// Fails by: a notebook read only alongside a cell id, or every stat error
+    /// read as an absent file — which calls `x.sh` under a FILE new shell.
+    #[test]
+    fn a_write_the_guard_cannot_read_is_could_not_look() {
+        let dir =
+            std::env::temp_dir().join(format!("batten-shell-introduced-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        std::fs::write(dir.join("f"), "x").expect("a file");
+        let blocked = write_envelope("Write", "f/x.sh");
+        assert_eq!(
+            super::shell_introduced(&dir, &blocked),
+            crate::facts::Look::CouldNotLook
+        );
+        let mut notebook = write_envelope("Write", "n.sh");
+        notebook.input = serde_json::json!({"notebook_path": "n.ipynb"});
+        assert_eq!(
+            super::shell_introduced(&dir, &notebook),
+            crate::facts::Look::CouldNotLook
+        );
+        // The control: the same new shell file, readable, is introduced.
+        assert!(matches!(
+            super::shell_introduced(&dir, &write_envelope("Write", "x.sh")),
+            crate::facts::Look::Is(_)
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A repository declaring no ceiling MEASURES NOTHING; one declaring a
     /// ceiling measures exactly once (CLOUD-925).
     ///
@@ -21387,6 +21497,36 @@ deny contains "refused by themodule" if {
         assert!(ceiling_policy(vec![policy_row("p")]).reads_pinned(&call));
         assert!(!ceiling_policy(vec![shape("s", "git push", None)]).reads_pinned(&call));
         assert!(!ceiling_policy(Vec::new()).reads_pinned(&call));
+    }
+
+    /// The shell-authoring fact is resolved for a pre-tool write a policy row
+    /// selects, and for nothing else.
+    ///
+    /// Fails by: either comparison inverted, or any conjunction widened — a
+    /// post-tool write, a call no row reads, or a non-write resolved.
+    #[test]
+    fn the_shell_fact_is_resolved_only_for_a_selected_pre_tool_write() {
+        let root = std::env::temp_dir().join(format!("batten-shell-fact-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("scratch");
+        let reading = ceiling_policy(vec![policy_row("p")]);
+        let write = write_envelope("Write", "x.sh");
+        assert!(matches!(
+            reading.shell_fact(&root, &write),
+            crate::facts::Look::Is(_)
+        ));
+        let mut after = write_envelope("Write", "x.sh");
+        after.event = Event::PostTool;
+        for (policy, call) in [
+            (&reading, &after),
+            (&ceiling_policy(Vec::new()), &write),
+            (&reading, &envelope("ls x.sh")),
+        ] {
+            assert_eq!(
+                policy.shell_fact(&root, call),
+                crate::facts::Look::CouldNotLook
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// The task receipt is read only for a policy row that names a manifest.
