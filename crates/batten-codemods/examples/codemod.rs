@@ -133,7 +133,13 @@ fn run_tree(
         if chosen.skip.iter().any(|suffix| relative.ends_with(suffix)) {
             continue;
         }
-        if batten::durable::replace(&root.join(&relative), edited).is_ok() {
+        // A recipe may create a file (a split module), whose directory may
+        // not exist yet.
+        let target = root.join(&relative);
+        let parent_ready = target
+            .parent()
+            .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok());
+        if parent_ready && batten::durable::replace(&target, edited).is_ok() {
             rewritten += 1;
         } else {
             refused += 1;
