@@ -2949,6 +2949,20 @@ pub(crate) const MODULES_MAX: FlagDecl = FlagDecl::valued(
     "Refuse when the largest cycle holds more than this many modules (a non-negative integer)",
 );
 
+/// `--max <n>` on `modules impls` (CLOUD-2792).
+pub(crate) const MODULES_IMPLS_MAX: FlagDecl = FlagDecl::valued(
+    "max",
+    "max",
+    "Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)",
+);
+
+/// `--max <n>` on `modules shims` (CLOUD-2792).
+pub(crate) const MODULES_SHIMS_MAX: FlagDecl = FlagDecl::valued(
+    "max",
+    "max",
+    "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)",
+);
+
 pub(crate) const STEP_JOBS: FlagDecl = FlagDecl::valued(
     "jobs",
     "jobs",
@@ -7434,6 +7448,24 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[MODULES_ROOT, MODULES_MAX],
+    },
+    CommandDecl {
+        path: "modules impls",
+        id: "modules.impls",
+        about: "Print how many inherent impls sit away from their type's module, refusing more than --max",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MODULES_ROOT, MODULES_IMPLS_MAX],
+    },
+    CommandDecl {
+        path: "modules shims",
+        id: "modules.shims",
+        about: "Print how many re-exports of the crate's own items sit outside its root, refusing more than --max",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MODULES_ROOT, MODULES_SHIMS_MAX],
     },
     // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
     // `sbom-binary-record`). `write`: it writes the documents and runs the

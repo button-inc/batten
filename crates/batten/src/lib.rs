@@ -648,6 +648,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Modules {
             command: cli::ModulesCommand::Cycle { root, max },
         }) => crate::module_graph::run_cycle(Path::new(&root), max.as_deref(), out, err),
+        Some(Command::Modules {
+            command: cli::ModulesCommand::Impls { root, max },
+        }) => crate::module_graph::run_impls(Path::new(&root), max.as_deref(), out, err),
+        Some(Command::Modules {
+            command: cli::ModulesCommand::Shims { root, max },
+        }) => crate::module_graph::run_shims(Path::new(&root), max.as_deref(), out, err),
         // The §8 chain supplies the `[sbom]` declarations from the committed
         // authority alone; the tree is the repository root's.
         Some(Command::Sbom(request)) => {
