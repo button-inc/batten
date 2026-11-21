@@ -209,6 +209,54 @@ fn an_import_is_added_once_and_a_file_without_imports_gets_it_first() {
 }
 
 /// Fails by: a source the parser rejects rewritten anyway.
+/// A whole-line comparison missed every one of these and inserted a second
+/// import of the same name, which the compiler rejects (E0252).
+#[test]
+fn an_import_already_inside_a_group_is_not_added_again() {
+    const WANTED: &str = "use std::process::Command;";
+    for held in [
+        "use std::process::{Command, Output};\nfn run() {}\n",
+        "use std::{process::{Command}, fs};\nfn run() {}\n",
+        "use std::process::{self, Command};\nfn run() {}\n",
+        "use std::process::*;\nfn run() {}\n",
+    ] {
+        assert_eq!(
+            codemod::ensure_use(held, Edition::E2021, WANTED).unwrap(),
+            held,
+            "{held:?} already imports Command"
+        );
+    }
+    // The alias is part of the leaf: `Write as _` is not `Write`.
+    let renamed = "use std::fmt::Write as W;\nfn run() {}\n";
+    assert_ne!(
+        codemod::ensure_use(renamed, Edition::E2021, "use std::fmt::Write as _;").unwrap(),
+        renamed
+    );
+    // A sibling of the wanted name is not the wanted name.
+    let sibling = "use std::process::{Output};\nfn run() {}\n";
+    assert!(
+        codemod::ensure_use(sibling, Edition::E2021, WANTED)
+            .unwrap()
+            .starts_with(WANTED)
+    );
+}
+
+#[test]
+fn a_call_import_already_inside_a_group_is_not_added_again() {
+    let grouped =
+        "use batten::capture::{Streamed as _, other};\nfn run(c: C) { c.streamed_output(); }\n";
+    assert_eq!(
+        codemod::import_for_calls(
+            grouped,
+            Edition::E2021,
+            "use batten::capture::Streamed as _;",
+            "streamed_output"
+        )
+        .unwrap(),
+        grouped
+    );
+}
+
 #[test]
 fn an_import_into_invalid_rust_is_could_not_look() {
     assert!(matches!(

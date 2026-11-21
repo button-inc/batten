@@ -30,6 +30,7 @@
 //! result, and parsing alone is a read. This module reaches nothing else in the
 //! crate.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use ra_ap_syntax::ast::HasModuleItem as _;
@@ -323,6 +324,75 @@ pub fn lint_attributes(source: &str, edition: Edition, lint: &str) -> Vec<LintAt
         .collect()
 }
 
+/// Every leaf a `use` tree imports, as its full path with whitespace removed and
+/// any rename after ` as `: `use a::{b::{X}, self, Y as _};` yields `a::b::X`,
+/// `a`, `a::Y as _`. A glob leaf is `<prefix>::*`.
+fn use_leaves(tree: &ast::UseTree, prefix: &str, out: &mut BTreeSet<String>) {
+    let squeezed = |text: String| text.split_whitespace().collect::<String>();
+    let path = tree
+        .path()
+        .map(|path| squeezed(path.syntax().text().to_string()));
+    let full = match (prefix.is_empty(), path.as_deref()) {
+        (_, Some("self") | None) => prefix.to_owned(),
+        (true, Some(path)) => path.to_owned(),
+        (false, Some(path)) => format!("{prefix}::{path}"),
+    };
+    if let Some(list) = tree.use_tree_list() {
+        for inner in list.use_trees() {
+            use_leaves(&inner, &full, out);
+        }
+    } else if tree.star_token().is_some() {
+        out.insert(format!("{full}::*"));
+    } else {
+        // `as _` or `as Name`: the alias is what follows the keyword.
+        match tree.rename() {
+            Some(rename) => {
+                let text = squeezed(rename.syntax().text().to_string());
+                let alias = text.strip_prefix("as").unwrap_or(&text);
+                out.insert(format!("{full} as {alias}"));
+            }
+            None => {
+                out.insert(full);
+            }
+        }
+    }
+}
+
+/// The leaves the `use` items among `items` import, together.
+fn held_leaves(items: &[ast::Item]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for item in items {
+        if let ast::Item::Use(held) = item
+            && let Some(tree) = held.use_tree()
+        {
+            use_leaves(&tree, "", &mut out);
+        }
+    }
+    out
+}
+
+/// Whether every leaf of the `use` line `item` is already imported by `held`,
+/// exactly or under a glob of its parent. `None` when `item` is not one `use`.
+///
+/// A whole-line comparison saw `use a::X;` as missing beside `use a::{X, Y};`
+/// and inserted a second import of `X`, which the compiler rejects (E0252).
+fn already_imported(held: &BTreeSet<String>, item: &str, edition: Edition) -> Option<bool> {
+    let parse = SourceFile::parse(item, edition.parser());
+    let tree = parse.tree().items().find_map(|top| match top {
+        ast::Item::Use(wanted) => wanted.use_tree(),
+        _ => None,
+    })?;
+    let mut wanted = BTreeSet::new();
+    use_leaves(&tree, "", &mut wanted);
+    Some(wanted.iter().all(|leaf| {
+        let path = leaf
+            .split_once(" as ")
+            .map_or(leaf.as_str(), |(path, _)| path);
+        let parent = path.rsplit_once("::").map_or("", |(parent, _)| parent);
+        held.contains(leaf) || held.contains(&format!("{parent}::*"))
+    }))
+}
+
 /// Put `item` (a whole `use …;` line) in scope at the top of the file, once.
 ///
 /// A rename to a trait method needs the trait imported wherever the rename
@@ -346,12 +416,8 @@ pub fn ensure_use(source: &str, edition: Edition, item: &str) -> Result<String, 
         });
     }
     let file = parse.tree();
-    let squeezed = |text: &str| text.split_whitespace().collect::<String>();
-    let wanted = squeezed(item);
     let items: Vec<ast::Item> = file.items().collect();
-    if items.iter().any(|top| {
-        matches!(top, ast::Item::Use(_)) && squeezed(&top.syntax().text().to_string()) == wanted
-    }) {
+    if already_imported(&held_leaves(&items), item, edition) == Some(true) {
         return Ok(source.to_owned());
     }
     let anchor = items
@@ -455,8 +521,6 @@ pub fn import_for_calls(
             errors: errors.len(),
         });
     }
-    let squeezed = |text: &str| text.split_whitespace().collect::<String>();
-    let wanted = squeezed(item);
     let root = parse.syntax_node();
     // Each scope a call sits in, once: an inline module's item list, or the file.
     let mut scopes: Vec<Vec<ast::Item>> = Vec::new();
@@ -487,10 +551,7 @@ pub fn import_for_calls(
     }
     let mut inserts: Vec<(usize, String)> = Vec::new();
     for items in scopes {
-        if items.iter().any(|held| {
-            matches!(held, ast::Item::Use(_))
-                && squeezed(&held.syntax().text().to_string()) == wanted
-        }) {
+        if already_imported(&held_leaves(&items), item, edition) == Some(true) {
             continue;
         }
         let Some(anchor) = items
