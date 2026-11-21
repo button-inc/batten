@@ -978,7 +978,10 @@ fn gate_of(root: &Path, name: &str, sources: &[String]) -> Option<Gate> {
 /// Both empty, a `[mutate]` glob or scope that does not compile, or a tree
 /// whose tracked paths cannot be listed for a glob, is a usage error
 /// (→ exit `1`).
-pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+pub fn enforced_set(
+    root: &Path,
+    table: Option<&crate::config_model::Mutate>,
+) -> Result<Vec<String>> {
     let mut names = committed(root, table)?;
     let raw = std::env::var("MUTANT_GATES").unwrap_or_default();
     for name in raw
@@ -1002,7 +1005,7 @@ pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Resul
 
 /// The committed table's gates, each glob expanded to the names its matches
 /// already have as subjects, in tracked-path order.
-fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+fn committed(root: &Path, table: Option<&crate::config_model::Mutate>) -> Result<Vec<String>> {
     let Some(table) = table else {
         return Ok(Vec::new());
     };

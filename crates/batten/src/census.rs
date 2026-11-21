@@ -614,7 +614,7 @@ pub fn run_shell(
     let declared = declared.ok_or_else(|| {
         UsageError::raise(format!(
             "census shell: no [census.shell] in {}; nothing declares where shell lives here",
-            crate::config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })?;
     let tracked = crate::git::tracked_paths(root)?;

@@ -17,7 +17,7 @@
 //!
 //! ## The target, and the third answer
 //!
-//! [`crate::config::Config::must_land_on`] names the target; absent, the
+//! [`crate::config_model::Config::must_land_on`] names the target; absent, the
 //! engine resolves the remote's recorded default branch, because work lands on
 //! the trunk unless told otherwise. Where **no** target resolves, the verdict is
 //! [`Unlanded::NotComputable`] — a third answer an `Option` cannot express,
