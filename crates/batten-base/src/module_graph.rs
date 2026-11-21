@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use ra_ap_syntax::ast::{HasAttrs as _, HasModuleItem as _, HasName as _};
+use ra_ap_syntax::ast::{HasAttrs as _, HasModuleItem as _, HasName as _, HasVisibility as _};
 use ra_ap_syntax::{AstNode as _, SourceFile, SyntaxKind, SyntaxNode, ast};
 
 use crate::codemod::CouldNotLook;
@@ -143,30 +143,7 @@ impl Tarjan {
 /// A directory or file cannot be read, or a file does not parse
 /// ([`CouldNotLook`], which names nothing: the caller names the file).
 pub fn read(root: &Path) -> anyhow::Result<Graph> {
-    let mut modules: BTreeSet<String> = BTreeSet::new();
-    let mut files: Vec<(String, Vec<String>, std::path::PathBuf)> = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        let path = entry?.path();
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
-            continue;
-        };
-        if path.is_dir() {
-            modules.insert(stem.clone());
-            for file in rust_files(&path)? {
-                let below = file.strip_prefix(&path).unwrap_or(&file);
-                let mut module = vec![stem.clone()];
-                module.extend(module_path(below));
-                files.push((stem.clone(), module, file));
-            }
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            if stem == "lib" {
-                files.push((LIB.to_owned(), Vec::new(), path));
-            } else if stem != "main" {
-                modules.insert(stem.clone());
-                files.push((stem.clone(), vec![stem], path));
-            }
-        }
-    }
+    let (modules, files) = sources(root)?;
     let lib_source = crate::fsio::read_to_string(root.join("lib.rs")).unwrap_or_default();
     let lib_items = lib_items(&lib_source)?;
     let mut graph = Graph::default();
@@ -194,13 +171,91 @@ pub fn read(root: &Path) -> anyhow::Result<Graph> {
     Ok(graph)
 }
 
-/// `modules cycle`: print the largest component's size, and refuse (exit 2,
-/// the verdict) when it holds more than `max` modules.
+/// The top-level modules under `root`, and every library source file with its
+/// graph node and module path. ONE WALK for the graph and both censuses, so
+/// they can never disagree about which files are the crate.
+type Sources = (
+    BTreeSet<String>,
+    Vec<(String, Vec<String>, std::path::PathBuf)>,
+);
+
+fn sources(root: &Path) -> anyhow::Result<Sources> {
+    let mut modules: BTreeSet<String> = BTreeSet::new();
+    let mut files: Vec<(String, Vec<String>, std::path::PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        if path.is_dir() {
+            modules.insert(stem.clone());
+            for file in rust_files(&path)? {
+                let below = file.strip_prefix(&path).unwrap_or(&file);
+                let mut module = vec![stem.clone()];
+                module.extend(module_path(below));
+                files.push((stem.clone(), module, file));
+            }
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            if stem == "lib" {
+                files.push((LIB.to_owned(), Vec::new(), path));
+            } else if stem != "main" {
+                modules.insert(stem.clone());
+                files.push((stem.clone(), vec![stem], path));
+            }
+        }
+    }
+    Ok((modules, files))
+}
+
+/// One `modules` gate: parse `--max`, measure, print the measure's one line,
+/// and refuse (exit 2, the verdict) a count above `max`.
 ///
-/// One line on `out`, `modules cycle: <n> module(s) in the largest component`,
-/// a count and never the members (rule 4). `max` that is not a non-negative
-/// integer is a usage error (1); a root that cannot be read or a file that
-/// does not parse is could-not-look (3), with its reason on `err`.
+/// THE ONE EXIT DISCIPLINE for every `modules` verb: `max` that is not a
+/// non-negative integer is a usage error (1); a root that cannot be read or a
+/// file that does not parse is could-not-look (3), with its reason on `err`.
+/// `measure` returns the gated count and the line that reports it, a count and
+/// never the members (rule 4); `remedy` ends the refusal.
+fn gate(
+    verb: &str,
+    max: Option<&str>,
+    remedy: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+    measure: impl FnOnce() -> anyhow::Result<(usize, String)>,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    let max = match max.map(str::parse::<usize>) {
+        None => None,
+        Some(Ok(max)) => Some(max),
+        Some(Err(_)) => {
+            writeln!(err, "modules {verb}: --max takes a non-negative integer")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let (count, line) = match measure() {
+        Ok(measured) => measured,
+        Err(reason) => {
+            writeln!(
+                err,
+                "modules {verb}: could not read the module graph: {reason}"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    writeln!(out, "modules {verb}: {line}")?;
+    if let Some(max) = max.filter(|max| count > *max) {
+        writeln!(
+            err,
+            "modules {verb}: {count} is more than the committed {max}; {remedy}"
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    Ok(ExitCode::Success)
+}
+
+/// `modules cycle`: print the largest component's size, and refuse when it
+/// holds more than `max` modules. One line on `out`, `modules cycle: <n>
+/// module(s) in the largest component`.
 ///
 /// # Errors
 ///
@@ -211,38 +266,278 @@ pub fn run_cycle(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::exit::ExitCode> {
-    use crate::exit::ExitCode;
-    let max = match max.map(str::parse::<usize>) {
-        None => None,
-        Some(Ok(max)) => Some(max),
-        Some(Err(_)) => {
-            writeln!(err, "modules cycle: --max takes a non-negative integer")?;
-            return Ok(ExitCode::Usage);
-        }
-    };
-    let graph = match read(root) {
-        Ok(graph) => graph,
-        Err(reason) => {
-            writeln!(
-                err,
-                "modules cycle: could not read the module graph: {reason}"
-            )?;
-            return Ok(ExitCode::Internal);
-        }
-    };
-    let largest = graph.largest_component();
-    writeln!(
+    gate(
+        "cycle",
+        max,
+        "break a cycle rather than grow one",
         out,
-        "modules cycle: {largest} module(s) in the largest component"
-    )?;
-    if let Some(max) = max.filter(|max| largest > *max) {
-        writeln!(
-            err,
-            "modules cycle: {largest} is more than the committed {max}; break a cycle rather than grow one"
-        )?;
-        return Ok(ExitCode::Violation);
+        err,
+        || {
+            let largest = read(root)?.largest_component();
+            Ok((
+                largest,
+                format!("{largest} module(s) in the largest component"),
+            ))
+        },
+    )
+}
+
+/// How many inherent impls sit away from their type (CLOUD-2792).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImplCensus {
+    /// Impls of a type declared in exactly one other top-level module.
+    pub outside: usize,
+    /// Impls of a name declared in two or more modules: no single home.
+    pub ambiguous: usize,
+}
+
+/// Count every `impl T { … }` with no trait, outside test code, whose `T` is
+/// not declared in the impl's own top-level module.
+///
+/// `T` is the self type with references stripped, read to its last path
+/// segment. Its home is the top-level module whose non-test items declare a
+/// struct, enum, union or type alias of that name (an associated type is not
+/// a declaration). A name declared nowhere is a foreign type, which Rust gives
+/// no inherent impl, so it is not counted; one declared in two modules is
+/// AMBIGUOUS, and counted as such so it cannot hide an impl.
+///
+/// # Errors
+///
+/// The root cannot be read, or a file does not parse.
+pub fn impl_census(root: &Path) -> anyhow::Result<ImplCensus> {
+    let parsed = parsed_sources(root)?;
+    let mut homes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (node, tree) in &parsed {
+        for syntax in tree.syntax().descendants() {
+            let name = match_ast_name(&syntax);
+            if let Some(name) = name.filter(|_| !cfg_test(&syntax)) {
+                homes.entry(name).or_default().insert(node.clone());
+            }
+        }
     }
-    Ok(ExitCode::Success)
+    let mut census = ImplCensus::default();
+    for (node, tree) in &parsed {
+        for found in tree.syntax().descendants().filter_map(ast::Impl::cast) {
+            if found.trait_().is_some() || cfg_test(found.syntax()) {
+                continue;
+            }
+            let Some(name) = self_type_name(&found) else {
+                continue;
+            };
+            match homes.get(&name) {
+                Some(home) if home.len() > 1 => census.ambiguous += 1,
+                Some(home) if !home.contains(node) => census.outside += 1,
+                _ => {}
+            }
+        }
+    }
+    Ok(census)
+}
+
+/// The type name a node declares, when it is a struct, enum, union or a type
+/// alias that is not an associated type.
+fn match_ast_name(syntax: &SyntaxNode) -> Option<String> {
+    let name = if let Some(item) = ast::Struct::cast(syntax.clone()) {
+        item.name()
+    } else if let Some(item) = ast::Enum::cast(syntax.clone()) {
+        item.name()
+    } else if let Some(item) = ast::Union::cast(syntax.clone()) {
+        item.name()
+    } else if let Some(item) = ast::TypeAlias::cast(syntax.clone()) {
+        if syntax
+            .parent()
+            .is_some_and(|parent| parent.kind() == SyntaxKind::ASSOC_ITEM_LIST)
+        {
+            return None;
+        }
+        item.name()
+    } else {
+        return None;
+    }?;
+    Some(name.text().to_string())
+}
+
+/// An impl's self type, references stripped, as its last path segment.
+fn self_type_name(found: &ast::Impl) -> Option<String> {
+    let mut ty = found.self_ty()?;
+    loop {
+        match ty {
+            ast::Type::RefType(reference) => ty = reference.ty()?,
+            ast::Type::PathType(path) => {
+                return Some(path.path()?.segment()?.name_ref()?.text().to_string());
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// `modules impls`: print how many inherent impls sit away from their type,
+/// and refuse when outside plus ambiguous is more than `max` (CLOUD-2792).
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_impls(
+    root: &Path,
+    max: Option<&str>,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    let remedy = "put the impl beside its type, or make it a free function where it is used";
+    gate("impls", max, remedy, out, err, || {
+        let census = impl_census(root)?;
+        Ok((
+            census.outside + census.ambiguous,
+            format!(
+                "{} outside their type's module, {} ambiguous",
+                census.outside, census.ambiguous
+            ),
+        ))
+    })
+}
+
+/// How many re-exports a crate makes of its own items outside its root.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShimCensus {
+    /// `pub` or `pub(crate)` `use crate::…` leaves outside `lib.rs`.
+    pub reexports: usize,
+    /// Of those, the leaves renamed with `as`.
+    pub aliased: usize,
+}
+
+/// Count every leaf of a `pub` or `pub(crate)` `use crate::…` item, outside
+/// test code and outside the crate root (CLOUD-2792). The unit is the LEAF:
+/// `pub use crate::a::{X, Y as Z};` is two, one aliased. `pub(super)`,
+/// `pub(in …)` and `self::`/`super::` paths re-export within a module tree, not
+/// a crate's own item to the crate, and are out of scope.
+///
+/// # Errors
+///
+/// The root cannot be read, or a file does not parse.
+pub fn shim_census(root: &Path) -> anyhow::Result<ShimCensus> {
+    let mut census = ShimCensus::default();
+    for (node, tree) in parsed_sources(root)? {
+        if node == LIB {
+            continue;
+        }
+        for found in tree.syntax().descendants().filter_map(ast::Use::cast) {
+            let visibility: String = found
+                .visibility()
+                .map(|v| v.syntax().text().to_string())
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect();
+            if !matches!(visibility.as_str(), "pub" | "pub(crate)") || cfg_test(found.syntax()) {
+                continue;
+            }
+            let Some(tree) = found.use_tree() else {
+                continue;
+            };
+            for leaf in use_leaves(&tree) {
+                if leaf.path.first().is_some_and(|first| first == "crate") {
+                    census.reexports += 1;
+                    census.aliased += usize::from(leaf.renamed);
+                }
+            }
+        }
+    }
+    Ok(census)
+}
+
+/// `modules shims`: print how many re-exports of the crate's own items sit
+/// outside its root, and refuse more than `max` (CLOUD-2792).
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_shims(
+    root: &Path,
+    max: Option<&str>,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    let remedy = "name the item at its home and delete the re-export";
+    gate("shims", max, remedy, out, err, || {
+        let census = shim_census(root)?;
+        Ok((
+            census.reexports,
+            format!(
+                "{} re-export(s), {} aliased",
+                census.reexports, census.aliased
+            ),
+        ))
+    })
+}
+
+/// Every library source under `root`, parsed, with its graph node.
+fn parsed_sources(root: &Path) -> anyhow::Result<Vec<(String, SourceFile)>> {
+    let (_, files) = sources(root)?;
+    files
+        .into_iter()
+        .map(|(node, _, file)| {
+            let source = crate::fsio::read_to_string(&file)?;
+            let tree = parse(&source).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+            Ok((node, tree))
+        })
+        .collect()
+}
+
+/// One leaf of a `use` tree: the name it makes visible, the path it stands
+/// for, and whether `as` renamed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseLeaf {
+    /// The name visible where the `use` sits.
+    pub name: String,
+    /// The `::`-separated path it stands for, as written.
+    pub path: Vec<String>,
+    /// Whether the leaf carried `as`.
+    pub renamed: bool,
+}
+
+/// The leaves of a `use` tree, groups expanded. A glob names nothing and is
+/// skipped; `self` in a group names the group's own prefix. THE ONE FLATTENER,
+/// read by `shims` and by `item_index`'s resolution.
+#[must_use]
+pub fn use_leaves(tree: &ast::UseTree) -> Vec<UseLeaf> {
+    fn walk(tree: &ast::UseTree, prefix: &[String], out: &mut Vec<UseLeaf>) {
+        let mut path = prefix.to_vec();
+        if let Some(written) = tree.path() {
+            let text: String = written
+                .syntax()
+                .text()
+                .to_string()
+                .split_whitespace()
+                .collect();
+            path.extend(text.split("::").map(str::to_owned));
+        }
+        if tree.star_token().is_some() {
+            return;
+        }
+        if let Some(list) = tree.use_tree_list() {
+            for nested in list.use_trees() {
+                walk(&nested, &path, out);
+            }
+            return;
+        }
+        if path.last().is_some_and(|last| last == "self") {
+            path.pop();
+        }
+        let rename = tree
+            .rename()
+            .and_then(|rename| rename.name())
+            .map(|name| name.text().to_string());
+        let renamed = rename.is_some();
+        if let Some(name) = rename.or_else(|| path.last().cloned()) {
+            out.push(UseLeaf {
+                name,
+                path,
+                renamed,
+            });
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &[], &mut out);
+    out
 }
 
 /// Every `.rs` file under `dir`, sorted.
@@ -646,5 +941,214 @@ mod tests {
         let g = read(&dir).unwrap();
         assert_eq!(g.edges["m"], BTreeSet::from([String::from("git")]));
         assert_eq!(g.largest_component(), 2);
+    }
+
+    /// A scratch crate root holding `files` (name, text).
+    fn crate_root(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = crate::scratch::scratch(name);
+        for (file, text) in files {
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        dir
+    }
+
+    fn impls(files: &[(&str, &str)], name: &str) -> ImplCensus {
+        impl_census(&crate_root(name, files)).unwrap()
+    }
+
+    fn shims(files: &[(&str, &str)], name: &str) -> ShimCensus {
+        shim_census(&crate_root(name, files)).unwrap()
+    }
+
+    /// Fails by: an impl beside its own type counted as split.
+    #[test]
+    fn an_impl_beside_its_type_is_not_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod a;\n"),
+                ("a.rs", "pub struct T;\nimpl T { fn f() {} }\n"),
+            ],
+            "impls-beside",
+        );
+        assert_eq!(census, ImplCensus::default());
+    }
+
+    /// Fails by: an impl in another module than its type's missed — the split
+    /// a crate boundary cannot carry.
+    #[test]
+    fn an_impl_in_another_module_is_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct T;\n"),
+                (
+                    "b.rs",
+                    "impl crate::a::T { fn f() {} }\nimpl &crate::a::T { fn g() {} }\n",
+                ),
+            ],
+            "impls-outside",
+        );
+        assert_eq!(
+            census,
+            ImplCensus {
+                outside: 2,
+                ambiguous: 0
+            }
+        );
+    }
+
+    /// Fails by: a trait impl counted. Rust's orphan rule, not this gate,
+    /// decides where a trait impl may sit.
+    #[test]
+    fn a_trait_impl_is_not_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct T;\n"),
+                (
+                    "b.rs",
+                    "impl Clone for crate::a::T { fn clone(&self) -> Self { todo!() } }\n",
+                ),
+            ],
+            "impls-trait",
+        );
+        assert_eq!(census, ImplCensus::default());
+    }
+
+    /// Fails by: an impl of a name this crate never declares counted.
+    #[test]
+    fn an_impl_of_a_foreign_type_is_not_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod b;\n"),
+                ("b.rs", "impl Elsewhere { fn f() {} }\n"),
+            ],
+            "impls-foreign",
+        );
+        assert_eq!(census, ImplCensus::default());
+    }
+
+    /// Fails by: a name declared twice hiding its impl, or charged to one of
+    /// its homes. It is ambiguous, and the gate counts it.
+    #[test]
+    fn an_impl_of_a_name_declared_twice_is_ambiguous_and_gated() {
+        let root = crate_root(
+            "impls-ambiguous",
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct Pin;\nimpl Pin { fn f() {} }\n"),
+                ("b.rs", "pub type Pin = u8;\n"),
+            ],
+        );
+        assert_eq!(
+            impl_census(&root).unwrap(),
+            ImplCensus {
+                outside: 0,
+                ambiguous: 1
+            }
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_impls(&root, Some("0"), &mut out, &mut err).unwrap();
+        assert_eq!(code, crate::exit::ExitCode::Violation);
+    }
+
+    /// Fails by: `lib.rs` treated as no module, so an impl elsewhere of a type
+    /// it declares goes uncounted.
+    #[test]
+    fn an_impl_of_a_lib_type_elsewhere_is_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod b;\npub struct Root;\n"),
+                ("b.rs", "impl crate::Root { fn f() {} }\n"),
+            ],
+            "impls-lib",
+        );
+        assert_eq!(
+            census,
+            ImplCensus {
+                outside: 1,
+                ambiguous: 0
+            }
+        );
+    }
+
+    /// Fails by: test code counted, which no crate cut carries.
+    #[test]
+    fn a_cfg_test_impl_is_not_counted() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                ("a.rs", "pub struct T;\n"),
+                (
+                    "b.rs",
+                    "#[cfg(test)]\nmod tests { impl crate::a::T { fn f() {} } }\n",
+                ),
+            ],
+            "impls-test",
+        );
+        assert_eq!(census, ImplCensus::default());
+    }
+
+    /// Fails by: a grouped re-export counted once. The unit is the leaf.
+    #[test]
+    fn a_crate_reexport_outside_the_root_is_a_shim_per_leaf() {
+        let census = shims(
+            &[
+                ("lib.rs", "mod a;\nmod b;\n"),
+                (
+                    "b.rs",
+                    "pub use crate::a::{X, Y};\npub(crate) use crate::a::Z;\n",
+                ),
+            ],
+            "shims-leaf",
+        );
+        assert_eq!(census.reexports, 3);
+    }
+
+    /// Fails by: the crate root's own re-exports counted. `lib.rs` is where a
+    /// crate's public surface is stated.
+    #[test]
+    fn a_reexport_in_the_root_is_not_a_shim() {
+        let census = shims(
+            &[("lib.rs", "mod a;\npub use crate::a::X;\n")],
+            "shims-root",
+        );
+        assert_eq!(census, ShimCensus::default());
+    }
+
+    /// Fails by: an `as` rename not reported as aliased.
+    #[test]
+    fn an_aliased_leaf_is_counted_as_aliased() {
+        let census = shims(
+            &[
+                ("lib.rs", "mod b;\n"),
+                ("b.rs", "pub use crate::a::{X as Z, Y};\n"),
+            ],
+            "shims-alias",
+        );
+        assert_eq!(
+            census,
+            ShimCensus {
+                reexports: 2,
+                aliased: 1
+            }
+        );
+    }
+
+    /// Fails by: a re-export within a module tree, a private `use`, or a test
+    /// module's `use` counted as a shim of the crate's own item.
+    #[test]
+    fn a_super_or_self_reexport_is_out_of_scope() {
+        let census = shims(
+            &[
+                ("lib.rs", "mod b;\n"),
+                (
+                    "b.rs",
+                    "pub use super::X;\npub use self::inner::Y;\npub(super) use crate::a::Z;\nuse crate::a::W;\n#[cfg(test)]\nmod t { pub use crate::a::V; }\n",
+                ),
+            ],
+            "shims-scope",
+        );
+        assert_eq!(census, ShimCensus::default());
     }
 }

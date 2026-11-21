@@ -3671,7 +3671,7 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l key -d 'Which git fact the receipt is judged against: the exact commit, or the branch' -r -f -a "head\t'Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it'
 branch\t'Keyed to the branch; every commit on it continues to serve the claim'
 named\t'Keyed to a value the CALL names, read through [`Rule::key_from`] (CLOUD-987)'
-delta\t'Keyed to the identity of the branch\'s whole CHANGE against [`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`]'"
+delta\t'Keyed to the identity of the branch\'s whole CHANGE against [`Rule::key_base`] (CLOUD-1547) — the read side of [`MintKey::Delta`]'"
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l base -d 'The ref a `--key delta` receipt\'s change identity is taken against' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -5338,29 +5338,31 @@ complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from help" -f -a "base" -d 'Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref'
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from help" -f -a "env" -d 'Print the sorted `env` lines a declared environment keys, the step cache\'s answer to the tool line'
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -f -a "cycle" -d 'Print how many modules the largest cycle of the module graph holds, refusing more than --max'
-complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -f -a "cycle" -d 'Print how many modules the largest cycle of the module graph holds, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -f -a "impls" -d 'Print how many inherent impls sit away from their type\'s module, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -f -a "shims" -d 'Print how many re-exports of the crate\'s own items sit outside its root, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand modules; and not __fish_seen_subcommand_from cycle impls shims help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -l root -d 'The crate\'s source root, the directory holding lib.rs' -r
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -l max -d 'Refuse when the largest cycle holds more than this many modules (a non-negative integer)' -r
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -5384,7 +5386,55 @@ complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from cycle" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l root -d 'The crate\'s source root, the directory holding lib.rs' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l max -d 'Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from impls" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l root -d 'The crate\'s source root, the directory holding lib.rs' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l max -d 'Refuse when more than this many re-exports of the crate\'s own items sit outside its root (a non-negative integer)' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from shims" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from help" -f -a "cycle" -d 'Print how many modules the largest cycle of the module graph holds, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from help" -f -a "impls" -d 'Print how many inherent impls sit away from their type\'s module, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from help" -f -a "shims" -d 'Print how many re-exports of the crate\'s own items sit outside its root, refusing more than --max'
 complete -c batten -n "__fish_batten_using_subcommand modules; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l binary -d 'Inventory this built binary from its own bytes instead of the tree' -r
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l target -d 'The target triple the binary was built for, which names its asset' -r
@@ -5782,6 +5832,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
+complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l structural -d 'Judge only removed tests, without building: the seconds half the lap runs first'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
@@ -6142,6 +6193,8 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from step" -f -a "base" -d 'Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from step" -f -a "env" -d 'Print the sorted `env` lines a declared environment keys, the step cache\'s answer to the tool line'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from modules" -f -a "cycle" -d 'Print how many modules the largest cycle of the module graph holds, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from modules" -f -a "impls" -d 'Print how many inherent impls sit away from their type\'s module, refusing more than --max'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from modules" -f -a "shims" -d 'Print how many re-exports of the crate\'s own items sit outside its root, refusing more than --max'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from board" -f -a "check" -d 'Refuse a board whose columns, graph or citations lie, and print the ready frontier'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from board" -f -a "sweep" -d 'Run every declared board gate over one payload set and report the set of refusals'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from census" -f -a "shell" -d 'Count every shell line in the declared manifests, workflows and shell files, as pointers'
