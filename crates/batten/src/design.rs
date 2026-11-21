@@ -69,9 +69,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config_model::Strictness;
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
 use crate::receipt::hex_sha256;
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 
 /// The pointer a finding names, since the corpus arrives on stdin and has no

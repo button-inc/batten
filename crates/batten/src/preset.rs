@@ -50,9 +50,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub use crate::config_check::preset::verdict_rows;
+use crate::config_model::{Rule, RuleKind, RuleScope};
 use crate::error::UsageError;
 pub use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
-use crate::rules::{Rule, RuleKind, RuleScope};
 
 impl PresetModule {
     /// The source an engine compiles: the embedded one, or under the

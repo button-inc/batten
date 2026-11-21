@@ -555,7 +555,7 @@ fn waiver_smells(
                 && config
                     .rules
                     .iter()
-                    .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
+                    .any(|rule| rule.kind == crate::config_model::RuleKind::Policy) => {}
             None => found.push(Smell {
                 at: at.clone(),
                 id: SmellId::WaiverNamesNoRule,

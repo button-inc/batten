@@ -72,11 +72,12 @@ use anyhow::{Context, Result};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config_model::Rule;
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{Fingerprint, IdentityKey, SecretSpan};
 use crate::provision::Provision;
 use crate::refusal::{Fix, Refusal};
-use crate::rules::{Finding, Rule};
 use crate::waiver::Date;
 
 /// The `[[provision]]` entry this kind runs.

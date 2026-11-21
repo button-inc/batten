@@ -102,8 +102,8 @@ pub use crate::config_check::handler::declarable_tokens;
 pub use crate::config_check::handler::validate;
 #[allow(unused_imports)]
 pub(crate) use crate::config_check::handler::{PROBE_SERVERS, event_of};
+use crate::config_model::Event;
 pub use crate::config_model::Handler;
-use crate::hook::Event;
 
 /// The exit code a handler refuses with.
 ///

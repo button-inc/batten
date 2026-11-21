@@ -66,8 +66,8 @@ use anyhow::Result;
 
 use crate::UsageError;
 use crate::config::{self, Config, Strictness};
+use crate::config_model::{Rule, RuleKind};
 use crate::git;
-use crate::rules::{Rule, RuleKind};
 use crate::severity::RuleSeverity;
 use crate::waiver;
 

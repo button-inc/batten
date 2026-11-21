@@ -74,8 +74,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::config_model::{Event, Harness};
 use crate::error::UsageError;
-use crate::hook::{Event, Harness, WiringFile};
+use crate::hook::WiringFile;
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -237,7 +238,7 @@ fn matches(entry: &str, path: &str) -> bool {
 /// compiled into the binary, so a change to one is already a change to `crates/`.
 /// Including it would be a second, weaker spelling of a path already covered.
 #[must_use]
-pub fn registered_paths(rules: &[crate::rules::Rule]) -> Vec<String> {
+pub fn registered_paths(rules: &[crate::config_model::Rule]) -> Vec<String> {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for rule in rules {
         if let Some(module) = rule.module.as_ref() {
