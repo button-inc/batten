@@ -65,6 +65,124 @@ impl Graph {
         }
         tarjan.largest
     }
+
+    /// Every node each node reaches by one or more edges.
+    fn reach(&self) -> BTreeMap<&str, BTreeSet<&str>> {
+        self.edges
+            .keys()
+            .map(|start| {
+                let mut seen: BTreeSet<&str> = BTreeSet::new();
+                let mut queue: Vec<&str> = self.successors(start).collect();
+                while let Some(node) = queue.pop() {
+                    if seen.insert(node) {
+                        queue.extend(self.successors(node));
+                    }
+                }
+                (start.as_str(), seen)
+            })
+            .collect()
+    }
+
+    fn successors<'a>(&'a self, node: &str) -> impl Iterator<Item = &'a str> {
+        self.edges
+            .get(node)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .filter(|next| self.edges.contains_key(*next))
+    }
+
+    /// MacCormack, Rusnak & Baldwin's propagation cost (Management Science,
+    /// 2006): the share of (node, node) pairs where the first reaches the
+    /// second, each node counted as reaching itself, in percent. The cycle's
+    /// size says how many modules are tangled; this says how far a change in
+    /// any one of them can travel.
+    #[must_use]
+    pub fn propagation_cost(&self) -> f64 {
+        let nodes = self.edges.len();
+        if nodes == 0 {
+            return 0.0;
+        }
+        let reached: usize = self
+            .reach()
+            .iter()
+            .map(|(node, seen)| seen.len() + usize::from(!seen.contains(node)))
+            .sum();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a module count is far below 2^52, so the ratio is exact enough for a percentage"
+        )]
+        let share = reached as f64 / (nodes * nodes) as f64;
+        share * 100.0
+    }
+
+    /// Lakos's levelization (*Large-Scale C++ Software Design*, 1996): a
+    /// node reaching nothing outside its own cycle is level 1, and any other
+    /// is one above the highest level it reaches. Every member of a cycle
+    /// shares one level, which is why a cycle is the thing to break.
+    #[must_use]
+    pub fn levels(&self) -> BTreeMap<String, usize> {
+        let reach = self.reach();
+        let tangled = |a: &str, b: &str| reach[a].contains(b) && reach[b].contains(a);
+        // A node reached from another outside its cycle reaches strictly
+        // less, so ascending reach size orders every node after what it needs.
+        let mut order: Vec<&str> = reach.keys().copied().collect();
+        order.sort_by_key(|node| reach[node].len());
+        let mut level: BTreeMap<&str, usize> = BTreeMap::new();
+        for node in order {
+            let below = reach[node]
+                .iter()
+                .filter(|next| **next != node && !tangled(node, next))
+                .filter_map(|next| level.get(next))
+                .max()
+                .copied()
+                .unwrap_or(0);
+            level.insert(node, below + 1);
+        }
+        level
+            .into_iter()
+            .map(|(node, at)| (node.to_owned(), at))
+            .collect()
+    }
+
+    /// Every edge inside the largest component, each with that component's
+    /// size once the edge alone is gone, smallest first: Shah et al.'s
+    /// ranking of dependency-breaking moves (CSMR 2012, ICSM 2013) at module
+    /// granularity. An edge whose removal shrinks the cycle is the one move
+    /// that pays; one that leaves it unchanged has a parallel path.
+    #[must_use]
+    pub fn cut_ranking(&self) -> Vec<(String, String, usize)> {
+        let reach = self.reach();
+        let largest = self.largest_component();
+        let members: BTreeSet<&str> = reach
+            .keys()
+            .copied()
+            .filter(|node| {
+                reach[node]
+                    .iter()
+                    .filter(|other| reach[*other].contains(node))
+                    .count()
+                    == largest
+            })
+            .collect();
+        let mut ranked: Vec<(String, String, usize)> = members
+            .iter()
+            .flat_map(|from| {
+                self.successors(from)
+                    .filter(|to| members.contains(to))
+                    .map(move |to| (*from, to))
+            })
+            .map(|(from, to)| {
+                let mut cut = self.clone();
+                if let Some(next) = cut.edges.get_mut(from) {
+                    next.remove(to);
+                }
+                (from.to_owned(), to.to_owned(), cut.largest_component())
+            })
+            .collect();
+        ranked.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| (&a.0, &a.1).cmp(&(&b.0, &b.1))));
+        ranked
+    }
 }
 
 /// Tarjan's algorithm, iterative so a deep chain cannot overflow the stack.
@@ -1760,6 +1878,46 @@ mod tests {
             ("e", &["d"]),
         ]);
         assert_eq!(g.largest_component(), 3);
+    }
+
+    /// Fails by: a cycle's members given different levels, or a node placed
+    /// at or below something it reaches.
+    #[test]
+    fn a_cycle_shares_one_level_above_what_it_reaches() {
+        let g = graph(&[
+            ("leaf", &[]),
+            ("a", &["b", "leaf"]),
+            ("b", &["a"]),
+            ("top", &["a"]),
+        ]);
+        let levels = g.levels();
+        assert_eq!(levels["leaf"], 1);
+        assert_eq!((levels["a"], levels["b"]), (2, 2));
+        assert_eq!(levels["top"], 3);
+    }
+
+    /// Fails by: a node not counted as reaching itself, or reach not followed
+    /// past one edge. A chain of three reaches 3 + 2 + 1 of 9 pairs.
+    #[test]
+    fn propagation_cost_counts_every_transitive_pair() {
+        let chain = graph(&[("a", &["b"]), ("b", &["c"]), ("c", &[])]);
+        assert!((chain.propagation_cost() - 600.0 / 9.0).abs() < 1e-9);
+        let cycle = graph(&[("a", &["b"]), ("b", &["a"])]);
+        assert!((cycle.propagation_cost() - 100.0).abs() < 1e-9);
+        assert!(Graph::default().propagation_cost().abs() < 1e-9);
+    }
+
+    /// Fails by: an edge with a parallel path ranked as breaking the cycle, or
+    /// the one bridge edge not ranked first.
+    #[test]
+    fn the_edge_whose_cut_shrinks_the_cycle_ranks_first() {
+        // a→b→c→a and a→c: cutting c→a breaks every cycle; cutting a→b leaves
+        // a→c→a.
+        let g = graph(&[("a", &["b", "c"]), ("b", &["c"]), ("c", &["a"])]);
+        let ranked = g.cut_ranking();
+        assert_eq!(ranked[0], ("c".to_owned(), "a".to_owned(), 1));
+        assert!(ranked.contains(&("a".to_owned(), "b".to_owned(), 2)));
+        assert_eq!(ranked.len(), 4);
     }
 
     /// Fails by: a name with no node kept as an edge target.

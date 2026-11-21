@@ -38,6 +38,14 @@ pub struct Plan {
     pub errors: usize,
 }
 
+/// Which build a diagnostic came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    NonTest,
+    UnitTest,
+    Other,
+}
+
 /// One diagnostic out of cargo's `--message-format json` stream.
 struct Diagnostic {
     /// The rustc diagnostic object, re-serialised for `rustfix`.
@@ -82,11 +90,28 @@ fn site(suggestion: &Suggestion) -> Option<(String, Range<usize>)> {
     ))
 }
 
-/// Plan one pass from the non-test build's stream and the test build's.
-/// `read` returns a file's current text, by the path rustc reports.
+/// The three diagnostic streams a pass reads.
+#[derive(Debug, Clone, Copy)]
+pub struct Streams<'a> {
+    /// `--lib --bins`: the non-test build.
+    pub non_test: &'a str,
+    /// `--lib --bins --profile test`: the same sources with `cfg(test)`, the
+    /// only stream that decides whether tests use an import.
+    pub unit_test: &'a str,
+    /// `--tests --examples --benches`: the other targets. Cargo builds the
+    /// library NON-test as their dependency, so its warnings repeat here;
+    /// read as "unused in a test build" they turned a gate into a deletion
+    /// on the applier's first real run (`verdict.rs`, `VocabularyWord`).
+    pub other: &'a str,
+}
+
+/// Plan one pass from the three streams. `read` returns a file's current
+/// text, by the path rustc reports.
 #[must_use]
-pub fn plan(non_test: &str, test: &str, read: &dyn Fn(&str) -> Option<String>) -> Plan {
-    let (lib, tests) = (diagnostics(non_test), diagnostics(test));
+pub fn plan(streams: Streams<'_>, read: &dyn Fn(&str) -> Option<String>) -> Plan {
+    let lib = diagnostics(streams.non_test);
+    let unit = diagnostics(streams.unit_test);
+    let other = diagnostics(streams.other);
     let unused_sites = |stream: &[Diagnostic]| -> BTreeSet<(String, usize, usize)> {
         stream
             .iter()
@@ -96,24 +121,33 @@ pub fn plan(non_test: &str, test: &str, read: &dyn Fn(&str) -> Option<String>) -
             .map(|(file, range)| (file, range.start, range.end))
             .collect()
     };
-    let in_tests = unused_sites(&tests);
+    let (in_lib, in_tests) = (unused_sites(&lib), unused_sites(&unit));
     let mut plan = Plan {
-        errors: lib.iter().chain(&tests).filter(|d| d.error).count(),
+        errors: lib
+            .iter()
+            .chain(&unit)
+            .chain(&other)
+            .filter(|d| d.error)
+            .count(),
         ..Plan::default()
     };
     let mut seen: BTreeSet<(String, usize, usize, String)> = BTreeSet::new();
-    let from_lib = lib.iter().map(|d| (d, true));
-    let from_tests = tests.iter().map(|d| (d, false));
-    for (diagnostic, non_test_build) in from_lib.chain(from_tests) {
+    let from_lib = lib.iter().map(|d| (d, Stream::NonTest));
+    let from_unit = unit.iter().map(|d| (d, Stream::UnitTest));
+    let from_other = other.iter().map(|d| (d, Stream::Other));
+    for (diagnostic, stream) in from_lib.chain(from_unit).chain(from_other) {
         for mut suggestion in suggestions(diagnostic) {
             let Some((file, range)) = site(&suggestion) else {
                 continue;
             };
             let unused = diagnostic.code.as_deref() == Some("unused_imports");
-            if unused
-                && non_test_build
-                && !in_tests.contains(&(file.clone(), range.start, range.end))
-            {
+            let key = (file.clone(), range.start, range.end);
+            // The library's own warning, repeated by a dependent target's
+            // build: already decided from the first two streams.
+            if unused && stream == Stream::Other && in_lib.contains(&key) {
+                continue;
+            }
+            if unused && stream == Stream::NonTest && !in_tests.contains(&key) {
                 // Unused only where tests are not compiled: tests use it.
                 match gate(&mut suggestion, read) {
                     Some(()) => plan.gated += 1,
@@ -213,7 +247,14 @@ mod tests {
             unused("src/a.rs", 14, 27, 2)
         );
         let test = format!("{}\n", unused("src/a.rs", 14, 27, 2));
-        let plan = plan(&non_test, &test, &read);
+        let plan = plan(
+            Streams {
+                non_test: &non_test,
+                unit_test: &test,
+                other: "",
+            },
+            &read,
+        );
         assert_eq!((plan.gated, plan.left, plan.errors), (1, 0, 0));
         let fixed = apply(SRC, &plan.edits["src/a.rs"]).expect("the edits apply");
         assert_eq!(fixed, "#[cfg(test)]\nuse std::fmt;\nfn f() {}\n");
@@ -224,11 +265,40 @@ mod tests {
     #[test]
     fn a_removal_both_builds_report_is_applied_once() {
         let line = unused("src/a.rs", 14, 27, 2);
-        let plan = plan(&line, &line, &read);
+        let plan = plan(
+            Streams {
+                non_test: &line,
+                unit_test: &line,
+                other: &line,
+            },
+            &read,
+        );
         assert_eq!(plan.edits["src/a.rs"].len(), 1);
         assert_eq!(
             apply(SRC, &plan.edits["src/a.rs"]).expect("applies"),
             "use std::fmt;\nfn f() {}\n"
+        );
+    }
+
+    /// Fails by: the library's non-test warning, repeated by an integration
+    /// test's build of it, read as "unused in tests" and deleted. Measured on
+    /// the applier's first real run: `VocabularyWord` in `verdict.rs`.
+    #[test]
+    fn a_library_warning_another_target_repeats_is_still_gated() {
+        let lib = unused("src/a.rs", 0, 14, 1);
+        let plan = plan(
+            Streams {
+                non_test: &lib,
+                unit_test: "",
+                other: &lib,
+            },
+            &read,
+        );
+        assert_eq!((plan.gated, plan.edits["src/a.rs"].len()), (1, 1));
+        assert!(
+            apply(SRC, &plan.edits["src/a.rs"])
+                .expect("applies")
+                .starts_with("#[cfg(test)]\nuse std::fmt;\n")
         );
     }
 }
