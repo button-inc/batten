@@ -180,6 +180,48 @@ fn a_result_too_large_to_hold_reaches_the_model_as_a_pointer() {
 /// beside the view's lines. Measured by the row's cold read: a spill floor of a
 /// million tokens held every result between the bound and ~4 MB whole, and
 /// that path's pointer carried no handle.
+/// The post-tool payload of [`post_tool`], from inside a subagent: Claude Code
+/// names it with `agent_id` (CLOUD-2791).
+fn post_tool_as_subagent(dir: &Path, result: &serde_json::Value) -> std::process::Output {
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "bound",
+        "agent_id": "a1",
+        "tool_name": "Read",
+        "tool_input": { "file_path": "big.log" },
+        "tool_response": result,
+    });
+    common::run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload.to_string(),
+    )
+}
+
+/// Fails by: a subagent's oversized result replaced by a rewrite. Its tools
+/// are its type's, so the pointer the rewrite carries may be one it cannot
+/// follow: two `web-fetch` agents returned nothing that way (CLOUD-2791).
+#[test]
+fn a_subagents_oversized_result_reaches_it_whole() {
+    let dir = repo("result-bound-subagent");
+    let posted = post_tool_as_subagent(&dir, &read_result(&payload(2000)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    assert!(!said.contains("updatedToolOutput"), "no rewrite: {said}");
+}
+
+/// Fails by: a subagent pointed at a spilled result's view or stored handle,
+/// the route a large page takes, rather than left its own result.
+#[test]
+fn a_subagents_spilled_result_carries_no_pointer() {
+    let dir = repo("result-bound-subagent-spilled");
+    let posted = post_tool_as_subagent(&dir, &read_result(&payload(2000)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    assert!(!said.contains("output point now"), "no pointer: {said}");
+    assert!(!said.contains("response:"), "no stored handle: {said}");
+}
+
 #[test]
 fn a_result_over_the_bound_is_spilled_not_held() {
     let dir = repo("result-bound-spilled-at-bound");

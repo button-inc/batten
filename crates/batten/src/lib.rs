@@ -22549,6 +22549,16 @@ fn rewrite_post_tool(
     out: &mut dyn Write,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
+    // A SUBAGENT'S RESULT IS NEVER REWRITTEN (CLOUD-2791). Every rewrite below
+    // replaces text with a pointer whose route is a file read, and a subagent's
+    // tools are its type's: a `web-fetch` agent has no file read, so it was
+    // handed pointers it could not follow and returned nothing. The payload
+    // names the subagent (`agent_id`) and never its tools, so whether the
+    // reader can follow is unknowable here; emitting nothing leaves the host
+    // its own result. The parent sees the subagent's report, not this result.
+    if envelope.agent.is_some() {
+        return Ok(());
+    }
     // ONE DOCUMENT FOR BOTH REWRITES: the seen-finding collapse and the
     // result bound each change what the model reads, and the host reads the
     // first JSON document on stdout and drops the rest.
