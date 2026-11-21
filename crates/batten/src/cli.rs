@@ -544,6 +544,22 @@ pub enum ModulesCommand {
         /// refuses. The verb parses it, so a bad value is its usage error.
         max: Option<String>,
     },
+    /// Print how many inherent impls sit away from their type's module
+    /// (CLOUD-2792), refusing a count above `max`.
+    Impls {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most outside-plus-ambiguous impls allowed, as written.
+        max: Option<String>,
+    },
+    /// Print how many re-exports of the crate's own items sit outside its
+    /// root (CLOUD-2792), refusing a count above `max`.
+    Shims {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+        /// The most re-export leaves allowed, as written.
+        max: Option<String>,
+    },
 }
 
 /// `batten forge`'s sub-verbs.
@@ -4094,6 +4110,14 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
 fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
     match matches.subcommand()? {
         ("cycle", matches) => Some(ModulesCommand::Cycle {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
+        ("impls", matches) => Some(ModulesCommand::Impls {
+            root: matches.get_one::<String>("root").cloned()?,
+            max: matches.get_one::<String>("max").cloned(),
+        }),
+        ("shims", matches) => Some(ModulesCommand::Shims {
             root: matches.get_one::<String>("root").cloned()?,
             max: matches.get_one::<String>("max").cloned(),
         }),
