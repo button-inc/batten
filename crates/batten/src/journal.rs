@@ -217,7 +217,7 @@ pub fn open(store_dir: &Path) -> Result<Access> {
 
 /// Whether this store already holds records written before the journal existed.
 fn legacy_records_exist(store_dir: &Path) -> bool {
-    crate::findings::load_all(store_dir).is_ok_and(|records| !records.is_empty())
+    crate::findings::any(store_dir)
 }
 
 /// Write the format record atomically.
