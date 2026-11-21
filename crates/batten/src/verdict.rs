@@ -46,9 +46,14 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+pub use crate::config_model::{
+    Applicability, DeclaredVerdict, Route, RouteKind, Vocabulary, VocabularyWord,
+};
 use crate::error::UsageError;
+pub use crate::preset_catalog::{VendoredRoute, VendoredVerdict};
+pub use crate::preset_catalog::{admit, read, run};
 
 // THE `V-` AND `R-` PREFIXES ARE GONE (CLOUD-1284).
 //
@@ -87,28 +92,6 @@ use crate::error::UsageError;
 /// perfectly well.
 pub(crate) const GLOSS_MAX: usize = 120;
 
-/// What a route offers the reader.
-///
-/// **A closed set, deliberately.** The whole defect is a remedy nobody can
-/// check; an open `kind` string would put it straight back, because a typo'd
-/// kind would be a route that resolves to nothing and refuses nothing.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteKind {
-    /// Run something. `target` is the command.
-    Command,
-    /// Read something in this tree. `target` is a repo-relative path.
-    Document,
-    /// Take it to the tracker. `target` is the issue key.
-    Issue,
-    /// Ask for the refusal to be lifted. `target` is unread; `precondition` is
-    /// what the asker must be able to state, and is required (CLOUD-1051 reads
-    /// it to generate the questions an admission answers).
-    Override,
-}
-
 impl RouteKind {
     /// The token a rendered route carries.
     #[must_use]
@@ -120,84 +103,6 @@ impl RouteKind {
             RouteKind::Override => "override",
         }
     }
-}
-
-/// One way out of a refusal.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Route {
-    /// The id a rendered refusal names, e.g. `task read first`.
-    ///
-    /// Stable and referenceable: an agent told `task read first` twice has
-    /// been told the same thing twice, which a paraphrase cannot establish.
-    pub id: String,
-    /// Which kind of way out this is.
-    pub kind: RouteKind,
-    /// What it points at, read according to [`Route::kind`].
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub target: String,
-    /// What the asker must be able to state. [`RouteKind::Override`] only, and
-    /// required there.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub precondition: Option<String>,
-}
-
-/// One declared vocabulary word: the spelling, and what it means in a name.
-///
-/// The gloss is what makes dropping the per-class essay from the hot path safe
-/// rather than merely cheap (CLOUD-1284). A class used to buy a new essay to
-/// explain its own free-text name; a word buys one gloss that every name using
-/// it reuses, so the *marginal* class costs no new prose at all.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct VocabularyWord {
-    /// The spelling, as it appears in a name. One token under the declared pin.
-    pub word: String,
-    /// What this word contributes to a name that uses it.
-    pub gloss: String,
-}
-
-/// The three positional lists a name is drawn from, and the pin they were
-/// measured under (CLOUD-1284).
-///
-/// # Why the middle list is `action` and not `verb`
-///
-/// The grammar is `<subject> <action> <condition>` and the issue writes the
-/// middle slot as "verb". The config key cannot be `verb`: `[[verb]]` is already
-/// this config's table of mutating **shell** verbs, and two unrelated tables one
-/// letter apart is the drift a reader pays for every time. The prose keeps the
-/// grammatical word; the key states which table it belongs to.
-///
-/// # Why the pin is data and not a constant
-///
-/// The token counts are model-specific, and `bench/tokens/method.toml` already
-/// sets this repository's discipline for a constant a published figure depends
-/// on: state it with its source and the date it was read, so a reader checks the
-/// arithmetic against the primary rather than trusting a program. The *ratio*
-/// argument survives a different tokenizer — common English words are
-/// single-merge in every modern BPE vocabulary — but the exact integer does not,
-/// so the integer's provenance travels with it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Vocabulary {
-    /// The encoding every word's token count was measured under.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tokenizer: Option<String>,
-    /// Where that encoding is published.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tokenizer_source: Option<String>,
-    /// When it was read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tokenizer_retrieved: Option<String>,
-    /// Slot 1: what the finding is about.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub subject: Vec<VocabularyWord>,
-    /// Slot 2: what was done, or what relation is being judged.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub action: Vec<VocabularyWord>,
-    /// Slot 3: the state that makes it a refusal.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub condition: Vec<VocabularyWord>,
 }
 
 impl Vocabulary {
@@ -234,55 +139,6 @@ const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
 /// namespace this grammar replaced, wearing a delimiter.
 const SLOTS: usize = 3;
 
-/// What the boundary may DO about a class, beyond naming it (CLOUD-1639).
-///
-/// **Every refusal in this tree is advice**: a class, its pointers, and routes
-/// the agent must walk itself. Two outcomes the field treats as first-class are
-/// unrepresentable — *repaired, re-run* and *repaired, proceed* — and
-/// [`crate::rules::Rule::fix`] has existed for them since CLOUD-81, executed by
-/// nothing.
-///
-/// # THE DEFAULT IS `advice`, AND THAT IS WHAT MAKES THIS ADDITIVE
-///
-/// Absent means today's behaviour, so 200-odd declared classes keep it without
-/// restating it and no consumer config changes meaning under an engine that
-/// gained this column. `Retry` and `Silent` are opt-in per class and each owes
-/// something extra at load — see [`validate`].
-///
-/// # WHY `retry` IS THE DEFAULT POSTURE FOR A REPAIR AND `silent` THE EXCEPTION
-///
-/// Not a preference. pre-commit's hook that modifies files FAILS the run and the
-/// caller re-runs over the new bytes — there is no silent path (SRC-041); Ruff
-/// makes the caller choose with `--exit-non-zero-on-fix` (SRC-047); Kubernetes
-/// mutating webhooks apply silently but write `auditAnnotations` (SRC-042). **No
-/// surveyed system applies silently and leaves no record.** Measured on agents:
-/// feedback-then-retry converged 86.6% against 79.8% for block-and-retry at no
-/// utility loss, while silent server-side rewrite converged 96.9% and cost 22.3%
-/// utility (SRC-059). So `Silent` owes a stated reason and a record, and
-/// [`validate`] refuses one that declares neither.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Applicability {
-    /// Name the class and its routes; the agent acts. Every class's behaviour
-    /// before CLOUD-1639, and the default.
-    #[default]
-    Advice,
-    /// The boundary repaired what it refused; the identical call should be
-    /// re-issued. Still a refusal — exit `2` — because the call as made did not
-    /// happen, and reporting it as an allow would be the silent-rewrite posture
-    /// wearing a retry's name.
-    Retry,
-    /// The boundary repaired it and let the call through, owing a record.
-    ///
-    /// The exception, and it owes `no_retry_reason` on the row that declares it:
-    /// a repair the caller never learns about is the 22.3% utility cost SRC-059
-    /// measured, so the reason a retry was rejected has to be somebody's stated
-    /// decision rather than a default.
-    Silent,
-}
-
 impl Applicability {
     /// Whether this is the default, for `skip_serializing_if`.
     ///
@@ -308,66 +164,6 @@ impl Applicability {
             Applicability::Silent => "silent",
         }
     }
-}
-
-/// One declared refusal class.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DeclaredVerdict {
-    /// The token, e.g. `task name undefined`.
-    pub id: String,
-    /// What the boundary may DO about this class, beyond naming it (CLOUD-1639).
-    ///
-    /// Absent is [`Applicability::Advice`], which is every class's behaviour
-    /// today and the reason the column defaults rather than being required: a
-    /// refusal that names a remedy the agent follows itself is the shape 200 of
-    /// this tree's classes already have, and making them all restate it would be
-    /// a column that carries no information 99% of the time.
-    #[serde(default, skip_serializing_if = "Applicability::is_default")]
-    pub applicability: Applicability,
-    /// One line, the hot path's whole payload, and a first sighting's `what`.
-    pub gloss: String,
-    /// How to deal with a refusal of this class, delivered once per context
-    /// window beside the gloss (CLOUD-2143). See [`crate::doc`].
-    #[serde(default, skip_serializing_if = "crate::doc::Doc::is_empty")]
-    pub doc: crate::doc::Doc,
-    /// What the class means, at length. `batten policy explain`'s payload, and
-    /// the **deliberate exception** to pointer-only output (house style §6):
-    /// `explain` is local documentation rather than a finding, and carrying the
-    /// text the hot path no longer does is its entire purpose.
-    pub class: String,
-    /// The ways out, in the order a reader should consider them.
-    #[serde(default, rename = "route", skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<Route>,
-    /// The token that replaced this one, for a class that has been retired.
-    ///
-    /// A **tombstone**: the entry stays so a historical token is still
-    /// explainable, which git history cannot do at runtime. A tombstone is
-    /// exempt from the emitted-somewhere half of registry equality, because the
-    /// whole point is that nothing emits it any more.
-    ///
-    /// One of **two** retirement arms — see [`DeclaredVerdict::withdrawn`] for
-    /// the other, and why naming both is refused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub successor: Option<String>,
-    /// Why this class was **withdrawn**, for one that was not replaced at all
-    /// (CLOUD-1114).
-    ///
-    /// The second retirement arm, and it exists because the first cannot express
-    /// this case. A class can be withdrawn rather than replaced — the thing it
-    /// refused should no longer be refused by anything — so there is no successor
-    /// and naming one would be a false claim about where the class went. Before
-    /// this arm the only ways past were to invent a successor that does not hold
-    /// the predicate, or to delete the row and lose the ability to explain a
-    /// historical token, which is the whole thing a tombstone exists for.
-    ///
-    /// **It owes a reason and names no target**, exactly as
-    /// [`crate::rules::Conserves::withdrawn`] does one registry over (CLOUD-1080,
-    /// the precedent for this arm's shape): a column demanding a target here
-    /// would be the invented successor again. An empty reason is refused, so the
-    /// arm cannot be spent as a bare "gone".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub withdrawn: Option<String>,
 }
 
 impl DeclaredVerdict {
@@ -1244,83 +1040,6 @@ pub use crate::error::Native;
 #[must_use]
 pub fn native_tokens() -> BTreeSet<&'static str> {
     Native::ALL.iter().map(|native| native.id()).collect()
-}
-
-/// One vendored class, in the shape a `const` table can hold.
-///
-/// A mirror of [`DeclaredVerdict`] over `&'static str`, because that type owns
-/// `String`s and cannot be a `const`. [`vendored`] converts. The alternative —
-/// building the table at runtime from literals — puts the same data one
-/// indirection further from the reader for nothing.
-#[derive(Debug)]
-pub struct VendoredVerdict {
-    /// The three-word class token.
-    pub id: &'static str,
-    /// The one-line summary.
-    pub gloss: &'static str,
-    /// The prose a reader dereferences through `batten policy explain`.
-    pub class: &'static str,
-    /// The declared remedies.
-    pub routes: &'static [VendoredRoute],
-    /// What the boundary may do about it (CLOUD-1639).
-    ///
-    /// A plain field with no default, unlike the consumer table's: a `const`
-    /// initialiser cannot omit one, and spelling `Applicability::Advice` on every
-    /// vendored row is what makes the ones that are NOT advice visible in a diff
-    /// rather than inferred from an absence.
-    pub applicability: Applicability,
-}
-
-/// One vendored route. See [`VendoredVerdict`].
-#[derive(Debug)]
-pub struct VendoredRoute {
-    /// The route's own three-word id.
-    pub id: &'static str,
-    /// Which kind of remedy it is.
-    pub kind: RouteKind,
-    /// What it points at.
-    pub target: &'static str,
-    /// The condition an override route states.
-    pub precondition: Option<&'static str>,
-}
-
-/// A `command`-kind route, which is most of them.
-#[must_use]
-pub const fn run(id: &'static str, target: &'static str) -> VendoredRoute {
-    VendoredRoute {
-        id,
-        kind: RouteKind::Command,
-        target,
-        precondition: None,
-    }
-}
-
-/// A `document`-kind route.
-#[must_use]
-pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
-    VendoredRoute {
-        id,
-        kind: RouteKind::Document,
-        target,
-        precondition: None,
-    }
-}
-
-/// An `override`-kind route, which is the only kind whose precondition is
-/// REQUIRED rather than optional.
-///
-/// `target` is deliberately absent: [`RouteKind::Override`]'s own doc says it is
-/// unread, and the precondition is the whole payload — it is what
-/// [`crate::admission::questions_for`] renders the first question from. A helper
-/// that took a target would invite one to be written and then silently ignored.
-#[must_use]
-pub const fn admit(id: &'static str, precondition: &'static str) -> VendoredRoute {
-    VendoredRoute {
-        id,
-        kind: RouteKind::Override,
-        target: "",
-        precondition: Some(precondition),
-    }
 }
 
 /// CLOUD-1823's route, shared by the two receipt classes a `turn mint ahead`
