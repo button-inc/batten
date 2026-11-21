@@ -47,7 +47,27 @@ use crate::error::UsageError;
 
 /// The application namespace under the OS data directory. Taken from the crate
 /// name (`CARGO_PKG_NAME`) so it tracks the binary rather than being a literal.
-const APP_NAMESPACE: &str = env!("CARGO_PKG_NAME");
+///
+/// THE PACKAGE FAMILY, NOT THE PACKAGE (CLOUD-2789). This module moved into
+/// `batten-core`, so `CARGO_PKG_NAME` here names that package, and the state
+/// root silently became a second directory beside the binary's: every receipt,
+/// cache and capture orphaned. Every workspace package is `<binary>-<part>`, so
+/// the namespace is the name before its first `-`, which is the binary's.
+const APP_NAMESPACE: &str = family(env!("CARGO_PKG_NAME"));
+
+/// `package` up to its first `-`: the family a `<binary>-<part>` package belongs
+/// to, and the binary's own name for the binary's package.
+const fn family(package: &str) -> &str {
+    let bytes = package.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'-' {
+            return package.split_at(at).0;
+        }
+        at += 1;
+    }
+    package
+}
 
 /// How many hex characters of the checkout digest the state segment carries.
 ///
@@ -433,6 +453,17 @@ mod tests {
                     .as_str()
             )
         );
+    }
+
+    /// Fails by: a package of the family read as its own namespace, the move
+    /// that put the state root under `batten-core` (CLOUD-2789).
+    #[test]
+    fn the_namespace_is_the_package_family() {
+        assert_eq!(family("batten-core"), "batten");
+        assert_eq!(family("batten-base-x"), "batten");
+        assert_eq!(family("batten"), "batten");
+        assert_eq!(APP_NAMESPACE, family(env!("CARGO_PKG_NAME")));
+        assert!(!APP_NAMESPACE.contains('-'));
     }
 
     #[test]
