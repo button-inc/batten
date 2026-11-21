@@ -72,13 +72,24 @@ use crate::config_check::outputs::validate;
 use crate::config_check::outputs::validate_environment;
 use crate::config_model::{OutputPattern, Watched};
 
-impl Watched {
+/// `Watched` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait WatchedExt: Sized {
     /// Every value, so anything ranging over the vocabulary is derived.
-    pub const ALL: &'static [Watched] = &[Watched::Stdout, Watched::Stderr, Watched::Both];
+    const ALL: &'static [Watched];
 
     /// The stable token this value is written as.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+
+    /// Whether this selection covers `stream`.
+    #[must_use]
+    fn covers(self, stream: Stream) -> bool;
+}
+
+impl WatchedExt for Watched {
+    const ALL: &'static [Watched] = &[Watched::Stdout, Watched::Stderr, Watched::Both];
+
+    fn as_str(self) -> &'static str {
         match self {
             Watched::Stdout => "stdout",
             Watched::Stderr => "stderr",
@@ -86,9 +97,7 @@ impl Watched {
         }
     }
 
-    /// Whether this selection covers `stream`.
-    #[must_use]
-    pub const fn covers(self, stream: Stream) -> bool {
+    fn covers(self, stream: Stream) -> bool {
         match self {
             Watched::Both => true,
             Watched::Stdout => matches!(stream, Stream::Stdout),

@@ -48,6 +48,8 @@
 //! their project-level one identically, so a checkout sitting AT the home
 //! directory resolves both to one file.
 
+use crate::hook::HarnessExt as _;
+use crate::hook::HarnessWiringExt as _;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
@@ -1218,8 +1220,6 @@ fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     /// Build a claude-code merged surface carrying `commands` on one event.
     fn surface(commands: &[&str]) -> serde_json::Value {

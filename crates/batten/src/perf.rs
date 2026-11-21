@@ -69,6 +69,7 @@
 //! looking for `^arm=`, never by a second exit code.
 
 use crate::capture::Streamed as _;
+use crate::hook::HarnessExt as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -3413,8 +3414,6 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     /// The sweep refuses a checkout with no release build, and gets past that
     /// check for one that has it, whatever the host's instrument then says.

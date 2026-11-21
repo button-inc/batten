@@ -9,7 +9,10 @@
 
 use crate::common;
 use batten::capture::StreamedChild as _;
+use batten::hook::EventExt as _;
+use batten::hook::HarnessExt as _;
 use batten::rules::RuleExt as _;
+use batten::rules::RuleKindExt as _;
 
 use std::fmt::Write as _;
 use std::fs;

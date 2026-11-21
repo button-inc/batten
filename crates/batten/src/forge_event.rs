@@ -16,6 +16,7 @@
 //! carries the event name, action, repository, number, SHA, ref and key, and
 //! the payload itself stays out of [`Envelope::input`].
 
+use crate::hook::EventExt as _;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -922,8 +923,6 @@ fn snapshot_event(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use serde_json::json;
 
     fn key_of(envelope: &Envelope) -> String {

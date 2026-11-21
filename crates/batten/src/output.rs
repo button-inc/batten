@@ -53,46 +53,26 @@ use crate::UsageError;
 use crate::surface;
 use crate::surface_table::Verbosity;
 
-impl Verbosity {
+/// `Verbosity` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait VerbosityExt: Sized {
     /// Every rung, so anything ranging over the ladder is derived rather than
     /// re-typed — the token parse, the surface's rung census, and the
     /// total-order test all read this one list.
-    pub const ALL: &'static [Verbosity] = &[
-        Verbosity::Silent,
-        Verbosity::Quiet,
-        Verbosity::Normal,
-        Verbosity::Verbose,
-        Verbosity::Debug,
-        Verbosity::Trace,
-    ];
+    const ALL: &'static [Verbosity];
 
     /// The default rung, and the origin the ladder is measured from.
-    pub const DEFAULT: Verbosity = Verbosity::Normal;
+    const DEFAULT: Verbosity;
 
     /// The rung's token, as `--log-level` and `BATTEN_LOG_LEVEL` spell it.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Verbosity::Silent => "silent",
-            Verbosity::Quiet => "quiet",
-            Verbosity::Normal => "normal",
-            Verbosity::Verbose => "verbose",
-            Verbosity::Debug => "debug",
-            Verbosity::Trace => "trace",
-        }
-    }
+    fn as_str(self) -> &'static str;
 
     /// The rung named by `token`, or `None` if it names none.
     ///
     /// Derived from [`Verbosity::ALL`] and [`Verbosity::as_str`], so the
     /// accepted spellings are exactly the emitted ones by construction.
     #[must_use]
-    pub fn from_token(token: &str) -> Option<Verbosity> {
-        Verbosity::ALL
-            .iter()
-            .copied()
-            .find(|rung| rung.as_str() == token)
-    }
+    fn from_token(token: &str) -> Option<Verbosity>;
 
     /// Step `extra` further rungs in the direction this rung lies from
     /// [`Verbosity::DEFAULT`], clamped at the end of the ladder.
@@ -103,7 +83,44 @@ impl Verbosity {
     /// than an error. `Normal.further(n)` is `Normal`: there is no direction to
     /// step in, which is why no flag selects it.
     #[must_use]
-    pub fn further(self, extra: u8) -> Verbosity {
+    fn further(self, extra: u8) -> Verbosity;
+
+    /// Whether a message declared at `rung` is said at this verbosity.
+    #[must_use]
+    fn admits(self, rung: Verbosity) -> bool;
+}
+
+impl VerbosityExt for Verbosity {
+    const ALL: &'static [Verbosity] = &[
+        Verbosity::Silent,
+        Verbosity::Quiet,
+        Verbosity::Normal,
+        Verbosity::Verbose,
+        Verbosity::Debug,
+        Verbosity::Trace,
+    ];
+
+    const DEFAULT: Verbosity = Verbosity::Normal;
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Verbosity::Silent => "silent",
+            Verbosity::Quiet => "quiet",
+            Verbosity::Normal => "normal",
+            Verbosity::Verbose => "verbose",
+            Verbosity::Debug => "debug",
+            Verbosity::Trace => "trace",
+        }
+    }
+
+    fn from_token(token: &str) -> Option<Verbosity> {
+        Verbosity::ALL
+            .iter()
+            .copied()
+            .find(|rung| rung.as_str() == token)
+    }
+
+    fn further(self, extra: u8) -> Verbosity {
         if extra == 0 || self == Verbosity::DEFAULT {
             return self;
         }
@@ -129,9 +146,7 @@ impl Verbosity {
         Verbosity::ALL.get(index).copied().unwrap_or(self)
     }
 
-    /// Whether a message declared at `rung` is said at this verbosity.
-    #[must_use]
-    pub fn admits(self, rung: Verbosity) -> bool {
+    fn admits(self, rung: Verbosity) -> bool {
         self >= rung
     }
 }
@@ -608,8 +623,8 @@ where
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     #[cfg(test)]
+    use crate::output::VerbosityExt as _;
     #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use std::cell::RefCell;
 
     use super::*;

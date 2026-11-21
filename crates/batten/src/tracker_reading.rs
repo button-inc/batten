@@ -739,9 +739,6 @@ mod tests {
         pull_number, without_code_spans,
     };
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     use std::collections::BTreeMap;
 
     fn no_inputs() -> BTreeMap<String, String> {

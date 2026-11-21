@@ -196,6 +196,8 @@ mod tests {
     use super::*;
     #[cfg(test)]
     use crate::error::UsageError;
+    #[cfg(test)]
+    use crate::hook::EventExt as _;
 
     fn action(id: &str, on: &str, run: &[&str]) -> Action {
         Action {

@@ -6397,6 +6397,23 @@ pub enum Decided {
     SilentExit,
 }
 
+impl Decided {
+    /// Whether this is the value an absent key means, so the derived schema and
+    /// the round-tripped config both stay quiet about the ordinary case.
+    ///
+    /// BESIDE ITS TYPE because serde's `skip_serializing_if` names it by path
+    /// from this module's own attributes, where no extension trait's import
+    /// reaches (CLOUD-2793).
+    #[must_use]
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `skip_serializing_if` calls this with a reference to the field, so the signature is the derive's rather than this author's; taking `self` by value does not compile"
+    )]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::ExitStatus)
+    }
+}
+
 /// The configured transcript, as `batten.toml` declares it: where it is, and
 /// whose dialect it is in.
 ///

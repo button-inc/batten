@@ -88,6 +88,8 @@
 //! rather than passed along — named rather than dropped, because a silently
 //! discarded document is an author who believes they are deciding something.
 
+#[cfg(test)]
+use crate::hook::EventExt as _;
 use regex::Regex;
 use std::io::Read;
 use std::path::Path;
@@ -931,11 +933,7 @@ fn reason(stderr: &str, stdout: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
-    #[cfg(test)]
-    use crate::handler::HandlerExt as _;
 
     /// A Batten child's refusal reaches the session as its deny lines alone:
     /// the remedy line and the task runner's error line are dropped, and the

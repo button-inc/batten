@@ -39,6 +39,7 @@
 //! whose single inventory row names this floor's bound: the band
 //! (`min_free_mb`), not a guess. The arm grows no clock of its own.
 
+use crate::prune::PruneExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

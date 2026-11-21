@@ -79,6 +79,24 @@ pub enum Applicability {
     Silent,
 }
 
+impl Applicability {
+    /// Whether this is the default, for `skip_serializing_if`.
+    ///
+    /// Keeps `-J` byte-identical for the 200-odd classes that declare nothing,
+    /// which is what makes the column additive on the machine surface too.
+    ///
+    /// BESIDE ITS TYPE because serde names it by path from `config_model`'s
+    /// attributes, where no extension trait's import reaches (CLOUD-2793).
+    #[must_use]
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `skip_serializing_if` calls this with a reference to the field"
+    )]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Advice)
+    }
+}
+
 /// One vendored class, in the shape a `const` table can hold.
 ///
 /// A mirror of [`DeclaredVerdict`] over `&'static str`, because that type owns

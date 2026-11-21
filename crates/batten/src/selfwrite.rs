@@ -237,8 +237,6 @@ pub fn counts(detections: &[Detection]) -> Counts {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

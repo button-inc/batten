@@ -252,26 +252,35 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
 pub(crate) const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-impl OutputStyle {
+/// `OutputStyle` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait OutputStyleExt: Sized {
     /// mise's `style_only()`: the stream style with the suppression removed.
     ///
     /// `quiet` and `silent` are not stream styles — they are statements about
     /// whose output is suppressed — so asking one of them how to render a line
     /// has no answer, and the default is what mise falls back to.
-    const fn style_only(self) -> Self {
+    fn style_only(self) -> Self;
+
+    /// Whether Batten's own record is suppressed.
+    fn suppresses_batten(self) -> bool;
+
+    /// Whether the child's own bytes are suppressed even under `--tee`.
+    fn suppresses_child(self) -> bool;
+}
+
+impl OutputStyleExt for OutputStyle {
+    fn style_only(self) -> Self {
         match self {
             OutputStyle::Quiet | OutputStyle::Silent => OutputStyle::Interleave,
             other => other,
         }
     }
 
-    /// Whether Batten's own record is suppressed.
-    const fn suppresses_batten(self) -> bool {
+    fn suppresses_batten(self) -> bool {
         matches!(self, OutputStyle::Quiet | OutputStyle::Silent)
     }
 
-    /// Whether the child's own bytes are suppressed even under `--tee`.
-    const fn suppresses_child(self) -> bool {
+    fn suppresses_child(self) -> bool {
         matches!(self, OutputStyle::Silent)
     }
 }
@@ -2945,10 +2954,6 @@ impl Streamed for std::process::Command {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-    #[cfg(test)]
-    use crate::exec::ExecConfigExt as _;
     use std::sync::Arc;
     use std::sync::mpsc;
 
