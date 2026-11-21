@@ -62,7 +62,6 @@
 //! default is missing. `--config-from` is the one exception and stays strict;
 //! [`authority`] says why.
 
-use crate::verdict::VocabularyExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

@@ -22,7 +22,6 @@ use crate::prune::PruneExt as _;
 use crate::rules::RuleExt as _;
 use crate::rules::RuleKindExt as _;
 use crate::verdict::RouteKindExt as _;
-use crate::verdict::VocabularyExt as _;
 // `token_enum!` lives in `batten-facts` with `error::Native`, the first enum
 // declared through it (CLOUD-2789); `crate::config_model::NativeGate` and `lint` declare
 // through it here. Moving the crate's other hand-kept tokened enums onto it is
