@@ -41,9 +41,17 @@ hk = "1.56.1"                                                # git-hook runner (
 # perf_event_open directly, so no `perf` binary and no kernel headers). Callgrind
 # answers "which function" at 20-100x slowdown; a sampler answers it at native
 # speed, with wall-clock attribution, which a ~300 ms path needs. Prebuilt
-# release assets for every `lock-complete` platform; `github:` and locked, since
-# the proxy serves a third-party asset by URL but refuses its release listing.
-"github:mstange/samply" = "samply-v0.13.1"
+# release assets for every `lock-complete` platform.
+#
+# `http:`, NOT `github:` or `aqua:`. The proxy serves a third-party asset by URL
+# but refuses its release listing, and `[settings] lockfile = false` (below) means
+# a plain `mise install` never reads `mise.lock` — so a `github:` pin resolves its
+# version through `api.github.com/repos/mstange/samply/releases` on every cold
+# install, and `aqua:` has no samply entry and falls back to the same call. In a
+# container carrying no PAT (CLOUD-2688) that 403 killed every `mise` call, and so
+# every hook handler, before anything ran. `http:` names each asset's url and
+# checksum here, so no API call is made. Measured: installs and runs with no token.
+"http:samply" = { version = "0.13.1", platforms = { linux-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-unknown-linux-gnu.tar.xz", checksum = "sha256:61875daad67888798690dea3cb2748279df6ac299c5c6a857d67eed7642473d9" }, linux-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-unknown-linux-gnu.tar.xz", checksum = "sha256:aa465162b62830168775b7ff4804bc35049436dcbc29bb3d1ea9f580380ea06a" }, macos-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-apple-darwin.tar.xz", checksum = "sha256:7597239aa3769e75058be5ed359dbfe067f5e7714a5f052c45dd81d509aec17f" }, macos-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-apple-darwin.tar.xz", checksum = "sha256:a57f05f9162d06c36df6d51425d976ac774a8cd6dbd84050e6303fa8bf813998" }, windows-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-pc-windows-msvc.zip", checksum = "sha256:8fed74dac18197bbb2520125b0199255e09709bed7903a7672a06225a5d7e976" } } }
 # NOTE: no cargo-msrv pin, and since CLOUD-593 no MSRV gate needs one. It was
 # already unpinnable — upstream ships no aarch64-unknown-linux binary in ANY
 # release, so a release-asset backend locks no `linux-arm64` entry and `mise run
