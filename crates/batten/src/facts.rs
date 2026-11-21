@@ -739,6 +739,9 @@ pub enum Fact {
     /// How the **declared** globs' paths differ from a **declared** base rev:
     /// added, edited, deleted (CLOUD-1059).
     BaseDelta,
+    /// Which lines of each declared `[census.shell]` home, and of each shell
+    /// file, are shell logic, on both sides of the delta (CLOUD-2625).
+    Shell,
     /// The lines a **declared** `[[recorder]]` accumulated on this branch
     /// (CLOUD-1051).
     Records,
@@ -803,6 +806,13 @@ pub enum Fact {
     /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
     /// record exists — the branch owes no push a read.
     RedHead,
+    /// Whether this call's write authors shell into the repository, and by
+    /// which arm: `shell-path` or `shebang` (CLOUD-2335).
+    ///
+    /// Decided in Rust by [`crate::shell`]'s detector over the bytes the write
+    /// would land and the bytes on disk, so the policy input carries a reason
+    /// token and never the content (non-negotiable rule 4).
+    ShellIntroduced,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1481,6 +1491,18 @@ pub const REVIEW: Class = Class::new(Cost::Effect, Surface::Check);
 /// a migration gate needs to know WHICH files moved and never what they say.
 pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Shell`] — the shell detector's answer over the declared homes'
+/// lines, on both sides of the delta (CLOUD-2625).
+///
+/// `read` x **`check`**, the meet of what it is derived from: [`LINES`] and
+/// [`DOCUMENT`] for the head and the declaration, [`BASE_DELTA`] for the base
+/// side. It reads nothing they did not, and parses every declared body with the
+/// grammar the mediation boundary uses — unbounded in the input for all three of
+/// their reasons, so never a mediated call's.
+///
+/// Pointer-only: a kind, a line number and the detector's reason per line.
+pub const SHELL: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::Records`] — the lines a declared recorder accumulated (CLOUD-1051).
 ///
 /// `read` x **`check`**, and the second axis is the interesting one because the
@@ -1545,6 +1567,10 @@ pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
 pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::ShellIntroduced`] — one bounded read (1 MiB) of the file the call
+/// already names (CLOUD-2335). A read, asked only of a write.
+pub const SHELL_INTRODUCED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1586,12 +1612,14 @@ impl Fact {
         Fact::Symbols,
         Fact::Review,
         Fact::BaseDelta,
+        Fact::Shell,
         Fact::Records,
         Fact::RecordsBlocked,
         Fact::Instant,
         Fact::Pinned,
         Fact::DispatchCleared,
         Fact::RedHead,
+        Fact::ShellIntroduced,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1636,12 +1664,14 @@ impl Fact {
             Fact::Symbols => "symbols",
             Fact::Review => "review",
             Fact::BaseDelta => "base-delta",
+            Fact::Shell => "shell",
             Fact::Records => "records",
             Fact::RecordsBlocked => "records-blocked",
             Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
             Fact::RedHead => "red-head",
+            Fact::ShellIntroduced => "shell-introduced",
         }
     }
 
@@ -1694,12 +1724,14 @@ impl Fact {
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
+            Fact::Shell => SHELL,
             Fact::Records => RECORDS,
             Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
             Fact::RedHead => RED_HEAD,
+            Fact::ShellIntroduced => SHELL_INTRODUCED,
         }
     }
 
@@ -1784,10 +1816,12 @@ impl Fact {
             | Fact::Symbols
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Instant => false,
         }
     }
@@ -1896,6 +1930,9 @@ impl Fact {
             // of the base tree and a walk of the working tree, which is a
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
+            // CLOUD-2625. Tree-only for `BaseDelta`'s and `Lines`' reasons: it
+            // is derived from both, and parses every declared body.
+            Fact::Shell => Some("shell"),
             Fact::Records => Some("records"),
             Fact::RecordsBlocked => Some("records-blocked"),
             // Hook-surface facts. The tree engine resolves none of them, and
@@ -1958,7 +1995,11 @@ impl Fact {
             | Fact::DispatchCleared
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
-            | Fact::RedHead => None,
+            | Fact::RedHead
+            // CLOUD-2335. Hook-only for `Prospective`'s reason: what a write
+            // would introduce does not exist on the tree, whose own arms judge
+            // the shell already there.
+            | Fact::ShellIntroduced => None,
         }
     }
 
@@ -2071,12 +2112,14 @@ impl Fact {
             | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             Fact::RedHead => Self::red_head_schema_fragment(),
+            Fact::ShellIntroduced => Self::shell_introduced_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
             // and a match arm per fact for twenty facts is not. Split along the
             // seam that already exists rather than by line count.
             Fact::BaseDelta => Self::base_delta_schema_fragment(),
+            Fact::Shell => Self::shell_schema_fragment(),
             Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
@@ -2094,6 +2137,66 @@ impl Fact {
                 Self::repository_schema_fragment(self)
             }
         }
+    }
+
+    /// [`Fact::Shell`]'s fragment (CLOUD-2625).
+    fn shell_schema_fragment() -> serde_json::Value {
+        let side = serde_json::json!({
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["manifest", "workflow", "file"]},
+                    "lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "line": {"type": "integer"},
+                                "reason": {"type": "string"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        });
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`crate::shell::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading. For a row enabling `shell-hygiene` or handing over a `[census.shell]` table, `head` also reads every tracked file that can be shell, every declared manifest and every path a workflow glob selects (CLOUD-2628). `generated` is one {path, matches, check_found} per `[[census.shell.generated]]` entry: how many tracked paths its glob matches, and whether a line of its `check` file holds the test name (an unreadable file is false).",
+            "properties": {
+                "head": side.clone(),
+                "base": side,
+                "generated": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "matches": {"type": "integer"},
+                            "check_found": {"type": "boolean"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+                // CLOUD-2770: engine source spawning a shell. Absent when the
+                // fact did not read the whole tree.
+                "spawn": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "function": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
     }
 
     /// [`Fact::BaseDelta`]'s fragment (CLOUD-1059), lifted out of
@@ -2363,10 +2466,12 @@ impl Fact {
             | Fact::Symbols
             | Fact::Plan
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Pinned
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
             }),
@@ -2436,6 +2541,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::GitHead
@@ -2458,6 +2564,7 @@ impl Fact {
             | Fact::Captured
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2509,6 +2616,22 @@ impl Fact {
                 "running": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["head", "failed", "running"],
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for [`Fact::ShellIntroduced`] (CLOUD-2335): the look
+    /// and a reason token, stated so `opa check -s` refuses a module reading a
+    /// key the fact does not carry.
+    fn shell_introduced_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::ShellIntroduced (CLOUD-2335) -- whether this call's write authors shell into the repository. `look` is is, is-not or could-not-look; `reason` is shell-path (the write creates an absent file at a shell path) or shebang (line 1 would name a shell and does not on disk) when `look` is is, else null. A token, never the content; the path is `call.writes`.",
+            "properties": {
+                "look": {"type": "string", "enum": ["is", "is-not", "could-not-look"]},
+                "reason": {"type": ["string", "null"], "enum": ["shell-path", "shebang", null]},
+            },
+            "required": ["look", "reason"],
             "additionalProperties": false,
         })
     }
@@ -2629,6 +2752,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Pinned
             | Fact::GitHead
             | Fact::GitStatus
@@ -2646,6 +2770,7 @@ impl Fact {
             | Fact::Landing
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2854,6 +2979,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Staged
@@ -2870,6 +2996,7 @@ impl Fact {
             | Fact::GitIndex
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2930,10 +3057,12 @@ impl Fact {
             | Fact::Symbols
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::RedHead
+            | Fact::ShellIntroduced
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),
@@ -5714,4 +5843,52 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two shell facts (CLOUD-2625, CLOUD-2335): their tokens, their
+    /// classes, which surface resolves each, and the keys each schema states.
+    ///
+    /// Fails by: a token, class or tree key misrouted, or a schema that does
+    /// not state what the fact carries, so `opa check -s` admits a module
+    /// reading a key the fact never holds.
+    #[test]
+    fn the_shell_facts_are_named_classed_and_described() {
+        assert_eq!(Fact::Shell.as_str(), "shell");
+        assert_eq!(Fact::ShellIntroduced.as_str(), "shell-introduced");
+        assert_eq!(Fact::Shell.class(), SHELL);
+        assert_eq!(Fact::ShellIntroduced.class(), SHELL_INTRODUCED);
+        assert_eq!(Fact::Shell.tree_key(), Some("shell"));
+        assert_eq!(Fact::ShellIntroduced.tree_key(), None);
+        assert!(!Fact::Shell.minted_at_session_start());
+        assert!(!Fact::ShellIntroduced.minted_at_session_start());
+        let shell = Fact::Shell.schema_fragment();
+        for key in ["head", "base", "generated", "spawn"] {
+            assert!(shell["properties"].get(key).is_some(), "shell.{key}");
+        }
+        let introduced = Fact::ShellIntroduced.schema_fragment();
+        assert_eq!(
+            introduced["required"],
+            serde_json::json!(["look", "reason"])
+        );
+    }
+
+    /// Every fact is listed once, by a token no other fact carries, and
+    /// routes to a schema of its own rather than a delegate's placeholder.
+    ///
+    /// Fails by: a fact added to the enum but left out of `ALL`, two facts
+    /// sharing a token, or a fact falling through to an `unrouted` arm.
+    #[test]
+    fn every_fact_has_one_token_and_a_routed_schema() {
+        let mut tokens = std::collections::BTreeSet::new();
+        for fact in Fact::ALL {
+            assert!(tokens.insert(fact.as_str()), "{} twice", fact.as_str());
+            let fragment = fact.schema_fragment();
+            let described = fragment["description"].as_str().unwrap_or_default();
+            assert!(!described.starts_with("unrouted fact"), "{}", fact.as_str());
+        }
+    }
 }

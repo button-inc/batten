@@ -1269,14 +1269,6 @@
             "type": "string",
             "maxLength": 1536
           }
-        },
-        "suite_shared": {
-          "description": "Paths a bats suite can be moved by without naming them (CLOUD-1716).\n\n**CONSUMER DATA for `slow_inert`'s reason, and it arrived here as a\nconstant** (review of #928). `suites::select` carried a literal list —\nthis repository's task runner, gate config, lockfile and harness settings\n— inside `crates/batten`, which non-negotiable rule 1 refuses: the core\nknows the RELATIONSHIP (a path every suite depends on widens the run) and\nthe consumer knows which of its paths those are.\n\nSame spelling as `slow_inert`: an entry ending `/` covers a directory,\nanything else is an exact path.\n\n**Empty WIDENS, where `slow_inert` empty narrows**, and the asymmetry is\nthe one `suites::select` is built around: a selection that is too wide\ncosts money and shows up in the bill, while one that is too narrow has no\nsymptom at all — the suites simply do not run and a regression lands\ngreen. So an undeclared list is read as \"this tree has not said what its\nshared inputs are\", and the answer is every suite.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "maxLength": 1536
-          }
         }
       },
       "additionalProperties": false,
@@ -2785,6 +2777,37 @@
         }
       ]
     },
+    "Generated": {
+      "description": "One `[[census.shell.generated]]` row: shell a generator writes and a test\nholds.",
+      "type": "object",
+      "properties": {
+        "check": {
+          "description": "The test that holds their bytes, as `<test file>::<test name>`. Optional\nto the parser so that [`ShellCensus::validate`] is what refuses it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "generator": {
+          "description": "The command or function that writes them, as free text. Optional to the\nparser so that [`ShellCensus::validate`] is what refuses its absence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "path": {
+          "description": "The generated files, as a glob over tracked paths (`*`, `?`, `**`).",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
     "GitRead": {
       "description": "A git fact a rule declares reading, for the three variants that take no\nparameter (CLOUD-907).\n\nThe parameterised two are [`Rule::refs`] and [`Rule::ranges`]. A closed enum\nrather than a string, for [`SinkKey`]'s reason: a name the config could spell\narbitrarily is a question the engine would have to answer at runtime, and an\nunknown variant here is a load error rather than a fact that silently\nresolves to undefined — which is the shape a Rego predicate reads as \"does\nnot hold\".",
       "oneOf": [
@@ -3122,8 +3145,16 @@
       "description": "One manifest whose command strings are counted.",
       "type": "object",
       "properties": {
+        "carrier": {
+          "description": "The carrier whose fields this manifest's commands are, by its id in\n`crate::shell::CARRIERS` (`mise-task` or `hk-step`, the two with a\nmanifest reader). Exactly one of `carrier` and `keys`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "keys": {
-          "description": "The keys whose values are commands, as they are spelled before ` = `.",
+          "description": "The keys whose values are commands, as they are spelled before ` = `,\nfor a manifest no carrier describes. Exactly one of `carrier` and\n`keys`.",
           "type": "array",
           "items": {
             "type": "string",
@@ -3146,8 +3177,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "path",
-        "keys"
+        "path"
       ]
     },
     "Marker": {
@@ -5735,11 +5765,18 @@
       "type": "object",
       "properties": {
         "exempt": {
-          "description": "Paths that must stay shell because nothing else can run where they do, as\nglobs. Still measured, reported apart, and never totalled.",
+          "description": "Paths that must stay shell because nothing else can run where they do, as\nglobs. Still measured, reported apart, and never totalled.\n\nLEGACY (CLOUD-2628): a non-empty list with no `mode` reads as\n`mode = \"migrate\"` with these paths exempt, exactly as before the ban\njudged presence. Removing that reading is CLOUD-2745's.",
           "type": "array",
           "items": {
             "type": "string",
             "maxLength": 1536
+          }
+        },
+        "generated": {
+          "description": "The only shell the presence ban admits: files a named generator writes\nand a named test holds, one row per glob.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Generated"
           }
         },
         "manifest": {
@@ -5747,6 +5784,24 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Manifest"
+          }
+        },
+        "mode": {
+          "description": "How the `shell-hygiene` ban judges this tree. Absent is presence: any\nshell no `generated` entry covers is refused. `migrate` judges growth\nonly, while a repository ports what it has.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShellMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spawn": {
+          "description": "The only shell engine source may spawn (CLOUD-2770): one row per\nfunction whose string-literal argv runs a shell because an external\nformat forces it. Held in both directions, whatever `mode` says.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Spawn"
           }
         },
         "workflows": {
@@ -5759,6 +5814,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "ShellMode": {
+      "description": "`[census.shell] mode`: the one knob between presence and growth.",
+      "oneOf": [
+        {
+          "description": "Presence is not judged; the growth arms refuse new shell and shell that\ngrows, so the existing surface may only shrink.",
+          "type": "string",
+          "const": "migrate"
+        }
+      ]
     },
     "Signature": {
       "description": "A declared signature: what makes a class exact.\n\n**Consumer config, and none of its content may be a literal in this crate**\n(non-negotiable rule 1). The engine holds the matcher; which codes and which\nprogram-specific patterns are recognised is the repository's own answer.",
@@ -5959,6 +6024,37 @@
           "type": "string",
           "const": "days"
         }
+      ]
+    },
+    "Spawn": {
+      "description": "One `[[census.shell.spawn]]` row: an engine function that spawns a shell,\nand the external contract that forces it to.",
+      "type": "object",
+      "properties": {
+        "contract": {
+          "description": "The external format that makes the argv a shell command line, with a\ncitation (a URL). Optional to the parser so that\n[`ShellCensus::validate`] is what refuses its absence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "function": {
+          "description": "The function holding the spawn, by its name. Optional to the parser so\nthat [`ShellCensus::validate`] is what refuses its absence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "path": {
+          "description": "The source file, repo-relative.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
       ]
     },
     "Startup": {

@@ -180,13 +180,13 @@ A refusal is a pointer: the `batten policy explain` it names answers both its ru
 auto-loaded. **Start at `mem:core`** — the graph root carrying every memory's trigger,
 so the routing table lives there, not in this budgeted file (CLOUD-683's own cap).
 
-| `rules/`            | Read it when                                                                                                                                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rust.md`           | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                          |
-| `toolchain.md`      | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/**/*.bats`, workflows — a governed gate has two landable shapes; setup, the gate, lifecycle tasks, guards |
-| `commits.md`        | touching release config — Conventional Commits detail, fast-forward landing, release-plz, the release path                                                     |
-| `scanning.md`       | asking a whole-tree question, or asserting one is answered — text, syntax, names, or whether the board already says so                                         |
-| `policy-modules.md` | writing or editing a `.rego` module — the shape, the `[[pattern]]` rule, which `input.*` keys exist per surface                                                |
+| `rules/`            | Read it when                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rust.md`           | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                  |
+| `toolchain.md`      | editing `mise.toml`, `hk.pkl`, `crates/batten/tests/**`, workflows — a governed gate has two landable shapes; setup, the gate, lifecycle tasks, guards |
+| `commits.md`        | touching release config — Conventional Commits detail, fast-forward landing, release-plz, the release path                                             |
+| `scanning.md`       | asking a whole-tree question, or asserting one is answered — text, syntax, names, or whether the board already says so                                 |
+| `policy-modules.md` | writing or editing a `.rego` module — the shape, the `[[pattern]]` rule, which `input.*` keys exist per surface                                        |
 
 ## Scope reminder
 

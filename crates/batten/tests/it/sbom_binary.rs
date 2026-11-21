@@ -48,52 +48,56 @@ const ASSET: &str = "dist/batten-v9.9.9-x86_64-unknown-linux-gnu.spdx.json";
 /// A `syft` that writes both outputs and recovers `$FIXTURE/count` rust-crate
 /// artifacts. Sentinels: `syft.fails`, `syft.foreign` (the second crate is not
 /// in the lockfile) and `syft.file` (also an artifact for the binary itself).
-const SYFT: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-[ ! -f "$FIXTURE/syft.fails" ] || exit 1
-spdx=""
-scan=""
-want=0
-for arg in "$@"; do
-	if [ "$want" = 1 ]; then
-		case "$arg" in
-		spdx-json=*) spdx="${arg#spdx-json=}" ;;
-		syft-json=*) scan="${arg#syft-json=}" ;;
-		esac
-		want=0
-		continue
-	fi
-	[ "$arg" = "--output" ] && want=1
-done
-n=$(cat "$FIXTURE/count")
-names=(alpha beta)
-versions=(1.0.0 2.0.0)
-[ ! -f "$FIXTURE/syft.foreign" ] || names=(alpha not-in-the-lockfile)
-artifacts=""
-i=0
-while [ "$i" -lt "$n" ]; do
-	[ -z "$artifacts" ] || artifacts="$artifacts,"
-	artifacts="$artifacts{\"name\":\"${names[$i]}\",\"version\":\"${versions[$i]}\",\"type\":\"rust-crate\"}"
-	i=$((i + 1))
-done
-if [ -f "$FIXTURE/syft.file" ]; then
-	[ -z "$artifacts" ] || artifacts="$artifacts,"
-	artifacts="$artifacts{\"name\":\"batten\",\"version\":\"9.9.9\",\"type\":\"binary\"}"
-fi
-mkdir -p "$(dirname "$spdx")" "$(dirname "$scan")"
-echo "{\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"batten\",\"packages\":[]}" >"$spdx"
-echo "{\"artifacts\":[$artifacts]}" >"$scan"
-"#;
-
-fn executable(path: &Path, text: &str) {
-    fs::write(path, text).expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = fs::metadata(path).expect("stat").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod");
+///
+/// One rule per reading of the fixture, the sentinel-present ones first, since
+/// the stand-in's first matching rule wins and a condition cannot be negated.
+/// A rule holds one `file_exists`, so `syft.foreign` and `syft.file` together
+/// are not modelled (no case sets both): `syft.foreign` would win.
+fn syft() -> serde_json::Value {
+    let mut rules = vec![serde_json::json!({
+        "file_exists": "{env:FIXTURE}/syft.fails",
+        "steps": [{"exit": 1}],
+    })];
+    for count in 0..=2_usize {
+        for (foreign, file) in [(true, false), (false, true), (false, false)] {
+            let names = if foreign {
+                ["alpha", "not-in-the-lockfile"]
+            } else {
+                ["alpha", "beta"]
+            };
+            let mut artifacts: Vec<String> = names
+                .iter()
+                .zip(["1.0.0", "2.0.0"])
+                .take(count)
+                .map(|(name, version)| {
+                    format!(r#"{{"name":"{name}","version":"{version}","type":"rust-crate"}}"#)
+                })
+                .collect();
+            if file {
+                artifacts.push(r#"{"name":"batten","version":"9.9.9","type":"binary"}"#.to_owned());
+            }
+            let mut rule = serde_json::json!({
+                "file_contains": ["{env:FIXTURE}/count", count.to_string()],
+                "steps": [
+                    {"write": [
+                        "{argv-strip:spdx-json=}",
+                        "{\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"batten\",\"packages\":[]}\n",
+                    ]},
+                    {"write": [
+                        "{argv-strip:syft-json=}",
+                        format!("{{\"artifacts\":[{}]}}\n", artifacts.join(",")),
+                    ]},
+                ],
+            });
+            for (on, sentinel) in [(foreign, "foreign"), (file, "file")] {
+                if on {
+                    rule["file_exists"] = format!("{{env:FIXTURE}}/syft.{sentinel}").into();
+                }
+            }
+            rules.push(rule);
+        }
     }
+    serde_json::Value::Array(rules)
 }
 
 fn repo(name: &str) -> PathBuf {
@@ -132,8 +136,7 @@ fn repo(name: &str) -> PathBuf {
     write(&dir, "batten", "binary bytes\n");
     write(&dir, "count", "2\n");
     write(&dir, ".gitignore", "bin/\ndist/\ncount\nsyft.*\n");
-    fs::create_dir_all(dir.join("bin")).expect("bin");
-    executable(&dir.join("bin/syft"), SYFT);
+    common::stub_at(&dir.join("bin/syft"), &syft());
     init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "register the module"]);

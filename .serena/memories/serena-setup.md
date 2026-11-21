@@ -12,7 +12,7 @@ below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
 `mise.lock`. `.mcp.json` launches it through `batten mcp spawn serena --`, which
 records the spawn and then `exec`s the scoped, pinned launch line the file
-still carries verbatim (the shell shim `mise-tasks/serena-mcp.sh` retired onto
+still carries verbatim (the serena-mcp shell shim retired onto
 the verb under CLOUD-843): `mise exec pipx:serena-agent@<v> -- serena
 start-mcp-server --context claude-code --project .`. The argv stayed in
 `.mcp.json` on purpose — `mise-pin-agreement` reads the pin out of it.
@@ -29,7 +29,7 @@ why the first fix was validated green and Serena stayed absent anyway.
 1. **Install timing.** `mise exec` installs on demand; on a cold container that
    24s `pipx:serena-agent` install lands inside the MCP startup window and the
    handshake never completes. Closed by the synchronous `SessionStart` hook
-   (`.claude/hooks/session-start.sh`) running `mise install` **before** the
+   running `mise install` **before** the
    session starts.
 
    **Closed for INSTALLATION, not for everything that happens before Serena
@@ -215,7 +215,7 @@ connected` record, not the presence of an error key or a literal code.
 - **A slow attach is usually the cold index, not a fault.** A cold container pays
   a first rust-analyzer index (CLOUD-670, no persistent cache) while provisioning
   runs, and healthy attaches spread over an order of magnitude because of it.
-  `mise-tasks/mcp-timeout-budget.sh`'s header carries the measurement table and the
+  `policy/mcp-timeout-budget.rego`'s header carries the measurement table and the
   worst observed success; read it there rather than judging a duration by feel.
 - **`serverVersion` in the handshake record is NOT Serena's version, and it will
   look like pin drift.** The `Connection established with capabilities` line
@@ -271,7 +271,7 @@ perfectly runnable. (This paragraph used to add "and MCP servers are not retried
 mid-session"; that is false, see gate 1 above.)
 
 Fix (`9f78869`): a **synchronous** `SessionStart` hook,
-`.claude/hooks/session-start.sh`, runs `mise install` + submodule init before
+a since-retired shell script, ran `mise install` + submodule init before
 the session starts, so the install is out of the startup window.
 
 Verified on a genuinely cold container 2026-08-07: PID 1 started 22:00:00,

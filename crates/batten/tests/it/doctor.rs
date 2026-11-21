@@ -797,12 +797,10 @@ fn the_probe_never_executes_the_program_it_checks() {
     let dir = scratch("doctor-no-exec", true, None);
     let marker = dir.join("ran");
     let script = dir.join("writes-a-file");
-    fs::write(&script, format!("#!/bin/sh\ntouch {}\n", marker.display())).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    common::stub_at(
+        &script,
+        &serde_json::json!([{ "steps": [{ "write": [marker.display().to_string(), ""] }] }]),
+    );
     // A TOML *literal* string for the path, and that is not style. A basic
     // string processes escapes, so a Windows path interpolated into one —
     // `D:\a\batten\…` — reads `\a` and `\b` as control characters and rejects

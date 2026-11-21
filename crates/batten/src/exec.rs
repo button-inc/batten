@@ -3059,16 +3059,22 @@ mod tests {
         );
     }
 
-    /// The code `run` reports for a shell exiting `code`.
+    /// The code `run` reports for the stand-in running `steps`, installed
+    /// under the scratch `name`.
     #[cfg(unix)]
-    fn exit_with(script: &str) -> Result<ExitCode> {
-        run(&["sh".to_owned(), "-c".to_owned(), script.to_owned()])
+    fn exit_with(name: &str, steps: &serde_json::Value) -> Result<ExitCode> {
+        let child = crate::scratch::scratch(name).join("child");
+        crate::scratch::stub_at(&child, &serde_json::json!([{ "steps": steps }]));
+        run(&[child.to_str().expect("a utf-8 scratch path").to_owned()])
     }
 
     #[cfg(unix)]
     #[test]
     fn a_clean_child_is_success() {
-        assert_eq!(exit_with("exit 0").expect("sh runs"), ExitCode::Success);
+        assert_eq!(
+            exit_with("exec-clean-child", &serde_json::json!([])).expect("the child runs"),
+            ExitCode::Success
+        );
     }
 
     #[cfg(unix)]
@@ -3077,8 +3083,11 @@ mod tests {
         // The exception, asserted at the unit boundary as well as end-to-end: a
         // code the §7 table does not contain must survive intact.
         for expected in [1, 2, 7, 42, 255] {
-            let err =
-                exit_with(&format!("exit {expected}")).expect_err("non-zero travels as an error");
+            let err = exit_with(
+                &format!("exec-child-code-{expected}"),
+                &serde_json::json!([{ "exit": expected }]),
+            )
+            .expect_err("non-zero travels as an error");
             let carried = err
                 .downcast_ref::<Passthrough>()
                 .expect("a non-zero child code is a Passthrough");
@@ -3092,7 +3101,11 @@ mod tests {
     fn a_signalled_child_is_never_reported_as_success() {
         // `ExitStatus::code()` is `None` for a signalled child. Reporting `0`
         // there would call a killed build a pass.
-        let err = exit_with("kill -TERM $$").expect_err("a signalled child is not success");
+        let err = exit_with(
+            "exec-signalled-child",
+            &serde_json::json!([{ "run": ["kill", "-TERM", "{pid}"] }]),
+        )
+        .expect_err("a signalled child is not success");
         let carried = err
             .downcast_ref::<Passthrough>()
             .expect("a signalled child is a Passthrough");
@@ -3735,15 +3748,32 @@ mod tests {
         assert!(!path.exists(), "the guard's drop releases it");
     }
 
-    /// `sh -c script` through [`piped_argv`], from a scratch root.
-    fn sh(
+    /// The stand-in under the plan `rules`, run through [`piped_argv`] from a
+    /// scratch root.
+    fn stubbed(
         root: &Path,
-        script: &str,
+        rules: &serde_json::Value,
         stdin: &str,
         diagnostics: Diagnostics,
     ) -> Option<(i32, String)> {
-        let argv = ["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        let child = root.join("child");
+        crate::scratch::stub_at(&child, rules);
+        let argv = [child.to_str().expect("a utf-8 scratch path").to_owned()];
         piped_argv(root, &argv, stdin, diagnostics, &[])
+    }
+
+    /// [`stubbed`] with one rule that runs `steps` whatever it is handed.
+    fn steps(
+        root: &Path,
+        steps: &serde_json::Value,
+        diagnostics: Diagnostics,
+    ) -> Option<(i32, String)> {
+        stubbed(
+            root,
+            &serde_json::json!([{ "steps": steps }]),
+            "",
+            diagnostics,
+        )
     }
 
     /// Fails by: a piped child's code, stdout or stdin going astray, or
@@ -3758,45 +3788,58 @@ mod tests {
             "an empty argv names nothing to run"
         );
         if !cfg!(unix) {
-            // Off unix there is no `sh` to drive the cases below.
+            // Off unix the stand-in is a copy without the platform's executable
+            // suffix, so the cases below stay unix-only.
             return;
         }
-        let both = "printf out; printf why >&2; exit 3";
+        let both = serde_json::json!([{ "stdout": "out" }, { "stderr": "why" }, { "exit": 3 }]);
         assert_eq!(
-            sh(&root, both, "", Diagnostics::Drop),
+            steps(&root, &both, Diagnostics::Drop),
             Some((3, "out".to_owned()))
         );
         assert_eq!(
-            sh(&root, both, "", Diagnostics::Keep),
+            steps(&root, &both, Diagnostics::Keep),
             Some((3, "out\nwhy".to_owned()))
         );
         assert_eq!(
-            sh(
+            steps(
                 &root,
-                "printf 'out\\n'; printf why >&2",
-                "",
+                &serde_json::json!([{ "stdout": "out\n" }, { "stderr": "why" }]),
                 Diagnostics::Keep
             ),
             Some((0, "out\nwhy".to_owned())),
             "a stdout that already ends its line gets no second separator"
         );
         assert_eq!(
-            sh(&root, "printf why >&2", "", Diagnostics::Keep),
+            steps(
+                &root,
+                &serde_json::json!([{ "stderr": "why" }]),
+                Diagnostics::Keep
+            ),
             Some((0, "why".to_owned())),
             "an empty stdout needs no separator"
         );
         assert_eq!(
-            sh(
+            steps(
                 &root,
-                "printf out; printf '  \\n' >&2",
-                "",
+                &serde_json::json!([{ "stdout": "out" }, { "stderr": "  \n" }]),
                 Diagnostics::Keep
             ),
             Some((0, "out".to_owned())),
             "a blank stderr adds nothing"
         );
+        // The stdin reaches the child: only a child that was fed matches the
+        // rule that answers it, and an unfed one exits 127.
         assert_eq!(
-            sh(&root, "cat; exit 5", "fed", Diagnostics::Drop),
+            stubbed(
+                &root,
+                &serde_json::json!([{
+                    "stdin_contains": "fed",
+                    "steps": [{ "stdout": "fed" }, { "exit": 5 }],
+                }]),
+                "fed",
+                Diagnostics::Drop
+            ),
             Some((5, "fed".to_owned()))
         );
     }
@@ -3806,9 +3849,15 @@ mod tests {
     #[test]
     fn piped_runs_a_program_at_its_root_and_refuses_an_absent_one() {
         let root = crate::scratch::scratch("exec-piped-path");
-        std::fs::write(root.join("prog"), "#!/bin/sh\nprintf \"$1\"\ncat\nexit 4\n")
-            .expect("write the program");
-        crate::engine::make_executable(&root.join("prog")).expect("make the program executable");
+        // The argument, then the stdin (only a fed child matches), then 4.
+        crate::scratch::stub_at(
+            &root.join("prog"),
+            &serde_json::json!([{
+                "argv": ["arg-"],
+                "stdin_contains": "in",
+                "steps": [{ "stdout": "{argv:1}in" }, { "exit": 4 }],
+            }]),
+        );
         if cfg!(unix) {
             assert_eq!(
                 piped(&root, Path::new("prog"), &["arg-".to_owned()], "in"),
@@ -3918,11 +3967,12 @@ mod tests {
     impl Fifo {
         fn at(path: PathBuf) -> Self {
             let dir = path.parent().expect("a fifo inside the case's scratch");
-            let made = sh(
+            let made = piped_argv(
                 dir,
-                &format!("mkfifo '{}'", path.display()),
+                &["mkfifo".to_owned(), path.display().to_string()],
                 "",
                 Diagnostics::Keep,
+                &[],
             );
             assert_eq!(made, Some((0, String::new())), "make the fifo");
             let file = std::fs::OpenOptions::new()
@@ -3931,11 +3981,6 @@ mod tests {
                 .open(&path)
                 .expect("hold the fifo open");
             Self { path, file }
-        }
-
-        /// The shell redirection that writes one line to this pipe.
-        fn write(&self, line: &str) -> String {
-            format!("echo {line} 1<>'{}'", self.path.display())
         }
 
         /// Write `line` from this case's own end, waking a waiter.
@@ -3998,14 +4043,26 @@ mod tests {
         }
     }
 
-    /// A detached `sh` leading its own group, its pid read back from the pipe
-    /// it writes once `trap` is set. It then spins on builtins alone, so the
-    /// group holds that one process and nothing else. Unix only: the caller
-    /// holds the platform split.
-    fn detached_group(dir: &Path, trap: &str) -> Group {
+    /// A detached stand-in leading its own group, its pid read back from the
+    /// pipe it writes once its TERM trap is set (CLOUD-2336: it was `sh` with a
+    /// `trap`). With `on_term` absent it ignores TERM and sleeps; otherwise it
+    /// waits for TERM and then runs those plan steps. Either way it runs no
+    /// child, so the group holds that one process and nothing else. Unix only:
+    /// the caller holds the platform split.
+    fn detached_group(dir: &Path, on_term: Option<Vec<serde_json::Value>>) -> Group {
         let pid = Fifo::at(dir.join("pid"));
-        let script = format!("{trap} {}; while :; do :; done", pid.write("$$"));
-        detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
+        let mut steps = vec![
+            serde_json::json!({ "trap": "TERM" }),
+            serde_json::json!({ "write": [pid.path.display().to_string(), "{pid}\n"] }),
+        ];
+        if let Some(after) = on_term {
+            steps.push(serde_json::json!({ "await-signal": "TERM" }));
+            steps.extend(after);
+        }
+        steps.push(serde_json::json!({ "sleep": 600_000 }));
+        let leader = dir.join("group-leader");
+        crate::scratch::stub_at(&leader, &serde_json::json!([{ "steps": steps }]));
+        detached(&leader, &[], &[]);
         Group {
             pid: pid.first("the detached child writing its pid"),
             reaped: false,
@@ -4056,7 +4113,7 @@ mod tests {
             return;
         }
         let dir = crate::scratch::scratch("exec-live-group");
-        let mut pid = detached_group(&dir, "trap '' TERM;");
+        let mut pid = detached_group(&dir, None);
         assert!(terminate_group(&pid), "a live group was asked to leave");
         assert!(
             escalate_group(&pid),
@@ -4084,7 +4141,7 @@ mod tests {
             assert!(!cancel_owned_group(&root), "no process groups to cancel");
             return;
         }
-        let mut pid = detached_group(&root, "trap '' TERM;");
+        let mut pid = detached_group(&root, None);
         std::fs::write(&record, format!("{}\n", &*pid)).expect("seed the record");
         assert!(
             cancel_owned_group(&root),
@@ -4117,20 +4174,19 @@ mod tests {
         [(TASK_PGID_MANAGED_ENV.to_owned(), String::new())]
     }
 
-    /// One `sh -c script` dispatched under the decision a managed run reaches
+    /// One `command` dispatched under the decision a managed run reaches
     /// with no ancestor managing: Batten owns the group. Stated rather than
     /// observed, because the observation reads this process's environment,
     /// which is the harness's — `mise run` exports the marker and so declines.
     /// `each_decline_rule_refuses_on_its_own` holds the observation's rules.
-    fn owned_run(root: &Path, script: &str) -> Result<Vec<Outcome>> {
+    fn owned_run(root: &Path, command: &[String]) -> Result<Vec<Outcome>> {
         let managed = ExecConfig {
             manage_process_group: true,
             ..ExecConfig::DEFAULT
         };
-        let command = ["sh".to_owned(), "-c".to_owned(), script.to_owned()];
         dispatch_decided(
             root,
-            &[&command[..]],
+            &[command],
             &managed,
             &unmarked(),
             next_run(),
@@ -4150,19 +4206,37 @@ mod tests {
             .expect("state")
             .join("exec")
             .join(format!("group.{}", std::process::id()));
-        let outcomes = owned_run(&root, &format!("test \"${TASK_PGID_MANAGED_ENV}\" = 1"))
-            .expect("the owned run has an outcome");
+        // `test "$MARKER" = 1`: exits 0 only when the marker reads `1`.
+        let marked = root.join("marked");
+        crate::scratch::stub_at(
+            &marked,
+            &serde_json::json!([
+                { "env_eq": [TASK_PGID_MANAGED_ENV, "1"], "steps": [] },
+                { "steps": [{ "exit": 1 }] },
+            ]),
+        );
+        let marked = [marked.to_str().expect("a utf-8 scratch path").to_owned()];
+        let outcomes = owned_run(&root, &marked).expect("the owned run has an outcome");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0, "the child saw Batten's marker");
         assert!(!record.exists(), "the reap clears the record");
 
+        // `test -z "$MARKER"`: exits 0 when the marker is empty or unset.
+        let unmarked_child = root.join("unmarked");
+        crate::scratch::stub_at(
+            &unmarked_child,
+            &serde_json::json!([
+                { "env_eq": [TASK_PGID_MANAGED_ENV, ""], "steps": [] },
+                { "env": TASK_PGID_MANAGED_ENV, "steps": [{ "exit": 1 }] },
+                { "steps": [] },
+            ]),
+        );
         let unmanaged = run_in_with_env(
             &root,
-            &[
-                "sh".to_owned(),
-                "-c".to_owned(),
-                format!("test -z \"${TASK_PGID_MANAGED_ENV}\""),
-            ],
+            &[unmarked_child
+                .to_str()
+                .expect("a utf-8 scratch path")
+                .to_owned()],
             &[],
             &ExecConfig::DEFAULT,
             &unmarked(),
@@ -4181,20 +4255,32 @@ mod tests {
         }
         let root = contained("exec-clean-leaves");
         let alive = Fifo::at(root.join("alive"));
-        let go = Fifo::at(root.join("go"));
-        // The job outlives the run by construction: it blocks reading `go`,
-        // which this case writes only once the run has returned. Should the
-        // case fail before then, dropping `go` closes its only writer and the
-        // read ends at EOF.
-        let script = format!(
-            "(read _ < '{go}'; {alive}) >/dev/null 2>&1 &",
-            go = go.path.display(),
-            alive = alive.write("yes")
+        let go = root.join("go");
+        // The job outlives the run by construction: it waits for `go` to say
+        // `go`, which this case writes only once the run has returned, and
+        // gives up after a minute should the case fail before then. It is
+        // spawned `quiet`, so its streams hold none of the run's pipes and
+        // draining them does not wait on it.
+        let job = root.join("job");
+        crate::scratch::stub_at(
+            &job,
+            &serde_json::json!([
+                { "argv": ["start"], "steps": [{ "spawn": {
+                    "argv": [job.display().to_string(), "wait"],
+                    "pid": root.join("job.pid").display().to_string(),
+                    "quiet": true,
+                } }] },
+                { "argv": ["wait"], "steps": [
+                    { "await-file": [go.display().to_string(), "go"] },
+                    { "write": [alive.path.display().to_string(), "yes\n"] },
+                ] },
+            ]),
         );
-        let outcomes = owned_run(&root, &script).expect("the child exits clean");
+        let command = [job.display().to_string(), "start".to_owned()];
+        let outcomes = owned_run(&root, &command).expect("the child exits clean");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0);
-        go.say("go");
+        std::fs::write(&go, "go").expect("tell the job to go");
         assert_eq!(
             alive.first("the background job outliving the clean run"),
             "yes"
@@ -4207,16 +4293,25 @@ mod tests {
     #[test]
     fn a_bundle_runs_what_its_width_and_failure_policy_say() {
         let root = contained("exec-bundle-dispatch");
+        // `exit 0` is `true`; `exit 3` is the stand-in exiting 3.
+        let three = root.join("exit-3");
+        crate::scratch::stub_at(&three, &serde_json::json!([{ "steps": [{ "exit": 3 }] }]));
+        let three = three.to_str().expect("a utf-8 scratch path").to_owned();
+        let program = |code: &str| -> String {
+            if code == "exit 3" {
+                three.clone()
+            } else {
+                "true".to_owned()
+            }
+        };
         let bundle = |first: &str, second: &str| -> Vec<String> {
-            ["sh", "-c", first, BUNDLE_SEPARATOR, "sh", "-c", second]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect()
+            vec![program(first), BUNDLE_SEPARATOR.to_owned(), program(second)]
         };
         let declared = bundle("exit 0", "exit 0");
         assert_eq!(split_bundle(&declared).expect("a bundle").len(), 2);
         if !cfg!(unix) {
-            // Off unix there is no `sh` to drive the runs below.
+            // Off unix the stand-in is a copy without the platform's executable
+            // suffix, so the runs below stay unix-only.
             return;
         }
         let classify = |command: &[String], settings: &ExecConfig| {
@@ -4270,11 +4365,11 @@ mod tests {
     fn quiet_silences_the_record_and_the_default_emits_it() {
         assert!(OutputStyle::Quiet.suppresses_batten());
         if !cfg!(unix) {
-            // Off unix there is no `sh` to drive the runs below.
+            // Kept to the case's original platform.
             return;
         }
         let root = contained("exec-quiet-record");
-        let command = ["sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+        let command = ["true".to_owned()];
         let said = |style: OutputStyle| {
             let mut said = Vec::new();
             run_in_with(
@@ -4294,15 +4389,20 @@ mod tests {
         assert!(said(OutputStyle::Interleave).ends_with("exec: exit 0\n"));
     }
 
-    /// An owned forwarder over a detached group whose TERM trap is `on_term`,
-    /// adopted, with TERM then sent to this case and seen to reach the group.
-    /// Returns the forwarder and the group's pid. Unix only.
-    fn forwarded(name: &str, on_term: &str) -> (Forwarding, Group) {
+    /// An owned forwarder over a detached group that, on TERM, says `got` and
+    /// then exits 0 when `exits`, or stays when not; adopted, with TERM then
+    /// sent to this case and seen to reach the group. Returns the forwarder
+    /// and the group's pid. Unix only.
+    fn forwarded(name: &str, exits: bool) -> (Forwarding, Group) {
         let dir = crate::scratch::scratch(name);
         let got = Fifo::at(dir.join("got"));
         let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
-        let trap = on_term.replace("GOT", &got.write("got"));
-        let pid = detached_group(&dir, &format!("trap \"{trap}\" TERM;"));
+        let mut on_term =
+            vec![serde_json::json!({ "write": [got.path.display().to_string(), "got\n"] })];
+        if exits {
+            on_term.push(serde_json::json!({ "exit": 0 }));
+        }
+        let pid = detached_group(&dir, Some(on_term));
         forwarder
             .adopt(pid.parse().expect("a numeric pid"))
             .expect("adopt");
@@ -4324,7 +4424,7 @@ mod tests {
             );
             return;
         }
-        let (forwarder, mut pid) = forwarded("exec-forward-exit", "GOT; exit 0");
+        let (forwarder, mut pid) = forwarded("exec-forward-exit", true);
         reap(&mut pid);
         assert_eq!(forwarder.finish_reporting(), (Some(TERM), None));
     }
@@ -4337,7 +4437,7 @@ mod tests {
             assert_eq!(forwarder.finish(), None, "nothing forwards");
             return;
         }
-        let (forwarder, mut pid) = forwarded("exec-forward-finish", "GOT; exit 0");
+        let (forwarder, mut pid) = forwarded("exec-forward-finish", true);
         reap(&mut pid);
         assert_eq!(forwarder.finish(), Some(TERM));
     }
@@ -4349,7 +4449,7 @@ mod tests {
             return;
         }
         // The trap notes the first TERM and stays, so only the escalation ends it.
-        let (forwarder, mut pid) = forwarded("exec-forward-second", "GOT");
+        let (forwarder, mut pid) = forwarded("exec-forward-second", false);
         term_self();
         reap(&mut pid);
         assert_eq!(
@@ -4367,13 +4467,23 @@ mod tests {
         }
         let root = contained("exec-signalled-run");
         let started = Fifo::at(root.join("started"));
-        let script = format!("{}; exec sleep 10", started.write("started"));
+        // Says it started, then waits on a sleeper in its own group: the
+        // group's TERM ends both.
+        let child = root.join("child");
+        crate::scratch::stub_at(
+            &child,
+            &serde_json::json!([{ "steps": [
+                { "write": [started.path.display().to_string(), "started\n"] },
+                { "run": ["sleep", "10"] },
+            ] }]),
+        );
+        let command = [child.to_str().expect("a utf-8 scratch path").to_owned()];
         let outcomes = std::thread::scope(|scope| {
             scope.spawn(|| {
                 assert_eq!(started.first("the child starting"), "started");
                 term_self();
             });
-            let outcomes = owned_run(&root, &script);
+            let outcomes = owned_run(&root, &command);
             // A run that returned without its child ever starting must not
             // leave the waiter above waiting out its bound: it reads this
             // instead, and fails at once.

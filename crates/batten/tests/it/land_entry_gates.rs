@@ -70,23 +70,21 @@ fn gate(dir: &std::path::Path, name: &str, code: i32) -> String {
     } else {
         dir.join(name)
     };
-    let body = if cfg!(windows) {
-        format!(
+    if cfg!(windows) {
+        let body = format!(
             "@echo off\r\necho %* >>\"{}\"\r\necho the gate spoke\r\nexit /b {code}\r\n",
             asked.display()
-        )
+        );
+        std::fs::write(&path, body).expect("write the gate");
     } else {
-        format!(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{}'\necho 'the gate spoke'\nexit {code}\n",
-            asked.display()
-        )
-    };
-    std::fs::write(&path, body).expect("write the gate");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate executable");
+        common::stub_at(
+            &path,
+            &serde_json::json!([{ "steps": [
+                { "append": [asked.display().to_string(), "{argv}\n"] },
+                { "stdout": "the gate spoke\n" },
+                { "exit": code },
+            ] }]),
+        );
     }
     path.display().to_string()
 }

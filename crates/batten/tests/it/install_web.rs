@@ -41,7 +41,6 @@ use crate::common;
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the import both spawns below need, annotated at every site the way the other suites in this directory are"
@@ -63,15 +62,30 @@ const TAG: &str = "v9.9.9";
 /// so pointing it here is the supported route and not a workaround.
 const REPO: &str = "example/pkg";
 
+/// What the payload `batten` does: say `ran <argv>`, so a case can see the
+/// verified bytes were run and with what.
+fn payload_plan() -> serde_json::Value {
+    serde_json::json!([{"steps": [{"stdout": "ran {argv}\n"}]}])
+}
+
+/// Stage the payload `batten` in `dir`: a COPY of the stand-in (a link would
+/// not survive the tar) with its plan beside it as `batten.plan.json`.
+/// Executable, as the binary in a real release archive is: the copy keeps the
+/// stand-in's mode.
+fn stage_payload(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::copy(common::stub(), dir.join("batten")).unwrap();
+    std::fs::write(dir.join("batten.plan.json"), payload_plan().to_string()).unwrap();
+}
+
 /// The archive payload: a `batten` stub at the archive root, which is where
 /// `batten dist` puts the binary and where the bootstrap extracts it from.
+///
+/// The bootstrap extracts the `batten` member alone, so its plan does not
+/// survive the extraction: [`install_in`] names it with `BATTEN_STUB_PLAN`.
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
     let stage = dir.join("stage");
-    std::fs::create_dir_all(&stage).unwrap();
-    let stub = stage.join("batten");
-    std::fs::write(&stub, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
-    // Executable, as the binary in a real release archive is.
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stage_payload(&stage);
     let archive = dir.join("payload.tar.gz");
     #[expect(
         clippy::disallowed_types,
@@ -275,6 +289,8 @@ fn install_in(
 ) -> (Option<i32>, String, String) {
     let dir = scratch(name);
     std::fs::write(dir.join("batten.toml"), config).unwrap();
+    let plan = dir.join("payload.plan.json");
+    std::fs::write(&plan, payload_plan().to_string()).unwrap();
     let script = dir.join("install.sh");
     std::fs::write(
         &script,
@@ -297,7 +313,10 @@ fn install_in(
         // The loopback host must not be reached through this container's proxy.
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env("no_proxy", "127.0.0.1,localhost")
-        .env("BATTEN_RELEASES", [web, REPO].join("/"));
+        .env("BATTEN_RELEASES", [web, REPO].join("/"))
+        // The payload's plan, which the extraction leaves behind; a case's own
+        // `env` may name another.
+        .env("BATTEN_STUB_PLAN", &plan);
     for (key, value) in env {
         command.env(key, value);
     }
@@ -596,14 +615,18 @@ fn the_retry_is_bounded_and_reports_rather_than_looping() {
 fn a_platform_no_release_builds_is_refused_before_any_request() {
     let dir = scratch("install-web-platform");
     let stub = dir.join("stub");
-    std::fs::create_dir_all(&stub).unwrap();
     let uname = stub.join("uname");
-    std::fs::write(
+    common::stub_at(
         &uname,
-        "#!/bin/sh\ncase \"$1\" in -s) echo Linux ;; -m) echo riscv64 ;; esac\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&uname, std::fs::Permissions::from_mode(0o755)).unwrap();
+        &serde_json::json!([
+            {"argv_prefix": ["-s"], "steps": [{"stdout": "Linux\n"}]},
+            {"argv_prefix": ["-m"], "steps": [{"stdout": "riscv64\n"}]},
+            {"steps": []},
+        ]),
+    );
+    // Named outright: the payload's plan, which `install_in` names, would
+    // otherwise answer for `uname` too.
+    let plan = format!("{}.plan.json", uname.display());
     let (web, log) = logged_host(|_| Vec::new());
     let ambient = common::ambient_path();
     let path =
@@ -615,7 +638,7 @@ fn a_platform_no_release_builds_is_refused_before_any_request() {
         "install-web-platform-run",
         &web,
         &lock_for(&"0".repeat(64)),
-        &[("PATH", &path)],
+        &[("PATH", &path), ("BATTEN_STUB_PLAN", &plan)],
     );
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(stderr.contains("no release for Linux/riscv64"), "{stderr}");
@@ -833,11 +856,7 @@ fn run_dist(ws: &std::path::Path, args: &[&str]) {
 /// installer strips with `--strip-components 1`.
 fn dist_tarball(dir: &std::path::Path, target: &str) -> Vec<u8> {
     let stage = dir.join("dist-stage");
-    let inner = stage.join(format!("batten-{target}"));
-    std::fs::create_dir_all(&inner).unwrap();
-    let stub = inner.join("batten");
-    std::fs::write(&stub, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stage_payload(&stage.join(format!("batten-{target}")));
     let archive = dir.join("dist-payload.tar.gz");
     #[expect(
         clippy::disallowed_types,

@@ -25,11 +25,10 @@
 //! misbehave on demand.
 
 // UNIX-ONLY, AND THE WINDOWS FAILURE WOULD BE A FALSE GREEN RATHER THAN A
-// COULD-NOT-RUN. Every case below drives a `#!/bin/sh` stub through
-// `exec::piped`, and only unix makes it executable — the `set_permissions` call
-// in `stub` is already `#[cfg(unix)]`. On Windows the spawn fails, the dispatch
-// leaves no record, and absence is exactly what this gate refuses: the refusal
-// cases would pass FOR THE WRONG REASON while
+// COULD-NOT-RUN. Every case below drives the stand-in through `exec::piped` at
+// an extensionless `runner.sh`, which only unix can run. On Windows the spawn
+// fails, the dispatch leaves no record, and absence is exactly what this gate
+// refuses: the refusal cases would pass FOR THE WRONG REASON while
 // `a_dispatched_review_reaches_the_predicate_and_is_clean` failed.
 //
 // That asymmetry is the reason to gate the module rather than the one clean case.
@@ -88,27 +87,21 @@ fn repo(name: &str, subject: &str, emits: &str, code: i32) -> PathBuf {
 /// spawns, never by looking at the record, since a hit and a second identical
 /// dispatch leave byte-identical records.
 fn stub(root: &Path, emits: &str, code: i32) {
-    let path = root.join("runner.sh");
-    fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\n\
-             if [ \"$1\" = setup ]; then printf '%s' \"$(cat \"$(dirname \"$0\")/ready\")\"; exit 0; fi\n\
-             cat >/dev/null\n\
-             echo \"$@\" >> \"$(dirname \"$0\")/calls\"\n\
-             printf '%s' {emits:?}\n\
-             exit {code}\n"
-        ),
-    )
-    .expect("write the stub");
+    let ready = root.join("ready").display().to_string();
+    common::stub_at(
+        &root.join("runner.sh"),
+        &serde_json::json!([
+            { "argv_prefix": ["setup"], "steps": [{ "cat": ready }] },
+            { "steps": [
+                { "append": [root.join("calls").display().to_string(), "{argv}\n"] },
+                { "stdout": emits },
+                { "exit": code },
+            ] },
+        ]),
+    );
     // The probe's answer lives beside the stub so a case can set it without
     // rewriting the program: readiness is what varies, not the runner.
     fs::write(root.join("ready"), r#"{"ready": true}"#).expect("write the probe answer");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("make it executable");
-    }
 }
 
 fn calls(root: &Path) -> usize {

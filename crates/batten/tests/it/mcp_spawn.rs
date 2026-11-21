@@ -75,16 +75,10 @@ use common::{StateHome as _, at_root, batten};
 /// it is the right one.
 fn launcher(dir: &Path) -> PathBuf {
     let path = dir.join("launcher");
-    common::write(
-        dir,
-        "launcher",
-        "#!/usr/bin/env bash\nprintf 'pid=%s args=%s\\n' \"$$\" \"$*\"\n",
+    common::stub_at(
+        &path,
+        &serde_json::json!([{"steps": [{"stdout": "pid={pid} args={argv}\n"}]}]),
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     path
 }
 
@@ -397,11 +391,16 @@ fn a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_lin
     let output = batten()
         .state_home(&home)
         .args(["mcp", "spawn", "demo", "--", "demo-server", "a", "b"])
-        // `demo-server` is on no directory of this PATH; `env` and `bash`,
-        // which the launcher's shebang needs, are.
+        // `demo-server` is on no directory of this PATH.
         .env(
             "PATH",
             std::env::join_paths(["/usr/bin", "/bin"]).expect("a joinable PATH"),
+        )
+        // The provisioned copy is the stand-in with no plan beside it, so the
+        // launcher's plan is named outright.
+        .env(
+            "BATTEN_STUB_PLAN",
+            format!("{}.plan.json", launcher.display()),
         )
         .current_dir(&dir)
         .output()

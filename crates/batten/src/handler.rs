@@ -1500,6 +1500,17 @@ mod tests {
         );
     }
 
+    /// A handler program that says `why` on stderr and exits 2 — a refusal —
+    /// installed under the scratch `name`; its path.
+    fn refusing(name: &str, why: &str) -> String {
+        let program = crate::scratch::scratch(name).join("refuse");
+        crate::scratch::stub_at(
+            &program,
+            &serde_json::json!([{ "steps": [{ "stderr": format!("{why}\n") }, { "exit": 2 }] }]),
+        );
+        program.to_str().expect("a utf-8 scratch path").to_owned()
+    }
+
     fn is_usage_error(err: &anyhow::Error) -> bool {
         err.downcast_ref::<UsageError>().is_some()
     }
@@ -1536,7 +1547,7 @@ mod tests {
         // reading is `Pass`, not `TimedOut`. The exact timeout, at the bound the
         // handler declared, is therefore what separates the fix from the defect;
         // an elapsed-time ceiling only restated it, and added a way to flake.
-        let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
+        let mut deaf = handler("deaf", "stop", &["sleep", "30"]);
         deaf.timeout_ms = Some(300);
         let outcome = run_one(Path::new("."), &deaf, &Payload::Text(oversized()));
         assert_eq!(
@@ -1557,13 +1568,22 @@ mod tests {
         //
         // Asserted as `Advise` with the bytes intact, so both halves are pinned:
         // the call returns, and it returns what the handler actually said.
-        // `head`/`tr` rather than a shell loop: this has to finish well inside the
-        // default bound, or the test would pass for the wrong reason on a slow box.
+        // One write of the whole stream rather than a loop: this has to finish
+        // well inside the default bound, or the test would pass for the wrong
+        // reason on a slow box.
         let big = 200 * 1024;
-        let script = format!("head -c {big} /dev/zero | tr '\\0' a");
+        let loud = crate::scratch::scratch("handler-loud").join("loud");
+        crate::scratch::stub_at(
+            &loud,
+            &serde_json::json!([{ "steps": [{ "stdout": "a".repeat(big) }] }]),
+        );
         let outcome = run_one(
             Path::new("."),
-            &handler("loud", "stop", &["sh", "-c", &script]),
+            &handler(
+                "loud",
+                "stop",
+                &[loud.to_str().expect("a utf-8 scratch path")],
+            ),
             &Payload::from("{}"),
         );
         match outcome {
@@ -1742,7 +1762,7 @@ mod tests {
         // channel they travel. Asserting one without the other would pass on a
         // build that converted every advisory into a grant.
         let payload = "{}";
-        let mut row = handler("g", Event::PreTool.as_str(), &["sh", "-c", "echo granted"]);
+        let mut row = handler("g", Event::PreTool.as_str(), &["printf", "%s\n", "granted"]);
 
         let dispatched = dispatch(
             Path::new("."),
@@ -1790,11 +1810,8 @@ mod tests {
         // must not have lost the ability to say "I found something" or "no" —
         // otherwise declaring it would silently disarm the guard's other arms,
         // which is the shape this whole surface exists to refuse.
-        let mut row = handler(
-            "g",
-            Event::PreTool.as_str(),
-            &["sh", "-c", "echo no >&2; exit 2"],
-        );
+        let refuser = refusing("handler-declaring-refuses", "no");
+        let mut row = handler("g", Event::PreTool.as_str(), &[refuser.as_str()]);
         row.preapproves = true;
         let dispatched = dispatch(
             Path::new("."),
@@ -1867,9 +1884,9 @@ mod tests {
         // overrule one would let a dispatched program spend a verdict another
         // dispatched program reached. Asserted here rather than trusted, because
         // this projection is what the boundary reads.
-        let mut first = handler("a", Event::PreTool.as_str(), &["sh", "-c", "echo one"]);
+        let mut first = handler("a", Event::PreTool.as_str(), &["printf", "%s\n", "one"]);
         first.preapproves = true;
-        let mut second = handler("b", Event::PreTool.as_str(), &["sh", "-c", "echo two"]);
+        let mut second = handler("b", Event::PreTool.as_str(), &["printf", "%s\n", "two"]);
         second.preapproves = true;
         let rows = vec![first, second.clone()];
         let dispatched = dispatch(
@@ -1882,11 +1899,8 @@ mod tests {
         );
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
 
-        let denier = handler(
-            "d",
-            Event::PreTool.as_str(),
-            &["sh", "-c", "echo nope >&2; exit 2"],
-        );
+        let refuser = refusing("handler-grant-outranked", "nope");
+        let denier = handler("d", Event::PreTool.as_str(), &[refuser.as_str()]);
         let rows = vec![second, denier];
         let dispatched = dispatch(
             Path::new("."),
@@ -1915,9 +1929,9 @@ mod tests {
             "g",
             Event::PreTool.as_str(),
             &[
-                "sh",
-                "-c",
-                r#"printf '{"hookSpecificOutput":{"permissionDecision":"allow"}}'"#,
+                "printf",
+                "%s",
+                r#"{"hookSpecificOutput":{"permissionDecision":"allow"}}"#,
             ],
         );
         row.preapproves = true;
@@ -1952,21 +1966,17 @@ mod tests {
         // under Windows' `sh` prints `/c/...`, which no `Path` compares equal
         // to (measured on #1132's `windows` job), while a relative file lands
         // wherever the handler actually ran on every platform.
-        let script = root.join("scripts").join("where.sh");
-        std::fs::write(&script, "#!/bin/sh\n: > ran-here\necho here\n").expect("script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("executable");
-        }
-        // Windows runs no `#!` script by itself, so `sh` runs it there, by the
-        // same root-relative path.
-        #[cfg(unix)]
-        let run: &[&str] = &["scripts/where.sh"];
-        #[cfg(not(unix))]
-        let run: &[&str] = &["sh", "scripts/where.sh"];
-        let row = handler("w", Event::PreTool.as_str(), run);
+        // The stand-in's `ran-here` is relative, so it lands in the directory
+        // the handler ran in; its plan is found beside the root-relative path.
+        let program = format!("scripts/where{}", std::env::consts::EXE_SUFFIX);
+        crate::scratch::stub_at(
+            &root.join(&program),
+            &serde_json::json!([{ "steps": [
+                { "write": ["ran-here", ""] },
+                { "stdout": "here\n" },
+            ] }]),
+        );
+        let row = handler("w", Event::PreTool.as_str(), &[program.as_str()]);
         let dispatched = dispatch(
             &root,
             std::slice::from_ref(&row),

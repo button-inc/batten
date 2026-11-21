@@ -319,9 +319,6 @@ _batten() {
             batten__subcmd__ci,step)
                 cmd="batten__subcmd__ci__subcmd__step"
                 ;;
-            batten__subcmd__ci,suites)
-                cmd="batten__subcmd__ci__subcmd__suites"
-                ;;
             batten__subcmd__ci__subcmd__help,help)
                 cmd="batten__subcmd__ci__subcmd__help__subcmd__help"
                 ;;
@@ -330,9 +327,6 @@ _batten() {
                 ;;
             batten__subcmd__ci__subcmd__help,step)
                 cmd="batten__subcmd__ci__subcmd__help__subcmd__step"
-                ;;
-            batten__subcmd__ci__subcmd__help,suites)
-                cmd="batten__subcmd__ci__subcmd__help__subcmd__suites"
                 ;;
             batten__subcmd__claim,bot)
                 cmd="batten__subcmd__claim__subcmd__bot"
@@ -813,9 +807,6 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__ci,step)
                 cmd="batten__subcmd__help__subcmd__ci__subcmd__step"
-                ;;
-            batten__subcmd__help__subcmd__ci,suites)
-                cmd="batten__subcmd__help__subcmd__ci__subcmd__suites"
                 ;;
             batten__subcmd__help__subcmd__claim,bot)
                 cmd="batten__subcmd__help__subcmd__claim__subcmd__bot"
@@ -3485,7 +3476,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ci)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help slow-needed suites step help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help slow-needed step help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3515,7 +3506,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ci__subcmd__help)
-            opts="slow-needed suites step help"
+            opts="slow-needed step help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3557,20 +3548,6 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ci__subcmd__help__subcmd__step)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        batten__subcmd__ci__subcmd__help__subcmd__suites)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -3658,40 +3635,6 @@ _batten() {
                     return 0
                     ;;
                 --require-env)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --strictness)
-                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
-                    return 0
-                    ;;
-                --config-from)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --config-in)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --log-level)
-                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
-                    return 0
-                    ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        batten__subcmd__ci__subcmd__suites)
-            opts="-q -v -y -h --base --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                --base)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -6319,7 +6262,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__ci)
-            opts="slow-needed suites step"
+            opts="slow-needed step"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -6347,20 +6290,6 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__ci__subcmd__step)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        batten__subcmd__help__subcmd__ci__subcmd__suites)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -14269,7 +14198,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__suites)
-            opts="-q -v -y -h --write --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

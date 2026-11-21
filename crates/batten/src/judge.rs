@@ -1110,13 +1110,20 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_payload_crosses_on_stdin_and_the_exit_code_is_the_whole_verdict() {
-        // Both halves of the contract in one run over a real process: `sh -c`
-        // is the fixture here (not how a judge row is invoked — `invoke` never
-        // uses a shell) because it can assert on stdin and choose an exit code.
+        // Both halves of the contract in one run over a real process: the
+        // stand-in is the fixture here because it can assert on stdin and
+        // choose an exit code.
+        let dir = crate::scratch::scratch("judge-payload-on-stdin");
         let payload = b"PAYLOAD-SENTINEL-crossed-on-stdin";
-        let script =
-            "read -r line; case \"$line\" in *PAYLOAD-SENTINEL*) exit 2;; *) exit 9;; esac";
-        let argv = vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        let reads = dir.join("reads");
+        crate::scratch::stub_at(
+            &reads,
+            &serde_json::json!([
+                { "stdin_contains": "PAYLOAD-SENTINEL", "steps": [{ "exit": 2 }] },
+                { "steps": [{ "exit": 9 }] },
+            ]),
+        );
+        let argv = vec![reads.to_str().unwrap().to_owned()];
         assert_eq!(
             invoke("r", &argv, payload).unwrap(),
             Verdict::Raised,
@@ -1129,7 +1136,12 @@ mod tests {
             (1, Verdict::Unresolved(1)),
             (3, Verdict::Unresolved(3)),
         ] {
-            let argv = vec!["sh".to_owned(), "-c".to_owned(), format!("exit {code}")];
+            let exits = dir.join(format!("exit-{code}"));
+            crate::scratch::stub_at(
+                &exits,
+                &serde_json::json!([{ "steps": [{ "exit": code }] }]),
+            );
+            let argv = vec![exits.to_str().unwrap().to_owned()];
             assert_eq!(invoke("r", &argv, payload).unwrap(), want);
         }
     }

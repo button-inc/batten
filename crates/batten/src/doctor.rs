@@ -27,8 +27,8 @@
 //! differ per machine and would defeat byte-stability (§6) while leaking the
 //! layout of someone's disk into a log (rule 4).
 //!
-//! Not to be confused with `mise-tasks/doctor.sh`, which gates *this repository's*
-//! own provisioning (the bats submodule, rustup cross targets). That one is
+//! Not to be confused with `mise-tasks/doctor.sh`, which gated *this repository's*
+//! own provisioning (the bats submodule, rustup cross targets). That one was
 //! repo tooling; this is the product verb.
 
 use std::io::Write;
@@ -251,7 +251,7 @@ const PLAN_SURFACE: &str = "plan-surface";
 /// # What it is NOT
 ///
 /// Not a claim that the gate PASSES — only that a commit in this clone runs it.
-/// `mise-tasks/doctor.sh` asks the stronger question (can the hook resolve its
+/// `mise-tasks/doctor.sh` asked the stronger question (can the hook resolve its
 /// runner) by executing the hook under a probe, which a `read` verb may not do
 /// (§5, CLOUD-170). This stats, exactly as [`on_path`] does and for the same
 /// reason.
@@ -474,22 +474,22 @@ impl crate::output::Line for Mediator {
 ///
 /// # Not a widening of `mise-tasks/egress-check.sh`, and deliberately not an edit to it
 ///
-/// That task asks a NARROWER question over a DIFFERENT subject: given two values
+/// That task asked a NARROWER question over a DIFFERENT subject: given two values
 /// passed as arguments, will **mise's release resolver** reach `api.github.com`.
-/// It answers `ok` or `unfenced`, it matches the host generously — bare,
-/// dot-prefixed and wildcard-prefixed entries all read as fenced — and it is
+/// It answered `ok` or `unfenced`, it matched the host generously — bare,
+/// dot-prefixed and wildcard-prefixed entries all read as fenced — and it was
 /// correct about its own subject.
 ///
 /// This asks whether **batten** would be proxied, reads the live environment,
 /// and defers to [`crate::fetch::is_direct`] for what a no-proxy list means. The
-/// two therefore disagree on an input like `*.api.github.com`, which fences a
+/// two therefore disagreed on an input like `*.api.github.com`, which fences a
 /// subdomain and not the bare host: generous there, [`Egress::Unfenced`] here.
 ///
-/// Neither should be made to match the other — aligning them would put a second
+/// Neither was to be made to match the other — aligning them would put a second
 /// authority in front of one of the two subjects, the class
 /// `rules/policy-modules.md` records for the shell tokenizer one layer
-/// over. And the task is left UNTOUCHED rather than extended, because
-/// `shell edit refused` is right about it: a migration replaces a shell gate, it
+/// over. And the task was left UNTOUCHED rather than extended, because
+/// `shell edit refused` was right about it: a migration replaces a shell gate, it
 /// does not maintain one. The three-way split lives here, in the engine, which is
 /// also the only place the ambient read is possible at all.
 ///
@@ -1408,7 +1408,7 @@ pub(crate) fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
 /// Whether `at` is a file this checkout's git would actually run.
 ///
 /// **Stats and follows, never executes** — [`on_path`]'s rule, one subject over:
-/// running the hook to see whether it works is what `mise-tasks/doctor.sh` does
+/// running the hook to see whether it works is what `mise-tasks/doctor.sh` did
 /// behind a probe variable, and a `read` verb may not reach user-supplied code
 /// (§5, CLOUD-170). `metadata` follows the symlink deliberately: this
 /// repository's own installer makes the hooks symlinks into the tree precisely

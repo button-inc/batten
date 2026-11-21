@@ -213,6 +213,36 @@
             "null"
           ]
         },
+        "shell-introduced": {
+          "additionalProperties": false,
+          "description": "Fact::ShellIntroduced (CLOUD-2335) -- whether this call's write authors shell into the repository. `look` is is, is-not or could-not-look; `reason` is shell-path (the write creates an absent file at a shell path) or shebang (line 1 would name a shell and does not on disk) when `look` is is, else null. A token, never the content; the path is `call.writes`.",
+          "properties": {
+            "look": {
+              "enum": [
+                "is",
+                "is-not",
+                "could-not-look"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "shell-path",
+                "shebang",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "look",
+            "reason"
+          ],
+          "type": "object"
+        },
         "stop": {
           "description": "Fact::Stop -- the end-of-turn facts."
         },

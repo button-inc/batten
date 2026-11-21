@@ -46,7 +46,8 @@ use std::path::{Path, PathBuf};
 fn stub(dir: &Path, name: &str) {
     fs::create_dir_all(dir).expect("fixture dir");
     let path = dir.join(name);
-    fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write stub");
+    // Only resolved by name, never run: plain bytes, no shell (CLOUD-2336).
+    fs::write(&path, "a program these cases never run\n").expect("write stub");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,7 +71,7 @@ fn resolves(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
 #[test]
 fn the_mask_hides_every_batten_and_keeps_the_rest() {
     if !cfg!(unix) {
-        // The shadow is symlinks and the stubs are shebang scripts; off Unix the
+        // The shadow is symlinks and the stubs carry unix modes; off Unix the
         // directory is dropped instead, which hides `batten` as surely and `mise`
         // with it — the cost `common::shadow_of`'s other arm states.
         return;

@@ -13,10 +13,10 @@
 //! image apart from a `batten` on `PATH`, because in-process they are the same
 //! file. Only a child spawned from a `PATH` the case controls can.
 //!
-//! So the discriminator is a decoy. A directory whose only `batten` is a script
-//! that fails goes on the front of `PATH`, and a `command` row names the bare
+//! So the discriminator is a decoy. A directory whose only `batten` is the real
+//! `false` goes on the front of `PATH`, and a `command` row names the bare
 //! word `batten`. The running image answers `--version` with exit 0 and the
-//! rule passes; the decoy answers with 17 and the rule is a violation. The two
+//! rule passes; the decoy fails and the rule is a violation. The two
 //! outcomes are different exit codes from `enforce`, so the case cannot pass
 //! for the wrong reason.
 //!
@@ -25,8 +25,8 @@
 //!
 //! # Unix only, and registered that way
 //!
-//! The decoy is a `#!/bin/sh` script whose permission bits are the mechanism,
-//! so `PermissionsExt` does not compile off Unix at all. That is `rules/rust.md`'s
+//! The decoy is a unix symlink to `false` named `batten`, so
+//! `std::os::unix::fs::symlink` does not compile off Unix at all. That is `rules/rust.md`'s
 //! stated exception to the `cfg!`-inside-a-case rule — the case reaches a symbol
 //! the other target does not have — so `main.rs` gates the whole module, as it
 //! already does for `ntia`.
@@ -36,14 +36,9 @@
 
 use crate::common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Fixture, StateHome, batten, scratch};
-
-/// The exit code the decoy answers with — distinct from anything the engine
-/// itself returns for `--version`, so a passing run cannot be the decoy's.
-const DECOY_CODE: i32 = 17;
 
 /// A repository with one `command` row naming the bare word `batten`, and a
 /// state home beside it.
@@ -65,9 +60,10 @@ fn self_image_repo(root: &Path) -> (PathBuf, PathBuf) {
     (repo, Fixture::at(root.join("home")).build())
 }
 
-/// A directory whose only `batten` is a script that exits [`DECOY_CODE`].
+/// A directory whose only `batten` is the real `false`, linked in under that
+/// name — a program that runs and fails, with no shell authored (CLOUD-2336).
 ///
-/// Executable on purpose. A decoy that could not run would turn a broken rung
+/// Runnable on purpose. A decoy that could not run would turn a broken rung
 /// into `NotFound`, which is also non-zero — the case would still fail, but for
 /// "nothing ran" rather than for "the wrong thing ran", and the second is the
 /// defect under test.
@@ -75,10 +71,13 @@ fn decoy_dir(root: &Path) -> PathBuf {
     let dir = root.join("decoy");
     std::fs::create_dir_all(&dir).expect("the decoy directory is creatable");
     let decoy = dir.join("batten");
-    std::fs::write(&decoy, format!("#!/bin/sh\nexit {DECOY_CODE}\n"))
-        .expect("the decoy is written");
-    std::fs::set_permissions(&decoy, std::fs::Permissions::from_mode(0o755))
-        .expect("the decoy is executable");
+    let _ = std::fs::remove_file(&decoy);
+    let path = std::env::var_os("PATH").expect("the suite runs with a PATH");
+    let falsity = std::env::split_paths(&path)
+        .map(|entry| entry.join("false"))
+        .find(|candidate| candidate.is_file())
+        .expect("`false` is on PATH");
+    std::os::unix::fs::symlink(falsity, &decoy).expect("the decoy is linked");
     dir
 }
 

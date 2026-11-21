@@ -65,26 +65,6 @@ pub struct Ci {
     /// direction and the honest reading of an undeclared list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slow_inert: Vec<String>,
-    /// Paths a bats suite can be moved by without naming them (CLOUD-1716).
-    ///
-    /// **CONSUMER DATA for `slow_inert`'s reason, and it arrived here as a
-    /// constant** (review of #928). `suites::select` carried a literal list —
-    /// this repository's task runner, gate config, lockfile and harness settings
-    /// — inside `crates/batten`, which non-negotiable rule 1 refuses: the core
-    /// knows the RELATIONSHIP (a path every suite depends on widens the run) and
-    /// the consumer knows which of its paths those are.
-    ///
-    /// Same spelling as `slow_inert`: an entry ending `/` covers a directory,
-    /// anything else is an exact path.
-    ///
-    /// **Empty WIDENS, where `slow_inert` empty narrows**, and the asymmetry is
-    /// the one `suites::select` is built around: a selection that is too wide
-    /// costs money and shows up in the bill, while one that is too narrow has no
-    /// symptom at all — the suites simply do not run and a regression lands
-    /// green. So an undeclared list is read as "this tree has not said what its
-    /// shared inputs are", and the answer is every suite.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub suite_shared: Vec<String>,
     /// The workflow whose matrix names the targets a release builds.
     ///
     /// CONSUMER DATA (rule 1): `release install` compares three authorities that
@@ -769,7 +749,6 @@ mod tests {
     fn ci(checks: &[&str], methods: Option<&[&str]>) -> Ci {
         Ci {
             slow_inert: Vec::new(),
-            suite_shared: Vec::new(),
             release_workflow: None,
             required_checks: checks.iter().map(|check| (*check).to_owned()).collect(),
             allowed_merge_methods: methods

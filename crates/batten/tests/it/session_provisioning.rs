@@ -103,9 +103,10 @@
 //!
 //! # UNIX ONLY, and the gate is load-bearing rather than tidy
 //!
-//! Every dispatch case below runs a `#!/bin/sh` stub as a `[[hook.handler]]` row.
-//! On a Windows runner the spawn ladder cannot start the interpreter the shebang
-//! names, so the door reports a could-not-run and forwards nothing — and the
+//! Every dispatch case below runs a stub as a `[[hook.handler]]` row — the test
+//! stand-in since CLOUD-2336, a `#!/bin/sh` script before it. On a Windows runner
+//! the spawn ladder could not start the interpreter that shebang named, so the
+//! door reported a could-not-run and forwarded nothing — and the
 //! cases that assert an ABSENCE would then pass for the wrong reason, which is
 //! the vacuous-pass class this file exists to close. `connector_allow_door.rs`
 //! gates its whole suite on the same rung, and the retired `.bats` suite never
@@ -117,7 +118,7 @@
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use common::{at_root, git_in, scratch, stderr, stdout, write};
 
@@ -228,11 +229,11 @@ impl Bench {
         }
     }
 
-    /// Write one stub step and declare it as a `session-start` handler body.
-    fn step(&self, id: &str, body: &str) {
-        let path = format!("steps/{id}");
-        write(&self.repo, &path, &format!("#!/bin/sh\n{body}\n"));
-        make_executable(&self.repo.join(&path));
+    /// Install one stub step, the test stand-in driven by `rules`, as the
+    /// program a `session-start` handler row dispatches — never authored shell
+    /// (CLOUD-2336).
+    fn step(&self, id: &str, rules: &serde_json::Value) {
+        common::stub_at(&self.repo.join("steps").join(id), rules);
     }
 }
 
@@ -261,17 +262,6 @@ fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
 
     Bench { repo }
-}
-
-// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
-// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("the stub exists")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("the stub is runnable");
 }
 
 /// One `[[hook.handler]]` row, reduced to the three fields this suite asks
@@ -355,7 +345,9 @@ fn the_steps_run_in_declaration_order() {
     for id in ["zulu", "alpha", "mike"] {
         bench.step(
             id,
-            &format!("printf '{id}\\n' >> \"$(dirname \"$0\")/../order.log\""),
+            &serde_json::json!([{ "steps": [
+                { "append": [log.to_str().expect("utf-8"), format!("{id}\n")] },
+            ] }]),
         );
     }
 
@@ -379,11 +371,18 @@ fn a_session_start_writes_the_stamp_before_any_row_runs() {
     // `refined-this-session` rule depends on: refinement must PREDATE the
     // session, so the boundary is written before anything is provisioned.
     let bench = bench("session-stamp", &[("observer", 5000)]);
+    let stamp = bench.repo.join(".git/batten-receipts/session-start");
+    let observed = bench.repo.join("observed");
+    let observed = observed.to_str().expect("utf-8");
     bench.step(
         "observer",
-        "if [ -f \"$(git rev-parse --git-dir)/batten-receipts/session-start\" ]; then \
-         printf 'present\\n' > \"$(dirname \"$0\")/../observed\"; else \
-         printf 'absent\\n' > \"$(dirname \"$0\")/../observed\"; fi",
+        &serde_json::json!([
+            {
+                "file_exists": stamp.to_str().expect("utf-8"),
+                "steps": [{ "write": [observed, "present\n"] }],
+            },
+            { "steps": [{ "write": [observed, "absent\n"] }] },
+        ]),
     );
 
     let door = bench.session_start();
@@ -418,7 +417,10 @@ fn a_failed_step_is_reported_rather_than_silent() {
     let bench = bench("session-loud", &[("failing", 5000)]);
     bench.step(
         "failing",
-        "echo '::error:: session-start: failing failed — see /tmp/x.log' >&2\nexit 1",
+        &serde_json::json!([{ "steps": [
+            { "stderr": "::error:: session-start: failing failed — see /tmp/x.log\n" },
+            { "exit": 1 },
+        ] }]),
     );
 
     let door = bench.session_start();
@@ -444,7 +446,7 @@ fn a_step_that_passes_says_nothing() {
     // was on stdout and the argument against it was about the reader, not the
     // file descriptor.
     let bench = bench("session-silent", &[("quiet", 5000)]);
-    bench.step("quiet", "exit 0");
+    bench.step("quiet", &serde_json::json!([{ "steps": [] }]));
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0));
@@ -492,9 +494,15 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // found the `sleep` still running after the case had passed.
     let bench = bench("session-bound", &[("hanging", 300)]);
     let pid_file = bench.repo.join("grandchild.pid");
+    // NOT `quiet`: the grandchild inherits the step's streams, as the shell's
+    // backgrounded `sleep` did, so a parent that drained a pipe a survivor still
+    // held would hang this case.
     bench.step(
         "hanging",
-        &format!("sleep 3600 &\necho $! > '{}'\nwait", pid_file.display()),
+        &serde_json::json!([{ "steps": [
+            { "spawn": { "argv": ["sleep", "3600"], "pid": pid_file.to_str().expect("utf-8") } },
+            { "sleep": 3_600_000 },
+        ] }]),
     );
 
     let door = bench.session_start();
@@ -543,7 +551,12 @@ fn a_steps_stdout_is_interpreted_never_forwarded() {
     // demanding silence would be asserting the wrong property and would break
     // the moment the advisory channel renders it.
     let bench = bench("session-passthrough", &[("talkative", 5000)]);
-    bench.step("talkative", "printf '{\"async\": true}\\n'");
+    // `{"async": true}` names no placeholder the stand-in knows, so it is written
+    // as given.
+    bench.step(
+        "talkative",
+        &serde_json::json!([{ "steps": [{ "stdout": "{\"async\": true}\n" }] }]),
+    );
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0));

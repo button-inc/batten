@@ -57,8 +57,20 @@ fn a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs() {
     let owned = common::scratch("harness-isolation-task-owned");
     common::init_repo(&owned);
     let bare = common::scratch("harness-isolation-task-bare");
+    // The body is one program, the stand-in on the task's `bin/` (CLOUD-2336),
+    // and running it leaves `ran` in the directory the body was moved to.
+    let stub = owned.join("bin").join("mark-ran");
+    common::stub_at(
+        &stub,
+        &serde_json::json!([{"steps": [
+            {"write": [bare.join("ran").to_string_lossy(), ""]},
+        ]}]),
+    );
     let refused = std::panic::catch_unwind(|| {
-        let mut task = common::task_bash(&owned, "touch ran");
+        let mut task = common::task_bash(&owned, "mark-ran");
+        // Run by bare name, so the stand-in's argv[0] has no directory to find
+        // its plan beside: the variable names it.
+        task.env("BATTEN_STUB_PLAN", format!("{}.plan.json", stub.display()));
         task.current_dir(&bare);
         let _ = task.output();
     })
