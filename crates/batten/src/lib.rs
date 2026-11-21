@@ -89,11 +89,11 @@ pub use batten_base::forge;
 /// module decides over (CLOUD-843).
 pub mod forge_event;
 pub mod forge_query;
-pub mod git;
+pub use batten_core::git;
 pub mod githook;
-pub mod gitwrite;
-pub mod grammar;
 pub use batten_base::graph;
+pub use batten_core::gitwrite;
+pub use batten_core::grammar;
 pub mod handler;
 pub mod history;
 pub mod hk;
@@ -115,10 +115,10 @@ pub mod land;
 pub use batten_base::landed;
 /// The landing lease's wire half: ref discovery and a compare-and-swap over a
 /// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
-pub mod lease;
+pub use batten_core::lease;
 pub mod lint;
 pub use batten_base::low_water;
-pub mod main_watch;
+pub use batten_core::main_watch;
 pub mod markers;
 pub mod mcp;
 pub mod mcp_grant;
@@ -133,14 +133,13 @@ pub mod output;
 pub mod outputs;
 /// The in-process patch identity: what a change IS, independent of the commit
 /// carrying it and of the host's git configuration.
-use batten_base::patch;
 pub use batten_base::pattern;
 pub mod perf;
 pub mod pinned;
 pub mod pipeline;
 pub mod policy;
-pub mod pr_watch;
 pub use batten_base::preflight;
+pub use batten_core::pr_watch;
 pub mod preset;
 pub mod probe;
 pub use batten_base::probe_verdict;
@@ -175,17 +174,17 @@ pub mod sbom;
 pub use batten_base::secret;
 pub use batten_facts::scratch;
 pub mod secrets;
-pub mod selector;
+pub use batten_core::selector;
 pub mod selfwrite;
 /// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),
 /// carrying a baseline the committed lock can build when the registry can no
 /// longer resolve one.
 pub mod semver;
 pub mod session;
-pub mod severity;
-pub mod shell;
-pub mod signer_posture;
-pub mod sink;
+pub use batten_core::severity;
+pub use batten_core::shell;
+pub use batten_core::signer_posture;
+pub use batten_core::sink;
 pub use batten_facts::source;
 pub mod spec;
 pub mod speculation;
@@ -196,29 +195,29 @@ pub mod symbols;
 pub mod tokens;
 
 pub mod startup;
-pub mod state;
+pub use batten_core::state;
 /// The step cache (CLOUD-424): a step answered from its receipt when its exact
 /// declared inputs, arguments and tools already passed.
 pub mod step;
 /// The `[[step]]` row and its load-time validator: a leaf the loader reaches
 /// without reaching the cache (CLOUD-843).
-pub mod step_table;
+pub use batten_core::step_table;
 pub mod stop;
 pub mod store;
-pub mod stream_input;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
 pub use batten_base::suites;
+pub use batten_core::stream_input;
 pub mod surface;
 pub mod sweep;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub use batten_base::task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
 pub mod taskset;
-/// Decisions the test harness makes about a spawn, swept by `batten mutate`.
-#[doc(hidden)]
-pub mod testing;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub use batten_base::tools;
+/// Decisions the test harness makes about a spawn, swept by `batten mutate`.
+#[doc(hidden)]
+pub use batten_core::testing;
 /// The `tracker-hygiene` preset's readings: tracker payloads and a pull request
 /// body, reduced to the record families its modules decide over (CLOUD-843).
 pub mod tracker_reading;

@@ -272,7 +272,6 @@ impl Default for Window {
 /// landing without the proof of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum Evidence {
     /// A commit on the target makes the identical change.
     PatchId {
@@ -311,7 +310,6 @@ impl Evidence {
 /// The landing verdict for a branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum Verdict {
     /// Every commit that changes anything is accounted for on the target.
     Landed,
@@ -331,7 +329,6 @@ pub enum Verdict {
 /// What [`landing`] actually looked at, so a negative verdict can be read for
 /// how much it proves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[non_exhaustive]
 pub struct Scan {
     /// The resolved full SHA of the target.
     pub target_commit: String,
@@ -351,7 +348,6 @@ pub struct Scan {
 
 /// One head-side commit and what became of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[non_exhaustive]
 pub struct CommitLanding {
     /// Full SHA on the head side.
     pub commit: String,
@@ -366,7 +362,6 @@ pub struct CommitLanding {
 /// The result of [`landing`]: pointer-only — SHAs and identities, never file
 /// content — and byte-stable for identical repository state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[non_exhaustive]
 pub struct Landing {
     /// The verdict, derived from the evidence below and nothing else.
     pub verdict: Verdict,
@@ -985,7 +980,8 @@ thread_local! {
 }
 
 /// The guard [`open_scope`] returns: the memo dies with the guard that opened it.
-pub(crate) struct OpenScope {
+#[derive(Debug)]
+pub struct OpenScope {
     /// Whether this guard opened the memo. A scope opened inside another one
     /// shares the outer memo and leaves it standing when it drops.
     owner: bool,
@@ -1002,7 +998,7 @@ impl Drop for OpenScope {
 /// Remember this thread's repository opens for the life of the returned guard
 /// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
 #[must_use = "the memo lives only as long as the guard: an unbound scope ends at once"]
-pub(crate) fn open_scope() -> OpenScope {
+pub fn open_scope() -> OpenScope {
     let owner = with_cell(|opens| {
         if opens.is_some() {
             return false;
@@ -1360,7 +1356,6 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
 /// honour, and degrading on either would serve a pin in place of a config that
 /// is *present and broken*.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum BaseBlob {
     /// The ref resolved and carried a readable file, at `commit`.
     ///
@@ -2240,7 +2235,6 @@ pub fn newest_version_tag(dir: &Path) -> Result<Option<String>> {
 /// short answered with empty strings — an *answer*, on the module that decides
 /// commit attribution, where the honest response is a refusal (CLOUD-742).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct CommitRecord {
     /// `%an <%ae>` — the author identity.
     pub author: String,
@@ -2480,12 +2474,16 @@ pub fn spend_scope() {
 /// Within a fresh scope: read `dir` through the memo (asserting it was
 /// remembered), run `act`, and answer how many opens the scope still remembers
 /// — for the write modules' cases, which cannot reach the memo themselves.
+///
+/// # Panics
+///
+/// When `dir` is not a repository, or the read was not remembered.
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "a test fixture that is not a repository is a broken test"
 )]
-pub(crate) fn memo_after(dir: &Path, act: impl FnOnce(&Path)) -> Option<usize> {
+pub fn memo_after(dir: &Path, act: impl FnOnce(&Path)) -> Option<usize> {
     let _scope = open_scope();
     open(dir).expect("a repository");
     assert_eq!(
@@ -2928,7 +2926,6 @@ pub fn commit_count(dir: &Path, range: &str) -> Result<usize> {
 /// after the first space of a `%H %s` line, and a caller that has to know that
 /// is a caller that can get it wrong (CLOUD-742).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct CommitSubject {
     /// The commit's full SHA.
     pub commit: String,
@@ -3728,7 +3725,7 @@ pub struct BaseDelta {
 /// classified line-by-line without tracking state, and guessing fails in the
 /// refusing direction — so a file using them reads as code, which is the safe
 /// half.
-pub(crate) fn without_comments(path: &str, text: &str) -> String {
+pub fn without_comments(path: &str, text: &str) -> String {
     let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
         // Markdown is prose end to end; there is no non-comment remainder.
         Some("md") => return String::new(),
@@ -4595,7 +4592,7 @@ impl IdentityMemo {
 /// deciding whether to SKIP a commit, so the fail-closed direction is to replay
 /// it — a commit whose identity could not be computed gets the ordinary
 /// three-way merge, which is exactly the behaviour that existed before this.
-pub(crate) fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Option<String> {
+pub fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Option<String> {
     let mut changes = commit_changes(repo, id).ok()?;
     crate::patch::identity(&mut changes)
 }
@@ -4609,7 +4606,7 @@ pub(crate) fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Opt
 /// # Errors
 ///
 /// As [`rev_list`]: a range that will not resolve or a commit that will not read.
-pub(crate) fn patch_identities(
+pub fn patch_identities(
     dir: &Path,
     window: Window,
     range: &str,
@@ -6372,7 +6369,8 @@ pub fn tag_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec
 /// `pub(crate)` for `release backfill` (CLOUD-843): an explicitly named tag is
 /// held to the same glob the listing selects by, so the two routes to a tag
 /// list cannot disagree about what a release tag is.
-pub(crate) fn tag_glob_matches(glob: &str, tag: &str) -> bool {
+#[must_use]
+pub fn tag_glob_matches(glob: &str, tag: &str) -> bool {
     gix::glob::wildmatch(glob.into(), tag.into(), gix::glob::wildmatch::Mode::empty())
 }
 
@@ -6767,7 +6765,8 @@ fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> boo
 /// caller states its off-unix answer as `elsewhere`, an argument every leg
 /// compiles and tests, where a `#[cfg(not(unix))]` twin was code no unix sweep
 /// could build.
-pub(crate) fn executable_bit_or(meta: &std::fs::Metadata, elsewhere: bool) -> bool {
+#[must_use]
+pub fn executable_bit_or(meta: &std::fs::Metadata, elsewhere: bool) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

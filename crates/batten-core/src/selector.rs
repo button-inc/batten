@@ -76,3 +76,15 @@ impl Selector {
         self.glob.glob()
     }
 }
+
+/// Hand-written because a compiled matcher has no equality of its own, and
+/// stated over the pattern rather than derived so the compiled form stays an
+/// implementation detail: a `rules::PathSet` comparison is a comparison of the
+/// config that built it.
+impl PartialEq for Selector {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern() == other.pattern()
+    }
+}
+
+impl Eq for Selector {}

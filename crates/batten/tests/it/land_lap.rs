@@ -130,8 +130,8 @@
 // carried: "a lap that pushed does not also buy a second event" crates/batten/src/land.rs kind:mechanism
 // carried: "a landing that succeeds says nothing that reads as a failure" crates/batten/src/lib.rs kind:mechanism
 // carried: "the receipt guard still has its voice when it is the real failure" crates/batten/src/lib.rs kind:mechanism
-// carried: "a silent bot with main moved ends the lap instead of polling" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "a silent bot with main unmoved keeps polling" crates/batten/src/main_watch.rs kind:mechanism
+// carried: "a silent bot with main moved ends the lap instead of polling" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "a silent bot with main unmoved keeps polling" crates/batten-core/src/main_watch.rs kind:mechanism
 // withdrawn: "the watcher does not outlive a merged landing" the predecessor backgrounded a watcher subshell and reaped it on the merged path. `land::wait` races in-process and returns, so nothing outlives the call and there is no reaper to assert
 // carried: "a re-draft that fails stops the lap rather than waiting on a run nobody started" crates/batten/src/lib.rs kind:mechanism
 // carried: "a ready that fails stops before the push rather than pushing into silence" crates/batten/src/lib.rs kind:mechanism
@@ -142,9 +142,9 @@
 // carried: "a delete the remote refuses does not change land's exit code" crates/batten/src/land.rs kind:mechanism
 // carried: "a run that stops instead of merging deletes nothing" crates/batten/src/lib.rs kind:mechanism
 // carried: "a second land in this clone is refused before anything is spent (CLOUD-428)" crates/batten/src/lib.rs kind:mechanism
-// carried: "the lease is taken before the push, so no run starts unheld" crates/batten/src/lease.rs kind:mechanism
-// carried: "a lease held by someone else waits instead of pushing, and says so" crates/batten/src/lease.rs kind:mechanism
-// carried: "a lost lease is caught BEFORE the merge is asked for" crates/batten/src/lease.rs kind:mechanism
+// carried: "the lease is taken before the push, so no run starts unheld" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a lease held by someone else waits instead of pushing, and says so" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a lost lease is caught BEFORE the merge is asked for" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "the lease is released on the merged path" crates/batten/src/lib.rs kind:mechanism
 // carried: "the lease is released on a die path too — a leak would wedge the fleet" crates/batten/src/pipeline.rs kind:mechanism
 // withdrawn: "the CI race waits on ITS OWN pids, never on every background job" the predecessor tracked its own background pids to avoid `wait`ing on every job in the shell. One process, no jobs, nothing to disambiguate
@@ -160,11 +160,11 @@
 // carried: "A CONFLICTING SPECULATION FALLS BACK — it is information, not a stop" crates/batten/src/lib.rs kind:mechanism
 // carried: "THE BET CANNOT BE PUSHED WHEN IT LOSES: a stale speculation is unwound first" crates/batten/src/lib.rs kind:mechanism
 // carried: "an unwind the tree refuses is a stop, not a lap onto an unknown HEAD" crates/batten/src/lib.rs kind:mechanism
-// carried: "THE SECOND MATRIX: an admitted successor readies and pushes without the lease" crates/batten/src/lease.rs kind:mechanism
+// carried: "THE SECOND MATRIX: an admitted successor readies and pushes without the lease" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "a verify failure on a SPECULATIVE tree names the borrowed base" crates/batten/src/lib.rs kind:mechanism
 // carried: "a verify failure with NO speculation still gets the original advice" crates/batten/src/lib.rs kind:mechanism
-// carried: "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" crates/batten/src/lease.rs kind:mechanism
-// carried: "the successor reserves only once, however many laps it waits" crates/batten/src/lease.rs kind:mechanism
+// carried: "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "the successor reserves only once, however many laps it waits" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "MAIN MOVING DURING THE WAIT: the winner laps rather than confirming a doomed head" crates/batten/src/land.rs kind:mechanism
 // carried: "a lap whose main did not move confirms and proceeds — the negative of the case above" crates/batten/src/land.rs kind:mechanism
 // carried: "the successor's run is bought ONCE, not re-pushed on every lap it waits" crates/batten/src/land.rs kind:mechanism
@@ -191,13 +191,13 @@
 // carried: "CLOUD-790: the landing makes the unsubscribe call itself, for THIS PR" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-790: a drop that could not happen does not stop the landing itself" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-518: a dropped subscription lets the landing proceed untouched" crates/batten/src/land.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI has NOT ANSWERED admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI COULD NOT BE READ admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a lease naming no head admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-pos — a GREEN holder still admits exactly one waiter" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause e — a waiter whose base APPLIES CLEANLY still is admitted" crates/batten/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI has NOT ANSWERED admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI COULD NOT BE READ admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a lease naming no head admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-pos — a GREEN holder still admits exactly one waiter" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause e — a waiter whose base APPLIES CLEANLY still is admitted" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "CLOUD-861: an ENOSPC during verify is reported as the environment, not as a defect to reproduce" crates/batten/src/land.rs kind:mechanism
 // carried: "an ordinary verify failure still says reproduce it locally" crates/batten/src/lib.rs kind:mechanism
 // carried: "CLOUD-862: a bet left by a dead run is adopted and unwound before anything is pushed" crates/batten/src/speculation.rs kind:mechanism

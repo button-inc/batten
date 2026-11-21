@@ -23,7 +23,7 @@
 //!
 //! # The signer classification
 //!
-//! `crates/batten/src/signer_posture.rs` is the one authority on which
+//! `crates/batten-core/src/signer_posture.rs` is the one authority on which
 //! configurations are unverifiable, and its `#[cfg(test)] mod tests` asserts all
 //! seven arms against scratch paths. What THIS tier adds is that the engine reads
 //! the checkout's own config (no task hands the values in any more) and carries
@@ -47,12 +47,12 @@
 // carried: "an unsigned range with the override in place passes" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "signing with a verifiable signer is left alone" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "a commit signed by a VERIFIABLE signer is left alone, header and all" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
-// carried: "an empty signing key is what makes it unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "a signing key that is a directory is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "a signing key this checkout cannot read is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "a signing key naming a path that does not exist is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "an inline public key is a literal, not a path, and is verifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "a signer under /tmp is unverifiable because the container reclaims it" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "an empty signing key is what makes it unverifiable" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key that is a directory is unverifiable" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key this checkout cannot read is unverifiable" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key naming a path that does not exist is unverifiable" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "an inline public key is a literal, not a path, and is verifiable" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signer under /tmp is unverifiable because the container reclaims it" crates/batten-core/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signed commit in range is refused, and named by short sha" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "repairing the config does not excuse a commit already signed" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "a missing override is refused when the environment sets signing globally" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
@@ -60,10 +60,10 @@
 // carried: "a local override set to true is refused when the signer is broken" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "the refusal echoes no part of the signature block" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "history before the range is never judged" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
-// carried: "--repair leaves a verifiable signer alone rather than switching signing off" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
-// carried: "--repair writes the override, local only" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
-// carried: "--repair is idempotent" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
-// carried: "--repair never writes global config" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair leaves a verifiable signer alone rather than switching signing off" crates/batten-core/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair writes the override, local only" crates/batten-core/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair is idempotent" crates/batten-core/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair never writes global config" crates/batten-core/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
 // changed: "outside a git repository it is exit 2, never a silent pass" crates/batten/src/record.rs kind:mechanism could-not-look is `record derive`'s usage refusal (exit 1) and it writes NOTHING, so the preset — which reads an absent record as silence — says nothing over a tree nobody looked at; `outside_a_repository_the_derivation_refuses_and_records_nothing` and `an_absent_record_says_nothing_rather_than_refusing` are the two halves
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.

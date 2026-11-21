@@ -380,7 +380,7 @@ fn a_comment_alone_is_not_a_home() {
 fn a_subagents_write_is_not_credited_to_the_turn() {
     let turns = Turns::new("sub-write")
         .prompt()
-        .say("Broken at crates/batten/src/git.rs:100.")
+        .say("Broken at crates/batten-core/src/git.rs:100.")
         .sub_tool("mcp__Linear__save_issue");
     fired(&turns.check(), 1);
     // Nor is its prose judged as the orchestrator's.
