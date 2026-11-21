@@ -769,7 +769,7 @@ pub fn run(
             let fetch = forge_fetch(fetch, fanin, answered.as_deref())?;
             run_forge(&reference, fetch.as_ref(), overrides, err)
         }
-        crate::cli::RecordCommand::Plan => run_plan(),
+        crate::cli::RecordCommand::Plan { replace } => run_plan(replace, out),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
         crate::cli::RecordCommand::Derive { family, inputs } => {
@@ -917,13 +917,20 @@ const PLAN_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "delete
 
 /// Record this branch's plan: one `<id> <status>` line per entry.
 ///
+/// MERGED BY ID, never replaced unless asked (CLOUD-2807): recording ten new
+/// entries used to wipe the 28 already in the store, with exit 0 and no
+/// output, and `plan declare held` reads that store, so a dropped entry was a
+/// declared item silently no longer held. Each input line now sets its id's
+/// status and every id it does not name is kept; `--replace` keeps the
+/// whole-store rewrite for a deliberate one. One count line says what moved.
+///
 /// # Errors
 ///
 /// A [`UsageError`] when a line is not `<id> <status>`, when a status is not one
 /// of [`PLAN_STATUSES`], or when there is no branch to key on — a detached HEAD
 /// has nothing to record against, exactly as the claim receipt has nothing to key
 /// on there. An internal error when the store cannot be written.
-pub fn run_plan() -> Result<ExitCode> {
+pub fn run_plan(replace: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let raw = verdict_lines()?;
     plan_validated(&raw)?;
 
@@ -939,11 +946,76 @@ pub fn run_plan() -> Result<ExitCode> {
         ));
     };
     let claim = claim_of(&git_dir, &branch);
-    store(
-        &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
-        &raw,
+    let path = crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref());
+    let held = if replace {
+        String::new()
+    } else {
+        crate::fsio::read_to_string(&path).unwrap_or_default()
+    };
+    let merged = plan_merged(&held, &raw);
+    store(&path, &merged.body)?;
+    writeln!(
+        out,
+        "record plan: added {}, changed {}, kept {}",
+        merged.added, merged.changed, merged.kept
     )?;
     Ok(ExitCode::Success)
+}
+
+/// A plan store with new lines merged in by id, and what the merge moved.
+#[derive(Debug, PartialEq, Eq)]
+struct PlanMerge {
+    /// The store's new text: one `<id> <status>` line per entry.
+    body: String,
+    /// Ids the store did not hold.
+    added: usize,
+    /// Held ids whose status the input changed.
+    changed: usize,
+    /// Held ids the input left as they were, named or not.
+    kept: usize,
+}
+
+/// `held` with each `incoming` line setting its id's status. Held entries keep
+/// their order; new ids follow in input order; a repeated id takes its last
+/// line. Blank lines are dropped.
+fn plan_merged(held: &str, incoming: &str) -> PlanMerge {
+    let entry = |line: &str| {
+        let mut words = line.split_whitespace();
+        Some((words.next()?.to_owned(), words.next()?.to_owned()))
+    };
+    let mut entries: Vec<(String, String)> = held.lines().filter_map(entry).collect();
+    let mut news: Vec<(String, String)> = Vec::new();
+    for (id, status) in incoming.lines().filter_map(entry) {
+        match news.iter_mut().find(|(seen, _)| *seen == id) {
+            Some(slot) => slot.1 = status,
+            None => news.push((id, status)),
+        }
+    }
+    let (mut added, mut changed) = (0, 0);
+    for (id, status) in news {
+        match entries.iter_mut().find(|(held_id, _)| *held_id == id) {
+            Some(slot) if slot.1 != status => {
+                slot.1 = status;
+                changed += 1;
+            }
+            Some(_) => {}
+            None => {
+                entries.push((id, status));
+                added += 1;
+            }
+        }
+    }
+    let kept = entries.len() - added - changed;
+    let body = entries
+        .iter()
+        .map(|(id, status)| format!("{id} {status}\n"))
+        .collect();
+    PlanMerge {
+        body,
+        added,
+        changed,
+        kept,
+    }
 }
 
 /// Refuse a plan whose line is not `<id> <status>` or whose status is not one
@@ -2271,6 +2343,26 @@ mod tests {
         assert!(plan_validated("a pending\n\nb completed\n").is_ok());
         assert!(plan_validated("a bogus\n").is_err());
         assert!(plan_validated("a\n").is_err());
+    }
+
+    /// Fails by: an id the input does not name dropped, a named one not
+    /// updated, or a count that disagrees with what moved (CLOUD-2807).
+    #[test]
+    fn a_merge_keeps_every_id_the_input_does_not_name() {
+        let merged = plan_merged(
+            "a completed\nb pending\nc pending\n",
+            "b completed\nc pending\nd pending\nd in_progress\n",
+        );
+        assert_eq!(
+            merged,
+            PlanMerge {
+                body: "a completed\nb completed\nc pending\nd in_progress\n".to_owned(),
+                added: 1,
+                changed: 1,
+                kept: 2,
+            }
+        );
+        assert_eq!(plan_merged("", "x pending\n").body, "x pending\n");
     }
 
     /// Fails by: a non-tracker family clearing the tracker records, or a
