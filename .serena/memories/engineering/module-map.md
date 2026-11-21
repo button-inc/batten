@@ -5,9 +5,12 @@ One line per module: WHERE a responsibility lives. The WHY is each module's own
 `policy/module-map.rego` (`memory cover partial`) refuses a crate module with no
 row here, so a new module lands with its line.
 
+- `config_check.rs` — each config section's rules, below the loader (CLOUD-2789): one inline module per feature (`config_check::mcp`, `config_check::rules`, ...) holding the validator and the helpers and inherent methods it calls, so `config` names this module and no feature; CLOUD-2794 folds it into each section's `serde(try_from)` parse.
+- `digest.rs` (crate `batten-facts`) — lowercase hex and the SHA-256 of a byte string in it (CLOUD-2789): the one spelling a receipt key, a provisioned artifact's checksum, a cache stamp and a git object id share, where five modules once carried their own loop.
 - `main.rs` — binary boundary: parse → `lib::run` → exit status.
 - `install.rs` — whether a published release is actually installable (CLOUD-1753), retired out of `mise-tasks/install-check.sh`.
 - `lib.rs` — library entry point, declares the module tree.
+- `preset_catalog.rs` — the vendored preset manifests as data (CLOUD-2789), with the vocabulary they are written in (`RuleScope`, `RouteKind`, `Applicability`, `VendoredVerdict`, the `run`/`read`/`admit` route constructors): a leaf below the config model, which reads it for the presets a row may enable.
 - `suites.rs` (crate `batten-base`) — the per-suite cost corpus (CLOUD-352), derived from the report the bats runner already wrote.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared once, as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each flag's env equivalent, so §8 precedence is inspectable data).
 - `board.rs` (crate `batten-base`) — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
@@ -57,6 +60,7 @@ row here, so a new module lands with its line.
 - `source.rs` (crate `batten-facts`) — the ONE `syn::parse_file` in the crate (CLOUD-1008).
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_ config can still carry.
 - `brief.rs` (crate `batten-base`) — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
+- `surface_table.rs` — the command surface as data (house style §11, CLOUD-2789): `SURFACE`, the declaration types and their constructors, the value parsers and the value enums they parse into; `surface` interprets it, and a config check that a row names a real command reads it without naming the command layer.
 - `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review and a branch cannot lower its own bar.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file > repo config > default`, declared as data in `SETTINGS`, not hard-coded per field.
 - `git.rs` (crate `batten-core`) — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
