@@ -20,32 +20,40 @@ the parser rejects is **could-not-look**, never silently skipped.
 
 ## The loop
 
-1. **Test first, on a fixture built to break a splicer.** In
-   `crates/batten/tests/it/codemod.rs`, put the target spelling inside a string,
+1. **Test first, on a fixture built to break a splicer.** A primitive's test goes
+   in `crates/batten/tests/it/codemod.rs`; a recipe's in
+   `crates/batten-codemods/tests/recipes.rs`. Put the target spelling inside a string,
    a comment, a `use`, a longer path (`x::fs::read`), a method of the same name
    and a macro argument — before the real call. Assert the real call changes
    and every decoy is kept byte-for-byte. A text replace must fail this test.
 2. **Add the primitive to `codemod.rs` if none fits.** Existing ones:
    `rename_method_calls` (method name), `redirect_calls` (call callee path,
-   including inside macro token trees), `ensure_use` (a top-level import,
-   once). Pure: text in, text out.
+   including inside macro token trees), `rewrite_paths` (a path wherever it is
+   spelled), `rewrite_calls_by_chain` (a call by the chain it ends),
+   `ensure_use` and `import_for_calls` (an import, once per scope, a name
+   already inside a group counted), and `lint_escapes`/`lint_attributes`
+   (counting). Pure: text in, text out.
 3. **Write the migration as a RECIPE**, never a throwaway driver: a named entry
    in `batten_codemods::RECIPES` (`crates/batten-codemods`, never released) (its edition, the files it skips, and an
    `apply` built only from primitives). Every migration this repository runs
    is kept: it is the shape of a codemod a consumer runs from a preset, and
    the tree it already migrated is its regression test.
 4. **Run it backgrounded** through the pinned toolchain (`mise exec -- cargo
-run --release -q -p batten-codemods --example codemod -- <recipe>`), which walks the
-   tree once, writes only changed files and prints `files read, rewritten,
-refused` and nothing else. Then count what is left with `Grep`. The
+run --release -q -p batten-codemods --example codemod -- <recipe> [root]`). The
+   root defaults to `crates/batten`: **name every crate root you migrate**, and
+   note the driver spells the crate `crate` under a `/src/` path and `batten`
+   elsewhere. It writes only changed files and prints `files read, rewritten,
+refused`; a refused file is a read, parse or write failure. With no recipe
+   named it lists them. Then count what is left with `Grep`. The
    remainder is the codemod's blind spot: read each one. **Run it a second
    time: it must rewrite 0 files.** A recipe that is not idempotent on its own
    output is not finished.
-5. **Clean the fallout mechanically.** `mise exec -- cargo clippy --fix
---allow-dirty --workspace --all-targets` removes imports the rewrite
-   orphaned, then `cargo fmt`. **Watch the cfg split**: clippy fixes the lib
-   build first, so an import only `#[cfg(test)]` code still used is removed
-   and the test build then fails. Re-add it inside `mod tests`, not at the top.
+5. **Clean the fallout with the driver's `fix` mode**, never `clippy --fix`:
+   `… --example codemod -- fix <package>…` applies rustc's machine-applicable
+   suggestions to a fixpoint and judges each unused import in BOTH builds, so
+   an import only `#[cfg(test)]` code uses is gated, not deleted (the failure
+   `clippy --fix` causes). It applies nothing over a build with compile errors.
+   Then `cargo fmt`.
    **Exclude files with a second compilation context.** A file `build.rs`
    includes by `#[path]` (`mutation_markers.rs`) is compiled outside the crate,
    so a `crate::` path there is an edge the layering gate catches.
@@ -61,13 +69,13 @@ refused` and nothing else. Then count what is left with `Grep`. The
 
 The matcher compares **spellings**, per file, with no name resolution:
 
-| case                                        | seen |
-| ------------------------------------------- | ---- |
-| `fs::read(p)`, `std::fs::read( p )`         | yes  |
-| `assert_eq!(fs::read(p)…)` (macro argument) | yes  |
-| `use std::fs as f; f::read(p)`              | no   |
-| `use std::fs::read; read(p)`                | no   |
-| a path a macro builds from pieces           | no   |
+| case                                        | seen                  |
+| ------------------------------------------- | --------------------- |
+| `fs::read(p)`, `std::fs::read( p )`         | yes                   |
+| `assert_eq!(fs::read(p)…)` (macro argument) | `redirect_calls` only |
+| `use std::fs as f; f::read(p)`              | no                    |
+| `use std::fs::read; read(p)`                | no                    |
+| a path a macro builds from pieces           | no                    |
 
 The compiler resolves names in macro arguments only after expanding them. The
 semantic route is rust-analyzer's own: load the workspace with
