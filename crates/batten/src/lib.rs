@@ -57,6 +57,7 @@ pub mod collect;
 pub mod commit;
 pub mod completion;
 pub mod config;
+pub mod config_model;
 pub use batten_base::config_edit;
 pub mod contract;
 pub mod decision;

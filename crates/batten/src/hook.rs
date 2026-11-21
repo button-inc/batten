@@ -56,10 +56,9 @@ use crate::rules::{
     RuleScope,
 };
 use crate::severity::{self, ReportLevel, RuleSeverity};
-use crate::shell::{
-    Segment, SegmentLine, Separator, covered, flatten, flatten_command, flatten_in, opens_heredoc,
-    segments, shell_commands, stdin_text,
-};
+#[cfg(test)]
+use crate::shell::shell_commands;
+use crate::shell::{Segment, SegmentLine, Separator, segments};
 use crate::verbs::{MutatingVerb, OperandScope};
 
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
