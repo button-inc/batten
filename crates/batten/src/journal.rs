@@ -75,6 +75,9 @@ const MERGED_FILE: &str = "merged.jsonl";
 const FORMAT_FILE: &str = "format.json";
 /// The file the shard-merge advisory lock is taken on.
 const LOCK_FILE: &str = "merge.lock";
+/// Entries already read from their shard whose record did not exist yet
+/// (CLOUD-2820): retried on every merge until the record appears.
+const PENDING_FILE: &str = "pending.jsonl";
 
 /// The journal directory under a bound store.
 fn journal_dir(store_dir: &Path) -> PathBuf {
@@ -99,6 +102,13 @@ pub struct Format {
     pub generation: String,
     /// How many entries the merged log holds in this generation.
     pub seqno: u64,
+    /// How many bytes of each shard (by file name) the merge has folded
+    /// (CLOUD-2820). A merge folds only what lies past these marks, so an entry
+    /// is applied exactly once and a reopen it preceded stands. Absent in a
+    /// format written before the marks existed, which reads as "nothing
+    /// folded" and takes the full replay once.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folded: BTreeMap<String, u64>,
 }
 
 impl Format {
@@ -110,6 +120,7 @@ impl Format {
             findings_schema: FINDINGS_SCHEMA,
             generation: mint_generation(store_dir, 0),
             seqno: 0,
+            folded: BTreeMap::new(),
         }
     }
 
@@ -198,6 +209,7 @@ pub fn open(store_dir: &Path) -> Result<Access> {
             findings_schema: FINDINGS_SCHEMA_MIN,
             generation: mint_generation(store_dir, 0),
             seqno: 0,
+            folded: BTreeMap::new(),
         },
         Err(_) => {
             let fresh = Format::fresh(store_dir);
@@ -667,18 +679,105 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
         }
     }
 
+    let mut format = match open(store_dir)? {
+        Access::Writable(format) => format,
+        Access::DegradedReadOnly { format, .. } => {
+            // A degraded binary reads and dedupes but must not advance the log.
+            drop(lock);
+            return Ok(Merge::Merged { format, applied: 0 });
+        }
+    };
+
+    // INCREMENTAL, NOT A REPLAY (CLOUD-2820). Every merge used to fold every
+    // entry in the log's history: on this repository's store that was 791
+    // record reads and a 2.1 MB rewrite of the merged log on every `stop`, with
+    // no shard grown. Worse, re-applying a folded disposition re-settled a
+    // finding a key loss had reopened (CLOUD-529's one bypass of the join).
+    // Each shard's folded byte count is kept in the format; a merge folds only
+    // what lies past it, plus the entries still pending a record.
+    //
+    // THE FULL REPLAY STAYS FOR WHAT THE MARKS CANNOT VOUCH FOR: a shard shorter
+    // than its mark (truncated or replaced) or a marked shard that is gone. A
+    // shard only grows by append, so anything else is a change the marks do not
+    // describe, and the replay is the answer that needs no history.
+    let shards = shard_sizes(store_dir);
+    let grown_only = shards
+        .iter()
+        .all(|(name, len)| format.folded.get(name).is_none_or(|mark| mark <= len))
+        && format.folded.keys().all(|name| shards.contains_key(name));
+    if !grown_only || format.folded.is_empty() && format.seqno > 0 {
+        return replay(store_dir, lock, format, &shards);
+    }
+
+    let (fresh, marks) = read_past_marks(store_dir, &format.folded, &shards)?;
+    let pending = read_pending(store_dir);
+    let resolvable = pending.iter().any(|entry| {
+        Fingerprint::from_hex(&entry.identity)
+            .is_ok_and(|fingerprint| crate::findings::is_recorded(store_dir, fingerprint))
+    });
+    if fresh.is_empty() && !resolvable {
+        // Nothing new and nothing newly foldable: no record is read, and the
+        // merged log is not rewritten.
+        drop(lock);
+        return Ok(Merge::Merged { format, applied: 0 });
+    }
+
+    let mut todo = pending;
+    todo.extend(fresh.iter().cloned());
+    let (applied, still_pending) = fold(store_dir, &todo)?;
+    if !fresh.is_empty() {
+        // The merged log stays the stable `at`-sort of every entry: what it held
+        // is already sorted, and the new entries join it in that order.
+        let mut all = read_merged(store_dir);
+        all.extend(fresh);
+        all.sort_by_key(|entry| entry.at);
+        write_merged(store_dir, &all)?;
+        format.seqno = all.len() as u64;
+    }
+    write_pending(store_dir, &still_pending)?;
+    format.folded = marks;
+    write_format(store_dir, &format)?;
+    // Explicit: the lock is released here, after the format is published, so a
+    // racing merger never reads a log and a format that disagree.
+    drop(lock);
+    Ok(Merge::Merged { format, applied })
+}
+
+/// The full replay: every shard folded onto the records and the merged log
+/// rewritten, then every shard marked as folded. What a store with no marks
+/// takes once, and what [`merge`] falls back to when a shard did not only grow.
+fn replay(
+    store_dir: &Path,
+    lock: std::fs::File,
+    mut format: Format,
+    shards: &BTreeMap<String, u64>,
+) -> Result<Merge> {
     let entries = read_shards(store_dir)?;
+    let (applied, pending) = fold(store_dir, &entries)?;
+    write_merged(store_dir, &entries)?;
+    write_pending(store_dir, &pending)?;
+    format.seqno = entries.len() as u64;
+    format.folded = shards.clone();
+    write_format(store_dir, &format)?;
+    drop(lock);
+    Ok(Merge::Merged { format, applied })
+}
+
+/// Fold `entries` onto their records, in order, writing each changed record
+/// once. Returns how many entries were applied and the entries whose record
+/// does not exist yet, which stay pending.
+fn fold(store_dir: &Path, entries: &[Entry]) -> Result<(usize, Vec<Entry>)> {
     let mut applied = 0;
-    // FOLDED IN MEMORY, WRITTEN ONCE PER RECORD. The shards are append-only and
-    // every merge replays all of them, so writing the record once per ENTRY made
-    // each merge cost two fsync+rename pairs per entry in the log's whole history
-    // — 354k of each for 229 records on this repository's own store, over 400s
-    // for one `enforce`. The fold is the same sequential fold per identity (entry
-    // order is kept within each record), so the landed records are byte-identical;
-    // only the number of intermediate writes changes. A record the fold leaves
-    // unchanged is not rewritten at all.
+    let mut pending = Vec::new();
+    // FOLDED IN MEMORY, WRITTEN ONCE PER RECORD. Writing the record once per
+    // ENTRY cost two fsync+rename pairs per entry — 354k of each for 229 records
+    // on this repository's own store, over 400s for one `enforce`. The fold is
+    // the same sequential fold per identity (entry order is kept within each
+    // record), so the landed records are byte-identical; only the number of
+    // intermediate writes changes. A record the fold leaves unchanged is not
+    // rewritten at all.
     let mut folded: BTreeMap<Fingerprint, (FindingRecord, FindingRecord)> = BTreeMap::new();
-    for entry in &entries {
+    for entry in entries {
         let Ok(fingerprint) = Fingerprint::from_hex(&entry.identity) else {
             continue;
         };
@@ -688,8 +787,9 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
                 let Some(loaded) = crate::findings::load_one(store_dir, fingerprint)? else {
                     // An entry for an identity with no record is not an error: the
                     // record may be GC'd, or the scan that mints it may not have run
-                    // here yet. Dropping the entry silently would lose a disposition,
-                    // so it stays in the shard and is folded when the record appears.
+                    // here yet. Dropping the entry would lose a disposition, so it
+                    // stays pending and is folded when the record appears.
+                    pending.push(entry.clone());
                     continue;
                 };
                 &mut slot.insert((loaded.clone(), loaded)).1
@@ -710,22 +810,100 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
             crate::findings::save_one(store_dir, record)?;
         }
     }
+    Ok((applied, pending))
+}
 
-    let mut format = match open(store_dir)? {
-        Access::Writable(format) => format,
-        Access::DegradedReadOnly { format, .. } => {
-            // A degraded binary reads and dedupes but must not advance the log.
-            drop(lock);
-            return Ok(Merge::Merged { format, applied: 0 });
-        }
+/// Every shard's file name and length, sorted by name.
+fn shard_sizes(store_dir: &Path) -> BTreeMap<String, u64> {
+    let Ok(entries) = std::fs::read_dir(shards_dir(store_dir)) else {
+        return BTreeMap::new();
     };
-    write_merged(store_dir, &entries)?;
-    format.seqno = entries.len() as u64;
-    write_format(store_dir, &format)?;
-    // Explicit: the lock is released here, after the format is published, so a
-    // racing merger never reads a log and a format that disagree.
-    drop(lock);
-    Ok(Merge::Merged { format, applied })
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|path| {
+            let len = std::fs::metadata(&path).ok()?.len();
+            Some((path.file_name()?.to_str()?.to_owned(), len))
+        })
+        .collect()
+}
+
+/// The entries past each shard's mark, sorted by stamp, and the new marks.
+///
+/// Only whole lines are read: a torn tail stays behind the new mark and is read
+/// once its writer finishes it, exactly as [`read_shards`] drops it today.
+fn read_past_marks(
+    store_dir: &Path,
+    marks: &BTreeMap<String, u64>,
+    shards: &BTreeMap<String, u64>,
+) -> Result<(Vec<Entry>, BTreeMap<String, u64>)> {
+    let mut fresh = Vec::new();
+    let mut moved = BTreeMap::new();
+    for (name, len) in shards {
+        let from = marks.get(name).copied().unwrap_or(0);
+        if from >= *len {
+            moved.insert(name.clone(), from);
+            continue;
+        }
+        let path = shards_dir(store_dir).join(name);
+        let bytes = crate::fsio::read(&path)
+            .with_context(|| format!("read the shard {}", path.display()))?;
+        let start = usize::try_from(from).unwrap_or(usize::MAX).min(bytes.len());
+        let tail = &bytes[start..];
+        let whole = tail
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |at| at + 1);
+        fresh.extend(
+            String::from_utf8_lossy(&tail[..whole])
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Entry>(line).ok()),
+        );
+        moved.insert(name.clone(), from + whole as u64);
+    }
+    fresh.sort_by_key(|entry| entry.at);
+    Ok((fresh, moved))
+}
+
+/// The pending entries' path.
+fn pending_path(store_dir: &Path) -> PathBuf {
+    journal_dir(store_dir).join(PENDING_FILE)
+}
+
+/// The entries still waiting for their record; absent or unreadable is none.
+fn read_pending(store_dir: &Path) -> Vec<Entry> {
+    crate::fsio::read_to_string(pending_path(store_dir)).map_or_else(
+        |_| Vec::new(),
+        |text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+                .collect()
+        },
+    )
+}
+
+/// Publish the pending entries, removing the file when there are none.
+fn write_pending(store_dir: &Path, pending: &[Entry]) -> Result<()> {
+    let path = pending_path(store_dir);
+    if pending.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(anyhow::Error::from(err))
+                .with_context(|| format!("remove the pending entries {}", path.display())),
+            _ => Ok(()),
+        };
+    }
+    let mut body = String::new();
+    for entry in pending {
+        body.push_str(&serde_json::to_string(entry)?);
+        body.push('\n');
+    }
+    let temp = journal_dir(store_dir).join(format!("{PENDING_FILE}.{}.tmp", std::process::id()));
+    crate::durable::replace(&temp, body)
+        .with_context(|| format!("write the pending entries {}", temp.display()))?;
+    std::fs::rename(&temp, &path)
+        .with_context(|| format!("publish the pending entries {}", path.display()))?;
+    Ok(())
 }
 
 /// The merged log's path.
@@ -1237,6 +1415,7 @@ mod tests {
                 findings_schema: FINDINGS_SCHEMA + 1,
                 generation: "f".repeat(64),
                 seqno: 0,
+                folded: BTreeMap::new(),
             },
         )
         .unwrap();
@@ -1267,6 +1446,7 @@ mod tests {
                 findings_schema: FINDINGS_SCHEMA_MIN,
                 generation: "a".repeat(64),
                 seqno: 0,
+                folded: BTreeMap::new(),
             },
         )
         .unwrap();
@@ -1584,6 +1764,108 @@ mod tests {
             Fold::Records(vec!["x".to_owned(), "y".to_owned(), "w".to_owned()])
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2820. Fails by: a merge re-applying an entry it already folded, so a
+    /// finding reopened after a key loss (the one bypass of the disposition
+    /// join, CLOUD-529) is settled again by the next merge.
+    #[test]
+    fn a_reopened_finding_stays_open_across_a_merge() {
+        let dir = store("reopen-holds");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        let mut record = crate::findings::load_all(&dir).unwrap().remove(0);
+        assert_eq!(record.disposition, Some(Disposition::Acted));
+        assert!(record.reopen());
+        crate::findings::save_one(&dir, &record).unwrap();
+        merge(&dir).unwrap();
+        assert_eq!(
+            crate::findings::load_all(&dir).unwrap()[0].disposition,
+            None,
+            "a folded entry must not be folded again over a reopen"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2820. Fails by: a merge with no new shard bytes rewriting the
+    /// merged log, the O(log) cost every `stop` paid. A trailing line the
+    /// reader skips survives only if nothing rewrote the file.
+    #[test]
+    fn a_merge_with_no_new_entries_touches_no_record() {
+        let dir = store("no-new-entries");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        let merged = merged_path(&dir);
+        let marked = format!("{}\n", crate::fsio::read_to_string(&merged).unwrap());
+        std::fs::write(&merged, &marked).unwrap();
+        assert!(matches!(
+            merge(&dir).unwrap(),
+            Merge::Merged { applied: 0, .. }
+        ));
+        assert_eq!(
+            crate::fsio::read_to_string(&merged).unwrap(),
+            marked,
+            "a merge with nothing new must not rewrite the merged log"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2820. Fails by: an entry whose record did not exist yet being lost
+    /// once its shard bytes are behind the high-water mark.
+    #[test]
+    fn an_entry_whose_record_appears_later_is_folded_then() {
+        let dir = store("record-later");
+        append(&dir, "shard-a", &entry_for("LATER", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        assert!(crate::findings::load_all(&dir).unwrap().is_empty());
+        crate::findings::save_one(&dir, &record_for("LATER")).unwrap();
+        merge(&dir).unwrap();
+        assert_eq!(
+            crate::findings::load_all(&dir).unwrap()[0].disposition,
+            Some(Disposition::Acted),
+            "the pending entry is folded once its record exists"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2820. Fails by: folding in two rounds landing other records or
+    /// another merged log than folding once, with distinct stamps and no reopen.
+    #[test]
+    fn incremental_and_full_merges_land_the_same_records() {
+        let entries: Vec<(&str, Entry)> = (0_u64..12)
+            .map(|i| {
+                let span = if i % 3 == 0 { "ONE" } else { "TWO" };
+                let disposition =
+                    [Disposition::RejectedWrong, Disposition::Acted][(i % 2) as usize];
+                let mut entry = entry_for(span, disposition);
+                entry.at = Some(1_000 + 7 * i);
+                (if i % 2 == 0 { "shard-a" } else { "shard-b" }, entry)
+            })
+            .collect();
+        let land = |name: &str, rounds: &[std::ops::Range<usize>]| {
+            let dir = store(name);
+            for span in ["ONE", "TWO"] {
+                crate::findings::save_one(&dir, &record_for(span)).unwrap();
+            }
+            for round in rounds {
+                for (shard, entry) in &entries[round.clone()] {
+                    append(&dir, shard, entry).unwrap();
+                }
+                merge(&dir).unwrap();
+            }
+            let landed = (
+                crate::findings::load_all(&dir).unwrap(),
+                crate::fsio::read_to_string(merged_path(&dir)).unwrap(),
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            landed
+        };
+        assert_eq!(
+            land("fold-once", &[0..12]),
+            land("fold-twice", &[0..5, 5..12])
+        );
     }
 
     /// Fails by: a merge reporting a count other than the entries it applied.
