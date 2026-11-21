@@ -27,6 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use ra_ap_syntax::ast::{HasAttrs as _, HasModuleItem as _, HasName as _, HasVisibility as _};
+use std::fmt::Write as _;
+
 use ra_ap_syntax::{AstNode as _, SourceFile, SyntaxKind, SyntaxNode, ast};
 
 use crate::codemod::CouldNotLook;
@@ -92,7 +94,7 @@ impl Graph {
             .filter(|next| self.edges.contains_key(*next))
     }
 
-    /// MacCormack, Rusnak & Baldwin's propagation cost (Management Science,
+    /// `MacCormack`, Rusnak & Baldwin's propagation cost (Management Science,
     /// 2006): the share of (node, node) pairs where the first reaches the
     /// second, each node counted as reaching itself, in percent. The cycle's
     /// size says how many modules are tangled; this says how far a change in
@@ -626,10 +628,14 @@ fn dedent(body: &str) -> String {
 
 /// The files of `files` under `src` that parse, as their keys and their
 /// `(node, module, tree)`, index for index.
-fn parse_src(
-    src: &str,
-    files: &BTreeMap<String, String>,
-) -> (Vec<String>, Vec<(String, Vec<String>, SourceFile)>) {
+/// Each parsed file as `(node, module path, tree)`, index for index with its key.
+type Parsed = Vec<(String, Vec<String>, SourceFile)>;
+
+/// The `use` lines owed per `(file, insertion point)`: each path, and whether it
+/// is gated `#[cfg(test)]`.
+type Imports = BTreeMap<(String, Option<usize>), BTreeSet<(String, bool)>>;
+
+fn parse_src(src: &str, files: &BTreeMap<String, String>) -> (Vec<String>, Parsed) {
     let prefix = format!("{}/", src.trim_end_matches('/'));
     let mut keys = Vec::new();
     let mut parsed = Vec::new();
@@ -669,6 +675,10 @@ fn parse_src(
 /// `use …::TExt as _;`, gated `#[cfg(test)]` where only test code calls it;
 /// `cargo fix` drops the ones a same-named method elsewhere made spurious.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over one parse: group, declare, import, rewrite; split it when a second caller needs a stage"
+)]
 pub fn impls_to_extension_traits(
     src: &str,
     krate: &str,
@@ -699,7 +709,7 @@ pub fn impls_to_extension_traits(
         }
     }
     let mut edits: BTreeMap<String, Vec<(std::ops::Range<usize>, String)>> = BTreeMap::new();
-    let mut imports: BTreeMap<(String, Option<usize>), BTreeSet<(String, bool)>> = BTreeMap::new();
+    let mut imports: Imports = BTreeMap::new();
     for ((file, name), blocks) in groups {
         let Some(trait_) = extension_trait(&name, &blocks) else {
             continue;
@@ -729,8 +739,10 @@ pub fn impls_to_extension_traits(
         let targets =
             ["src/", "tests/", "examples/", "benches/"].map(|dir| format!("{package}{dir}"));
         for (other, text) in files {
-            if !other.ends_with(".rs") || !targets.iter().any(|dir| other.starts_with(dir.as_str()))
-            {
+            let rust = std::path::Path::new(other)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+            if !rust || !targets.iter().any(|dir| other.starts_with(dir.as_str())) {
                 continue;
             }
             // A binary target (`main.rs`, `src/bin/`) is its own crate root,
@@ -823,18 +835,22 @@ fn extension_trait(name: &str, blocks: &[ast::Impl]) -> Option<ExtensionTrait> {
             let visibility = syntax.children().find_map(ast::Visibility::cast);
             public |= visibility
                 .as_ref()
-                .is_some_and(|v| v.syntax().text().to_string() == "pub");
+                .is_some_and(|v| v.syntax().text() == "pub");
             // Doc comments and `#[must_use]` describe the declaration; every
             // other attribute is about the body.
             let (mut declared, mut kept) = (String::new(), String::new());
             for child in syntax.children_with_tokens() {
                 match child.kind() {
                     // The parser wraps a doc comment in its own node.
-                    SyntaxKind::DOC_COMMENT => declared.push_str(&format!("    {child}\n")),
-                    SyntaxKind::ATTR if child.to_string().contains("must_use") => {
-                        declared.push_str(&format!("    {child}\n"));
+                    SyntaxKind::DOC_COMMENT => {
+                        let _ = writeln!(declared, "    {child}");
                     }
-                    SyntaxKind::ATTR => kept.push_str(&format!("    {child}\n")),
+                    SyntaxKind::ATTR if child.to_string().contains("must_use") => {
+                        let _ = writeln!(declared, "    {child}");
+                    }
+                    SyntaxKind::ATTR => {
+                        let _ = writeln!(kept, "    {child}");
+                    }
                     _ => {}
                 }
             }
@@ -910,10 +926,12 @@ fn calls(text: &str, items: &BTreeSet<String>) -> BTreeMap<Option<usize>, bool> 
         // (measured: `row.severity()` in a `vec![…]`): there a call is the
         // name between `.`/`::` and `(`.
         let in_macro = || {
-            let next = std::iter::successors(token.next_token(), |at| at.next_token())
-                .find(|at| at.kind() != SyntaxKind::WHITESPACE);
-            let previous = std::iter::successors(token.prev_token(), |at| at.prev_token())
-                .find(|at| at.kind() != SyntaxKind::WHITESPACE);
+            let next =
+                std::iter::successors(token.next_token(), ra_ap_syntax::SyntaxToken::next_token)
+                    .find(|at| at.kind() != SyntaxKind::WHITESPACE);
+            let previous =
+                std::iter::successors(token.prev_token(), ra_ap_syntax::SyntaxToken::prev_token)
+                    .find(|at| at.kind() != SyntaxKind::WHITESPACE);
             next.is_some_and(|at| at.kind() == SyntaxKind::L_PAREN)
                 && previous
                     .is_some_and(|at| matches!(at.kind(), SyntaxKind::DOT | SyntaxKind::COLON2))
@@ -989,6 +1007,10 @@ fn locate(below: &str) -> Option<(String, Vec<String>)> {
 /// unresolved, is left where it is, so the gate still counts it. What this
 /// cannot see is a compile error naming the site, never a silent change.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over one parse: locate, lift, re-import, splice; split it when a second caller needs a stage"
+)]
 pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let (keys, parsed) = parse_src(src, files);
     let Sites { sites, declared } = impl_sites(&parsed);
@@ -1037,7 +1059,7 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
         };
         // The moved impl's private methods its old module still calls.
         let mut text = source[start..end].to_owned();
-        let mut raises: Vec<usize> = site
+        let mut private_calls: Vec<usize> = site
             .found
             .assoc_item_list()
             .into_iter()
@@ -1050,13 +1072,13 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
             .filter(|function| {
                 function
                     .name()
-                    .is_some_and(|name| used_outside(&name.text()))
+                    .is_some_and(|name| used_outside(name.text()))
             })
             .filter_map(|function| item_start(function.syntax()))
             .map(|at| at - start)
             .collect();
-        raises.sort_unstable();
-        for at in raises.into_iter().rev() {
+        private_calls.sort_unstable();
+        for at in private_calls.into_iter().rev() {
             text.insert_str(at, "pub(crate) ");
         }
         landed.entry(target).or_default().push(text);
@@ -1107,7 +1129,10 @@ pub fn move_impls_home(src: &str, files: &BTreeMap<String, String>) -> BTreeMap<
             .map_or(text.len(), |item| {
                 usize::from(item.syntax().text_range().start())
             });
-        let body: String = texts.iter().map(|moved| format!("\n{moved}\n\n")).collect();
+        let body = texts.iter().fold(String::new(), |mut body, moved| {
+            let _ = write!(body, "\n{moved}\n\n");
+            body
+        });
         let list = edits.entry(target).or_default();
         list.push((at..at, body));
         let lines: Vec<String> = uses
@@ -1317,10 +1342,9 @@ impl Resolver<'_> {
         let name = path.last()?;
         let node = match head.as_str() {
             "crate" if rest.len() >= 2 => rest[0].clone(),
-            "crate" => LIB.to_owned(),
             "self" => module.first().cloned().unwrap_or_else(|| LIB.to_owned()),
             "super" if module.len() >= 2 => module[0].clone(),
-            "super" => LIB.to_owned(),
+            "crate" | "super" => LIB.to_owned(),
             child if module.is_empty() && self.modules.contains(child) => child.to_owned(),
             _ => return None,
         };
@@ -1346,7 +1370,8 @@ fn match_ast_name(syntax: &SyntaxNode) -> Option<String> {
         item.name()
     } else if let Some(item) = ast::Union::cast(syntax.clone()) {
         item.name()
-    } else if let Some(item) = ast::TypeAlias::cast(syntax.clone()) {
+    } else {
+        let item = ast::TypeAlias::cast(syntax.clone())?;
         if syntax
             .parent()
             .is_some_and(|parent| parent.kind() == SyntaxKind::ASSOC_ITEM_LIST)
@@ -1354,8 +1379,6 @@ fn match_ast_name(syntax: &SyntaxNode) -> Option<String> {
             return None;
         }
         item.name()
-    } else {
-        return None;
     }?;
     Some(name.text().to_string())
 }
@@ -1800,6 +1823,7 @@ fn from_root(segments: &[String], module: &[String]) -> Option<String> {
 }
 
 /// Whether `node` sits inside an item carrying `#[cfg(test)]`.
+#[must_use]
 pub fn cfg_test(node: &SyntaxNode) -> bool {
     node.ancestors().any(|ancestor| {
         ast::AnyHasAttrs::cast(ancestor).is_some_and(|item| {
