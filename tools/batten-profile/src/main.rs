@@ -55,8 +55,42 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: batten-profile hot P.json [--top N] [--min PCT] [--all] \
-                     | callers P.json NAME [--top N] | diff A.json B.json [--top N]";
+const USAGE: &str = "usage: batten-profile record ARM [--rate HZ] [--iterations N] [--out P.json] \
+                     | hot P.json [--top N] [--min PCT] [--all] \
+                     | callers P.json NAME [--top N] | diff A.json B.json [--top N] \
+                     | calls CALLGRIND.out NAME";
+
+/// The arms `batten perf measure` times, as (payload under the hook fixtures,
+/// arguments after the binary, whether it runs in the staged `check-repo`).
+/// The same commands, so a profile describes what the gate measured.
+const ARMS: [(&str, Option<&str>, &[&str], bool); 6] = [
+    ("noop", None, &["--help"], false),
+    ("check", None, &["check"], true),
+    (
+        "hook",
+        Some("claude-code.json"),
+        &["adjudicate", "--harness", "claude-code"],
+        false,
+    ),
+    (
+        "passthrough",
+        Some("claude-code-passthrough.json"),
+        &["adjudicate", "--harness", "claude-code"],
+        false,
+    ),
+    (
+        "posttool",
+        Some("claude-code-posttool.json"),
+        &["adjudicate", "--harness", "claude-code"],
+        false,
+    ),
+    (
+        "stop",
+        Some("claude-code-stop.json"),
+        &["adjudicate", "--harness", "claude-code"],
+        true,
+    ),
+];
 
 fn flag<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
     args.iter()
@@ -75,16 +109,220 @@ fn run(args: &[String]) -> Result<String, String> {
             top,
             flag(args, "--min", 1.0),
         )),
-        (Some("callers"), Some(path), Some(name)) => {
-            callers(&load(Path::new(path), all)?, name, top)
-        }
+        (Some("callers"), Some(path), Some(name)) => callers(
+            &load(Path::new(path), all)?,
+            name,
+            top,
+            flag(args, "--depth", 3_usize),
+        ),
         (Some("diff"), Some(a), Some(b)) => Ok(diff(
             &load(Path::new(a), all)?,
             &load(Path::new(b), all)?,
             top,
         )),
+        (Some("calls"), Some(path), Some(name)) => {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            calls(&text, name)
+        }
+        (Some("record"), Some(arm), _) => {
+            let out = args
+                .iter()
+                .position(|a| a == "--out")
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+                .unwrap_or_else(|| format!("target/profile/{arm}.json"));
+            record(
+                arm,
+                flag(args, "--rate", 10_000_u32),
+                flag(args, "--iterations", 10_u32),
+                Path::new(&out),
+            )?;
+            Ok(format!(
+                "{out}\n{}",
+                hot(&load(Path::new(&out), all)?, top, flag(args, "--min", 1.0))
+            ))
+        }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// Exact call counts into frames whose name contains `needle`, per caller, from
+/// a callgrind output file: what a sampler cannot give and what proves a claim
+/// like "computed three times per call".
+///
+/// The format names a function once as `(id) name` and by `(id)` after; a
+/// `calls=N …` line counts calls into the preceding `cfn=`, made from the
+/// current `fn=`.
+fn calls(text: &str, needle: &str) -> Result<String, String> {
+    let mut names: HashMap<String, String> = HashMap::new();
+    let mut resolve = |spec: &str| -> String {
+        let spec = spec.trim();
+        match spec.strip_prefix('(').and_then(|rest| rest.split_once(')')) {
+            Some((id, "")) => names.get(id).cloned().unwrap_or_else(|| format!("({id})")),
+            Some((id, name)) => {
+                let name = short(name.trim());
+                names.insert(id.to_owned(), name.clone());
+                name
+            }
+            None => short(spec),
+        }
+    };
+    let (mut current, mut callee) = (String::new(), None::<String>);
+    let mut counted: HashMap<(String, String), u64> = HashMap::new();
+    for line in text.lines() {
+        if let Some(spec) = line.strip_prefix("fn=") {
+            current = resolve(spec);
+        } else if let Some(spec) = line.strip_prefix("cfn=") {
+            callee = Some(resolve(spec));
+        } else if let Some(rest) = line.strip_prefix("calls=") {
+            if let Some(called) = callee.take().filter(|c| c.contains(needle)) {
+                let n: u64 = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+                *counted.entry((called, current.clone())).or_default() += n;
+            }
+        }
+    }
+    if counted.is_empty() {
+        return Err(format!(
+            "no call into a function containing `{needle}`; record with --toggle-collect unset or wider"
+        ));
+    }
+    let mut rows: Vec<((String, String), u64)> = counted.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let total: u64 = rows.iter().map(|(_, n)| n).sum();
+    let mut out = format!("{total} calls into `{needle}`\n");
+    for ((called, caller), n) in rows {
+        let _ = writeln!(out, "{n:>8}  {caller} -> {called}");
+    }
+    Ok(out)
+}
+
+/// Restores `kernel.perf_event_paranoid` when dropped, so an error or a panic
+/// mid-recording cannot leave the host's setting lowered.
+struct Paranoid(Option<String>);
+
+const PARANOID: &str = "/proc/sys/kernel/perf_event_paranoid";
+
+impl Paranoid {
+    /// Lower the setting to 1 only if it is above, remembering the original.
+    /// samply needs `<= 1`; an unwritable setting is reported, not worked around.
+    fn lower() -> Result<Self, String> {
+        let now = std::fs::read_to_string(PARANOID).map_err(|e| format!("{PARANOID}: {e}"))?;
+        if now.trim().parse::<i32>().map_or(true, |level| level <= 1) {
+            return Ok(Self(None));
+        }
+        std::fs::write(PARANOID, "1")
+            .map_err(|e| format!("samply needs {PARANOID} <= 1 and it is {}: {e}", now.trim()))?;
+        Ok(Self(Some(now)))
+    }
+}
+
+impl Drop for Paranoid {
+    fn drop(&mut self) {
+        if let Some(original) = self.0.take() {
+            let _ = std::fs::write(PARANOID, original.trim());
+        }
+    }
+}
+
+/// `'…'`-quote a word for `sh -c`.
+fn quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// The iteration's shell script. NOT `exec`, and the status is discarded:
+/// samply skips every remaining iteration after a non-zero exit, and `stop`
+/// and every refusing arm exit 2 by design — the deny channel — so an
+/// `exec`'d run recorded one cold iteration of ten.
+fn wrapped(command: &[String]) -> String {
+    format!("{}; exit 0", command.join(" "))
+}
+
+/// Build the `profiling` binary and sample `arm` with the pinned samply,
+/// writing `out` and its `.syms.json` sidecar. Every iteration gets its own
+/// stdin through `sh -c '… < payload'`: a bare redirect would be consumed by
+/// the first and leave the rest adjudicating nothing.
+fn record(arm: &str, rate: u32, iterations: u32, out: &Path) -> Result<(), String> {
+    let repo = std::env::current_dir().map_err(|e| e.to_string())?;
+    let (_, payload, argv, staged) =
+        ARMS.iter().find(|(name, ..)| *name == arm).ok_or_else(|| {
+            let names: Vec<&str> = ARMS.iter().map(|(name, ..)| *name).collect();
+            format!("unknown arm `{arm}`; one of {}", names.join(", "))
+        })?;
+    let dir = if *staged {
+        repo.join("target/perf/check-repo")
+    } else {
+        repo.clone()
+    };
+    if !dir.is_dir() {
+        return Err(format!(
+            "{} is missing: run `mise run perf` once to stage it",
+            dir.display()
+        ));
+    }
+    let status = std::process::Command::new("mise")
+        .args([
+            "exec",
+            "--",
+            "cargo",
+            "build",
+            "--profile",
+            "profiling",
+            "-q",
+            "-p",
+            "batten",
+            "--bin",
+            "batten",
+        ])
+        .current_dir(&repo)
+        .status()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if !status.success() {
+        return Err("the profiling build failed".to_owned());
+    }
+    let binary = repo.join("target/profiling/batten");
+    let mut command: Vec<String> = vec![quote(&binary.to_string_lossy())];
+    command.extend(argv.iter().map(|word| quote(word)));
+    if let Some(payload) = payload {
+        let file = repo
+            .join("crates/batten/tests/fixtures/hooks")
+            .join(payload);
+        command.push(format!("< {}", quote(&file.to_string_lossy())));
+    }
+    let out = repo.join(out);
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let _restore = Paranoid::lower()?;
+    let status = std::process::Command::new("mise")
+        .args([
+            "exec",
+            "--",
+            "samply",
+            "record",
+            "--save-only",
+            "--unstable-presymbolicate",
+        ])
+        .args([
+            "--rate",
+            &rate.to_string(),
+            "--iteration-count",
+            &iterations.to_string(),
+        ])
+        .arg("-o")
+        .arg(&out)
+        .args(["--", "sh", "-c", &wrapped(&command)])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("samply: {e}"))?;
+    if !status.success() {
+        return Err(format!("samply exited {status}"));
+    }
+    Ok(())
 }
 
 /// Frames a reader of batten's own code does not act on: the runtime, libc,
@@ -424,7 +662,9 @@ fn hot(stacks: &Stacks, top: usize, min: f64) -> String {
     out
 }
 
-fn callers(stacks: &Stacks, needle: &str, top: usize) -> Result<String, String> {
+/// `depth` frames above the match: three answers "who called it"; a deeper
+/// window reaches the frame that owns an inlined library call.
+fn callers(stacks: &Stacks, needle: &str, top: usize, depth: usize) -> Result<String, String> {
     let mut paths: HashMap<String, u64> = HashMap::new();
     let mut matched = 0_u64;
     for (stack, weight) in &stacks.stacks {
@@ -432,7 +672,7 @@ fn callers(stacks: &Stacks, needle: &str, top: usize) -> Result<String, String> 
             continue;
         };
         matched += weight;
-        let path: Vec<&str> = stack[i.saturating_sub(3)..=i]
+        let path: Vec<&str> = stack[i.saturating_sub(depth)..=i]
             .iter()
             .map(|f| f.name.as_str())
             .collect();
@@ -486,4 +726,122 @@ fn diff(before: &Stacks, after: &Stacks, top: usize) -> String {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(name: &str) -> Frame {
+        Frame {
+            name: name.to_owned(),
+            at: String::new(),
+        }
+    }
+
+    fn stacks(rows: &[(&[&str], u64)]) -> Stacks {
+        let stacks: Vec<(Vec<Frame>, u64)> = rows
+            .iter()
+            .map(|(names, n)| (names.iter().map(|n| frame(n)).collect(), *n))
+            .collect();
+        Stacks {
+            total: stacks.iter().map(|(_, n)| n).sum(),
+            stacks,
+        }
+    }
+
+    /// Fails by: a generic argument list surviving, or a nested one leaking a `>`.
+    #[test]
+    fn generic_arguments_collapse_to_one_marker() {
+        assert_eq!(
+            short("try_find<gix_odb::Cache<Handle<Rc<Store>>>>"),
+            "try_find<…>"
+        );
+        assert_eq!(short("plain"), "plain");
+        assert_eq!(short("<T as Trait>::call"), "<…>::call");
+    }
+
+    /// Fails by: a workspace path keeping its machine prefix, a registry path
+    /// keeping the index hash, or a line number dropped.
+    #[test]
+    fn paths_keep_only_what_locates_the_line() {
+        assert_eq!(
+            short_path("/home/u/repo/crates/batten/src/store.rs", 363),
+            "crates/batten/src/store.rs:363"
+        );
+        assert_eq!(
+            short_path(
+                "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zlib-rs-0.6.8/src/inflate.rs",
+                9
+            ),
+            "zlib-rs-0.6.8/src/inflate.rs:9"
+        );
+        assert_eq!(short_path("/usr/lib/x.c", 0), "/usr/lib/x.c");
+    }
+
+    /// Fails by: recursion counting a frame twice in one stack, or self time
+    /// charged to anything but the leaf.
+    #[test]
+    fn inclusive_counts_a_frame_once_per_stack_and_self_is_the_leaf() {
+        let (inclusive, own) = shares(&stacks(&[(&["a", "b", "a"], 3), (&["a", "c"], 1)]));
+        assert_eq!(inclusive[&frame("a")], 4);
+        assert_eq!(inclusive[&frame("b")], 3);
+        assert_eq!(own[&frame("a")], 3);
+        assert_eq!(own[&frame("c")], 1);
+        assert!(!own.contains_key(&frame("b")));
+    }
+
+    /// Fails by: a caller path missing, mis-weighted, or an absent name answered
+    /// with an empty report instead of a refusal that says what to do.
+    #[test]
+    fn callers_name_every_path_and_refuse_an_absent_frame() {
+        let s = stacks(&[
+            (&["main", "x", "hot"], 3),
+            (&["main", "y", "hot"], 1),
+            (&["main", "z"], 4),
+        ]);
+        let report = callers(&s, "hot", 5, 3).unwrap();
+        assert!(callers(&s, "hot", 5, 0).unwrap().contains("50.0%  hot"));
+        assert!(report.starts_with("50.0% of 8 samples pass through `hot`"));
+        assert!(report.contains("37.5%  main > x > hot"));
+        assert!(report.contains("12.5%  main > y > hot"));
+        assert!(callers(&s, "absent", 5, 3).is_err());
+    }
+
+    /// Fails by: a frame that vanished after a patch going unreported — the
+    /// blind spot of a red/blue differential flame graph.
+    #[test]
+    fn a_diff_reports_a_frame_that_vanished() {
+        let before = stacks(&[(&["main", "walk"], 9), (&["main"], 1)]);
+        let after = stacks(&[(&["main"], 1)]);
+        assert!(diff(&before, &after, 5).contains(" 90.0% ->   0.0%  walk"));
+    }
+
+    /// Fails by: a `calls=` attributed to the wrong callee or caller, or a
+    /// compressed `(id)` name left unresolved.
+    #[test]
+    fn calls_are_summed_per_caller_through_compressed_names() {
+        let text = "fn=(1) store::resolve\ncfn=(2) git::root_commits<T>\ncalls=2 0\n0 5\n\
+                    fn=(3) run_state_record\ncfn=(2)\ncalls=1 0\n0 5\ncfn=(4) other\ncalls=7 0\n";
+        let report = calls(text, "root_commits").unwrap();
+        assert!(report.starts_with("3 calls into `root_commits`"));
+        assert!(report.contains("       2  store::resolve -> git::root_commits<…>"));
+        assert!(report.contains("       1  run_state_record -> git::root_commits<…>"));
+        assert!(calls(text, "absent").is_err());
+    }
+
+    /// Fails by: a quote in a path breaking out of the `sh -c` word.
+    #[test]
+    fn a_quote_cannot_escape_its_word() {
+        assert_eq!(quote("a'b"), r"'a'\''b'");
+    }
+
+    /// Fails by: the iteration script letting the deny channel's exit 2 reach
+    /// samply, which then records one iteration of ten.
+    #[test]
+    fn an_iteration_exits_zero_whatever_the_arm_answers() {
+        let script = wrapped(&["'/b/batten'".to_owned(), "< '/p.json'".to_owned()]);
+        assert_eq!(script, "'/b/batten' < '/p.json'; exit 0");
+        assert!(!script.starts_with("exec "));
+    }
 }

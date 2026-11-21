@@ -14559,6 +14559,39 @@ id = "prompt read first"
 kind = "document"
 target = "skills/profile/SKILL.md"
 
+# A profiler run by hand is handed `skills/profile` (CLOUD-2813). One session
+# rebuilt the profiling recipe four times; the skill existed after the second
+# and nothing put it in front of the call. `warn`: the call runs, the pointer
+# rides it, `forge read first`'s shape.
+[[rule]]
+id = "program measure first"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/profile-read-first.rego"
+severity = "warn"
+
+[[verdict]]
+id = "program measure first"
+gloss = "a profiler is run by hand; `mise run profile` and the profiling skill carry the recipe"
+class = """
+Measured on #1276: one session profiled `stop` four times and lost a run each \
+time to a step the recipe already knew — the stripped binary, a payload only \
+the first iteration read, a sysctl left to restore by hand, a 700-line stack \
+dump. `mise run profile -- <arm>` does every step and answers in ranked rows; \
+the skill carries the loop around it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run profile -- <arm>, backgrounded (noop, check, hook, passthrough, posttool, stop)"
+
+[[verdict.route]]
+id = "prompt read first"
+kind = "document"
+target = "skills/profile/SKILL.md"
+
 [[verdict]]
 id = "test name undefined"
 gloss = "an obligation this row declared names no case, or a case with no mutation that could kill it"
