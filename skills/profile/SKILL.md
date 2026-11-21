@@ -76,33 +76,42 @@ after.json`, which also reports the frames that vanished. Keep the best
   `mise exec -- cargo build --release -q --manifest-path tools/batten-profile/Cargo.toml --target-dir target/profile-tool`,
   then run `target/profile-tool/release/batten-profile`.
 
-## Recording
-
-**Sampler (the default):** samply, pinned in `mise.toml`. It needs
-`kernel.perf_event_paranoid` at 1 or lower. Lower it for the recording and
-restore it to 2 afterwards. Each `--iteration-count` run gets its own stdin
-only through `sh -c '… < payload'`; a bare `< payload` is consumed by the first
-run.
+## Recording: one command
 
 ```sh
-sysctl -w kernel.perf_event_paranoid=1
-cd target/perf/check-repo && mise exec -- samply record --save-only --unstable-presymbolicate \
-  --rate 10000 --iteration-count 10 -o <scratch>/stop.json -- \
-  sh -c 'exec <repo>/target/profiling/batten adjudicate --harness claude-code < <repo>/crates/batten/tests/fixtures/hooks/claude-code-stop.json'
-sysctl -w kernel.perf_event_paranoid=2
-batten-profile hot <scratch>/stop.json --top 12
-batten-profile callers <scratch>/stop.json root_commits
+mise run profile -- stop            # backgrounded; any arm: noop check hook passthrough posttool stop
 ```
+
+It does every step that cost a rerun when done by hand:
+
+1. builds the symbolized `profiling` binary;
+2. lowers `kernel.perf_event_paranoid` to 1 behind a guard that restores it on
+   any exit;
+3. runs the arm's own command, payload and directory, as `perf measure` does;
+4. gives every iteration its own stdin, so a bare `< payload` is not consumed
+   by the first run;
+5. records with the pinned samply into `target/profile/<arm>.json`;
+6. prints `hot`.
 
 `hot` prints inclusive share, then self share with pprof's `sum%`, a running
 total that tells you when to stop reading. It hides std, libc, the allocator
-and the runtime unless `--all`, and strips generic arguments from names.
-
-**Call counts and deterministic instruction counts: valgrind 3.22.**
+and the runtime unless `--all`, and strips generic arguments from names. Then:
 
 ```sh
-valgrind --tool=callgrind --toggle-collect='*root_commits*' --callgrind-out-file=<scratch>/c.out <bin> … < payload
-callgrind_annotate --tree=caller <scratch>/c.out | grep -A3 'root_commits '   # calls=N
+batten-profile callers target/profile/stop.json root_commits   # every path in, with share
+batten-profile diff before.json target/profile/stop.json       # after a patch; reports vanished frames
+```
+
+The binary is `target/profile-tool/release/batten-profile`, built by the first
+`mise run profile`.
+
+**Call counts and deterministic instruction counts: valgrind 3.22.** Run each
+from the arm's directory, on `target/profiling/batten`; on `target/release` it
+is refused.
+
+```sh
+valgrind --tool=callgrind --callgrind-out-file=<scratch>/c.out <bin> … < payload
+batten-profile calls <scratch>/c.out root_commits               # N calls, per caller
 valgrind --tool=cachegrind --cachegrind-out-file=<scratch>/before.cg <bin> … < payload
 cg_annotate --diff <scratch>/before.cg <scratch>/after.cg | head -30
 ```
