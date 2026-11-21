@@ -32,8 +32,8 @@
 //! deliberately. The exit-code mapping over all four `Health` arms is asserted
 //! instead where it lives, in `lib.rs`'s own module.
 
-// carried: mise-tasks/land-lock-check.sh crates/batten/src/lease.rs kind:mechanism crates/batten/tests/it/lease_health.rs runs:batten+lease+check
-// carried: tests/land-lock-check.bats crates/batten/src/lease.rs kind:mechanism crates/batten/tests/it/lease_health.rs
+// carried: mise-tasks/land-lock-check.sh crates/batten-core/src/lease.rs kind:mechanism crates/batten/tests/it/lease_health.rs runs:batten+lease+check
+// carried: tests/land-lock-check.bats crates/batten-core/src/lease.rs kind:mechanism crates/batten/tests/it/lease_health.rs
 
 //! # RETIREMENT LEDGER — `tests/land-lock-check.bats`, 17 cases
 //!
@@ -47,21 +47,21 @@
 //! no remote, no clock and no fixture. That is a BETTER home than the bats suite
 //! had, which reached the same states only through an injected `$LAND_LOCK_BODY`.
 
-// carried: "an absent lease is healthy — nobody is landing" crates/batten/src/lease.rs
-// carried: "a live lease is healthy and names its holder and remaining time" crates/batten/src/lease.rs
-// carried: "a RELEASED lease is free, and is reported as a handover rather than an expiry" crates/batten/src/lease.rs
-// carried: "a LAPSED lease is free too — a holder that stopped without releasing" crates/batten/src/lease.rs
-// carried: "a lease expiring exactly now is free — zero seconds left is none" crates/batten/src/lease.rs
-// carried: "WEDGED: a horizon beyond one TTL is refused, since nothing legitimate mints one" crates/batten/src/lease.rs
-// carried: "a lease at exactly one TTL is the longest legitimate hold, not wedged" crates/batten/src/lease.rs
-// carried: "GARBAGE: a ref carrying no lease body is refused" crates/batten/src/lease.rs
-// carried: "GARBAGE: a non-numeric expiry is a refusal, never a shell error" crates/batten/src/lease.rs
-// carried: "GARBAGE: a lease with no holder is refused — nobody could ever release it" crates/batten/src/lease.rs
-// carried: "CLOUD-369 clause f — a held lease names the successor admitted behind it" crates/batten/src/lease.rs
-// carried: "CLOUD-369 clause f — output is BYTE-IDENTICAL when no successor is admitted" crates/batten/src/lease.rs
-// carried: "CLOUD-369 clause f — a RELEASED lease still names who was admitted behind it" crates/batten/src/lease.rs
-// carried: "CLOUD-369 clause f — a WEDGED lease names the successor too, and still fails" crates/batten/src/lease.rs
-// carried: "CLOUD-369 clause f — a LAPSED lease names the successor it left behind" crates/batten/src/lease.rs
+// carried: "an absent lease is healthy — nobody is landing" crates/batten-core/src/lease.rs
+// carried: "a live lease is healthy and names its holder and remaining time" crates/batten-core/src/lease.rs
+// carried: "a RELEASED lease is free, and is reported as a handover rather than an expiry" crates/batten-core/src/lease.rs
+// carried: "a LAPSED lease is free too — a holder that stopped without releasing" crates/batten-core/src/lease.rs
+// carried: "a lease expiring exactly now is free — zero seconds left is none" crates/batten-core/src/lease.rs
+// carried: "WEDGED: a horizon beyond one TTL is refused, since nothing legitimate mints one" crates/batten-core/src/lease.rs
+// carried: "a lease at exactly one TTL is the longest legitimate hold, not wedged" crates/batten-core/src/lease.rs
+// carried: "GARBAGE: a ref carrying no lease body is refused" crates/batten-core/src/lease.rs
+// carried: "GARBAGE: a non-numeric expiry is a refusal, never a shell error" crates/batten-core/src/lease.rs
+// carried: "GARBAGE: a lease with no holder is refused — nobody could ever release it" crates/batten-core/src/lease.rs
+// carried: "CLOUD-369 clause f — a held lease names the successor admitted behind it" crates/batten-core/src/lease.rs
+// carried: "CLOUD-369 clause f — output is BYTE-IDENTICAL when no successor is admitted" crates/batten-core/src/lease.rs
+// carried: "CLOUD-369 clause f — a RELEASED lease still names who was admitted behind it" crates/batten-core/src/lease.rs
+// carried: "CLOUD-369 clause f — a WEDGED lease names the successor too, and still fails" crates/batten-core/src/lease.rs
+// carried: "CLOUD-369 clause f — a LAPSED lease names the successor it left behind" crates/batten-core/src/lease.rs
 
 //! CARRIED HERE, over the compiled binary, because the property is the BINARY's
 //! rather than the predicate's — an exit code and a channel, which no pure

@@ -1825,7 +1825,7 @@ pub fn adjudicate(
 ///
 /// # BASENAMES RESOLVE, AND AN AMBIGUOUS ONE RESOLVES TO NOTHING
 ///
-/// Bodies here write `git.rs:107`, not `crates/batten/src/git.rs`. Measured on
+/// Bodies here write `git.rs:107`, not `crates/batten-core/src/git.rs`. Measured on
 /// the three rows the retired program was built from, exact path matching found
 /// ZERO and basename resolution found all three — so exact matching would ship a
 /// sensor blind to its own corpus. Where several tracked paths share a basename

@@ -22,32 +22,32 @@
 //! annotation at column 0, and the cancellation of the run the guard is standing
 //! in are `run_lease_guard`'s and `report_guard`'s. Stated rather than implied.
 
-// carried: mise-tasks/ci-lease-precondition.sh crates/batten/src/lease.rs kind:mechanism crates/batten/tests/it/lease_precondition.rs runs:batten+lease+guard
-// carried: tests/ci-lease-precondition.bats crates/batten/src/lease.rs kind:mechanism crates/batten/tests/it/lease_precondition.rs
+// carried: mise-tasks/ci-lease-precondition.sh crates/batten-core/src/lease.rs kind:mechanism crates/batten/tests/it/lease_precondition.rs runs:batten+lease+guard
+// carried: tests/ci-lease-precondition.bats crates/batten-core/src/lease.rs kind:mechanism crates/batten/tests/it/lease_precondition.rs
 //
 // The twenty-two cases, one row each, keyed by TITLE — a row whose first field
 // is the suite path is indexed as another arm for it and the deletion reads as
 // `shell retire unclear`.
 //
-// carried: "a current head with a free lease runs, and cancels nothing" crates/batten/src/lease.rs kind:mechanism
-// carried: "a lease that authorises another branch STOPS this run — the acceptance case" crates/batten/src/lease.rs kind:mechanism
-// carried: "THE STALENESS ROW: a head whose land does not take the lease is stopped" crates/batten/src/lease.rs kind:mechanism
-// carried: "the staleness refusal names the remedy, not merely the refusal" crates/batten/src/lease.rs kind:mechanism
-// carried: "a stale head is stopped WITHOUT consulting the lease — it cannot be judged by it" crates/batten/src/lease.rs kind:mechanism
+// carried: "a current head with a free lease runs, and cancels nothing" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a lease that authorises another branch STOPS this run — the acceptance case" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "THE STALENESS ROW: a head whose land does not take the lease is stopped" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "the staleness refusal names the remedy, not merely the refusal" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a stale head is stopped WITHOUT consulting the lease — it cannot be judged by it" crates/batten-core/src/lease.rs kind:mechanism
 // changed: "the head sha is read from LEASE_HEAD_SHA, and its absence is said out loud" crates/batten/src/lib.rs kind:mechanism
-// carried: "FAIL OPEN: an unreadable head land is not judged" crates/batten/src/lease.rs kind:mechanism
-// carried: "FAIL OPEN: an unreadable land-lock runs rather than stopping the fleet" crates/batten/src/lease.rs kind:mechanism
-// changed: "FAIL OPEN: an answer that is neither run nor stop runs" crates/batten/src/lease.rs kind:mechanism
+// carried: "FAIL OPEN: an unreadable head land is not judged" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "FAIL OPEN: an unreadable land-lock runs rather than stopping the fleet" crates/batten-core/src/lease.rs kind:mechanism
+// changed: "FAIL OPEN: an answer that is neither run nor stop runs" crates/batten-core/src/lease.rs kind:mechanism
 // withdrawn: "CLOUD-420: A WORKSPACE THAT CANNOT BE BUILT STILL EXITS 0" mise-tasks/ci-lease-precondition.sh
 // withdrawn: "CLOUD-420: a broken workspace is not reported as land-lock's answer" mise-tasks/ci-lease-precondition.sh
 // changed: "FAIL OPEN: a refused cancellation runs rather than reddening" crates/batten/src/lib.rs kind:mechanism
 // changed: "FAIL OPEN: no run id means there is nothing to cancel" crates/batten/src/lib.rs kind:mechanism
 // changed: "FAIL OPEN: no repository and no head ref each run" crates/batten/src/lib.rs kind:mechanism
-// carried: "the branch under judgement is the one passed to land-lock" crates/batten/src/lease.rs kind:mechanism
+// carried: "the branch under judgement is the one passed to land-lock" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "the token never reaches the log, on any path" crates/batten-base/src/rest.rs kind:mechanism
-// carried: "a branch that lands through /fast-forward is not judged, in either row" crates/batten/src/lease.rs kind:mechanism
-// carried: "the retired bot's prefix is judged like any other branch (CLOUD-660)" crates/batten/src/lease.rs kind:mechanism
-// carried: "the exemption is a prefix on the landing path, not a substring anywhere in the ref" crates/batten/src/lease.rs kind:mechanism
+// carried: "a branch that lands through /fast-forward is not judged, in either row" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "the retired bot's prefix is judged like any other branch (CLOUD-660)" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "the exemption is a prefix on the landing path, not a substring anywhere in the ref" crates/batten-core/src/lease.rs kind:mechanism
 // changed: "the ambient Actions run id is the fallback, and it is the run this is standing in" crates/batten/src/lib.rs kind:mechanism
 // changed: "the lease refusal is a real annotation, not a log line the runner ignores" crates/batten/src/lib.rs kind:mechanism
 // changed: "the staleness remedy is a real annotation too — it is the actionable one" crates/batten/src/lib.rs kind:mechanism

@@ -160,10 +160,10 @@ fn a_branch_whose_whole_diff_is_comment_lines_is_refused() {
     // `//!` doc comment, on their way to a full required matrix.
     let root = repo(
         "comments",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line, rewritten\n// and a second one\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
             )],
             removed: &[],
@@ -180,10 +180,10 @@ fn one_changed_line_of_code_admits_the_branch() {
     // something to have an opinion about.
     let root = repo(
         "code",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line, rewritten\nfn main() {\n    let x = 99;\n    let y = 2;\n}\n",
             )],
             removed: &[],
@@ -201,13 +201,13 @@ fn a_comment_change_plus_a_test_change_is_admitted() {
     let root = repo(
         "with-test",
         &[
-            ("crates/batten/src/git.rs", CODE),
+            ("crates/batten-core/src/git.rs", CODE),
             ("tests/a.bats", "@test \"x\" { true; }\n"),
         ],
         &Head {
             written: &[
                 (
-                    "crates/batten/src/git.rs",
+                    "crates/batten-core/src/git.rs",
                     "// rewritten\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
                 ),
                 (
@@ -241,10 +241,10 @@ fn a_block_of_code_moved_within_a_file_is_not_a_code_change() {
     // engine is comparing content rather than counting emitted lines.
     let root = repo(
         "moved",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line\nfn main() {\n    let y = 2;\n    let x = 1;\n}\n",
             )],
             removed: &[],
@@ -265,12 +265,12 @@ fn a_comment_reflowed_across_a_line_boundary_is_still_prose_only() {
     let root = repo(
         "reflowed",
         &[(
-            "crates/batten/src/git.rs",
+            "crates/batten-core/src/git.rs",
             "// one two three four\n// five six\nfn main() {}\n",
         )],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// one two\n// three four five\n// six\nfn main() {}\n",
             )],
             removed: &[],

@@ -61,7 +61,7 @@
 //! test file.
 //!
 //! **Both placements are refused by something, which is why this one is chosen.**
-//! Declared in `crates/batten/src/gitwrite.rs` the sed would be right and
+//! Declared in `crates/batten-core/src/gitwrite.rs` the sed would be right and
 //! `obligations-bound` could not see it — `test name undefined`'s `line_sources`
 //! do not cover `crates/batten/src/**` — so the promise would read as unbound and
 //! deny. Declared here the promise binds and the sweep does not exercise it. The

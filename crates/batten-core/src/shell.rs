@@ -11,7 +11,7 @@
 /// through the parse every hook judges by (CLOUD-2388); `None` when that parse
 /// could not read all of it.
 #[must_use]
-pub(crate) fn shell_commands(command: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
+pub fn shell_commands(command: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return None;
     };
@@ -45,14 +45,14 @@ pub(crate) fn shell_commands(command: &str) -> Option<Vec<(Vec<String>, Vec<Stri
 /// the same span exactly as written, for the one kind of predicate that must
 /// look *inside* a quoted span.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Segment {
+pub struct Segment {
     /// The span's arguments, quotes resolved and escapes applied.
-    pub(crate) words: Vec<String>,
+    pub words: Vec<String>,
     /// The redirection tokens, exactly the suffix of `words` (CLOUD-2670):
     /// what `program_reach` strips before it reads what a program was handed.
-    pub(crate) redirects: Vec<String>,
+    pub redirects: Vec<String>,
     /// The span exactly as written, quotes and all.
-    pub(crate) raw: String,
+    pub raw: String,
     /// The operator that FOLLOWED this span, or `None` where the command ended.
     ///
     /// Retained since CLOUD-443, and the reason is that three predicates are
@@ -60,7 +60,7 @@ pub(crate) struct Segment {
     /// its status is handed to, what replaces it, whether it was detached. The
     /// parser used to split on exactly these operators and discard them, so the
     /// structure was destroyed before any rule could see it.
-    pub(crate) terminator: Option<Separator>,
+    pub terminator: Option<Separator>,
     /// Whether this span binds an input redirection — `<`, `<<` or `<<<`.
     ///
     /// **Per SEGMENT, which is the entire predicate** (CLOUD-613). A heredoc
@@ -74,7 +74,7 @@ pub(crate) struct Segment {
     /// Read outside quoted spans only, so a `<` written inside a commit message
     /// is not a redirection — and heredoc BODIES are gone by the time this is
     /// set, so prose in a body cannot set it either.
-    pub(crate) input_redirect: bool,
+    pub input_redirect: bool,
     /// The text this span's own stdin redirections hand it: every heredoc body
     /// and here-string bound here.
     ///
@@ -84,11 +84,11 @@ pub(crate) struct Segment {
     /// same fact an operand states, in a place argv never shows. Measured: a
     /// write to a registered policy module through exactly that shape was
     /// admitted while `python3 /dev/null <module>` was refused.
-    pub(crate) stdin_text: Vec<String>,
+    pub stdin_text: Vec<String>,
     /// Each word that is exactly a `cat` heredoc substitution, as `words`
     /// spells it, with the heredoc's body (CLOUD-2683). Keyed by spelling, not
     /// index: index alignment between `words` and the parse broke once.
-    pub(crate) cat_bodies: Vec<(String, String)>,
+    pub cat_bodies: Vec<(String, String)>,
     /// Each CONSTITUENT command's own words, where a newline joined several into
     /// this one segment.
     ///
@@ -107,7 +107,7 @@ pub(crate) struct Segment {
     ///
     /// Not projected to the policy input: no module asks this, and adding a key
     /// no predicate reads would be schema surface with no consumer.
-    pub(crate) lines: Vec<SegmentLine>,
+    pub lines: Vec<SegmentLine>,
     /// The control-flow node this segment sits inside, and which half of it.
     ///
     /// `None` at the top level. `Some(("until", "condition"))` for the test of
@@ -123,7 +123,7 @@ pub(crate) struct Segment {
     /// excluded because it is a different node rather than because a list of
     /// words happens to omit it, and a `!` between the keyword and the test no
     /// longer has to be filtered out by hand.
-    pub(crate) construct: Option<(&'static str, &'static str)>,
+    pub construct: Option<(&'static str, &'static str)>,
     /// Did this segment come from INSIDE a word rather than from command
     /// position — a `$(…)`, a `` `…` `` or a `<(…)`?
     ///
@@ -134,14 +134,14 @@ pub(crate) struct Segment {
     /// joined parse after the command that fused them. A nested command is also
     /// not a LINE of the one containing it, so it is excluded from both sides of
     /// that walk rather than merely tolerated.
-    pub(crate) nested: bool,
+    pub nested: bool,
     /// Did this segment come from inside a `( … )` subshell (CLOUD-1690)?
     ///
     /// Private and unprojected, like [`Segment::nested`]. The walk flattens a
     /// subshell's body into ordinary segments, which is right for every predicate
     /// about WHAT runs — but a `cd` inside one does not outlive the parentheses,
     /// so the one reader that follows a `cd` has to be able to tell.
-    pub(crate) grouped: bool,
+    pub grouped: bool,
 }
 
 /// One constituent command of a segment: its own words, and its own span.
@@ -160,13 +160,13 @@ pub(crate) struct Segment {
 /// parallel `Vec` of spans is a second reading that can desync from the words it
 /// describes, and nothing would notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SegmentLine {
+pub struct SegmentLine {
     /// This command's arguments, quotes resolved and escapes applied.
-    pub(crate) words: Vec<String>,
+    pub words: Vec<String>,
     /// This line's redirection tokens, the suffix of its `words` (CLOUD-2670).
-    pub(crate) redirects: Vec<String>,
+    pub redirects: Vec<String>,
     /// This command's own span, exactly as written.
-    pub(crate) raw: String,
+    pub raw: String,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -178,7 +178,7 @@ pub(crate) struct SegmentLine {
 /// false green to stop. The other three each substitute something — the next
 /// stage's status, the next element's, or nothing at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Separator {
+pub enum Separator {
     /// `|` — the pipeline exits with the LAST stage's status.
     Pipe,
     /// `;` — the list exits with the last element's status.
@@ -198,7 +198,8 @@ impl Separator {
     /// what an author wrote: a predicate about `&&` is written `"&&"`. Naming
     /// the variants would oblige every module to learn a second vocabulary for
     /// something the command line already states.
-    pub(crate) const fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pipe => "|",
             Self::Semi => ";",
@@ -218,7 +219,8 @@ impl Separator {
 /// tighter than abstaining on the whole call. Only a call whose first line
 /// already fails abstains. Bounded: each step is one line shorter, and the
 /// recursion into [`segments`] is only ever over a prefix that parsed.
-pub(crate) fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
+#[must_use]
+pub fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
     let lines: Vec<&str> = command.split_inclusive('\n').collect();
     for end in (1..lines.len()).rev() {
         let prefix = lines[..end].concat();
@@ -276,7 +278,8 @@ pub(crate) fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>>
 /// at all on the next becomes a discarded status — which is a decision about
 /// that rule's reach and not about this parser. Changing it here would have been
 /// a behaviour change smuggled inside a substrate change.
-pub(crate) fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
+#[must_use]
+pub fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // `extglob` off: this is a pre-execution gate over what an agent wrote, and
     // the shell that will run it is not guaranteed to have the option set.
     let Ok(nodes) = rable::parse(command, false) else {
@@ -462,10 +465,7 @@ pub(crate) fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
 /// bound is narrower than it sounds — a heredoc's own newline already cannot
 /// separate two commands, because everything up to the delimiter belongs to the
 /// body.
-pub(crate) fn joined_parse(
-    command: &str,
-    nodes: &[rable::Node],
-) -> Option<(String, Vec<rable::Node>)> {
+pub fn joined_parse(command: &str, nodes: &[rable::Node]) -> Option<(String, Vec<rable::Node>)> {
     if !command.contains('\n') || nodes.len() < 2 || nodes.iter().any(opens_heredoc) {
         return None;
     }
@@ -485,7 +485,8 @@ pub(crate) fn joined_parse(
 
 /// Every word any command in this forest carries, for the conservation check
 /// above. Order is irrelevant to it; the count is the whole question.
-pub(crate) fn words_in(nodes: &[rable::Node]) -> usize {
+#[must_use]
+pub fn words_in(nodes: &[rable::Node]) -> usize {
     let mut segments = Vec::new();
     for node in nodes {
         flatten(node, "", None, &mut segments);
@@ -503,7 +504,7 @@ pub(crate) fn words_in(nodes: &[rable::Node]) -> usize {
 /// cost is stated rather than absorbed: an unbalanced quote in a command that
 /// ALSO opens a heredoc is not caught here. That is a miss, never a false
 /// refusal, and it is a strictly smaller hole than the one this closes.
-pub(crate) fn covered(nodes: &[rable::Node], command: &str) -> bool {
+pub fn covered(nodes: &[rable::Node], command: &str) -> bool {
     let Some(end) = nodes.iter().map(|node| node.span.end).max() else {
         // No nodes at all: an empty or whitespace-only command reads clean, and
         // `segments("")` giving an empty list is relied on elsewhere.
@@ -552,7 +553,7 @@ pub(crate) fn covered(nodes: &[rable::Node], command: &str) -> bool {
 }
 
 /// Does this node, anywhere inside it, open a heredoc?
-pub(crate) fn opens_heredoc(node: &rable::Node) -> bool {
+pub fn opens_heredoc(node: &rable::Node) -> bool {
     match &node.kind {
         rable::NodeKind::HereDoc { .. } => true,
         rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
@@ -583,7 +584,7 @@ pub(crate) fn opens_heredoc(node: &rable::Node) -> bool {
 /// Measured against the walk's output on every case in this file: `> notes.md`
 /// gives `[">", "notes.md"]`, `2>&1` gives `["2>&1"]`, and `<<'EOF'` gives
 /// `["<<'EOF'"]` — identical, token for token.
-pub(crate) fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String> {
+pub fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String> {
     let mut tokens = redirect
         .source_text(source)
         .split_whitespace()
@@ -606,12 +607,7 @@ pub(crate) fn redirect_words(redirect: &rable::Node, source: &str) -> Vec<String
 /// `after` is the operator that follows the node as a whole, handed down so that
 /// the LAST command of a nested structure carries it — `(a; b) && c` gives `b`
 /// the `&&`, which is where the status a rule reasons about actually flows.
-pub(crate) fn flatten(
-    node: &rable::Node,
-    source: &str,
-    after: Option<Separator>,
-    out: &mut Vec<Segment>,
-) {
+pub fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut Vec<Segment>) {
     flatten_in(node, source, after, None, out);
 }
 
@@ -630,7 +626,8 @@ pub(crate) fn flatten(
 /// those tokens out of `words` and into `redirects`, which is again right for a
 /// grammar and wrong here — dropping them was an under-deny on a WRITE, measured
 /// by `a_redirect_target_is_a_mutation_even_with_no_program`.
-pub(crate) fn command_words(
+#[must_use]
+pub fn command_words(
     assignments: &[rable::Node],
     words: &[rable::Node],
     redirects: &[rable::Node],
@@ -652,7 +649,8 @@ pub(crate) fn command_words(
 /// A word may CONTAIN commands: `rm $(cat list)` runs `cat`, and the character
 /// walk this replaces could not see them at all (CLOUD-1257). A redirect target
 /// may be a substitution too — `diff <(a) <(b)`.
-pub(crate) fn nested_commands(
+#[must_use]
+pub fn nested_commands(
     words: &[rable::Node],
     redirects: &[rable::Node],
     source: &str,
@@ -672,7 +670,7 @@ pub(crate) fn nested_commands(
 /// The node is taken whole rather than pre-destructured so this stays inside the
 /// argument ceiling; the caller has already matched the kind, so the `else` arm
 /// is unreachable and returns rather than inventing a segment.
-pub(crate) fn flatten_command(
+pub fn flatten_command(
     node: &rable::Node,
     source: &str,
     after: Option<Separator>,
@@ -739,7 +737,7 @@ pub(crate) fn flatten_command(
 }
 
 /// [`flatten`], carrying the control-flow node the walk is currently inside.
-pub(crate) fn flatten_in(
+pub fn flatten_in(
     node: &rable::Node,
     source: &str,
     after: Option<Separator>,
@@ -896,7 +894,8 @@ pub(crate) fn flatten_in(
 }
 
 /// A word's source text, from the parts the lexer resolved.
-pub(crate) fn word_text(word: &rable::Node) -> String {
+#[must_use]
+pub fn word_text(word: &rable::Node) -> String {
     match &word.kind {
         rable::NodeKind::Word { value, .. } | rable::NodeKind::WordLiteral { value } => {
             value.clone()
@@ -908,7 +907,8 @@ pub(crate) fn word_text(word: &rable::Node) -> String {
 /// The body of a word that is exactly `$(cat <<EOF … EOF)`, bare or in double
 /// quotes (CLOUD-2683): one substitution, whose command is a lone `cat` with no
 /// assignment and one complete heredoc. Anything else is `None`.
-pub(crate) fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
+#[must_use]
+pub fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
     let rable::NodeKind::Word { parts, .. } = &word.kind else {
         return None;
     };
@@ -953,7 +953,7 @@ pub(crate) fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
 /// `$(...)`, `` `...` `` and `<(...)` each carry a parsed command, and each of
 /// them is a command this call will run. They are appended AFTER the command
 /// that contains them and carry no terminator: nothing takes their status.
-pub(crate) fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
+pub fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
     match &word.kind {
         rable::NodeKind::Word { parts, .. } => {
             for part in parts {
@@ -969,7 +969,7 @@ pub(crate) fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segme
 }
 
 /// The same, for a redirection's target: `diff <(a) <(b)` runs three programs.
-pub(crate) fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
+pub fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
     if let rable::NodeKind::Redirect { target, .. } = &redirect.kind {
         descend_word(target, source, out);
     }
@@ -981,7 +981,8 @@ pub(crate) fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut V
 /// The here-string's word is read off its token value, never its source span:
 /// the parser builds a redirect target spanless (`Node::empty`), so
 /// `source_text` hands back nothing and the script would go unread.
-pub(crate) fn stdin_text(redirect: &rable::Node) -> Option<String> {
+#[must_use]
+pub fn stdin_text(redirect: &rable::Node) -> Option<String> {
     match &redirect.kind {
         rable::NodeKind::HereDoc { content, .. } => Some(content.clone()),
         rable::NodeKind::Redirect { op, target, .. } if op == "<<<" => match &target.kind {
@@ -1002,7 +1003,8 @@ pub(crate) fn stdin_text(redirect: &rable::Node) -> Option<String> {
 /// `land`, and both spellings carry an opener in the line. What has changed is
 /// that the parser decides which command owns the opener, where the walk decided
 /// it from the position of a `<` it had to prove was unquoted first.
-pub(crate) fn binds_stdin(redirect: &rable::Node) -> bool {
+#[must_use]
+pub fn binds_stdin(redirect: &rable::Node) -> bool {
     match &redirect.kind {
         // A heredoc IS an input redirection, and its body is AST data rather
         // than text this function has to skip past (CLOUD-723).
@@ -1027,7 +1029,8 @@ pub(crate) fn binds_stdin(redirect: &rable::Node) -> bool {
 /// exactly `"`, `\`, `$` and `` ` ``, which is bash's rule and not a
 /// simplification of it. An unterminated quote keeps its tail, matching what the
 /// parser accepted.
-pub(crate) fn unquote(word: &str) -> String {
+#[must_use]
+pub fn unquote(word: &str) -> String {
     let mut out = String::with_capacity(word.len());
     let mut chars = word.chars().peekable();
     while let Some(c) = chars.next() {

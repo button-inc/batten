@@ -31,9 +31,9 @@ row here, so a new module lands with its line.
 - `attribution.rs` — what produced commits may carry about the tooling that made them (CLOUD-274), the mechanism for the attribution decision record (CLOUD-268).
 - `commit.rs` — the commit-subject convention (CLOUD-701): one configured regex over `%s`, judged across a range or over one pending message file.
 - `checks_green.rs` (crate `batten-base`) — is this SHA green over the required check set (CLOUD-1143, ported off `mise-tasks/checks-green.sh`).
-- `pr_watch.rs` — the poll around that verdict (CLOUD-1143, ported off `mise-tasks/ci-wait.sh`; renamed onto §2's declared `pr watch` by CLOUD-1214).
+- `pr_watch.rs` (crate `batten-core`) — the poll around that verdict (CLOUD-1143, ported off `mise-tasks/ci-wait.sh`; renamed onto §2's declared `pr watch` by CLOUD-1214).
 - `speculation.rs` — betting on the base that is about to exist (CLOUD-748, CLOUD-862, CLOUD-369).
-- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off `mise-tasks/main-watch.sh`)?
+- `main_watch.rs` (crate `batten-core`) — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off `mise-tasks/main-watch.sh`)?
 - `fast_forward.rs` (crate `batten-base`) — asking the bot to land a head, and reading the answer keyed to THAT request (CLOUD-1338).
 - `ci.rs` (crate `batten-base`) — the merge contract derived from the host ruleset (CLOUD-54).
 - `capture.rs` — captured child output, content-addressed in out-of-tree state (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's handles both read, built once so neither grows its own copy.
@@ -58,8 +58,8 @@ row here, so a new module lands with its line.
 - `brief.rs` (crate `batten-base`) — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
 - `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review and a branch cannot lower its own bar.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file > repo config > default`, declared as data in `SETTINGS`, not hard-coded per field.
-- `git.rs` — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
-- `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via `etcetera`; the segment derived at runtime, never baked in (rule 1).
+- `git.rs` (crate `batten-core`) — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
+- `state.rs` (crate `batten-core`) — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via `etcetera`; the segment derived at runtime, never baked in (rule 1).
 - `stop.rs` — the end-of-turn gate (CLOUD-85), house-style §10's "the stop hook is the reconciliation point".
 - `store.rs` — _which_ store belongs to this checkout (CLOUD-164); it holds nothing, and CLOUD-78 extends the contents without touching identity.
 - `pipeline.rs` — the landing composition as a DECLARED list, with a compensation per step (CLOUD-1338, PR #848's review).
@@ -72,10 +72,10 @@ row here, so a new module lands with its line.
 - `propose.rs` (crate `batten-base`) — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
 - `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
 - `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
-- `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
-- `grammar.rs` — the finding line's grammar: `PROVENANCE`, the line `Severity`, `head` and `is_headed`, in a leaf so the modules below `refusal` spell a head without reaching up (CLOUD-2789).
+- `gitwrite.rs` (crate `batten-core`) — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
+- `grammar.rs` (crate `batten-core`) — the finding line's grammar: `PROVENANCE`, the line `Severity`, `head` and `is_headed`, in a leaf so the modules below `refusal` spell a head without reaching up (CLOUD-2789).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
-- `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
+- `lease.rs` (crate `batten-core`) — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
 - `low_water.rs` (crate `batten-base`) — the lowest free space any disk watcher in this process read since the window opened: a leaf, so `land` judges a disk-full gate without depending on `disk_watch` (CLOUD-2789).
 - `forge.rs` (crate `batten-base`) — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
 - `tools.rs` (crate `batten-base`) — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
@@ -126,15 +126,15 @@ row here, so a new module lands with its line.
 - `bypass.rs` — guardrail bypass (CLOUD-98): a refused operation retried with enforcement off, the THIRD detector over `transcript.rs`'s stream.
 - `completion.rs` — declared done with work not landed (CLOUD-97), the second detector over `transcript.rs`'s stream and the FIRST occupant of the `FindingKind::Sequence` seam.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): who is reading, and how far have they got.
-- `shell.rs` — the shell parse every hook judges a command by: segments, words with quotes resolved, here-doc stdin, through `rable`; a leaf below `hook` (CLOUD-2789).
+- `shell.rs` (crate `batten-core`) — the shell parse every hook judges a command by: segments, words with quotes resolved, here-doc stdin, through `rable`; a leaf below `hook` (CLOUD-2789).
 - `init.rs` — `batten init` (CLOUD-206), house style §12's scaffolding half: the starter `batten.toml` embedded as `src/starter.toml` plus the three-valued `apply`.
 - `identity.rs` (crate `batten-facts`) — finding-identity fingerprints (CLOUD-123): SHA-256 over a normalized, kind-discriminated tuple — never raw `file:line` — so line insertion doesn't re-mint a finding.
 - `scratch.rs` (crate `batten-facts`) — out-of-tree TEST scratch, owned in one place and reaped by liveness (CLOUD-1148).
-- `testing.rs` — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
+- `testing.rs` (crate `batten-core`) — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
 - `secret.rs` (crate `batten-base`) — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
-- `selector.rs` — one compiled glob over repo-relative paths, the selector every rule and the tree walk match through: a leaf (CLOUD-2789).
-- `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
+- `selector.rs` (crate `batten-core`) — one compiled glob over repo-relative paths, the selector every rule and the tree walk match through: a leaf (CLOUD-2789).
+- `sink.rs` (crate `batten-core`) — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
 - `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off `mise-tasks/semver.sh`.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760).
 - `preset.rs` — one manifest per vendored preset (CLOUD-1181): identity, the `scope` its modules decide, the modules themselves, and the refusal classes they raise.
@@ -143,7 +143,7 @@ row here, so a new module lands with its line.
 - `tokens.rs` — the token-economics benchmark (CLOUD-119), retired out of `mise-tasks/token-bench.sh` and `token-bench-check.sh` under CLOUD-1753.
 - `pattern.rs` (crate `batten-base`) — the `[[pattern]]` table (CLOUD-885): named regular expressions a policy module references by id, never writes inline.
 - `pinned.rs` — the programs the project's pin puts on `PATH` (CLOUD-1028), and the record that lets a mediated call read them.
-- `signer_posture.rs` — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
+- `signer_posture.rs` (crate `batten-core`) — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
 - `durable.rs` (crate `batten-facts`) — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`; `create_empty` makes a zero-byte mark, and `open_handle` opens a file or directory for its lock or its times on every platform (CLOUD-2361).
 - `cache.rs` (crate `batten-facts`) — the ONE cross-process cache mechanism (CLOUD-2315): content keys through `identity::cache_key`, the running binary named by its linker build ID, self-validating entries written unsynced, and a `cache/` directory tagged `CACHEDIR.TAG` and partitioned per binary so two binaries never evict each other. The policy bytecode, the config parse, the transcript tally and the epoch all store through it.
 - `cargo_graph.rs` (crate `batten-base`) — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
@@ -157,7 +157,7 @@ row here, so a new module lands with its line.
 - `release_path.rs` (crate `batten-base`) — G2 (CLOUD-2033): the one predicate a write of `main` is graded by. Success for a pin inherited from the merge-base, or for a release head that touches only the release paths and pins a G1-verified published release whose tag commit is in its history. `batten release path <sha> [--post]` is its verb, and `--post` posts the `release-path` status.
 - `release_state.rs` — the release path's decisions (CLOUD-2033 P3, P4), each one pure function under a thin forge shell: `release discard` (a draft and its tag, never a published release, never an orphan tag), `release in-flight` (the landers' freeze, three arms), `release land-state` (`land`'s step (a) branch), `release guard` (only a draft of the built sha takes uploads), `release bump-unusable` (burned or stray-tagged version to X+1 in the four release paths, one commit made through the forge's git-data API), `release cut` (discard, draft at the head with its changelog section, dispatch the build) and `release pin`.
 - `release_guard.rs` — G4 (CLOUD-2033): `release settings [--last-run <workflow>]`, whether the rulesets and release settings the release path rests on hold. No `release-path` ruleset is owed and nothing probes for one (CLOUD-2319, CLOUD-2508).
-- `stream_input.rs` — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
+- `stream_input.rs` (crate `batten-core`) — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
 - `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh` by CLOUD-1422).
@@ -165,7 +165,7 @@ row here, so a new module lands with its line.
 - `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121).
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto statements that a named check passed, stored out-of-tree, plus the grandfathered `$GIT_DIR/batten-receipts/` compat layout.
 - `record.rs` — the WRITE half of the two out-of-tree verdict stores (CLOUD-1265).
-- `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
+- `severity.rs` (crate `batten-core`) — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
 - `asked.rs` — the asked ledger (CLOUD-1078): a weakening is admitted only by a human's recorded answer to the host's question tool.
 - `attestation.rs` — `batten record attestation`: a release's attestation posture, recorded for the `supply-chain` preset to decide (CLOUD-843).
 - `board_check.rs` — `batten board check` (CLOUD-1221): the board's columns, dependency graph and citations read into records the `tracker-hygiene` preset decides over.
@@ -185,7 +185,7 @@ row here, so a new module lands with its line.
 - `released.rs` — `batten record derive released`: which tracker rows a release tag shipped, and the board gate's verdict on them.
 - `sbom.rs` — `batten sbom`: the SPDX and CycloneDX inventories of a tree or a built binary (CLOUD-262/263, CLOUD-843).
 - `step.rs` — the step cache (CLOUD-424), retiring `[tasks.step-receipt]` (CLOUD-843).
-- `step_table.rs` — the `[[step]]` row and its load-time validator (CLOUD-843).
+- `step_table.rs` (crate `batten-core`) — the `[[step]]` row and its load-time validator (CLOUD-843).
 - `sweep.rs` — `batten board sweep`: every board gate a consumer declares, run over one payload set.
 - `tracker_reading.rs` — the readings the `tracker-hygiene` preset decides over, one family per board question.
 - `turn.rs` (crate `batten-base`) — the judged turn of a session, reduced to what a module decides over (CLOUD-843).
