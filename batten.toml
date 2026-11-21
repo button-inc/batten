@@ -7505,10 +7505,11 @@ severity = "deny"
 
 # CLOUD-1423's ratchet: a verb this branch ADDS that nothing reaches.
 #
-# `delta_sources` is `crates/batten/src/surface.rs` alone, and that is the whole
+# `delta_sources` is the verb table and its former path, and that is the whole
 # subject rather than a narrowing for speed — the module's first conjunct is
 # `SURFACE in touched`, so a delta naming anything else answers the same question
-# with more paths in it.
+# with more paths in it. The former path (`surface.rs`, before CLOUD-2789 moved
+# the table to `surface_table.rs`) is the base a pre-split branch is read from.
 #
 # `line_sources` IS THE CONSUMER'S SURFACE LIST, and it lives here rather than in
 # the module under non-negotiable rule 1: which directories of THIS repository a
@@ -7535,7 +7536,7 @@ no_fix_reason = "class 3 (review disposition): which rewrite is right is a readi
 kind = "policy"
 scope = "tree"
 base = "origin/main"
-delta_sources = ["crates/batten/src/surface.rs"]
+delta_sources = ["crates/batten/src/surface_table.rs", "crates/batten/src/surface.rs"]
 #
 # `batten.toml` IS DELIBERATELY NOT A SURFACE, and dropping it is a measured
 # decision rather than an omission. This file is ~14,000 lines ABOUT verbs, and
@@ -7550,7 +7551,7 @@ delta_sources = ["crates/batten/src/surface.rs"]
 # it is precisely how PR #812 would have passed. Declare a verb, name it in a
 # rule's `reason`, and a gate reading this file calls it reached.
 line_sources = [
-  "crates/batten/src/surface.rs",
+  "crates/batten/src/surface_table.rs",
   "mise-tasks/**",
   ".github/workflows/*.yml",
   ".claude/**",

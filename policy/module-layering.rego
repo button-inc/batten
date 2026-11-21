@@ -69,6 +69,12 @@ declared_modules := {
 	# `module_graph` arrived with CLOUD-2789: the crate's own module graph read
 	# off the syntax tree, for the gate that holds its largest cycle.
 	"module_graph",
+	# CLOUD-2789's phase 2 vocabulary, each below the module cycle by
+	# measurement: `config_model` (the config's types), `preset_catalog` (the
+	# vendored presets as data), `surface_table` (the command surface as data)
+	# and `config_check` (each section's rules, below the loader). `item_index`
+	# (CLOUD-2790) resolves a path to its defining site for `test replay`.
+	"config_model", "preset_catalog", "surface_table", "config_check", "item_index",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
@@ -1061,6 +1067,15 @@ forbidden[from] contains to if {
 		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
 		# further out. The loader names the row through the leaf instead.
 		"config": {"resolve", "trust", "lint", "epoch", "step"},
+		# CLOUD-2789's vocabulary sits below the loader and every feature: that
+		# placement is what took it out of the module cycle, and an edge back up
+		# would put it in again. The catalog sits below the model it feeds; the
+		# command table below the layer that interprets it.
+		"config_model": {"config", "config_check", "rules", "hook", "resolve", "trust"},
+		"preset_catalog": {"config_model", "config", "preset"},
+		"config_check": {"config", "rules", "hook", "resolve", "trust", "record", "receipt"},
+		"surface_table": {"surface", "cli", "lib", "config"},
+		"item_index": {"rules", "hook", "config", "replay"},
 		"resolve": {"trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
