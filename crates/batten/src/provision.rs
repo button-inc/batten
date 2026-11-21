@@ -2361,20 +2361,8 @@ fn extract(bytes: &[u8], binary: &str) -> Result<Vec<u8>> {
     )))
 }
 
-#[cfg(unix)]
 fn make_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = fs::metadata(path)
-        .context("read the provisioned binary's permissions")?
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).context("mark the provisioned binary executable")
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
-    // Windows has no executable bit; the extension carries it.
-    Ok(())
+    crate::durable::make_executable(path).context("mark the provisioned binary executable")
 }
 
 /// Fetch `url` into memory.
