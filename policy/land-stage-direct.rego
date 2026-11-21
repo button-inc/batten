@@ -216,11 +216,29 @@ same_stage(program, step) if {
 	program.tasks == step.tasks
 }
 
-# The `--target` and `--profile` values a program names, each with its option.
+# The `--target`, `--profile` and package values a program names, each with its
+# option. THE PACKAGE IS PART OF THE UNIT (CLOUD-2806), as the comment above
+# says of cargo's fingerprint: `cargo clippy -p batten-codemods` lints one
+# package, keeps no receipt, and reruns nothing `lint:clippy` would reuse, so
+# reading it as that workspace stage refused a seconds-long answer and left an
+# 881 s lap as the only one. `-p` and `--package` are one option; `--workspace`
+# and `--all` name what a virtual manifest selects by default, so they add
+# nothing and a workspace-wide run is still the stage.
 selected(program) := {pick |
 	some at, word in program.arguments
-	some option in {"--target", "--profile"}
-	pick := choice(program.arguments, at, word, option)
+	some option in {"--target", "--profile", "--package"}
+	pick := choice(program.arguments, at, package_spelled(word), option)
+}
+
+package_spelled("-p") := "--package"
+
+package_spelled(word) := concat("", ["--package=", substring(word, 3, -1)]) if {
+	startswith(word, "-p=")
+}
+
+package_spelled(word) := word if {
+	word != "-p"
+	not startswith(word, "-p=")
 }
 
 choice(words, at, word, option) := concat("=", [option, words[at + 1]]) if {
@@ -425,12 +443,26 @@ test_another_batten_verb_is_allowed if {
 
 test_a_steps_program_outside_its_step_is_refused if {
 	some _ in violation with input as {"call": {
-		"command": "mise exec -- cargo clippy -q -p batten --all-targets -- -D warnings",
+		"command": "mise exec -- cargo clippy -q --workspace --all-targets -- -D warnings",
 		"segments": [],
-		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy", "-q", "-p", "batten", "--all-targets", "--", "-D", "warnings"], "subcommand": "clippy", "nested": "batten", "global-options": [], "via": null, "mediated": false}],
+		"programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy", "-q", "--workspace", "--all-targets", "--", "-D", "warnings"], "subcommand": "clippy", "nested": "-D", "global-options": [], "via": null, "mediated": false}],
 		"task-programs": [],
 		"step-programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"], "subcommand": "clippy", "nested": "-D", "global-options": [], "via": "step run", "receipted": true, "task": "lint:clippy", "mediated": true}],
 	}}
+}
+
+# Fails by: a one-package clippy read as the workspace `lint:clippy` stage, which
+# left an 881 s lap as the only route to a lint verdict (CLOUD-2806).
+test_a_single_package_clippy_is_not_a_stage if {
+	every spelling in [["-p", "batten-codemods"], ["--package", "batten-codemods"], ["--package=batten-codemods"], ["-p=batten-codemods"]] {
+		count(violation) == 0 with input as {"call": {
+			"command": "mise exec -- cargo clippy -q --all-targets",
+			"segments": [],
+			"programs": [{"program": "cargo", "name": "cargo", "arguments": array.concat(["clippy", "-q"], array.concat(spelling, ["--all-targets", "--", "-D", "warnings"])), "subcommand": "clippy", "nested": null, "global-options": [], "via": null, "mediated": false}],
+			"task-programs": [],
+			"step-programs": [{"program": "cargo", "name": "cargo", "arguments": ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"], "subcommand": "clippy", "nested": "-D", "global-options": [], "via": "step run", "receipted": true, "task": "lint:clippy", "mediated": true}],
+		}}
+	}
 }
 
 test_a_steps_program_through_its_step_is_allowed if {
