@@ -4246,10 +4246,15 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (rotation at the credential's issuer): rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
 
+# EVERY FILE, NOT `crates/**` (CLOUD-2813). A merge committed six markers into
+# `skills/profile/SKILL.md` and pushed them: the glob never looked outside the
+# crates, and this row runs only in the slow lap. A marker is wrong in prose as
+# in code, and the whole tracked tree was clean when the glob widened. The
+# commit-time half is `merge-conflict-markers` in `hk.pkl`.
 [[rule]]
 id = "source carry broken"
 kind = "command"
-glob = "crates/**"
+glob = "**"
 check = "hk util check-merge-conflict --assume-in-merge {{files}}"
 severity = "deny"
 scope = "tree"
