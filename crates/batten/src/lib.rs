@@ -57,6 +57,7 @@ pub mod collect;
 pub mod commit;
 pub mod completion;
 pub mod config;
+pub mod config_check;
 pub mod config_model;
 pub use batten_base::config_edit;
 pub mod contract;
@@ -210,6 +211,7 @@ pub mod store;
 pub use batten_base::suites;
 pub use batten_core::stream_input;
 pub mod surface;
+pub mod surface_table;
 pub mod sweep;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub use batten_base::task;

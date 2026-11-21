@@ -65,6 +65,7 @@ use crate::identity::{self, FindingKind, StoredIdentity};
 use crate::rules::{Finding, glob_match, tree_files};
 use crate::severity::RuleSeverity;
 // The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_check::budget::validate;
 pub use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
 
 /// Bytes per estimated token. A convention-level constant, not a
@@ -632,25 +633,6 @@ pub fn measure_all(root: &Path, budget: Option<&Budget>) -> Result<Vec<Report>> 
         .sets()
         .map(|(name, set)| measure(root, name, set))
         .collect()
-}
-
-/// Validate the `[budget]` table at load.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for a `[budget]` table declaring no
-/// budget. A table that parses and gates nothing is the half-change
-/// non-negotiable rule 2 exists to refuse.
-pub fn validate(budget: Option<&Budget>) -> Result<()> {
-    let Some(budget) = budget else {
-        return Ok(());
-    };
-    if budget.is_empty() {
-        return Err(UsageError::raise(
-            "budget: the table declares no set; remove it or declare [budget.<name>]".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
