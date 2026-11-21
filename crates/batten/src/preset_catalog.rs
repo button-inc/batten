@@ -938,7 +938,9 @@ could-not-look arm exists to refuse.",
     },
     Manifest {
         name: "commit-hygiene",
-        version: 1,
+        // 2: the commit is git's projected subcommand, not a `commit` word anywhere
+        // in its argv (CLOUD-2813).
+        version: 2,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -1970,7 +1972,9 @@ is the same operation with the one check that makes it safe.",
     // for the one class it raises.
     Manifest {
         name: "linear-history",
-        version: 1,
+        // 2: `git rebase --rebase-merges` (`-r`) is refused too, since it replays
+        // a branch's merge commits as merge commits (CLOUD-2813).
+        version: 2,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,
@@ -1981,9 +1985,19 @@ is the same operation with the one check that makes it safe.",
             id: "commit write loose",
             gloss: "a merge or a merging pull wove a commit a linear trunk will refuse",
             class: "A trunk requiring linear history refuses a merge commit at the \
-fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git pull` without \
-`--rebase`; replaying the branch onto the base makes the same change as a line.",
-            routes: &[run("patch run first", "batten land replay <base>")],
+fast-forward, after CI has run. `git merge <ref>` writes one, so does `git pull` without \
+`--rebase`, and `git rebase --rebase-merges` keeps the ones a branch already has; replaying the \
+branch onto what it should follow makes the same change as a line. The usual cause is a push \
+refused because the branch's own remote moved: that is rebased onto the fetched head, never \
+merged with it.",
+            routes: &[
+                run("patch run first", "batten land replay <base>"),
+                run(
+                    "branch write first",
+                    "a refused push: git fetch origin <branch>, git rebase FETCH_HEAD, then git \
+push --force-with-lease=<branch>:<the head you rebased onto>",
+                ),
+            ],
             applicability: Applicability::Advice,
         }],
         patterns: &[],

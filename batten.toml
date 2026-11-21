@@ -6746,12 +6746,11 @@ severity = "deny"
 # comment argues for — banning both would push toward the bypass rather than
 # toward the safer flag.
 #
-# `commit-hygiene` is deliberately NOT enabled here, and that is a decision
-# rather than an oversight: its `no-empty-commit` predicate overlaps AGENTS.md's
-# own "never push an empty commit to kick CI", which the landing loop already
-# enforces where it can act on it. Enabling a second gate over the same practice
-# would double a refusal without doubling the coverage, and the row that fired
-# would be a question of which one a reader happened to read first.
+# `commit-hygiene` was left off here on the claim that the landing loop already
+# enforced AGENTS.md's "never push an empty commit to kick CI". No rule, module
+# or `land` path does (CLOUD-2813's census of unenabled presets), so it is now
+# enabled as `commit ship empty`, beside `linear-history`, `red-head` and
+# `claude-code-plan`, all shipped and found unenabled in the same census.
 #
 # Mediated-call scoped, because the preset's predicate is over a command line.
 # A tree-scoped row would hand it a document it has no predicate for and read as
@@ -14611,6 +14610,69 @@ no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused be
 kind = "policy"
 scope = "mediated_call"
 preset = "linear-history"
+severity = "deny"
+
+# The vendored `red-head` preset (CLOUD-2270), shipped and never enabled here
+# (found in the CLOUD-2813 census of unenabled presets). A push that replaces a
+# head whose landing wait stopped red buries the failed checks' logs; it is
+# refused until each failed run's log or check run was read. `land` writes the
+# `red-head` fact; the two mints below are what make a read count, as the
+# module's own header specifies: a job log for an Actions check, a check run for
+# a third-party app's.
+[[rule]]
+id = "job read unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+preset = "red-head"
+severity = "deny"
+
+[[mint]]
+name = "check-log-read"
+tool = "get_job_logs"
+key = "named"
+key_from = "job_id"
+requires = ["job_id", "logs_content"]
+mode = "replace"
+body = "{now}"
+
+[[mint]]
+name = "check-run-read"
+tool = "get_check_run"
+key = "named"
+key_from = "id"
+requires = ["id", "conclusion"]
+mode = "replace"
+body = "{now}"
+
+# The vendored `claude-code-plan` preset (CLOUD-2383), shipped and never enabled
+# here. A session's first `ExitPlanMode` is refused once with the correction an
+# operator otherwise types back ("verify, pressure test, validate; present
+# corrected plan"); the retry is admitted. The extract is what lets it count:
+# a row that declares none leaves the module deciding nothing.
+[[rule]]
+id = "plan check first"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-plan"
+severity = "deny"
+
+[[rule.extract]]
+id = "plan-exits"
+count = "plan-exits"
+
+# The vendored `commit-hygiene` preset: `git commit --allow-empty` refused. It
+# was left off on the claim that the landing loop already enforces AGENTS.md's
+# "never push an empty commit to kick CI". The CLOUD-2813 census found no gate
+# that does: no rule, module or `land` path refuses an empty commit, so the claim
+# was a second authority that did not exist. Enabled.
+[[rule]]
+id = "commit ship empty"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+preset = "commit-hygiene"
 severity = "deny"
 
 [[verdict]]
