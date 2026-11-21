@@ -1,9 +1,9 @@
 //! Running a row's declared repair at the mediated boundary (CLOUD-1639).
 //!
-//! [`crate::rules::Rule::fix`] has existed since CLOUD-81 as "the mutating half
+//! [`crate::config_model::Rule::fix`] has existed since CLOUD-81 as "the mutating half
 //! of §9's duality" and was executed by nothing. This is the half that executes
 //! it — for the rows whose raised class declares
-//! [`crate::verdict::Applicability::Retry`] or `Silent`, and no other.
+//! [`crate::preset_catalog::Applicability::Retry`] or `Silent`, and no other.
 //!
 //! # NO NEW SPAWN SITE, AND THAT IS A GATE RATHER THAN A PREFERENCE
 //!
@@ -47,7 +47,7 @@
 
 use std::path::Path;
 
-use crate::verdict::Applicability;
+use crate::preset_catalog::Applicability;
 
 /// What running a repair produced.
 ///

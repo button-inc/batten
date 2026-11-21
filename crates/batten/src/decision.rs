@@ -158,7 +158,7 @@ impl<'de> Deserialize<'de> for Provenance {
 /// Who made the mediated call: which model, through which harness, in which
 /// session.
 ///
-/// A hook caller passes [`crate::hook::Harness::as_str`] for `harness`. This
+/// A hook caller passes [`crate::config_model::Harness::as_str`] for `harness`. This
 /// module imports nothing from [`crate::hook`] on purpose — a decision can also
 /// come from a gate no harness invoked, where the honest answer is
 /// [`Provenance::Unknown`] rather than a harness token invented to fill a field.

@@ -140,7 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -250,7 +250,7 @@ fn question(answer: &str) -> serde_json::Value {
 /// ledger this tier reads is one the engine wrote (CLOUD-1078, CLOUD-845).
 fn ask(dir: &Path, answer: &str) -> usize {
     batten::record_asked_for_test(
-        batten::hook::Harness::ClaudeCode,
+        batten::config_model::Harness::ClaudeCode,
         "AskUserQuestion",
         &question(answer),
         dir,
@@ -333,7 +333,7 @@ fn a_question_answered_the_other_way_admits_nothing() {
 fn a_hand_composed_answer_is_never_recorded() {
     let dir = weakening_pr("lint-admit-hand", None);
     let written = batten::record_asked_for_test(
-        batten::hook::Harness::ExitCode,
+        batten::config_model::Harness::ExitCode,
         "AskUserQuestion",
         &question("Admit it"),
         &dir,

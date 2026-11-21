@@ -383,7 +383,7 @@ fn a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_lin
     let artifacts = common::scratch_outside_tree("batten-mcp-spawn", "provisioned-artifacts");
     let artifact = artifacts.join("demo-server");
     std::fs::write(&artifact, &bytes).unwrap();
-    let sha = batten::provision::digest(&bytes);
+    let sha = batten::digest::sha256_hex(&bytes);
     common::write(
         &dir,
         "batten.toml",

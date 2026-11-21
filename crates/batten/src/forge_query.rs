@@ -65,12 +65,19 @@ use std::path::Path;
 
 use anyhow::Result;
 
-pub use crate::config_check::forge_query::{MAX_PER_PAGE, validate};
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::forge_query::{
-    Piece, RESERVED, is_name, pieces, placeholders, segments, validate_derived, validate_endpoint,
-    validate_select,
-};
+#[cfg(test)]
+use crate::config_check::forge_query::MAX_PER_PAGE;
+use crate::config_check::forge_query::Piece;
+use crate::config_check::forge_query::RESERVED;
+#[cfg(test)]
+use crate::config_check::forge_query::is_name;
+use crate::config_check::forge_query::pieces;
+use crate::config_check::forge_query::placeholders;
+use crate::config_check::forge_query::segments;
+#[cfg(test)]
+use crate::config_check::forge_query::validate;
+#[cfg(test)]
+use crate::config_check::forge_query::validate_endpoint;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::forge::{self, Shape, Transport, Window};
@@ -457,7 +464,7 @@ fn walk(
         Some(since) => {
             let back = i64::try_from(since.seconds).unwrap_or(i64::MAX);
             let cutoff = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(back);
-            let text = crate::receipt::rfc3339_utc(u64::try_from(cutoff).unwrap_or(0));
+            let text = crate::clock::rfc3339_utc(u64::try_from(cutoff).unwrap_or(0));
             Some((cutoff, text))
         }
     };
@@ -913,8 +920,8 @@ mod tests {
         refused(row);
     }
 
-    fn family(name: &str) -> crate::record::Declared {
-        crate::record::Declared {
+    fn family(name: &str) -> crate::config_model::RecordDeclared {
+        crate::config_model::RecordDeclared {
             record: name.to_owned(),
             writer: format!("batten record query {name}"),
         }

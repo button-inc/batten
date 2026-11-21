@@ -39,7 +39,7 @@ fn red_repo(name: &str) -> PathBuf {
     std::fs::write(
         store.join(format!(
             "{}.{}",
-            batten::land::RED_HEAD,
+            batten::preset_catalog::RED_HEAD,
             batten::land::red_head_slug("work/red")
         )),
         "head abc123\nfailed 101 windows\nrunning macos\n",

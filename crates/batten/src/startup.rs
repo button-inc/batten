@@ -81,8 +81,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
-pub use crate::config_check::startup::validate;
-pub use crate::config_model::{Decided, Startup};
+#[cfg(test)]
+use crate::config_check::startup::validate;
+use crate::config_model::{Decided, Startup};
 
 impl Decided {
     /// Whether this is the value an absent key means, so the derived schema and

@@ -41,7 +41,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 /// `GITHUB_TOKEN` as `mise env` resolves it at the repository root, under an
 /// environment holding only the pairs given.

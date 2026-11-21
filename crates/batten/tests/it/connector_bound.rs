@@ -18,7 +18,9 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use batten::mcp::{self, McpConfig, Unresolved};
+use batten::config_model::McpConfig;
+use batten::mcp;
+use batten::mcp::Unresolved;
 use common::Fixture;
 
 /// A repository whose one source reads `wiring.json` beside it.

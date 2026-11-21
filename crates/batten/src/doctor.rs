@@ -166,7 +166,7 @@ pub fn workspace_refusal(
     subjects: &[crate::verdict::Subject],
     fix: crate::refusal::Fix,
 ) -> crate::refusal::Refusal {
-    let class = crate::verdict::Native::WorkspaceStateBroken;
+    let class = crate::error::Native::WorkspaceStateBroken;
     crate::refusal::Refusal::engine(class, subjects, fix)
 }
 
@@ -1450,7 +1450,7 @@ fn is_runnable_hook(at: &Path) -> bool {
 /// startup row asks it alone, and a second reading could drift from the report.
 #[must_use]
 pub fn diagnose_config(dir: &Path) -> Check {
-    match config::load(&dir.join(config::CONFIG_FILE)) {
+    match config::load(&dir.join(crate::config_model::CONFIG_FILE)) {
         // Loading proves the file parses and the version gates pass; resolving
         // proves the §8 chain (including a `batten.local.toml`) is coherent too.
         // Both are wanted — a config that parses but whose local override is
@@ -1469,7 +1469,7 @@ pub fn diagnose_config(dir: &Path) -> Check {
             Ok(_) => Check::passed(CONFIG),
             Err(_) => Check::failed(CONFIG, "config-unresolvable"),
         },
-        Err(_) if !dir.join(config::CONFIG_FILE).exists() => {
+        Err(_) if !dir.join(crate::config_model::CONFIG_FILE).exists() => {
             Check::failed(CONFIG, "config-missing")
         }
         Err(_) => Check::failed(CONFIG, "config-invalid"),
@@ -1832,7 +1832,7 @@ pub fn diagnose(dir: &Path) -> Report {
     //
     // `Unsurveyed` is a FAILED check rather than a passed one, which is the
     // whole reason the column has two variants. An absence of data reading as
-    // an absence of capability is the trap `hook::Harness::operation_of`
+    // an absence of capability is the trap `crate::config_model::Harness::operation_of`
     // records for Gemini and Copilot, and a diagnostic that reported "no plan
     // tool" for a host nobody has looked at would be repeating it in the one
     // place an operator goes to find out what is true.
@@ -1942,7 +1942,7 @@ fn hook_wiring_check(dir: &Path) -> Check {
 const HOOK_WIRING: &str = "hook-wiring";
 
 /// The surface the live session's root carries its wiring in: Claude Code's
-/// own declared file, read off [`hook::Harness::wiring`] so the core restates
+/// own declared file, read off [`crate::config_model::Harness::wiring`] so the core restates
 /// no consumer path (rule 1). The session root is that host's notion.
 fn session_root_surface() -> &'static str {
     match crate::config_model::Harness::ClaudeCode
@@ -2033,7 +2033,7 @@ pub struct HarnessWiring {
     /// one, or a simply absent one — and no reader could tell which, so the
     /// collapse this field exists to prevent was reproduced one level down. The
     /// siblings below split them, and [`MergedTally::partitions`] asserts their
-    /// sum against [`hook::Harness::merge_surfaces`]'s own length, so a fifth
+    /// sum against [`crate::config_model::Harness::merge_surfaces`]'s own length, so a fifth
     /// disposition cannot be added without landing somewhere countable.
     pub merged_surfaces_read: usize,
     /// Merged surfaces this host declares that are not present on disk.
@@ -2533,7 +2533,7 @@ fn reaches_engine(entry: &str, harness: crate::config_model::Harness) -> bool {
 
 /// What one host's merged surfaces amount to, as a partition rather than a pair.
 ///
-/// Every surface [`hook::Harness::merge_surfaces`] declares lands in exactly one
+/// Every surface [`crate::config_model::Harness::merge_surfaces`] declares lands in exactly one
 /// disposition, which is what makes [`MergedTally::partitions`] an invariant
 /// rather than a hope. The pair this replaced could not do that: four different
 /// answers all rendered as `read: 0`.
@@ -2778,10 +2778,10 @@ fn diagnose_session_root(
 
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).
 ///
-/// **Ranged over [`hook::Harness::ALL`], never a table.** Which harnesses exist
+/// **Ranged over [`crate::config_model::Harness::ALL`], never a table.** Which harnesses exist
 /// is the core's own answer, so a seventh adapter is diagnosed the day it lands
 /// rather than silently omitted — the shape a hand-kept list answers "no" to.
-/// `exit-code` declares no wiring surface and [`hook::Harness::wiring`] returns
+/// `exit-code` declares no wiring surface and [`crate::config_model::Harness::wiring`] returns
 /// `None` for it, which is what excludes it: the neutral contract is an envelope
 /// in and a decision as an exit status out, with no file to register in.
 ///
@@ -2969,7 +2969,7 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
     let mediated: Vec<crate::config_model::Rule> = resolved
         .rules
         .iter()
-        .filter(|rule| rule.scope == crate::config_model::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == crate::preset_catalog::RuleScope::MediatedCall)
         .cloned()
         .collect();
     if mediated.is_empty() {
@@ -3066,7 +3066,7 @@ enum TaskEvidence {
 /// answers [`TaskEvidence::Unknown`].
 fn transcript_evidence(
     dir: &Path,
-    transcript: &crate::transcript::TranscriptConfig,
+    transcript: &crate::config_model::TranscriptConfig,
     target: &Path,
 ) -> TaskEvidence {
     let (Some(harness), Some(path), Some(template)) = (
@@ -3143,7 +3143,7 @@ fn transcript_evidence(
 /// fact as a pointer at nothing.
 fn absent_store_is_zero(
     dir: &Path,
-    transcript: &crate::transcript::TranscriptConfig,
+    transcript: &crate::config_model::TranscriptConfig,
     link: &Path,
 ) -> bool {
     let Ok(target) = std::fs::read_link(link) else {
@@ -3435,7 +3435,7 @@ mod tests {
         let registered: std::collections::BTreeSet<String> = crate::hook::HookSource::Git
             .vocabulary()
             .into_iter()
-            .filter(|(_, d)| matches!(d, crate::hook::HookDisposition::Registered { .. }))
+            .filter(|(_, d)| matches!(d, crate::config_model::HookDisposition::Registered { .. }))
             .map(|(name, _)| name)
             .collect();
         let authority: std::collections::BTreeSet<String> =
@@ -3521,7 +3521,7 @@ mod tests {
     /// Fails by: reverting `reaches_engine` to a literal argv.
     #[test]
     fn wiring_naming_an_undeclared_path_does_not_reach_the_engine() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let live = hook::wiring_command(harness);
         assert!(
             reaches_engine(&live, harness),
@@ -3555,7 +3555,7 @@ mod tests {
     /// read as reaching the engine (or indexed past its end).
     #[test]
     fn only_a_batten_assignment_or_a_short_argv_falls_short_of_the_engine() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let live = hook::wiring_command(harness);
         assert!(reaches_engine(&format!("env LANG=C {live}"), harness));
         assert!(!reaches_engine(&format!("BATTEN_X=1 {live}"), harness));
@@ -3635,7 +3635,7 @@ mod tests {
 
     /// Claude Code's eight events, each carrying the derived command once.
     fn complete_wiring() -> serde_json::Value {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut events = serde_json::Map::new();
         for spelling in claude_spellings() {
             events.insert(
@@ -3648,11 +3648,11 @@ mod tests {
 
     /// The events the derivation registers for Claude Code, in its order.
     fn claude_spellings() -> Vec<String> {
-        let wiring = hook::Harness::ClaudeCode
+        let wiring = crate::config_model::Harness::ClaudeCode
             .wiring()
             .expect("claude-code declares a wiring surface");
         wiring
-            .registrations(hook::Harness::ClaudeCode)
+            .registrations(crate::config_model::Harness::ClaudeCode)
             .into_iter()
             .map(|(_, spelling)| spelling.to_owned())
             .collect()
@@ -3667,7 +3667,7 @@ mod tests {
     /// why `hook.rs` carries it, but a copy over here would be a second place it
     /// lives. And a fixture that hardcoded the path would keep passing if
     /// `Harness::wiring` moved, testing a file the binary no longer reads.
-    fn surface_of(harness: hook::Harness) -> &'static str {
+    fn surface_of(harness: crate::config_model::Harness) -> &'static str {
         match harness
             .wiring()
             .expect("the harness declares a surface")
@@ -3681,7 +3681,7 @@ mod tests {
     fn claude_row(name: &str, wiring: &serde_json::Value) -> HarnessWiring {
         let dir = write_surface(
             name,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             &serde_json::to_string_pretty(wiring).unwrap(),
         );
         diagnose_hooks(&dir)
@@ -3692,7 +3692,11 @@ mod tests {
     }
 
     /// A scratch directory carrying `body` at `harness`'s declared surface.
-    fn write_surface(name: &str, harness: hook::Harness, body: &str) -> std::path::PathBuf {
+    fn write_surface(
+        name: &str,
+        harness: crate::config_model::Harness,
+        body: &str,
+    ) -> std::path::PathBuf {
         let dir = scratch(name);
         let path = dir.join(surface_of(harness));
         if let Some(parent) = path.parent() {
@@ -3733,7 +3737,7 @@ mod tests {
     #[test]
     fn a_second_command_on_one_event_is_a_second_authority() {
         let mut wiring = complete_wiring();
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         wiring["hooks"]["Stop"] = serde_json::json!([
             { "hooks": [{ "type": "command", "command": command }] },
             { "hooks": [{ "type": "command", "command": command }] },
@@ -3774,7 +3778,7 @@ mod tests {
     #[test]
     fn an_entry_under_an_event_the_derivation_never_emits_can_never_fire() {
         let mut wiring = complete_wiring();
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         wiring["hooks"]["SomethingThisHostDoesNotEmit"] =
             serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }]);
         let row = claude_row("hooks-underived", &wiring);
@@ -3789,7 +3793,7 @@ mod tests {
 
     /// One batten registration under each of `spellings`.
     fn wiring_on(spellings: &[&str]) -> serde_json::Value {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut events = serde_json::Map::new();
         for spelling in spellings {
             events.insert(
@@ -3847,10 +3851,10 @@ mod tests {
 
     /// Each non-Claude host's documented events, typed literally from its docs so
     /// a truncated table cannot follow its own test (CLOUD-2695, CLOUD-2700).
-    fn documented_events() -> [(hook::Harness, &'static [&'static str]); 4] {
+    fn documented_events() -> [(crate::config_model::Harness, &'static [&'static str]); 4] {
         [
             (
-                hook::Harness::CodexCli,
+                crate::config_model::Harness::CodexCli,
                 &[
                     "PreToolUse",
                     "PostToolUse",
@@ -3870,7 +3874,7 @@ mod tests {
                 ],
             ),
             (
-                hook::Harness::CopilotCli,
+                crate::config_model::Harness::CopilotCli,
                 &[
                     "PreToolUse",
                     "PostToolUse",
@@ -3888,7 +3892,7 @@ mod tests {
                 ],
             ),
             (
-                hook::Harness::GeminiCli,
+                crate::config_model::Harness::GeminiCli,
                 &[
                     "BeforeTool",
                     "AfterTool",
@@ -3904,7 +3908,7 @@ mod tests {
                 ],
             ),
             (
-                hook::Harness::Cursor,
+                crate::config_model::Harness::Cursor,
                 &[
                     "preToolUse",
                     "beforeShellExecution",
@@ -3934,7 +3938,7 @@ mod tests {
     #[test]
     fn every_reason_id_has_a_fix() {
         // CLOUD-2676: every finding names its repair, by group.
-        let claude = hook::Harness::ClaudeCode;
+        let claude = crate::config_model::Harness::ClaudeCode;
         let regenerate = "batten generate hooks --harness claude-code";
         let table = [
             (FILE_MISSING, "batten wiring register --all"),
@@ -4040,7 +4044,7 @@ mod tests {
         // rule 1).
         let mut wiring = complete_wiring();
         wiring["hooks"]["Stop"] = serde_json::json!([
-            { "hooks": [{ "type": "command", "command": hook::wiring_command(hook::Harness::ClaudeCode) }] },
+            { "hooks": [{ "type": "command", "command": hook::wiring_command(crate::config_model::Harness::ClaudeCode) }] },
             { "hooks": [{ "type": "command", "command": "/home/someone/mise-tasks/stop-guard.sh" }] },
         ]);
         let row = claude_row("hooks-sibling", &wiring);
@@ -4075,7 +4079,7 @@ mod tests {
         // Two different remedies — write one, or fix one.
         let dir = write_surface(
             "hooks-unparseable",
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "not json at all\n",
         );
         let row = diagnose_hooks(&dir)
@@ -4094,7 +4098,7 @@ mod tests {
         // it declares no wiring surface at all.
         let report = diagnose_hooks(&scratch("hooks-census"));
         let diagnosed: Vec<&str> = report.harnesses.iter().map(|row| row.harness).collect();
-        for harness in hook::Harness::ALL {
+        for harness in crate::config_model::Harness::ALL {
             let expected = harness.wiring().is_some();
             assert_eq!(
                 diagnosed.contains(&harness.as_str()),
@@ -4155,16 +4159,18 @@ mod tests {
         // Derived from the harness table rather than typed here: a host's own
         // file layout is the adapter's fact, and spelling one in this crate is
         // what `no_artifact_name_reaches_the_core` refuses (rule 1).
-        let surface = home.join(hook::Harness::ClaudeCode.merge_surfaces()[0]);
+        let surface = home.join(crate::config_model::Harness::ClaudeCode.merge_surfaces()[0]);
         fs::create_dir_all(surface.parent().unwrap()).unwrap();
 
-        let declared = hook::Harness::ClaudeCode.merge_surfaces().len();
+        let declared = crate::config_model::Harness::ClaudeCode
+            .merge_surfaces()
+            .len();
 
         fs::write(&surface, wrong_shape.to_string()).unwrap();
         let tally = merged_under(
             &home,
             &project,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "batten hook",
             false,
         );
@@ -4189,7 +4195,7 @@ mod tests {
         let tally = merged_under(
             &home,
             &project,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "batten hook",
             false,
         );
@@ -4214,7 +4220,7 @@ mod tests {
     /// `continue`.
     #[test]
     fn every_merged_surface_lands_in_exactly_one_disposition() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let declared = harness.merge_surfaces().len();
         assert!(declared > 1, "this host declares more than one surface");
 
@@ -4302,7 +4308,7 @@ mod tests {
     /// Fails by: incrementing `commands` alone and leaving `siblings` at zero.
     #[test]
     fn a_merged_sibling_is_counted_apart_from_battens_own() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let home = scratch("merged-sibling-home");
         let project = scratch("merged-sibling-project");
         let surface = home.join(harness.merge_surfaces()[0]);
@@ -4354,7 +4360,7 @@ mod tests {
     /// Fails by: dropping either `if exclusive` guard, or hard-coding it true.
     #[test]
     fn a_sibling_refuses_only_where_the_consumer_declared_the_surface_exclusive() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let mut wiring = complete_wiring();
         wiring["hooks"]["Stop"] = serde_json::json!([
             { "hooks": [{ "type": "command", "command": hook::wiring_command(harness) }] },
@@ -4417,7 +4423,7 @@ mod tests {
     /// Fails by: dropping the `if exclusive` guard in `merged_under`.
     #[test]
     fn a_merged_sibling_refuses_only_under_the_declaration_too() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let home = scratch("merged-exclusive-home");
         let project = scratch("merged-exclusive-project");
         let surface = home.join(harness.merge_surfaces()[0]);
@@ -4471,7 +4477,7 @@ mod tests {
     /// Fails by: restoring `entry.contains(&command)` in `diagnose_harness`.
     #[test]
     fn a_command_that_reaches_the_engine_and_more_is_not_a_clean_registration() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let command = hook::wiring_command(harness);
 
         for spelling in [
@@ -4630,7 +4636,7 @@ mod probe_tests {
         let dir = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&dir).expect("a repository");
         if let Some(text) = config {
-            std::fs::write(dir.join(config::CONFIG_FILE), text).expect("the config");
+            std::fs::write(dir.join(crate::config_model::CONFIG_FILE), text).expect("the config");
         }
         dir
     }

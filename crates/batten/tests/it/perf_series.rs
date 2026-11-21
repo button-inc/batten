@@ -51,8 +51,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common::{batten, git_in, scratch, stderr, stdout, write};
-use batten::exec::Streamed as _;
-use batten::exec::StreamedChild as _;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;

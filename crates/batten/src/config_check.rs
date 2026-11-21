@@ -1144,7 +1144,7 @@ pub mod mint {
     /// A compiled authority a template may ask for a value.
     ///
     /// **Closed, and this is the axis that makes CLOUD-1100's renderer repo-agnostic**
-    /// (`[[recorder]]`'s [`crate::recorder::Ask`] is its twin). A `[program]` row
+    /// (`[[recorder]]`'s [`crate::config_model::Ask`] is its twin). A `[program]` row
     /// names a path the consumer owns and the engine spawns; an authority names a
     /// predicate the CRATE owns and answers in-process. Consumers get the second
     /// without the engine learning a tracker's vocabulary: this enum's one variant
@@ -2567,10 +2567,10 @@ pub mod refusal {
 pub mod rules {
 
     use crate::config_model::{
-        CeilingUnit, Direction, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope,
-        VerdictProgram,
+        CeilingUnit, Direction, ReceiptKey, ReceiptTrigger, Rule, RuleKind, VerdictProgram,
     };
     use crate::error::UsageError;
+    use crate::preset_catalog::RuleScope;
 
     use crate::selector::Selector;
 
@@ -5525,7 +5525,7 @@ pub mod transcript {
 
     /// Validate the table at load, the way every other config table is.
     ///
-    /// Takes an `Option` to match [`crate::budget::validate`]'s signature: `[budget]`
+    /// Takes an `Option` to match [`crate::config_check::budget::validate`]'s signature: `[budget]`
     /// and `[transcript]` are both tables rather than lists, so neither is reached by
     /// the `Vec<T>` census in `config.rs`, and both are called explicitly from
     /// `parse_ungated` for that reason.
@@ -5614,10 +5614,9 @@ pub mod preset {
 
 pub mod verdict {
     #![allow(unused_imports)]
-    use crate::config_model::{
-        Applicability, DeclaredVerdict, Route, RouteKind, Vocabulary, VocabularyWord,
-    };
+    use crate::config_model::{DeclaredVerdict, Route, Vocabulary, VocabularyWord};
     use crate::error::UsageError;
+    use crate::preset_catalog::{Applicability, RouteKind};
     use crate::preset_catalog::{VendoredRoute, VendoredVerdict};
     use crate::preset_catalog::{admit, read, run};
     use serde::Serialize;

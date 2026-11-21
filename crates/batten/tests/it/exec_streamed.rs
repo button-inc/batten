@@ -1,4 +1,4 @@
-//! The capture adapter (`batten::exec::Streamed`, #1276) over real children:
+//! The capture adapter (`batten::capture::Streamed`, #1276) over real children:
 //! `output`'s contract, with every stream pumped as it is written.
 //!
 //! Here rather than beside the adapter: each case IS a spawn, and the engine's

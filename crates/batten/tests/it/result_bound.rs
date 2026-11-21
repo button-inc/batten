@@ -474,7 +474,8 @@ fn a_bounded_result_is_recorded() {
 /// record no row names, made `age` ago; evicts, and says whether each survived
 /// as `(row_less, read)`.
 fn evict_beside_a_read(name: &str, age: std::time::Duration) -> (bool, bool) {
-    use batten::capture::{CallRow, CaptureConfig, Stream};
+    use batten::capture::{CallRow, Stream};
+    use batten::config_model::CaptureConfig;
     let store = common::scratch(name);
     let row_less = batten::capture::store_in(&store, Stream::Response, b"a capture no row names")
         .expect("store the row-less record");

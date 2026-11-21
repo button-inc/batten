@@ -63,12 +63,13 @@ use regex::Regex;
 use serde::Serialize;
 
 use crate::config_model::Harness;
-pub use crate::config_model::{Attribution, Identity};
+use crate::config_model::{Attribution, Identity};
 use crate::decision::{Caller, Provenance};
+use crate::error::Native;
 use crate::error::UsageError;
 use crate::git;
 use crate::hook::Capability;
-use crate::verdict::{Native, Subject as Pointer};
+use crate::verdict::Subject as Pointer;
 
 impl Identity {
     /// The identity as git renders it in `%an <%ae>` form.
@@ -1040,7 +1041,7 @@ mod tests {
             fields,
             expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
         );
-        let registry = crate::verdict::vendored();
+        let registry = crate::config_check::verdict::vendored();
         for (finding, (field, class)) in found.iter().zip(expected) {
             assert_eq!(finding.verdict, class, "{field}");
             let line = finding.line();

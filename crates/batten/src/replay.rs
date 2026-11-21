@@ -221,7 +221,7 @@ pub fn compare_moved(
 /// [`compare_moved`], with each body also read by the ITEMS it names rather
 /// than how it spells them (CLOUD-2789): `canon_base` and `canon_head` replace
 /// every path they resolve with the site defining it ([`crate::item_index`]),
-/// so `crate::rules::Rule` at base and `crate::config_model::Rule` at head are
+/// so `crate::config_model::Rule` at base and `crate::config_model::Rule` at head are
 /// one item when `Rule` moved, or `rules` re-exported it. A respelled path is
 /// then no change; every other token is still compared, so a changed assertion
 /// is still modified. `elsewhere` receives the canonical base shape.

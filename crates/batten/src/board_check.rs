@@ -349,18 +349,18 @@ fn undeclared(key: &str) -> anyhow::Error {
 }
 
 /// A list of globs, compiled.
-fn selectors(globs: &[String]) -> Result<Vec<crate::rules::Selector>> {
+fn selectors(globs: &[String]) -> Result<Vec<crate::selector::Selector>> {
     globs
         .iter()
-        .map(|glob| crate::rules::Selector::new(glob.as_str()))
+        .map(|glob| crate::selector::Selector::new(glob.as_str()))
         .collect()
 }
 
 /// Every tracked path one of `keep` selects and none of `drop` does.
 fn corpus_paths(
     root: &Path,
-    keep: &[crate::rules::Selector],
-    drop: &[crate::rules::Selector],
+    keep: &[crate::selector::Selector],
+    drop: &[crate::selector::Selector],
 ) -> std::result::Result<Vec<String>, String> {
     let tracked = crate::git::tracked_paths(root).map_err(|_| {
         "no repository root to scan — this reads the tree and must not guess".to_owned()
@@ -431,11 +431,11 @@ fn sort_lines(lines: &mut [String]) {
 /// `Err` is could-not-look: the preset is missing from the build, will not
 /// compile, or faulted over the reading.
 fn decide(family: &str, lines: &[String]) -> std::result::Result<Decided, String> {
-    let manifest = crate::preset::MANIFESTS
+    let manifest = crate::preset_catalog::MANIFESTS
         .iter()
         .find(|manifest| manifest.name == PRESET)
         .ok_or_else(|| format!("this build ships no `{PRESET}` preset to decide with"))?;
-    let sources = manifest.modules_at(crate::config_model::RuleScope::Tree);
+    let sources = manifest.modules_at(crate::preset_catalog::RuleScope::Tree);
     let bundle = crate::policy::compile(PRESET, &sources, &Value::Object(serde_json::Map::new()))
         .map_err(|_| format!("the `{PRESET}` preset does not compile"))?;
     let mut records = serde_json::Map::new();
@@ -1078,8 +1078,8 @@ struct Cites {
     obligations: Regex,
     cited_test: Regex,
     cited_path: Regex,
-    corpus: Vec<crate::rules::Selector>,
-    exclude: Vec<crate::rules::Selector>,
+    corpus: Vec<crate::selector::Selector>,
+    exclude: Vec<crate::selector::Selector>,
     prospective: Option<String>,
 }
 
@@ -1358,7 +1358,7 @@ fn render_cites(
 struct Refs {
     citation: Regex,
     tag: Regex,
-    exclude: Vec<crate::rules::Selector>,
+    exclude: Vec<crate::selector::Selector>,
 }
 
 /// One clause citation in the tree: where, which issue, which clause.
@@ -1393,7 +1393,7 @@ impl Refs {
     ///
     /// A file carrying a NUL byte is binary and skipped, `grep -I`'s reading.
     fn hits(&self, root: &Path) -> std::result::Result<BTreeSet<Hit>, String> {
-        let everything = [crate::rules::Selector::new("**")
+        let everything = [crate::selector::Selector::new("**")
             .map_err(|_| "the whole-tree glob does not compile".to_owned())?];
         let mut hits = BTreeSet::new();
         for path in corpus_paths(root, &everything, &self.exclude)? {

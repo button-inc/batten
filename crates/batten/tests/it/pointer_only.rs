@@ -37,7 +37,7 @@
 //!
 //! A **corpus** in which every byte a check can read as subject matter is a
 //! distinct canary token, crossed with a **census** over every leaf verb of
-//! [`batten::surface::SURFACE`]. The census is the totality proof: a verb added
+//! [`batten::surface_table::SURFACE`]. The census is the totality proof: a verb added
 //! tomorrow lands in no bucket and fails [`every_leaf_verb_is_classified`] until
 //! somebody says which bucket it is in. That is the property CLOUD-92 asks for —
 //! not "the checks we thought of do not leak", but "no check leaks, and a new one
@@ -59,13 +59,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use batten::surface::SURFACE;
+use batten::surface_table::SURFACE;
 use common::{Fixture, StateHome, batten, scratch};
 
 // -- The canaries ------------------------------------------------------------

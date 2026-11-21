@@ -20,7 +20,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -148,9 +148,10 @@ fn git_routes() -> Vec<(String, String)> {
             }
         }
     }
-    for verdict in batten::verdict::vendored() {
+    for verdict in batten::config_check::verdict::vendored() {
         for route in &verdict.routes {
-            if route.kind == batten::verdict::RouteKind::Command && route.target.starts_with("git ")
+            if route.kind == batten::preset_catalog::RouteKind::Command
+                && route.target.starts_with("git ")
             {
                 routes.push((verdict.id.clone(), route.target.clone()));
             }

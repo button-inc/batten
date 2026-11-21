@@ -9,7 +9,7 @@
 //!
 //! ## Where it writes, and why that is the working directory
 //!
-//! `dir.join(config::CONFIG_FILE)`, with `dir` the process's working directory.
+//! `dir.join(crate::config_model::CONFIG_FILE)`, with `dir` the process's working directory.
 //! Not [`crate::git::repo_root`]: §8 defines the authority as *the* `batten.toml`
 //! with **no upward directory walk**, and [`crate::resolve`] and
 //! [`crate::lint`] both read it from the working directory. A verb that
@@ -73,6 +73,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+#[cfg(test)]
 use crate::config;
 
 /// The starter `batten.toml` this verb writes.
@@ -112,7 +113,7 @@ pub enum Outcome {
 /// complete (exit `3`), never a verdict: the caller asked for something
 /// well-formed and the filesystem refused.
 pub fn apply(dir: &Path, dry_run: bool) -> Result<Outcome> {
-    let path = dir.join(config::CONFIG_FILE);
+    let path = dir.join(crate::config_model::CONFIG_FILE);
     // `try_exists` rather than `exists`: a path that cannot be interrogated is an
     // I/O error, and reading that as "absent" would overwrite on exactly the
     // filesystem least able to say what is there.
@@ -135,8 +136,9 @@ mod tests {
     /// does not parse is the one defect that makes every other property moot.
     #[test]
     fn the_starter_parses_as_a_config() {
-        let config = config::parse(STARTER, config::CONFIG_FILE).expect("the starter parses");
-        assert_eq!(config.version, config::SUPPORTED_VERSION);
+        let config =
+            config::parse(STARTER, crate::config_model::CONFIG_FILE).expect("the starter parses");
+        assert_eq!(config.version, crate::config_model::SUPPORTED_VERSION);
     }
 
     /// `check` on a freshly scaffolded repository must gate something. An empty
@@ -144,7 +146,8 @@ mod tests {
     /// the "did it even run" ambiguity a starter should not ship with.
     #[test]
     fn the_starter_declares_a_live_rule() {
-        let config = config::parse(STARTER, config::CONFIG_FILE).expect("the starter parses");
+        let config =
+            config::parse(STARTER, crate::config_model::CONFIG_FILE).expect("the starter parses");
         assert!(
             !config.rules.is_empty(),
             "the starter ships no rule: the first `check` would report on nothing"
@@ -157,12 +160,13 @@ mod tests {
     /// the config that declares it.
     #[test]
     fn no_starter_rule_fires_on_the_starter_itself() {
-        let config = config::parse(STARTER, config::CONFIG_FILE).expect("the starter parses");
+        let config =
+            config::parse(STARTER, crate::config_model::CONFIG_FILE).expect("the starter parses");
         for rule in &config.rules {
             let Some(glob) = rule.glob.as_deref() else {
                 continue;
             };
-            if !crate::rules::glob_match(glob, config::CONFIG_FILE) {
+            if !crate::selector::glob_match(glob, crate::config_model::CONFIG_FILE) {
                 continue;
             }
             let Some(pattern) = rule.pattern.as_deref() else {
@@ -172,7 +176,7 @@ mod tests {
                 !STARTER.contains(pattern),
                 "rule {} globs {} and its pattern appears in it",
                 rule.id,
-                config::CONFIG_FILE
+                crate::config_model::CONFIG_FILE
             );
         }
     }

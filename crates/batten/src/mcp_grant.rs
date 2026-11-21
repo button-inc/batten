@@ -33,9 +33,10 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::config_model::McpConfig;
 use crate::exit::ExitCode;
 use crate::facts::{Format, Look, Node};
-use crate::mcp::{self, McpConfig};
+use crate::mcp;
 
 /// What the committed permissions say about one exposed tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

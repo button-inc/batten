@@ -101,12 +101,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule, RuleKind, RuleScope};
+use batten::config_model::{Rule, RuleKind};
+use batten::preset_catalog::RuleScope;
+use batten::rules;
 
 /// A fixture repository whose base is one commit back and whose record is on
 /// disk exactly where the recorder would have written it.
@@ -210,22 +212,22 @@ fn row() -> Rule {
 /// Minimal on purpose: `recorder_records` reads `record` and nothing else, so a
 /// full transcription of `batten.toml`'s columns here would be a second copy of
 /// a declaration this test does not exercise.
-fn recorders() -> Vec<batten::recorder::Declared> {
+fn recorders() -> Vec<batten::config_model::RecorderDeclared> {
     ["board-writes", "pr-closes"]
         .into_iter()
-        .map(|record| batten::recorder::Declared {
+        .map(|record| batten::config_model::RecorderDeclared {
             name: record.to_owned(),
             record: record.to_owned(),
             tool: "save_issue".to_owned(),
-            key: batten::recorder::RecordKey::Branch,
+            key: batten::config_model::RecordKey::Branch,
             requires: Vec::new(),
             refused_when_input: Vec::new(),
             refused_when_result: Vec::new(),
             requires_input_matching: std::collections::BTreeMap::new(),
             requires_recorded: None,
-            columns: vec![batten::recorder::Column {
+            columns: vec![batten::config_model::Column {
                 name: "kind".to_owned(),
-                value: batten::recorder::Value::Literal("issue".to_owned()),
+                value: batten::config_model::Value::Literal("issue".to_owned()),
                 minus: None,
                 without: None,
                 counted_with: None,

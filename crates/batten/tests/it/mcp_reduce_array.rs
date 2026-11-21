@@ -13,7 +13,8 @@
 //! `payload` is what unframes a server's content blocks, and a case that skipped
 //! it would assert the reduction over a tree the dispatch path never produces.
 
-use batten::mcp::{self, Reduce, ResultRow};
+use batten::config_model::{Reduce, ResultRow};
+use batten::mcp;
 
 /// The row as a consumer writes it, parsed by the config surface's own path.
 fn row(toml_text: &str) -> ResultRow {

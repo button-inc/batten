@@ -14,7 +14,7 @@
 
 use crate::common;
 
-use batten::surface::SURFACE;
+use batten::surface_table::SURFACE;
 use common::{Fixture, batten};
 
 /// A fixture declaring one gate, so the gate list is non-empty and the

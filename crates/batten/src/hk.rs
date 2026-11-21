@@ -63,7 +63,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::config_model::PlanQuery;
+use crate::config_model::PlanQuery;
 use crate::facts::Look;
 
 /// The program this module adopts.

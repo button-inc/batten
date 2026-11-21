@@ -26,7 +26,7 @@
 //!
 //! There is no portable session identity to key on, and a timestamp would only
 //! move the question. What there IS, exactly once per session, is the moment the
-//! host re-reads its wiring: [`crate::hook::Event::SessionStart`]. At that
+//! host re-reads its wiring: [`crate::config_model::Event::SessionStart`]. At that
 //! instant live and at-load are the same by definition, so the record is
 //! **cleared** there ([`clear_at_load`]) and written only by [`reclaim`].
 //!
@@ -55,7 +55,7 @@ use anyhow::Result;
 
 use crate::{git, hook};
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Disarm, Wiring};
+use crate::config_model::{Disarm, Wiring};
 
 /// The event map inside a wiring file.
 ///
@@ -227,7 +227,7 @@ pub struct AtLoadRow {
 /// What this session's harnesses had loaded before any repair.
 ///
 /// Byte-stable under `-J` for §6's reason: the rows come back in
-/// [`hook::Harness::ALL`] order and, within a harness, in the order the host's
+/// [`crate::config_model::Harness::ALL`] order and, within a harness, in the order the host's
 /// own document lists its events, so two runs over one disk state serialise
 /// identically.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -332,7 +332,7 @@ impl Reclaimed {
 /// Remove every non-batten hook registration from this host's merged surfaces.
 ///
 /// The inverse of `doctor`'s merged census, over the same surfaces and with the
-/// same selector. Ranged over [`hook::Harness::ALL`] rather than a table, so a
+/// same selector. Ranged over [`crate::config_model::Harness::ALL`] rather than a table, so a
 /// seventh adapter is reclaimed the day it lands instead of silently skipped.
 ///
 /// **The at-load record is written before the first byte changes**, and only when
@@ -1162,7 +1162,7 @@ pub fn link_git_hooks(dir: &Path, check: bool) -> Result<GateReport> {
         std::fs::create_dir_all(&hooks)
             .map_err(|error| anyhow::anyhow!("wiring gate: the hooks directory: {error}"))?;
     }
-    for &(name, _) in crate::hook::GIT_HOOKS {
+    for &(name, _) in crate::config_model::GIT_HOOKS {
         let link = hooks.join(name);
         if std::fs::read_link(&link).is_ok_and(|target| target == exe) {
             continue;
@@ -1251,7 +1251,7 @@ mod tests {
     /// it forbids fires on itself. `rules/scanning.md` records the same
     /// shape one layer up, and the second draft of this comment is what proved it.
     fn claude() -> hook::WiringFile {
-        hook::Harness::ClaudeCode
+        crate::config_model::Harness::ClaudeCode
             .wiring()
             .expect("claude-code declares a wiring surface")
             .file
@@ -1263,7 +1263,7 @@ mod tests {
     /// Fails by: narrowing [`is_batten`] to the exact wiring command.
     #[test]
     fn a_renamed_batten_registration_is_not_somebody_elses_hook() {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         // Reaches no engine — the `--harness` flag is gone — so `doctor` reports
         // it as wrong. It must still not be deleted here.
         let mut document = surface(&["/usr/local/bin/batten hook"]);
@@ -1272,7 +1272,7 @@ mod tests {
                 &mut document,
                 claude(),
                 &command,
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             )
             .is_empty()
         );
@@ -1285,14 +1285,14 @@ mod tests {
     /// that always had none.
     #[test]
     fn an_emptied_event_is_removed_rather_than_left_as_a_husk() {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut document = surface(&["session-start-git-identity.sh"]);
         assert_eq!(
             prune_siblings(
                 &mut document,
                 claude(),
                 &command,
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             ),
             vec![("SessionStart".to_owned(), 1)]
         );
@@ -1306,14 +1306,14 @@ mod tests {
     /// takes batten's registration out with the sibling sharing its matcher.
     #[test]
     fn a_sibling_sharing_an_entry_with_batten_takes_only_itself() {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut document = surface(&[&command, "stop-hook-git-check.sh"]);
         assert_eq!(
             prune_siblings(
                 &mut document,
                 claude(),
                 &command,
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             ),
             vec![("SessionStart".to_owned(), 1)]
         );
@@ -1326,7 +1326,7 @@ mod tests {
     /// makes this verb delete a shape it does not own.
     #[test]
     fn a_registration_with_no_command_is_not_this_verbs_business() {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut document = serde_json::json!({
             "hooks": {"Stop": [{"hooks": [{"type": "command"}]}]}
         });
@@ -1336,7 +1336,7 @@ mod tests {
                 &mut document,
                 claude(),
                 &command,
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             )
             .is_empty()
         );
@@ -1349,12 +1349,17 @@ mod tests {
     /// exists to make unwritable.
     #[test]
     fn the_reader_and_the_writer_share_one_selector() {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let document = surface(&[&command, "session-start-git-identity.sh"]);
         let events = committed_events(&document, claude()).expect("a wiring file");
         let counted = events
             .values()
-            .flat_map(|value| entries_under(value, hook::Harness::ClaudeCode.entry_shape()))
+            .flat_map(|value| {
+                entries_under(
+                    value,
+                    crate::config_model::Harness::ClaudeCode.entry_shape(),
+                )
+            })
             .filter(|(_, entry)| !is_batten(entry, &command))
             .count();
         let mut pruned = document;
@@ -1362,7 +1367,7 @@ mod tests {
             &mut pruned,
             claude(),
             &command,
-            hook::Harness::ClaudeCode.entry_shape(),
+            crate::config_model::Harness::ClaudeCode.entry_shape(),
         )
         .iter()
         .map(|(_, count)| count)
@@ -1384,13 +1389,13 @@ mod tests {
             claude(),
             &["SessionStart", "PreToolUse"],
             "batten adjudicate --harness claude-code",
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
         );
         assert_eq!(added, vec!["PreToolUse".to_owned()]);
         assert_eq!(
             entries_under(
                 &document["hooks"]["SessionStart"],
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             )
             .len(),
             1
@@ -1398,7 +1403,7 @@ mod tests {
         assert_eq!(
             entries_under(
                 &document["hooks"]["PreToolUse"],
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             ),
             vec![(None, "batten adjudicate --harness claude-code")]
         );
@@ -1415,7 +1420,7 @@ mod tests {
                 claude(),
                 &spellings,
                 command,
-                hook::Harness::ClaudeCode
+                crate::config_model::Harness::ClaudeCode
             )
             .len(),
             2
@@ -1426,7 +1431,7 @@ mod tests {
                 claude(),
                 &spellings,
                 command,
-                hook::Harness::ClaudeCode
+                crate::config_model::Harness::ClaudeCode
             )
             .is_empty()
         );
@@ -1442,13 +1447,13 @@ mod tests {
             claude(),
             &["SessionStart"],
             "batten adjudicate --harness claude-code",
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
         );
         assert_eq!(added, vec!["SessionStart".to_owned()]);
         assert_eq!(
             entries_under(
                 &document["hooks"]["SessionStart"],
-                hook::Harness::ClaudeCode.entry_shape()
+                crate::config_model::Harness::ClaudeCode.entry_shape()
             )
             .len(),
             2
@@ -1474,10 +1479,10 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         let done = register(&root, &repo, true).unwrap();
         assert!(done.above);
-        let expected = hook::Harness::ClaudeCode
+        let expected = crate::config_model::Harness::ClaudeCode
             .wiring()
             .unwrap()
-            .registrations(hook::Harness::ClaudeCode)
+            .registrations(crate::config_model::Harness::ClaudeCode)
             .len();
         assert_eq!(done.events.len(), expected);
         assert!(!done.written);
@@ -1555,7 +1560,7 @@ mod tests {
         let dir = scratch("reclaim-repo");
         crate::gitwrite::init_on_main(&dir).unwrap();
         let home = scratch("reclaim-home");
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let merged = harness.merge_surfaces();
         let merged_at = merged.first().expect("claude-code merges a surface");
         let path = home.join(merged_at);
@@ -1630,7 +1635,7 @@ mod tests {
         assert!(!report.owed(), "{report:?}");
         let hooks = crate::doctor::hooks_dir(&dir).unwrap();
         let exe = std::env::current_exe().unwrap();
-        for name in crate::hook::GIT_HOOKS.iter().map(|&(name, _)| name) {
+        for name in crate::config_model::GIT_HOOKS.iter().map(|&(name, _)| name) {
             assert_eq!(std::fs::read_link(hooks.join(name)).unwrap(), exe, "{name}");
         }
         assert!(!link_git_hooks(&dir, true).unwrap().owed());
@@ -1676,12 +1681,12 @@ mod tests {
             {"command": "other-tool"},
             {"command": "batten adjudicate --harness cursor"}
         ]}});
-        let command = hook::wiring_command(hook::Harness::Cursor);
+        let command = hook::wiring_command(crate::config_model::Harness::Cursor);
         let removed = prune_siblings(
             &mut document,
             hook::WiringFile::Whole(".cursor/hooks.json"),
             &command,
-            hook::Harness::Cursor.entry_shape(),
+            crate::config_model::Harness::Cursor.entry_shape(),
         );
         assert_eq!(removed, vec![("stop".to_owned(), 1)]);
         assert_eq!(
@@ -1693,7 +1698,7 @@ mod tests {
     /// An event batten alone registers loses nothing and is not reported.
     #[test]
     fn an_event_with_only_batten_reports_no_removal() {
-        let command = hook::wiring_command(hook::Harness::Cursor);
+        let command = hook::wiring_command(crate::config_model::Harness::Cursor);
         let mut document = serde_json::json!({"version": 1, "hooks": {
             "stop": [{"command": "other-tool"}, {"command": command}],
             "start": [{"command": command}]
@@ -1702,7 +1707,7 @@ mod tests {
             &mut document,
             hook::WiringFile::Whole(".cursor/hooks.json"),
             &command,
-            hook::Harness::Cursor.entry_shape(),
+            crate::config_model::Harness::Cursor.entry_shape(),
         );
         assert_eq!(removed, vec![("stop".to_owned(), 1)]);
     }
@@ -1739,23 +1744,29 @@ mod tests {
             &mut nested,
             claude(),
             &["Stop"],
-            &hook::wiring_command(hook::Harness::ClaudeCode),
-            hook::Harness::ClaudeCode,
+            &hook::wiring_command(crate::config_model::Harness::ClaudeCode),
+            crate::config_model::Harness::ClaudeCode,
         );
         assert!(nested.get("version").is_none(), "{nested}");
         let cursor = hook::WiringFile::Whole(".cursor/hooks.json");
-        let command = hook::wiring_command(hook::Harness::Cursor);
+        let command = hook::wiring_command(crate::config_model::Harness::Cursor);
         let mut flat = serde_json::json!({});
         let _ = add_missing(
             &mut flat,
             cursor,
             &["stop"],
             &command,
-            hook::Harness::Cursor,
+            crate::config_model::Harness::Cursor,
         );
         assert_eq!(flat["version"], 1);
         let mut own = serde_json::json!({"version": 2});
-        let _ = add_missing(&mut own, cursor, &["stop"], &command, hook::Harness::Cursor);
+        let _ = add_missing(
+            &mut own,
+            cursor,
+            &["stop"],
+            &command,
+            crate::config_model::Harness::Cursor,
+        );
         assert_eq!(own["version"], 2);
     }
 
@@ -1801,7 +1812,7 @@ mod tests {
             register_committed(repo, true)
                 .unwrap()
                 .iter()
-                .any(|(harness, _)| *harness == hook::Harness::ClaudeCode)
+                .any(|(harness, _)| *harness == crate::config_model::Harness::ClaudeCode)
         };
         assert!(owes_claude(&repo), "an absent surface is owed");
         std::fs::create_dir_all(repo.join(surface(claude()))).unwrap();

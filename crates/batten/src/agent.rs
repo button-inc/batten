@@ -295,7 +295,11 @@ mod tests {
         assert!(!capabilities(Some(&resolved)).configured);
 
         let present = crate::scratch::scratch("agent-configured-present");
-        std::fs::write(present.join(crate::config::CONFIG_FILE), "version = 1\n").unwrap();
+        std::fs::write(
+            present.join(crate::config_model::CONFIG_FILE),
+            "version = 1\n",
+        )
+        .unwrap();
         let resolved =
             crate::resolve::resolve(&present, &crate::resolve::Overrides::default()).unwrap();
         assert_eq!(resolved.authority, Authority::Present, "the premise");

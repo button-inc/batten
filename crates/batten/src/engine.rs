@@ -39,7 +39,7 @@ use anyhow::Result;
 use crate::error::UsageError;
 
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::Pin;
+use crate::config_model::Pin;
 
 /// What a [`Pin`] names, decided once (CLOUD-2418): a verb that matches this
 /// rather than the two fields reads a malformed pin as every other such verb
@@ -1996,7 +1996,7 @@ mod tests {
     #[test]
     fn an_archive_whose_digest_disagrees_is_refused() {
         let archive = b"the release bytes";
-        let right = crate::receipt::hex_sha256(archive);
+        let right = crate::digest::sha256_hex(archive);
         let sums = format!("{right}  a.tar.gz\n{}  b.tar.gz\n", "0".repeat(64));
         assert!(verify(archive, &sums, "a.tar.gz").is_ok());
         assert!(

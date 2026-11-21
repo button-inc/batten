@@ -7,8 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use batten::hook::{Event, Harness, HookDisposition, HookSource};
-use batten::surface::SURFACE;
+use batten::config_model::{Event, Harness, HookDisposition};
+use batten::hook::HookSource;
+use batten::surface_table::SURFACE;
 
 fn is_kebab_id(reason: &str) -> bool {
     !reason.is_empty()
