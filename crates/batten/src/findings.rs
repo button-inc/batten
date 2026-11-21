@@ -749,6 +749,15 @@ pub fn load_one(store_dir: &Path, fingerprint: Fingerprint) -> Result<Option<Fin
     Ok(read_record(&record_path(store_dir, fingerprint)))
 }
 
+/// Whether a record file exists for `fingerprint`, by one `stat` and no read:
+/// what the journal asks of each pending entry on every merge (CLOUD-2820), so
+/// the question must cost no more than the answer is worth. An unreadable file
+/// still counts as present here; [`load_one`] decides whether it parses.
+#[must_use]
+pub fn is_recorded(store_dir: &Path, fingerprint: Fingerprint) -> bool {
+    record_path(store_dir, fingerprint).is_file()
+}
+
 /// Publish one record.
 ///
 /// The write half, exposed so [`crate::journal`] can fold dispositions in
