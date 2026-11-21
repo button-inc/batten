@@ -830,7 +830,7 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
         write_roots(
             path,
             cache_key,
-            &Roots {
+            &RootsEntry {
                 raw: key.1.clone(),
                 tips,
                 roots: found.clone(),
@@ -905,7 +905,7 @@ const ROOTS_FORMAT: &str = "batten-roots-2";
 
 /// One persisted answer: the refs' raw targets (the hit key), the peeled tips
 /// (what an incremental walk hides), and the roots.
-struct Roots {
+struct RootsEntry {
     raw: Vec<gix::ObjectId>,
     tips: Vec<gix::ObjectId>,
     roots: Vec<String>,
@@ -926,9 +926,9 @@ fn roots_entry(repo: &gix::Repository) -> Option<(PathBuf, String)> {
 
 /// The prior answer: `raw`, `tip` and `root` lines, each a hex id. Anything
 /// unreadable is a miss, and the full walk answers instead.
-fn read_roots(path: &Path, cache_key: &str) -> Option<Roots> {
+fn read_roots(path: &Path, cache_key: &str) -> Option<RootsEntry> {
     let body = String::from_utf8(batten_facts::cache::read(path, cache_key)?).ok()?;
-    let mut held = Roots {
+    let mut held = RootsEntry {
         raw: Vec::new(),
         tips: Vec::new(),
         roots: Vec::new(),
@@ -948,7 +948,7 @@ fn read_roots(path: &Path, cache_key: &str) -> Option<Roots> {
 
 /// Publish the answer, ignoring every failure: the roots are already computed
 /// and correct, and a cache that could refuse the answer would be a defect.
-fn write_roots(path: &Path, cache_key: &str, held: &Roots) {
+fn write_roots(path: &Path, cache_key: &str, held: &RootsEntry) {
     let mut body = String::new();
     for (label, ids) in [("raw", &held.raw), ("tip", &held.tips)] {
         for id in ids {
