@@ -798,8 +798,25 @@ pub fn forget(store_dir: &Path, fingerprint: Fingerprint) -> Result<()> {
 /// Returns an error only when the findings directory exists but cannot be read.
 pub fn load_all(store_dir: &Path) -> Result<Vec<FindingRecord>> {
     let dir = findings_dir(store_dir);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    // ONCE PER PROCESS WHILE THE STORE IS UNCHANGED (CLOUD-2813). Measured: one
+    // `stop` called this from six sites and opened the 689-file store about
+    // 3,560 times, re-parsing every record five times over, at 316 ms against a
+    // 100 ms budget. Every write publishes by rename and every removal unlinks,
+    // and both move the directory's mtime, so one `stat` proves a memo current;
+    // a child process writing the store moves it too, so a long-running verb
+    // re-reads. Nothing persists past the process: crash-only holds.
+    let Ok(stamp) = std::fs::metadata(&dir).and_then(|meta| meta.modified()) else {
         // No findings recorded yet is the ordinary first-run case.
+        return Ok(Vec::new());
+    };
+    if let Some(found) = memo().lock().ok().and_then(|memo| {
+        memo.get(&dir)
+            .filter(|(seen, _)| *seen == stamp)
+            .map(|(_, records)| records.clone())
+    }) {
+        return Ok(found);
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(Vec::new());
     };
     let mut found: Vec<FindingRecord> = entries
@@ -809,7 +826,37 @@ pub fn load_all(store_dir: &Path) -> Result<Vec<FindingRecord>> {
         .filter_map(|path| read_record(&path))
         .collect();
     found.sort_by_key(|a| a.identity.fingerprint);
+    if let Ok(mut memo) = memo().lock() {
+        memo.insert(dir, (stamp, found.clone()));
+    }
     Ok(found)
+}
+
+/// Whether the store holds any finding [`load_all`] would return, stopping at
+/// the first record that reads: a yes-or-no question parses one record, not
+/// the store. A torn or future-schema file is not a record here either.
+#[must_use]
+pub fn any(store_dir: &Path) -> bool {
+    std::fs::read_dir(findings_dir(store_dir)).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .any(|path| read_record(&path).is_some())
+    })
+}
+
+/// [`load_all`]'s per-process memo: each store directory's records, with the
+/// directory mtime they were read at.
+fn memo() -> &'static std::sync::Mutex<
+    std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>,
+> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>,
+        >,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(Default::default)
 }
 
 /// What one `record` call changed, as pointer-only counts.
