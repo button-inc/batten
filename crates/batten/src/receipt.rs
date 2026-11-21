@@ -1722,7 +1722,7 @@ fn record_agent_context(
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
-    let config = crate::config::load(Path::new(crate::config::CONFIG_FILE))?;
+    let config = crate::config::load(Path::new(crate::config_model::CONFIG_FILE))?;
     let declared = config
         .transcript
         .as_ref()

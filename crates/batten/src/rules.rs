@@ -15041,7 +15041,7 @@ impl Sets {
     ///
     /// Returns a [`UsageError`] (→ exit `1`) when a list is malformed — a bare
     /// `!` in `scope`, or a `!` entry in an include-only key.
-    pub fn from_config(config: &crate::config::Config) -> anyhow::Result<Self> {
+    pub fn from_config(config: &crate::config_model::Config) -> anyhow::Result<Self> {
         Ok(Sets {
             scope: PathSet::scope(&config.scope)?,
             protected: PathSet::includes("protected", &config.protected)?,
