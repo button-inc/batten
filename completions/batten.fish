@@ -4227,6 +4227,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l replace -d 'Replace the whole plan instead of merging these entries into it by id'
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

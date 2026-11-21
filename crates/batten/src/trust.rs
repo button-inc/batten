@@ -2618,8 +2618,7 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             // same whether a row names `keys = ["run"]` or the `mise-task`
             // carrier (CLOUD-2627), so the change is no narrowing.
             .flat_map(|manifest| {
-                manifest
-                    .fields()
+                crate::census::ManifestExt::fields(manifest)
                     .into_iter()
                     .map(move |key| format!("{}:{key}", manifest.path))
             })
@@ -2648,8 +2647,8 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // no census is judged for presence, so a head that migrates or admits a
     // generated file is the ban reaching less (CLOUD-2628).
     let mut found = Vec::new();
-    let migrating = |census: Option<&crate::census::ShellCensus>| {
-        census.is_some_and(crate::census::ShellCensus::migrating)
+    let migrating = |census: Option<&crate::config_model::ShellCensus>| {
+        census.is_some_and(crate::census::ShellCensusExt::migrating)
     };
     let (was_shell, now_shell) = (shell(base), shell(working));
     if !migrating(was_shell.as_ref()) && migrating(now_shell.as_ref()) {
@@ -2661,7 +2660,7 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         ));
     }
     let pairs =
-        |census: Option<&crate::census::ShellCensus>| -> BTreeSet<(String, Option<String>)> {
+        |census: Option<&crate::config_model::ShellCensus>| -> BTreeSet<(String, Option<String>)> {
             census
                 .map(|census| {
                     census

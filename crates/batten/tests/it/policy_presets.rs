@@ -589,11 +589,14 @@ fn every_shipped_preset_publishes_its_ids() {
 #[test]
 fn every_shipped_preset_passes_its_own_suite() {
     let root = scratch("suites");
-    for (name, row) in batten::config_model::preset_names().iter().flat_map(|name| {
-        rows_at_real_scopes("row", name)
-            .into_iter()
-            .map(move |row| (name, row))
-    }) {
+    for (name, row) in batten::config_model::preset_names()
+        .iter()
+        .flat_map(|name| {
+            rows_at_real_scopes("row", name)
+                .into_iter()
+                .map(move |row| (name, row))
+        })
+    {
         let bundles = policy::load(
             &root,
             &[row],

@@ -29,6 +29,7 @@ pub mod admission;
 pub mod advisory;
 pub mod agent;
 pub use batten_base::arm;
+pub(crate) mod argv_grammar;
 pub mod asked;
 pub mod attestation;
 pub mod attribution;

@@ -2113,7 +2113,12 @@ impl Fact {
             | Fact::LandLive
             | Fact::RedHead
             | Fact::PathspecStatus
-            | Fact::Budgeted => Subject::Live,
+            | Fact::Budgeted
+            // Both read past the tracked tree: `Shell` the base side of the
+            // delta, as `BaseDelta` does, and `ShellIntroduced` the call's write
+            // and the file on disk.
+            | Fact::Shell
+            | Fact::ShellIntroduced => Subject::Live,
         }
     }
 

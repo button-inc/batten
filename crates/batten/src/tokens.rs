@@ -486,10 +486,6 @@ fn remember(text: &str, handles: &mut BTreeMap<String, String>) {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/bench_tokens.rs
-//MUTANT bench-step-argv-joined|s@^            .collect::<Result<Vec<_>>>()?;$@            .collect::<Result<Vec<_>>>()?.join(" ").split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();@|an_argv_element_with_a_space_stays_one_argument
-//MUTANT bench-handle-element-unread|s@^        .strip_prefix(HANDLE)$@        .strip_prefix("{{unread:")@|a_handle_element_reads_step_one
-
 /// Measure every workload the consumer declares.
 ///
 /// # Errors

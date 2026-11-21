@@ -17,8 +17,9 @@
 
 use std::path::{Path, PathBuf};
 
+use batten::config_model::Harness;
 use batten::facts::Look;
-use batten::hook::{Harness, SHEBANG, SHELL_PATH, decode, shell_introduced};
+use batten::hook::{SHEBANG, SHELL_PATH, decode, shell_introduced};
 
 use crate::common;
 

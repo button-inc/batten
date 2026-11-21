@@ -50,12 +50,6 @@ const UNPARSEABLE: &str = "unparseable";
 ///
 /// `text` is the decoded scalar: a caller holding a TOML or YAML string strips
 /// that format's quoting first, or `run = "a | b"` would read as one quoted word.
-///
-/// The detector's mutation rows. Each disables one numbered rule below and is
-/// killed by the unit case it names, run from this file.
-//MUTANT-SUITE crates/batten/src/shell.rs
-//MUTANT detector-parse-failure-is-argv|s@^    let Ok(nodes) = rable::parse(text, false) else {$@    let Ok(nodes) = rable::parse(text, false).or_else(\x7c_\x7c rable::parse("", false)) else {@|text_the_parser_rejects_is_shell
-//MUTANT detector-multi-command-is-argv|s@^    if nodes.len() > 1 {$@    if false {@|two_plain_lines_are_a_multi_command_body
 #[must_use]
 pub fn logic(text: &str) -> Verdict {
     // `extglob` off, for `hook::segments`' reason: the shell that runs this text
@@ -108,14 +102,14 @@ enum Takes {
     /// applet is the program, looked up in this table again.
     Applet,
     /// Through a Windows switch (`cmd /C`, `pwsh -Command`), which the POSIX
-    /// option grammar in `crate::hook` cannot read: switches are
+    /// option grammar in `crate::argv_grammar` cannot read: switches are
     /// case-insensitive and PowerShell's may be shortened. Read by
     /// [`switch_script`].
     Switch,
 }
 
 /// One program that takes a script. Its option grammar (which flag is inline,
-/// which takes a value) is `crate::hook`'s per-family `grammar`, the one the
+/// which takes a value) is `crate::argv_grammar`'s per-family `grammar`, the one the
 /// mediation walk reads; this row names the program and how it takes a script,
 /// and its doc comment carries the citation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,8 +355,6 @@ const POWERSHELL_VALUED: &[&str] = &[
 
 /// Whether a Windows shell's argv carries a script (the [`CMD`],
 /// [`POWERSHELL`] and [`PWSH`] rows).
-//MUTANT cmd-switch-unread|s@^        return arguments.iter().any(\x7cword\x7c cmd_switch(word));$@        return false;@|a_windows_shell_switch_is_a_script
-//MUTANT powershell-default-command-unread|s@^            return program == "powershell";$@            return false;@|a_windows_shell_switch_is_a_script
 fn switch_script(program: &str, arguments: &[&str]) -> bool {
     if program == "cmd" {
         return arguments.iter().any(|word| cmd_switch(word));
@@ -412,11 +404,6 @@ fn cmd_switch(word: &str) -> bool {
 
 /// Whether one argv runs a script: its program is in [`INTERPRETERS`] and the
 /// argv carries one, or it is a wrapper whose utility does.
-///
-/// The detector's interpreter mutation rows, each killed by the unit case it
-/// names, run from this file.
-//MUTANT-SUITE crates/batten/src/shell.rs
-//MUTANT wrapper-operand-unread|s@^    if wrapped.iter().any(\x7cutility\x7c runs_script(utility)) {$@    if false {@|a_wrapped_shell_is_a_script
 fn runs_script(argv: &[&str]) -> bool {
     let Some((first, arguments)) = argv.split_first() else {
         return false;
@@ -430,13 +417,11 @@ fn runs_script(argv: &[&str]) -> bool {
 }
 
 /// Whether `program`, a table row, carries a script in `arguments`.
-//MUTANT interpreter-inline-flag-unread|s@^        crate::hook::Carried::Inline => true,$@        crate::hook::Carried::Inline => false,@|an_interpreter_inline_flag_is_a_script
-//MUTANT program-operand-unread|s@^        crate::hook::Carried::Operand => row.takes == Takes::Operand,$@        crate::hook::Carried::Operand => false,@|a_program_operand_is_a_script
 fn interpreter(program: &str, arguments: &[&str]) -> bool {
     if let Some(windows) = windows_shell(program) {
         return switch_script(windows, arguments);
     }
-    let family = crate::hook::family(program);
+    let family = crate::argv_grammar::family(program);
     let Some(row) = INTERPRETERS.iter().find(|row| row.program == family) else {
         return false;
     };
@@ -449,10 +434,10 @@ fn interpreter(program: &str, arguments: &[&str]) -> bool {
         Takes::Switch => return switch_script(row.program, arguments),
         Takes::Inline | Takes::Operand => {}
     }
-    match crate::hook::carried(program, arguments) {
-        crate::hook::Carried::Inline => true,
-        crate::hook::Carried::Operand => row.takes == Takes::Operand,
-        crate::hook::Carried::File | crate::hook::Carried::Elsewhere => false,
+    match crate::argv_grammar::carried(program, arguments) {
+        crate::argv_grammar::Carried::Inline => true,
+        crate::argv_grammar::Carried::Operand => row.takes == Takes::Operand,
+        crate::argv_grammar::Carried::File | crate::argv_grammar::Carried::Elsewhere => false,
     }
 }
 
@@ -467,7 +452,7 @@ fn utilities<'a>(program: &str, arguments: &[&'a str]) -> Vec<Vec<&'a str>> {
         // The other wrappers the mediation walk looks through (`nohup`,
         // `timeout`, …): the utility follows their flags, assignments and
         // numeric arguments, as `hook::effective_program` steps over them.
-        wrapper if crate::hook::is_lookthrough_wrapper(wrapper) => vec![
+        wrapper if crate::config_model::is_lookthrough_wrapper(wrapper) => vec![
             arguments
                 .iter()
                 .copied()
@@ -624,8 +609,6 @@ const fn quoting(kind: &rable::NodeKind) -> bool {
 /// The states are `hook::unquote`'s: single quotes are literal throughout, a
 /// backslash inside double quotes escapes the next character, and one outside
 /// any quote escapes it too.
-//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
-//MUTANT detector-quoted-glob-is-shell|s@^            (None, '\\'' \x7c '"') => quote = Some(c),$@            (None, '\\'' \x7c '"') => {}@|the_census_counts_the_fixture_as_the_shapes_say
 fn bare_pattern(raw: &str) -> Option<&'static str> {
     if raw.starts_with('~') {
         return Some("tilde");
@@ -747,8 +730,6 @@ const EXTENSIONS: [&str; 13] = [
 
 /// Whether a path is shell by its name alone. The extension is read
 /// case-insensitively, as Windows reads `RUN.BAT`.
-//MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
-//MUTANT file-extension-unread|s@^        .any(.extension. lower.ends_with(extension))$@        .any(\x7c_\x7c false)@|an_added_shell_script_is_refused
 #[must_use]
 pub fn shell_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
@@ -998,13 +979,6 @@ pub fn carrier(id: &str) -> Option<&'static Carrier> {
 }
 
 /// Whether `carrier` hands `spelling` to a shell.
-///
-/// The carrier mutation rows: the first reads every list as shell, the second
-/// reads a mise `run` array as argv.
-//MUTANT-SUITE crates/batten/src/shell.rs
-//MUTANT carrier-exec-form-read-as-shell|s@^        Spelling::List(_) => carrier.list.unwrap_or(Form::Shell),$@        Spelling::List(_) => Form::Shell,@|a_docker_exec_array_is_exec_and_its_shell_form_is_shell
-//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
-//MUTANT carrier-mise-array-read-as-argv|s@^    list: Some(Form::Shell), // a list of shell strings, never argv$@    list: Some(Form::Exec),@|the_census_counts_the_fixture_as_the_shapes_say
 #[must_use]
 pub fn form(carrier: &Carrier, spelling: &Spelling<'_>) -> Form {
     match spelling {
@@ -1460,7 +1434,7 @@ mod tests {
     fn every_interpreter_row_carries_a_citation() {
         // Each `const … : Interpreter` row's doc comment names an https URL,
         // and the table holds exactly the rows declared.
-        let source = include_str!("shell.rs");
+        let source = include_str!("shell_detect.rs");
         let lines: Vec<&str> = source.lines().collect();
         let mut rows = 0;
         for (at, line) in lines.iter().enumerate() {
@@ -1640,7 +1614,7 @@ mod tests {
 
     #[test]
     fn every_carrier_row_carries_a_citation_and_a_listed_id() {
-        let source = include_str!("shell.rs");
+        let source = include_str!("shell_detect.rs");
         let lines: Vec<&str> = source.lines().collect();
         let mut rows = 0;
         for (at, line) in lines.iter().enumerate() {

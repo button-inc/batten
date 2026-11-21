@@ -451,7 +451,7 @@ fn the_starter_config_names_every_shipped_preset() {
             "{file} names no {missing:?} — a preset the binary ships that the config a \
              consumer starts from does not mention"
         );
-        let suggested: Vec<&str> = batten::preset::MANIFESTS
+        let suggested: Vec<&str> = batten::preset_catalog::MANIFESTS
             .iter()
             .filter(|manifest| !manifest.suggested)
             .map(|manifest| manifest.name)

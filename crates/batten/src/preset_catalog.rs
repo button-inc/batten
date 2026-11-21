@@ -2118,6 +2118,7 @@ fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git p
     Manifest {
         name: RED_HEAD,
         version: 1,
+        suggested: true,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
             provider: None,

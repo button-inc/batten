@@ -107,8 +107,10 @@ fn validate_spawns(census: &ShellCensus) -> Result<()> {
 
 /// The carriers a manifest row may name: the ones this module has a manifest
 /// reader for. Every other `crate::shell_detect::CARRIERS` row is cited data only.
-const MANIFEST_CARRIERS: [&crate::shell_detect::Carrier; 2] =
-    [&crate::shell_detect::MISE_TASK, &crate::shell_detect::HK_STEP];
+const MANIFEST_CARRIERS: [&crate::shell_detect::Carrier; 2] = [
+    &crate::shell_detect::MISE_TASK,
+    &crate::shell_detect::HK_STEP,
+];
 
 /// `Manifest` behaviour that belongs to this module's layer, not the type's
 /// (CLOUD-2793): a carrier is the detector's table, which the model may not
@@ -282,9 +284,6 @@ impl ShellCensusExt for ShellCensus {
 const BAN_UNREAD_OPERATORS: [char; 5] = ['{', '}', '[', ']', '\\'];
 
 /// The first operator in `glob` the ban does not implement, if any.
-///
-/// The row below reads every glob as portable, and the unit case's brace, class
-/// and escape then load.
 fn ban_unread(glob: &str) -> Option<char> {
     glob.chars().find(|c| BAN_UNREAD_OPERATORS.contains(c))
 }
@@ -338,12 +337,17 @@ fn judged(
 /// shell strings, shell when any is. A value TOML cannot read is judged as
 /// written, which leaves the detector to call a stray quote unparseable rather
 /// than reading it clean.
-fn toml_reason(value: &str, carrier: Option<&crate::shell_detect::Carrier>) -> Option<&'static str> {
+fn toml_reason(
+    value: &str,
+    carrier: Option<&crate::shell_detect::Carrier>,
+) -> Option<&'static str> {
     let parsed = toml::from_str::<toml::Table>(&format!("v = {value}"))
         .ok()
         .and_then(|mut table| table.remove("v"));
     match parsed {
-        Some(toml::Value::String(text)) => judged(carrier, &crate::shell_detect::Spelling::Text(&text)),
+        Some(toml::Value::String(text)) => {
+            judged(carrier, &crate::shell_detect::Spelling::Text(&text))
+        }
         Some(toml::Value::Array(items)) => {
             let texts: Vec<&str> = items.iter().filter_map(toml::Value::as_str).collect();
             judged(carrier, &crate::shell_detect::Spelling::List(&texts))
@@ -458,8 +462,9 @@ fn array_reasons(
         .collect();
     let texts: Vec<&str> = strings.iter().map(|(_, text)| text.as_str()).collect();
     let list = crate::shell_detect::Spelling::List(&texts);
-    if carrier.is_none_or(|carrier| crate::shell::form(carrier, &list) == crate::shell::Form::Shell)
-    {
+    if carrier.is_none_or(|carrier| {
+        crate::shell_detect::form(carrier, &list) == crate::shell_detect::Form::Shell
+    }) {
         // Shell form: each entry is its own script, judged as written so a
         // stray quote is the detector's to call.
         for j in entries {
@@ -485,11 +490,14 @@ fn indent(line: &str) -> usize {
 fn run_key(line: &str) -> Option<&str> {
     let text = line.trim();
     let text = text.strip_prefix("- ").unwrap_or(text);
-    crate::shell::GHA_RUN.fields.iter().find_map(|field| {
-        text.strip_prefix(field)
-            .and_then(|rest| rest.strip_prefix(':'))
-            .map(str::trim)
-    })
+    crate::shell_detect::GHA_RUN
+        .fields
+        .iter()
+        .find_map(|field| {
+            text.strip_prefix(field)
+                .and_then(|rest| rest.strip_prefix(':'))
+                .map(str::trim)
+        })
 }
 
 /// The column a block's lines must exceed: the `run:` key's own.
@@ -683,11 +691,11 @@ fn generated_entries<'g>(
 
 // ---------------------------------------------------------------------------
 // Engine source that spawns a shell (CLOUD-2770). Whether an argv runs one is
-// `crate::shell::spawns_shell`'s; this walk only finds the argv.
+// `crate::shell_detect::spawns_shell`'s; this walk only finds the argv.
 // ---------------------------------------------------------------------------
 
 /// One engine spawn site: a string-literal argv, outside test code, whose
-/// program [`crate::shell::spawns_shell`] reads as running a shell.
+/// program [`crate::shell_detect::spawns_shell`] reads as running a shell.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct SpawnEntry {
     /// The source file.
@@ -847,7 +855,7 @@ impl SpawnWalk {
     /// the call it starts from, and carries more of the argv.
     fn record(&mut self, at: proc_macro2::Span, argv: &[String]) {
         let words: Vec<&str> = argv.iter().map(String::as_str).collect();
-        if crate::shell::spawns_shell(&words) {
+        if crate::shell_detect::spawns_shell(&words) {
             let start = at.start();
             let owner = self.owner.clone();
             self.found
@@ -1082,13 +1090,10 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 
 /// Take the census of the tree at `root` under `declared`.
 ///
-/// An exempt file is set apart and never totalled; the row below reads the
-/// exempt list as empty, and the compiled tier's pinned totals go red.
+/// An exempt file is set apart and never totalled.
 ///
 /// A workflow glob selects a composite action's metadata as readily as a
-/// workflow: both carry `gha-run` steps. The row below drops the composite
-/// action, and its fixture case goes red.
-//MUTANT composite-action-unread|s@^        let is_workflow = workflows.iter().any(.selector. selector.matches(path));$@        let is_workflow = workflows.iter().any(\x7cselector\x7c selector.matches(path)) \&\& !path.ends_with("action.yml");@|a_composite_actions_steps_are_counted_only_where_declared
+/// workflow: both carry `gha-run` steps, and both are counted.
 ///
 /// `tracked` is the tree's tracked paths, which is where workflows and shell
 /// files are found; a declared manifest is read by its path whether or not it
@@ -1175,7 +1180,8 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
             continue;
         }
         let first = lines.first().copied().unwrap_or_default();
-        if !(crate::shell_detect::shell_path(path) || crate::shell_detect::shebang(first).is_some()) {
+        if !(crate::shell_detect::shell_path(path) || crate::shell_detect::shebang(first).is_some())
+        {
             continue;
         }
         let count = lines.iter().filter(|line| code_line(line)).count();
@@ -1374,7 +1380,9 @@ impl<'a> TreeReader<'a> {
         self.candidates.get_or_init(|| {
             self.tracked
                 .iter()
-                .filter(|path| crate::shell::shell_path(path) || hash_bang(&self.root.join(path)))
+                .filter(|path| {
+                    crate::shell_detect::shell_path(path) || hash_bang(&self.root.join(path))
+                })
                 .cloned()
                 .collect()
         })
@@ -1577,6 +1585,7 @@ pub fn run_shell(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::config_model::{Generated, Spawn};
     #[cfg(test)]
 
     fn keys(names: &[&str]) -> Vec<String> {
@@ -2143,7 +2152,7 @@ mod tests {
         // which files stay shell are the consumer's. Assembled so this test's own
         // text is not a match.
         // The carrier table in `shell.rs` holds no path either (CLOUD-2627).
-        for source in [include_str!("census.rs"), include_str!("shell.rs")] {
+        for source in [include_str!("census.rs"), include_str!("shell_detect.rs")] {
             assert_no_consumer_path(source);
         }
     }

@@ -2462,27 +2462,6 @@ pub(crate) const ISSUE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// Write the derived corpus to its committed path instead of to stdout.
-///
-/// **Off by default, which is the safer direction for a verb whose product is a
-/// tracked file.** A caller who wants to SEE what would be recorded — a reviewer
-/// diffing a proposed corpus against the committed one — must not have to dirty
-/// the tree to do it, and `receipt clean` is one of the things that would then
-/// refuse.
-pub(crate) const SUITES_WRITE: FlagDecl = FlagDecl {
-    id: "write",
-    long: Some("write"),
-    short: None,
-    help: "Write the corpus to its committed path instead of printing it",
-    env: EnvDecl::None,
-    global: false,
-    positional: false,
-    required: false,
-    hidden: false,
-    rung: Rung::None,
-    value: ValueDecl::Bool,
-};
-
 /// The roster `checks green` decides against (CLOUD-1143).
 ///
 /// **Flags rather than environment variables, and that is rule 1 rather than

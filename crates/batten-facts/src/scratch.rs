@@ -167,10 +167,13 @@ fn pid_is_live(pid: i32) -> bool {
 /// # Panics
 ///
 /// When the helper was not built: a `--lib`-only run does not build examples.
-#[cfg(test)]
+///
+/// Test support, `#[doc(hidden)]` and public rather than `#[cfg(test)]`, so the
+/// crates above this one reach it from their own unit tests.
+#[doc(hidden)]
 #[must_use]
 #[allow(clippy::expect_used)]
-pub(crate) fn stub() -> PathBuf {
+pub fn stub() -> PathBuf {
     let exe = std::env::current_exe().expect("this test binary has a path");
     let profile = exe
         .parent()
@@ -197,9 +200,9 @@ pub(crate) fn stub() -> PathBuf {
 /// # Panics
 ///
 /// When the link or the plan cannot be written.
-#[cfg(test)]
+#[doc(hidden)]
 #[allow(clippy::expect_used)]
-pub(crate) fn stub_at(path: &Path, rules: &serde_json::Value) {
+pub fn stub_at(path: &Path, rules: &serde_json::Value) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("create the stub's directory");
     }

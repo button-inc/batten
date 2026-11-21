@@ -112,9 +112,6 @@ struct Call {
     stdin: String,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/acceptance_corpus.rs
-//MUTANT stub-seed-ignored|s@^    Path::new(\&call.expand(path)).exists()$@    false@|enforce_is_clean_on_the_fixture_and_a_violation_when_seeded
-//MUTANT stub-dispatch-collapsed|s@^    named(rule, call) \&\& argued(rule, call)$@    true@|the_warn_items_report_without_failing_until_promoted
 impl Rule {
     /// Whether every condition this rule declares holds for `call`.
     fn matches(&self, call: &Call) -> bool {

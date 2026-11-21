@@ -6112,7 +6112,7 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 # `action.yml` IS A WORKFLOW HOME TOO (CLOUD-2627): a composite action's steps
 # are the same `gha-run` carrier as a workflow's, and its four `shell: bash`
 # steps were shell nothing counted. The manifests name their carrier
-# (`crate::shell::CARRIERS`) rather than its keys; `mise-task` reads `run` and
+# (`crate::shell_detect::CARRIERS`) rather than its keys; `mise-task` reads `run` and
 # `hk-step` reads `check`/`fix`, so the homes compared between refs are
 # unchanged.
 [census.shell]

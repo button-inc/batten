@@ -21,17 +21,6 @@
 //! scanned by the censuses that scan the tree, and its last case holds it to
 //! carrying neither suffix whole.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/missing_shell_named.rs
-#MUTANT untracked-shell-name-passes|s@^        return tracked.contains(name);$@        return true;@|a_code_spanned_script_must_be_tracked_and_plain_prose_is_not_read
-#MUTANT glob-with-no-match-passes|s@^    tracked.iter().any(|path| glob.is_match(path))$@    true@|a_glob_needs_a_match
-#MUTANT front-matter-paths-unread|s@^    found.extend(front_matter_paths(text));$@@|a_front_matter_path_is_judged
-#MUTANT verdict-route-target-unread|s@^        values.extend(strings(route.get("target")));$@@|a_route_target_and_a_landing_path_are_judged
-#MUTANT landing-path-unread|s@^    values.extend(strings(landing));$@@|a_route_target_and_a_landing_path_are_judged
-#MUTANT stale-tolerated-pair-passes|s@^    let stale = tolerated.difference(found).cloned().collect();$@    let stale = Vec::new();@|the_list_only_shrinks
-#MUTANT line-suffix-breaks-match|s@^    let name = without_line(&name);$@@|a_line_suffix_is_ignored
-#MUTANT plain-prose-reported|s@^    let spanned = prose.split('`').skip(1).step_by(2);$@    let spanned = prose.split_whitespace();@|a_code_spanned_script_must_be_tracked_and_plain_prose_is_not_read
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
