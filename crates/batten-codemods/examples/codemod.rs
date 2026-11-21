@@ -14,6 +14,30 @@ fn main() -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     let mut args = std::env::args().skip(1);
     let asked = args.next().unwrap_or_default();
+    // `impl-plan <src>`: one pointer per impl `move-impl-home` would weigh,
+    // written nowhere. The evidence for choosing a remedy per impl.
+    if asked == "impl-plan" {
+        let src = args
+            .next()
+            .unwrap_or_else(|| String::from("crates/batten/src"));
+        let root = std::path::Path::new(".");
+        let files: std::collections::BTreeMap<String, String> = walk(&root.join(&src))
+            .into_iter()
+            .filter_map(|path| {
+                let text = batten::fsio::read_to_string(&path).ok()?;
+                let key = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                Some((key, text))
+            })
+            .collect();
+        for line in batten::module_graph::impl_plan(&src, &files) {
+            writeln!(out, "{line}")?;
+        }
+        return Ok(());
+    }
     if let Some(chosen) = recipe::named_tree(&asked) {
         let root = args.next().unwrap_or_else(|| String::from("."));
         return run_tree(&mut out, chosen, std::path::Path::new(&root));
