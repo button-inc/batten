@@ -41,7 +41,8 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize, Serializer};
+pub use crate::config_model::Ceiling;
+use serde::{Serialize, Serializer};
 
 /// A mediated call refused by policy: maps to [`ExitCode::Violation`] (exit `2`)
 /// with the reason on stderr, which is what a hook host reads as the deny.
@@ -86,61 +87,6 @@ impl Denial {
             None => rendered,
         }))
     }
-}
-
-/// The `[refusal]` table: what one emitted mediated line may cost.
-///
-/// **Declared, never a literal in the crate** (non-negotiable rule 2, and the
-/// same reasoning `[budget.instructions]` is built on): a ceiling written into
-/// `crates/batten` is this repository's judgement compiled into every consumer's
-/// engine, and a consumer whose harness renders differently could not move it
-/// without a release. [`crate::budget::BudgetSet`] is the landed shape this
-/// copies — a ceiling and nothing else, absent meaning unenforced, because a
-/// threshold nobody declared is not a threshold of zero.
-///
-/// The unit is **estimated tokens**, on `budget.rs`'s own bytes-per-token
-/// convention rather than a tokenizer: this is a ceiling on a line, checked off
-/// the hot path, and a real BPE pass here would be the dependency CLOUD-1284
-/// deliberately kept to `[dev-dependencies]`.
-///
-/// It is not [`crate::verdict`]'s `GLOSS_MAX`, which stays. That bounds one
-/// FIELD — the gloss `explain` prints — and this bounds the emitted LINE. Both
-/// exist for the same reason and neither substitutes for the other: with the
-/// gloss off the hot path, `GLOSS_MAX` is what stops it growing back into a
-/// paragraph where nothing measures it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Ceiling {
-    /// The ceiling on estimated tokens for ONE emitted mediated refusal line.
-    /// The boundary is `<=`: exactly at budget passes, matching
-    /// [`crate::budget::Report::over_budget`] so the two thresholds in this tree
-    /// do not disagree about their own edge.
-    ///
-    /// **Bounds the REPEAT arm** — the compact `<token> <pointers> <rule-id>`
-    /// every firing after the first emits. The first sighting is a different
-    /// quantity and has its own key below.
-    pub max_tokens: usize,
-    /// The ceiling on the FIRST sighting of a rule, which carries the class
-    /// definition (CLOUD-1637).
-    ///
-    /// **A second key rather than a second meaning for the first**, because the
-    /// two arms are different quantities: `max_tokens` prices prose a reader has
-    /// already read, and this prices the one firing where they have not. Folding
-    /// them would force a consumer to choose between bounding the repeat usefully
-    /// and letting the definition arrive at all.
-    ///
-    /// Absent means unbounded, which is the answer every other budget in this
-    /// tree gives an undeclared row: the ceiling is the consumer's statement
-    /// about their own line, and inventing one here would be this crate deciding
-    /// a consumer fact.
-    ///
-    /// What it bounds is the ROUTE LIST, never the line. Over budget, routes are
-    /// dropped from the end and the gloss never is; when `<token> <pointers>
-    /// <rule-id> — <gloss>; <first route>` is itself over, it is emitted anyway.
-    /// See [`crate::hook::deny_text`] for why that irreducible case is a decision
-    /// rather than an oversight.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_sighting_max_tokens: Option<usize>,
 }
 
 impl Ceiling {

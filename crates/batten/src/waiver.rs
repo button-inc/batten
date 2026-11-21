@@ -127,9 +127,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
+pub use crate::config_model::Waiver;
 use crate::error::UsageError;
 use crate::rules::{self, Finding, RuleKind};
 
@@ -240,30 +239,6 @@ impl Date {
 pub fn today() -> Result<Date> {
     let since = SystemTime::now().duration_since(UNIX_EPOCH)?;
     Ok(Date::from_unix_seconds(since.as_secs()))
-}
-
-/// One declared waiver: which rule, why, until when, and optionally where.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Waiver {
-    /// The [`crate::rules::Rule::id`] this waiver suppresses findings of.
-    pub rule: String,
-    /// Why the finding is being waived. Required, and required to be non-empty:
-    /// an unjustified waiver is the undesigned hatch this table replaces, and a
-    /// reason nobody had to write is one nobody can review.
-    pub reason: String,
-    /// The last day this waiver applies, `YYYY-MM-DD`. Required — see the module
-    /// docs on why a waiver with no expiry is the rot rather than a convenience.
-    pub expires: String,
-    /// A glob narrowing the waiver to some of the rule's findings.
-    ///
-    /// Absent means the whole rule, which is the widest a waiver can be and
-    /// therefore the one that must be typed deliberately rather than reached by
-    /// omitting a field nobody noticed. Matched with
-    /// [`crate::rules::glob_match`], so a waiver's path vocabulary is the one the
-    /// rules use and not a second dialect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 impl Waiver {

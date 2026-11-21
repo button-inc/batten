@@ -43,10 +43,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
+pub use crate::config_model::Field;
+pub use crate::config_model::Harness;
 use crate::receipt::Validity;
 use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
@@ -60,56 +61,6 @@ use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::shell::shell_commands;
 use crate::shell::{Segment, SegmentLine, Separator, segments};
 use crate::verbs::{MutatingVerb, OperandScope};
-
-/// The harness adapters `batten hook` can speak. Each owns the decode of its
-/// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
-/// what that host consumes; the core between them is harness-blind.
-/// **THREE SPELLINGS OF ONE NAME, held together rather than trusted to agree.**
-/// `clap::ValueEnum` spells `--harness`, serde spells `[transcript] harness` in
-/// `batten.toml` (CLOUD-1624), and [`Harness::as_str`] spells it for a matrix
-/// that builds no command. `kebab-case` is what makes the serde spelling the
-/// same token as the other two, and
-/// `tests::every_harness_token_matches_its_serde_spelling` is what keeps it that
-/// way — the same guard `every_harness_token_matches_its_clap_spelling` already
-/// provides for the flag.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    clap::ValueEnum,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum Harness {
-    /// Claude Code's `PreToolUse` payload; a deny is returned as the
-    /// `hookSpecificOutput.permissionDecision` JSON object on stdout with exit
-    /// `0` — the channel the production shell guards already use.
-    ClaudeCode,
-    /// Cursor. Two payload families under one host: a generic `preToolUse` that
-    /// looks like Claude's, and specialized events (`beforeShellExecution`,
-    /// `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top
-    /// level and **no** `tool_name` at all. Session is `conversation_id`.
-    Cursor,
-    /// GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which
-    /// yields `hook_event_name` natively. The camelCase dialect omits the event
-    /// name entirely, so Batten does not speak it.
-    CopilotCli,
-    /// Gemini CLI. Claude-identical payload fields, different event names
-    /// (`BeforeTool` rather than `PreToolUse`).
-    GeminiCli,
-    /// Codex CLI, whose wire format is a near-verbatim clone of Claude Code's —
-    /// its own repo says so. No payload shim is needed; the adapter exists so
-    /// the host is nameable and its fixture is pinned against drift.
-    CodexCli,
-    /// The neutral core contract: envelope in, decision as exit code out —
-    /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
-    /// channel is an exit status. Both codes are the §7 table's, unmodified.
-    ExitCode,
-}
 
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
@@ -3513,148 +3464,6 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // asymmetry a path rendered with `MAIN_SEPARATOR` produces.
     let rendered = relative.to_str()?.replace('\\', "/");
     (!rendered.is_empty()).then_some(rendered)
-}
-
-/// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
-/// `[[rule]]` ceiling names a projection with `measures`, so this enum is now
-/// config vocabulary as well as CLI vocabulary — and `kebab-case` is what
-/// `ValueEnum` already renders, so `--field last-assistant-message` and
-/// `measures = "last-assistant-message"` are one spelling. Taking serde's
-/// `snake_case` default would have given the same variant two names, which is
-/// the drift the shared type is here to prevent.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum Field {
-    /// The host's own event spelling, echoed back untouched.
-    ///
-    /// UNNORMALIZED on purpose, and the reason is now the ECHO rather than a gap
-    /// in [`Event`].
-    ///
-    /// **The premise this cited is gone, re-read rather than amended a third
-    /// time (CLOUD-777, 2026-08-21).** The comment argued from absence twice: it
-    /// read *"knows neither `UserPromptSubmit` nor `PostToolBatch`"* until
-    /// `PostToolBatch` landed (CLOUD-389), was corrected to cite
-    /// `UserPromptSubmit` alone (CLOUD-817), and said in as many words that
-    /// answering CLOUD-817 *yes* would remove the premise rather than amend it.
-    /// It is answered yes: [`Event::UserPromptSubmit`] exists, so
-    /// [`Event::normalize`] now knows every spelling a supported host emits and
-    /// the absence argument has nothing left to stand on.
-    ///
-    /// What survives is a property of the CONSUMER rather than of the enum: a
-    /// hook wired to more than one event echoes this value back into its own
-    /// reply, and a host reads its own spelling there. `contract-drift` is the
-    /// registered example. Normalizing here would hand it `session-start` where
-    /// the host said `SessionStart`, so the field stays the host's token and
-    /// [`Envelope::event`] stays the concept — the same split those two fields
-    /// carry everywhere else.
-    HookEventName,
-    /// The host's session id.
-    SessionId,
-    /// The tool being mediated.
-    ToolName,
-    /// The command text, for shell-shaped tools.
-    Command,
-    /// The host's working directory.
-    Cwd,
-    /// Whether this is a re-entered `Stop` hook.
-    StopHookActive,
-    /// The assistant's last message.
-    ///
-    /// The one prose-bearing member, and it is here because `stop-guard`
-    /// already receives exactly these bytes by exactly this route — it pipes
-    /// them straight to `stop-posture-check`. Moving the read from `jq` to here
-    /// changes which process parses the payload, not what flows where; rule 4
-    /// governs what a CHECK reports, and this is a decoder, not a verdict.
-    LastAssistantMessage,
-    /// The path to the session transcript.
-    TranscriptPath,
-    /// The prompt a subagent spawn commits a fresh context window to.
-    ///
-    /// The second prose-bearing member, admitted on `LastAssistantMessage`'s
-    /// argument rather than a new one: this is a DECODER, and rule 4 governs
-    /// what a check reports. `fanout-guard` (CLOUD-287) reads these bytes to
-    /// count them and emits only a count, a cap and repo paths — never a byte of
-    /// the prompt.
-    ///
-    /// It is also the member that could not be served any other way. A spawn is
-    /// not shell-shaped, so `Command` is empty for it, and the prompt lives in
-    /// [`Envelope::input`] — which is exactly what this allowlist exists to keep
-    /// a caller from addressing by path. Naming this one projection is the
-    /// deliberate edit the type's own doc calls for.
-    ///
-    /// APPENDED, never inserted. `semver` reads a reordered variant as
-    /// `enum_no_repr_variant_discriminant_changed` — a break — and this addition
-    /// is patch-compatible only at the end. The order carries no meaning.
-    Prompt,
-    /// Whether the host was asked to run this call in the background.
-    ///
-    /// `"true"` or `"false"`, never the flag's own JSON spelling: the caller is
-    /// a shell script comparing against a literal, and a decoder that echoed
-    /// `True` or `1` for some host would move the per-harness normalization out
-    /// of here and into every script.
-    ///
-    /// THE SECOND MEMBER READ OUT OF [`Envelope::input`], and the less exposed
-    /// of the two. The allowlist's safety argument is that it can never name
-    /// [`Envelope::input`] wholesale, because a tool input is among the likeliest
-    /// places in this engine for a secret to appear (non-negotiable rule 4); a
-    /// boolean projection of one named key cannot carry one. Absent reads as
-    /// absent rather than as `false` — "the host did not say" and "the host said
-    /// no" are the same decision for every caller today, but collapsing them
-    /// here would make them inseparable for one that is not.
-    ///
-    /// CLOUD-613 named this as a fact the mediated envelope hides, which is why
-    /// `run-shape-guard`'s surviving families could not be expressed as config
-    /// rows. It is hidden no longer; growing this allowlist is the deliberate
-    /// edit the type's own doc calls for, and CLOUD-821 is the caller that
-    /// needed it.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    RunInBackground,
-    /// The `id` a structured call names its subject by (CLOUD-987).
-    ///
-    /// THE THIRD MEMBER READ OUT OF [`Envelope::input`], and it is what lets a
-    /// row tell **creating** a thing from **annotating** one. CLOUD-312's rows 1
-    /// and 3 both turn on it: a `save_issue` carrying no `id` opens a row, one
-    /// carrying an `id` edits a row that already exists, and gating the second
-    /// as though it were the first is the outcome `issue-search-guard`'s own
-    /// header says *"would get the guard switched off within a day."*
-    ///
-    /// The allowlist's safety argument is unchanged and is the reason this is a
-    /// MEMBER rather than a config-named key: it can never address
-    /// [`Envelope::input`] wholesale, so a caller cannot point a rule at an
-    /// arbitrary path in the likeliest place in the envelope for a secret. A key
-    /// somebody enumerated here cannot carry one by accident.
-    ///
-    /// A non-string value reads as absent rather than as its debug rendering,
-    /// [`Field::Prompt`]'s rule: a caller comparing identifiers must never be
-    /// handed `{"a":1}` and told it is one.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputId,
-    /// The `state` a structured call moves its subject to (CLOUD-987).
-    ///
-    /// The fourth and last member read out of [`Envelope::input`], on
-    /// [`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)
-    /// fires only when a call MOVES something rather than merely editing it, so
-    /// without this the row would gate every edit — the same over-fire
-    /// [`Field::InputId`] exists to prevent one key over.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputState,
-    /// Whether a structured call sets its subject's `draft` flag (CLOUD-2260).
-    ///
-    /// `"true"` or `"false"`, [`Field::RunInBackground`]'s rendering and its
-    /// safety argument: a boolean projection of one named key cannot carry a
-    /// secret. It exists because readying a pull request is not only a shell
-    /// command — a forge connector's update call setting `draft` to `false` fires
-    /// the same `ready_for_review` and buys the same CI matrix, and a gate keyed on
-    /// `gh pr ready` alone left that route open.
-    ///
-    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
-    InputDraft,
 }
 
 impl Field {
