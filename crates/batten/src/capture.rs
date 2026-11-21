@@ -2211,49 +2211,10 @@ pub struct CallRow {
     pub absent: Option<String>,
 }
 
-/// The bound on response captures (CLOUD-918).
-///
-/// Enforced **at write time**, and the trigger is the write — never a clock,
-/// never a schedule, never a background sweeper. That is
-/// `rules/toolchain.md`'s split between a gate and a schedule, and
-/// [`prune`]'s own doc already refuses a time-based sweeper on the same grounds.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct CaptureConfig {
-    /// Total response-capture bytes the store may hold. Absent means the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bytes: Option<u64>,
-    /// Response-capture records the store may hold. Absent means the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_records: Option<u64>,
-    /// The payload size at which a rendered response switches from carrying the
-    /// bytes to carrying an address (CLOUD-1367).
-    ///
-    /// **An ECONOMIC threshold and nothing else.** A payload at or under it is
-    /// cheaper to send than an address plus the round trip to resolve one; over
-    /// it, the address wins. Absent means [`DEFAULT_INLINE_MAX_BYTES`].
-    ///
-    /// It is deliberately NOT a privacy or safety cap. Those refuse to emit
-    /// content at all and are their own rows; this one only ever changes the
-    /// REPRESENTATION, and both routes carry the same semantic result. Reusing
-    /// one number for both would mean a measurement about token cost silently
-    /// deciding what may leave the process.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inline_max_bytes: Option<u64>,
-    /// The `o200k` token count over which ANY tool's result reaches the model as
-    /// a pointer to its stored view rather than as its text (CLOUD-2223).
-    /// Absent means [`DEFAULT_RESULT_MAX_TOKENS`].
-    ///
-    /// Tokens, because the window is spent in tokens: a byte or line count is a
-    /// proxy that is 3-4x out on code and worse on dense text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_max_tokens: Option<u64>,
-}
-
 // Kept in `stream_input`, which bounds a result by it (CLOUD-2789).
 pub use crate::stream_input::LEAF_KEEP_BYTES;
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::CaptureConfig;
 
 /// The default bound on a tool result the model reads whole (CLOUD-2223), in
 /// `o200k` tokens. Measured on PR #1132: one task log read whole was 57,764

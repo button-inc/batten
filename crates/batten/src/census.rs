@@ -54,58 +54,13 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::rules::Selector;
-
-/// The `[census]` table: the measurements a consumer declares over its own tree.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Census {
-    /// Where this repository writes shell, for `batten census shell`. Absent
-    /// means the census has nothing declared to read, which the verb refuses
-    /// rather than reporting a zero it did not measure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell: Option<ShellCensus>,
-}
-
-/// `[census.shell]`: the homes shell may live in, and the files that must stay
-/// shell.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct ShellCensus {
-    /// Manifests whose command strings are counted, one row per file.
-    #[serde(default, rename = "manifest", skip_serializing_if = "Vec::is_empty")]
-    pub manifests: Vec<Manifest>,
-    /// Workflow files whose `run:` steps are counted, as globs over tracked paths.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workflows: Vec<String>,
-    /// Paths that must stay shell because nothing else can run where they do, as
-    /// globs. Still measured, reported apart, and never totalled.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exempt: Vec<String>,
-}
-
-/// One manifest whose command strings are counted.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct Manifest {
-    /// The manifest's repo-relative path.
-    pub path: String,
-    /// The keys whose values are commands, as they are spelled before ` = `.
-    pub keys: Vec<String>,
-    /// The header prefix that opens one named unit — a task table, say. Every
-    /// shell line between one such header and the next is that unit's. Absent,
-    /// each shell line is reported on its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Census, Manifest, ShellCensus};
 
 impl ShellCensus {
     /// Refuse a declaration that would count nothing while reading as covered.

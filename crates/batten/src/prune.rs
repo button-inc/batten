@@ -44,68 +44,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
-
-/// The `[prune]` table: the build tree, what to keep, and the collector's band.
-///
-/// CONSUMER CONFIG, NOT A CONST (non-negotiable rule 1): which directory a
-/// project builds into and how much free space its builds need are facts about
-/// THAT project.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Prune {
-    /// The build directory, relative to the repository root.
-    #[serde(default = "default_root")]
-    pub root: String,
-    /// Copies retained per stem. See the module header for why this is 2.
-    ///
-    /// The bound is in the SCHEMA as well as in [`Prune::validate`] (raised on
-    /// #734): an editor validating against the published schema is the surface
-    /// most consumers meet first.
-    #[serde(default = "default_keep")]
-    #[schemars(range(min = 1))]
-    pub keep: usize,
-    /// RETIRED (CLOUD-2198): the warm floor. Read and ignored, so a config
-    /// written for the floor model still loads while its pin moves; the
-    /// collector's band ([`Prune::min_free_mb`]) replaces it.
-    #[serde(default, skip_serializing)]
-    pub warm: Option<serde_json::Value>,
-    /// RETIRED (CLOUD-2198): the cold floor. Read and ignored, as `warm`.
-    #[serde(default, skip_serializing)]
-    pub cold: Option<serde_json::Value>,
-    /// RETIRED (CLOUD-2198): the escalation's regrowable roots. Read and
-    /// ignored, as `warm`: the collector never drops a cache whole.
-    #[serde(default, skip_serializing)]
-    pub regrowable: Option<serde_json::Value>,
-    /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
-    /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
-    /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
-    /// the collector runs at [`DEFAULT_FREE_BAND`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_free_mb: Option<u64>,
-    /// Once triggered, the collector frees space until this much is free, in
-    /// MB, then stops. Nix's `max-free`; above [`Prune::min_free_mb`], so the
-    /// pair is a hysteresis band rather than a threshold that re-fires at once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_free_mb: Option<u64>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::{Prune, default_root};
 
 /// The band a `[prune]` table declaring none collects at, `(min_free_mb,
 /// max_free_mb)`: measured on #1132 (2026-10-12), each targeted build consumed
 /// 2.6-4.3 GB, so 4096 MB is one build's room and 8192 MB one build of headroom
 /// after a collection.
 pub const DEFAULT_FREE_BAND: (u64, u64) = (4096, 8192);
-
-fn default_root() -> String {
-    String::from("target")
-}
-
-const fn default_keep() -> usize {
-    2
-}
 
 impl Prune {
     /// Validate the table at load.
