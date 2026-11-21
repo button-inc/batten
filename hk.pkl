@@ -1125,13 +1125,15 @@ hooks {
       // Measured on #1276: the module cycle went 54 -> 76 over five commits
       // (2d5f5662 onward) and nothing refused it, because these three ran only
       // in the 15-minute lap while each commit ran a filtered test set. Each
-      // takes seconds over the source tree. The bounds stay in their
-      // `mise.toml` tasks; `BATTEN_BIN` points `vars.batten` at the pinned
-      // engine so the commit pays no compile.
+      // takes seconds over the source tree. The record is `modules.lock`, held
+      // by one ratchet (CLOUD-2821): a worse metric or a record looser than the
+      // tree is refused, and `mise run modules-ratchet` tightens it. `BATTEN_BIN`
+      // points `vars.batten` at the PATH engine so the commit pays no compile;
+      // `modules ratchet` first ships in the release this branch cuts, so until
+      // then that engine is `mise run install:local`'s.
       ["module-census-pinned"] {
-        glob = List("crates/**/src/**/*.rs")
-        check =
-          "env BATTEN_BIN=batten MISE_TASK_TIMINGS=0 mise run -q modules-cycle ::: modules-shims ::: modules-impls"
+        glob = List("crates/**/src/**/*.rs", "modules.lock")
+        check = "env BATTEN_BIN=batten MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
       }
       // A conflict marker is refused at the commit, not first in the slow lap
       // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`

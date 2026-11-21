@@ -1512,6 +1512,278 @@ pub fn run_shims(
     })
 }
 
+/// Every module-graph quality metric of one source root (CLOUD-2821), each an
+/// integer so a comparison is exact and the record byte-stable. Lower is
+/// better for every field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Metrics {
+    /// The node count of the largest strongly connected component.
+    pub cycle: usize,
+    /// Propagation cost in basis points (a hundredth of a percent), rounded.
+    pub propagation: usize,
+    /// Inherent impls away from their type's module, ambiguous ones included.
+    pub impls: usize,
+    /// Re-export leaves of the crate's own items outside its root.
+    pub shims: usize,
+}
+
+impl Metrics {
+    /// Each metric's name and value, in record order.
+    #[must_use]
+    pub fn fields(&self) -> [(&'static str, usize); 4] {
+        [
+            ("cycle", self.cycle),
+            ("propagation", self.propagation),
+            ("impls", self.impls),
+            ("shims", self.shims),
+        ]
+    }
+
+    /// The record's form: `cycle=<n> propagation=<bp> impls=<n> shims=<n>`.
+    #[must_use]
+    pub fn line(&self) -> String {
+        self.fields()
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Parse [`Metrics::line`]'s form; `None` on any missing, extra or
+    /// non-integer field, so a hand-mangled record is could-not-look.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut read: BTreeMap<&str, usize> = BTreeMap::new();
+        for word in text.split_whitespace() {
+            let (name, value) = word.split_once('=')?;
+            if read.insert(name, value.parse().ok()?).is_some() {
+                return None;
+            }
+        }
+        let metrics = Self {
+            cycle: read.remove("cycle")?,
+            propagation: read.remove("propagation")?,
+            impls: read.remove("impls")?,
+            shims: read.remove("shims")?,
+        };
+        read.is_empty().then_some(metrics)
+    }
+}
+
+/// Propagation cost, a percentage, as whole basis points.
+#[must_use]
+pub fn basis_points(percent: f64) -> usize {
+    // A share of pairs is in [0, 100], so the product is in [0, 10000].
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a percentage in [0, 100] times 100 fits usize and is non-negative"
+    )]
+    let points = (percent * 100.0).round().max(0.0) as usize;
+    points
+}
+
+/// Measure every metric of `root`.
+///
+/// # Errors
+///
+/// The root cannot be read, or a file does not parse.
+pub fn metrics(root: &Path) -> anyhow::Result<Metrics> {
+    let graph = read(root)?;
+    let impls = impl_census(root)?;
+    Ok(Metrics {
+        cycle: graph.largest_component(),
+        propagation: basis_points(graph.propagation_cost()),
+        impls: impls.outside + impls.ambiguous,
+        shims: shim_census(root)?.reexports,
+    })
+}
+
+/// `modules metrics`: one line, `<root> <metrics line>`.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_metrics(
+    root: &Path,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    match metrics(root) {
+        Ok(measured) => {
+            writeln!(out, "{} {}", root.display(), measured.line())?;
+            Ok(crate::exit::ExitCode::Success)
+        }
+        Err(reason) => {
+            writeln!(
+                err,
+                "modules metrics: could not read the module graph: {reason}"
+            )?;
+            Ok(crate::exit::ExitCode::Internal)
+        }
+    }
+}
+
+/// One root's judgement against its record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Judged {
+    /// Every metric equals the record.
+    Held,
+    /// No metric is worse and at least one is better: the record tightens.
+    Better,
+    /// These metrics are worse: `(name, recorded, measured)`.
+    Worse(Vec<(&'static str, usize, usize)>),
+}
+
+/// Compare a measurement with its record, metric by metric.
+#[must_use]
+pub fn judge(recorded: &Metrics, measured: &Metrics) -> Judged {
+    let worse: Vec<_> = recorded
+        .fields()
+        .iter()
+        .zip(measured.fields())
+        .filter(|((_, was), (_, now))| now > was)
+        .map(|((name, was), (_, now))| (*name, *was, now))
+        .collect();
+    if !worse.is_empty() {
+        Judged::Worse(worse)
+    } else if recorded == measured {
+        Judged::Held
+    } else {
+        Judged::Better
+    }
+}
+
+/// `modules ratchet` (CLOUD-2821): measure every root `record` names and
+/// compare each with its recorded line.
+///
+/// - any metric worse: refused (exit 2, the verdict), naming the metric, the
+///   recorded and the measured value;
+/// - all held: exit 0, nothing written;
+/// - some better, none worse: the record is rewritten to the measurement, so
+///   it only ever tightens (exit 0), unless `check` is set, in which case a
+///   record looser than the tree is refused too: a commit that improves a
+///   metric must carry the tightened record, so a later one cannot spend it.
+///
+/// The record is one line per root, `<root> <metrics line>`, roots relative
+/// to the record's directory. A record that cannot be read or parsed, or a
+/// root that cannot be measured, is could-not-look (3).
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_ratchet(
+    record: &Path,
+    check: bool,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    let text = match crate::fsio::read_to_string(record) {
+        Ok(text) => text,
+        Err(reason) => {
+            writeln!(
+                err,
+                "modules ratchet: could not read {}: {reason}",
+                record.display()
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    let base = record.parent().unwrap_or_else(|| Path::new(""));
+    let mut rows: Vec<(String, Metrics)> = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parsed = line
+            .split_once(' ')
+            .and_then(|(root, rest)| Some((root.to_owned(), Metrics::parse(rest)?)));
+        let Some(row) = parsed else {
+            writeln!(
+                err,
+                "modules ratchet: {}:{} is not `<root> {}`",
+                record.display(),
+                number + 1,
+                Metrics::default().line()
+            )?;
+            return Ok(ExitCode::Internal);
+        };
+        rows.push(row);
+    }
+    if rows.is_empty() {
+        writeln!(err, "modules ratchet: {} names no root", record.display())?;
+        return Ok(ExitCode::Internal);
+    }
+    let mut refused = false;
+    let mut tightened = false;
+    let mut measured_rows: BTreeMap<&str, Metrics> = BTreeMap::new();
+    for (root, recorded) in &rows {
+        let measured = match metrics(&base.join(root)) {
+            Ok(measured) => measured,
+            Err(reason) => {
+                writeln!(
+                    err,
+                    "modules ratchet: could not read the module graph of {root}: {reason}"
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+        };
+        writeln!(out, "{root} {}", measured.line())?;
+        match judge(recorded, &measured) {
+            Judged::Held => {}
+            Judged::Better => {
+                tightened = true;
+                if check {
+                    refused = true;
+                    writeln!(
+                        err,
+                        "modules ratchet: {root} scores better than {}; run `batten modules ratchet --record {}` and commit the tightened record",
+                        record.display(),
+                        record.display()
+                    )?;
+                }
+            }
+            Judged::Worse(worse) => {
+                refused = true;
+                for (name, was, now) in worse {
+                    writeln!(
+                        err,
+                        "modules ratchet: {root} {name} {now} is worse than the recorded {was}; improve it rather than spend the record"
+                    )?;
+                }
+            }
+        }
+        measured_rows.insert(root, measured);
+    }
+    if refused {
+        return Ok(ExitCode::Violation);
+    }
+    if tightened {
+        // Comments and blank lines are kept where they stood; only row lines
+        // take the measurement.
+        let mut next = String::new();
+        for line in text.lines() {
+            let row = line
+                .split_once(' ')
+                .and_then(|(root, _)| measured_rows.get(root).map(|m| (root, m)));
+            match row {
+                Some((root, measured)) if !line.starts_with('#') => {
+                    let _ = writeln!(next, "{root} {}", measured.line());
+                }
+                _ => {
+                    let _ = writeln!(next, "{line}");
+                }
+            }
+        }
+        let staged = record.with_extension("lock.tmp");
+        std::fs::write(&staged, next)?;
+        std::fs::rename(&staged, record)?;
+        writeln!(out, "modules ratchet: tightened {}", record.display())?;
+    }
+    Ok(ExitCode::Success)
+}
+
 /// Every library source under `root`, parsed, with its graph node.
 fn parsed_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<String>, SourceFile)>> {
     let (_, files) = sources(root)?;

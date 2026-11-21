@@ -3785,41 +3785,22 @@ description = "Gate: the always-loaded context (AGENTS.md + anything else declar
 # working tree's engine and config together, the pair that ships.
 run = "{{vars.batten}} policy budget"
 
-[tasks.modules-cycle]
-description = "Gate: the crate's largest module cycle holds no more modules than the committed bound (CLOUD-2789)"
-# A workspace crate must be dependency-closed, so while one cycle spans most of
-# `crates/batten/src` no package cut exists. The bound is the count measured when
-# this gate landed (148), lowered to 128 when `error` and `facts` stopped
-# reaching up (CLOUD-2789 phase 2); a commit that breaks a cycle lowers it in the
-# same change, and a commit that grows one is refused here.
-#
-# 63 since CLOUD-2803 (Lakos demotion): CLOUD-2793's extension traits made
-# upward calls visible as imports and the honest count read 76; moving
-# `Vocabulary`'s slot methods down beside the type cut `config_model -> verdict`.
-run = "{{vars.batten}} modules cycle --root crates/batten/src --max 61"
+[tasks.modules-ratchet]
+description = "Tighten modules.lock to every crate source root's module-graph metrics, refusing any that got worse (CLOUD-2821)"
+# THE RECORD IS THE ONE AUTHORITY. Each source root's largest cycle, propagation
+# cost (basis points), misplaced inherent impls and re-export shims are held to
+# its line in `modules.lock`: a worse metric is refused, a better one rewrites
+# the line, so the record only tightens. It replaces three `--max` ceilings that
+# had to be lowered by hand: a commit improving the cycle from 61 to 58 left the
+# ceiling at 61 for the next commit to spend.
+run = "{{vars.batten}} modules ratchet --record modules.lock"
 
-[tasks.modules-impls]
-description = "Gate: no more inherent impls sit away from their type's module than the committed bound (CLOUD-2792)"
-# An inherent impl may live only in its type's own crate, so one away from its
-# type is a crate cut that cannot compile. An impl whose type the census cannot
-# resolve to one declaring module counts too, so an unread impl cannot hide.
-# Baseline when this gate landed, matching by name: 40 outside + 153 ambiguous.
-# Resolved the way each file reads the name, inline modules' own imports
-# included (CLOUD-2793): 57 outside + 0 ambiguous. `impl-to-extension-trait`
-# turned behaviour over lower-layer types into its layer's extension traits:
-# 24, then 7 once `const fn` blocks joined (a `const fn` a lower layer needs
-# moved home), then 0 once `config_check.rs`'s inline modules became files.
-# So a new inherent impl away from its type's module is refused.
-run = "{{vars.batten}} modules impls --root crates/batten/src --max 0"
-
-[tasks.modules-shims]
-description = "Gate: no more re-exports of the crate's own items sit outside its root than the committed bound (CLOUD-2792)"
-# A `pub use crate::…` outside `lib.rs` keeps an old spelling alive and draws a
-# graph edge that exists only because of spelling. The unit is the leaf.
-# Baseline when this gate landed: 499 (12 aliased). CLOUD-2793's
-# `respell-through-shims` recipe took it to 0, so any new re-export of the
-# crate's own items below its root is refused.
-run = "{{vars.batten}} modules shims --root crates/batten/src --max 0"
+[tasks."modules-ratchet:check"]
+description = "Gate: no crate source root scores worse than modules.lock, and the record is not looser than the tree (CLOUD-2821)"
+# Writes nothing, so a lap judges one tree: a looser record is refused too, so
+# the commit that improves a metric carries the tightened record (`mise run
+# modules-ratchet`) and no later commit can spend it.
+run = "{{vars.batten}} modules ratchet --record modules.lock --check"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
@@ -5027,9 +5008,7 @@ depends = ["tree-clean"]
 # prints its code and seconds.
 run = [
   "{{vars.batten}} step graph run verify-1",
-  "mise run modules-cycle",
-  "mise run modules-impls",
-  "mise run modules-shims",
+  "mise run modules-ratchet:check",
   "{{vars.batten}} step graph run verify-2 --jobs 2",
   "{{vars.batten}} step run ci-suite -- mise run ci",
   "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",

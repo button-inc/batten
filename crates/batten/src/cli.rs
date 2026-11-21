@@ -560,6 +560,20 @@ pub enum ModulesCommand {
         /// The most re-export leaves allowed, as written.
         max: Option<String>,
     },
+    /// Print every module-graph metric of `root` as one record line
+    /// (CLOUD-2821).
+    Metrics {
+        /// The source root, the directory holding `lib.rs`.
+        root: String,
+    },
+    /// Hold every root the record names to its recorded metrics, tightening
+    /// the record on improvement (CLOUD-2821).
+    Ratchet {
+        /// The record file, one `<root> <metrics>` line per root.
+        record: String,
+        /// Never write: a record looser than the tree is refused too.
+        check: bool,
+    },
 }
 
 /// `batten forge`'s sub-verbs.
@@ -4125,6 +4139,13 @@ fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
         ("shims", matches) => Some(ModulesCommand::Shims {
             root: matches.get_one::<String>("root").cloned()?,
             max: matches.get_one::<String>("max").cloned(),
+        }),
+        ("metrics", matches) => Some(ModulesCommand::Metrics {
+            root: matches.get_one::<String>("root").cloned()?,
+        }),
+        ("ratchet", matches) => Some(ModulesCommand::Ratchet {
+            record: matches.get_one::<String>("record").cloned()?,
+            check: matches.get_flag("check"),
         }),
         _ => None,
     }
