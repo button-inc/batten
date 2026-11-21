@@ -14,9 +14,10 @@ use anyhow::Result;
 use batten::output::{self, Mode};
 
 /// mimalloc, not the platform allocator (CLOUD-2315): see the workspace
-/// manifest's `mimalloc` row for the measurement. Linux glibc only, as the crate
-/// manifest says why.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+/// manifest's `mimalloc` row for the measurement. Linux only, as the crate
+/// manifest says why. `tests/it/allocator.rs` asks the built binary which
+/// allocator it runs on.
+#[cfg(target_os = "linux")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

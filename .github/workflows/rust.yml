@@ -187,9 +187,10 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # cross-check is `rustup target add` + `cargo check`; rust is the only
-          # tool it touches. See the ci job for why these lists are narrow.
-          install_args: rust
+          # cross-check is `rustup target add` + `cargo check`; zig and
+          # cargo-zigbuild compile mimalloc's musl C (see its task, CLOUD-2344).
+          # See the ci job for why these lists are narrow.
+          install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see `ci.yml`'s `ci` job.
@@ -328,7 +329,9 @@ jobs:
           # rather than letting them return, passing, over nothing.
           # cargo-dist is `install_web.rs`'s: the Linux-only tamper case runs the
           # pinned `dist` to generate the installer it refuses (CLOUD-2297).
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          # zig and cargo-zigbuild are this LIBC's: mimalloc's musl C (see
+          # `cross-check` in mise.toml, CLOUD-2344).
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
@@ -369,6 +372,12 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      - name: zig resolves on PATH, as install_args declares
+        shell: bash
+        run: zig version
+      - name: cargo-zigbuild resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo-zigbuild --version
       - run: mise run test:musl
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
@@ -499,9 +508,10 @@ jobs:
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
           # zig supplies the Darwin linker and cargo-zigbuild drives cargo
-          # through it; rust is the compiler. Nothing else is invoked here —
-          # and this is the ONLY job that needs zig, the 17.3s pole the other
-          # jobs used to pay for nothing. See the ci job.
+          # through it; rust is the compiler. Nothing else is invoked here.
+          # zig is the 17.3s pole, so only the jobs that invoke it install it:
+          # this one, and the musl ones that compile mimalloc's C through it
+          # (`cross`, `musl`, CLOUD-2344). See the ci job.
           install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
