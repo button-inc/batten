@@ -1,49 +1,81 @@
-//! Which item a path names, across the workspace's crates (CLOUD-2789).
+//! Which item a path names, across a tree's crates (CLOUD-2790).
 //!
 //! `test replay` asks whether a base test still holds at HEAD. A move that
 //! respells a path — `crate::rules::Rule` becoming `crate::config_model::Rule`
 //! once `Rule` lives in the model — changes no assertion, yet compares as a
-//! modified body. This index resolves each `crate::`, `batten::` or
-//! `batten_<name>::` path to the file and name that DEFINE it, following
-//! `pub use` re-exports and modules re-exported from a sibling crate, so a body
-//! is compared by the items it names rather than by how it spells them.
+//! modified body. This index resolves each path that starts at `crate::` or at
+//! one of the tree's own crates to the file and name that DEFINE it, following
+//! `use` and `pub use` aliases and modules re-exported from a sibling crate, so
+//! a body is compared by the items it names rather than by how it spells them.
 //!
-//! What it reads, per `crates/<dir>/src/**.rs` file: the items declared at the
-//! top level of the file and its inline modules, and its `use` declarations
-//! (any visibility: a `use` in the file is how its own paths resolve, and a
-//! `pub use` is how other paths reach through it). What it does not resolve
-//! is left exactly as written: `super::`, `self::`, a path through a type, or a
-//! macro-built path. A path it cannot resolve therefore compares as before.
+//! THE CRATES COME FROM THE TREE, never from this repository's layout: a crate
+//! is the directory of a `Cargo.toml` that declares `[package] name`, its
+//! identifier that name with `-` read as `_`, and its modules the files under
+//! that directory's `src/`. A consumer with one crate at its root and a
+//! workspace with forty under `crates/` are read by the same rule (rule 1).
+//!
+//! What it reads, per indexed file: the items declared at the top level of the
+//! file and of its inline modules (never a `#[cfg(test)]` one), and its `use`
+//! declarations. What it does not resolve is left exactly as written:
+//! `super::`, `self::`, a bare name a `use` brought in, a path through a type,
+//! or a macro-built path. A path it cannot resolve therefore compares as
+//! before, which is the direction that can only report more, never less.
 
 use std::collections::BTreeMap;
+
+use ra_ap_syntax::ast::{self, HasModuleItem as _, HasName as _};
+use ra_ap_syntax::{AstNode as _, Edition, SourceFile};
 
 /// A defining site: the file an item is declared in, and its name there.
 pub type Key = (String, String);
 
-/// One crate's module tree, flattened: module path to what it holds.
+/// What one module holds.
 #[derive(Debug, Default)]
 struct Module {
-    /// The file this module's items are declared in.
-    file: String,
-    /// Items declared here: name to the defining file (`file` itself).
+    /// Items declared here: name to its declaration's text.
     declared: BTreeMap<String, String>,
-    /// `use` aliases: the name visible here to the absolute path it stands for.
+    /// `use` aliases: the name visible here to the path it stands for.
     aliases: BTreeMap<String, Vec<String>>,
 }
 
 /// Every module of every crate in one tree.
 #[derive(Debug, Default)]
 pub struct Index {
-    /// `(crate name, module path)` to its contents.
+    /// `(crate identifier, module path)` to its contents.
     modules: BTreeMap<(String, Vec<String>), Module>,
+    /// Each indexed file's crate and module path.
+    files: BTreeMap<String, (String, Vec<String>)>,
+    /// Each crate root directory (`""` for the tree's root, else ending `/`)
+    /// to its identifier, longest first so a nested crate wins.
+    roots: Vec<(String, String)>,
 }
 
-/// The crate name and module path a file under `crates/<dir>/src/` is, or
-/// `None` for any other file (tests, examples, build scripts).
-fn module_of(path: &str) -> Option<(String, Vec<String>)> {
-    let rest = path.strip_prefix("crates/")?;
-    let (dir, inside) = rest.split_once("/src/")?;
-    let krate = dir.replace('-', "_");
+/// The crate roots a tree declares: each `Cargo.toml` with a `[package] name`,
+/// as its directory and identifier. A virtual manifest declares no crate.
+fn crate_roots(manifests: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    let mut roots: Vec<(String, String)> = manifests
+        .iter()
+        .filter_map(|(path, text)| {
+            let dir = path.strip_suffix("Cargo.toml")?;
+            if !(dir.is_empty() || dir.ends_with('/')) {
+                return None;
+            }
+            let table: toml::Table = toml::from_str(text).ok()?;
+            let name = table.get("package")?.get("name")?.as_str()?;
+            Some((dir.to_owned(), name.replace('-', "_")))
+        })
+        .collect();
+    roots.sort_by_key(|(dir, _)| std::cmp::Reverse(dir.len()));
+    roots
+}
+
+/// The crate and module path `path` is, or `None` when it is no crate's
+/// library source (a test, an example, a build script, a binary's `main`).
+fn module_of(roots: &[(String, String)], path: &str) -> Option<(String, Vec<String>)> {
+    let (dir, krate) = roots
+        .iter()
+        .find(|(dir, _)| path.starts_with(&format!("{dir}src/")))?;
+    let inside = path.strip_prefix(&format!("{dir}src/"))?;
     let stem = inside.strip_suffix(".rs")?;
     let mut segments: Vec<String> = stem.split('/').map(str::to_owned).collect();
     match segments.last().map(String::as_str) {
@@ -54,109 +86,127 @@ fn module_of(path: &str) -> Option<(String, Vec<String>)> {
         }
         _ => {}
     }
-    Some((krate, segments))
+    Some((krate.clone(), segments))
 }
 
-/// Flatten one `use` tree into `(visible name, absolute path)` pairs, with
-/// `prefix` the path so far. A glob names nothing and is skipped.
-fn flatten(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<(String, Vec<String>)>) {
-    match tree {
-        syn::UseTree::Path(path) => {
-            prefix.push(path.ident.to_string());
-            flatten(&path.tree, prefix, out);
-            prefix.pop();
+/// The `::`-separated segments of a path's text, whitespace removed.
+fn segments_of(path: &ast::Path) -> Vec<String> {
+    let text: String = path
+        .syntax()
+        .text()
+        .to_string()
+        .split_whitespace()
+        .collect();
+    text.split("::").map(str::to_owned).collect()
+}
+
+/// Flatten one `use` tree into `(visible name, path)` pairs, with `prefix` the
+/// path so far. A glob names nothing and is skipped.
+fn flatten(tree: &ast::UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
+    let mut full = prefix.to_vec();
+    if let Some(path) = tree.path() {
+        full.extend(segments_of(&path));
+    }
+    if tree.star_token().is_some() {
+        return;
+    }
+    if let Some(list) = tree.use_tree_list() {
+        for nested in list.use_trees() {
+            flatten(&nested, &full, out);
         }
-        syn::UseTree::Name(name) => {
-            let ident = name.ident.to_string();
-            if ident == "self" {
-                if let Some(last) = prefix.last() {
-                    out.push((last.clone(), prefix.clone()));
-                }
-            } else {
-                let mut full = prefix.clone();
-                full.push(ident.clone());
-                out.push((ident, full));
-            }
-        }
-        syn::UseTree::Rename(rename) => {
-            let mut full = prefix.clone();
-            full.push(rename.ident.to_string());
-            out.push((rename.rename.to_string(), full));
-        }
-        syn::UseTree::Group(group) => {
-            for item in &group.items {
-                flatten(item, prefix, out);
-            }
-        }
-        syn::UseTree::Glob(_) => {}
+        return;
+    }
+    // `self` in a group names the group's prefix itself.
+    if full.last().is_some_and(|last| last == "self") {
+        full.pop();
+    }
+    let renamed = tree
+        .rename()
+        .and_then(|rename| rename.name())
+        .map(|name| name.text().to_string());
+    if let Some(visible) = renamed.or_else(|| full.last().cloned()) {
+        out.push((visible, full));
     }
 }
 
 /// The name an item declares, when it declares one a path can name.
-fn declared_name(item: &syn::Item) -> Option<String> {
-    let ident = match item {
-        syn::Item::Fn(item) => &item.sig.ident,
-        syn::Item::Struct(item) => &item.ident,
-        syn::Item::Enum(item) => &item.ident,
-        syn::Item::Const(item) => &item.ident,
-        syn::Item::Static(item) => &item.ident,
-        syn::Item::Type(item) => &item.ident,
-        syn::Item::Trait(item) => &item.ident,
-        syn::Item::Union(item) => &item.ident,
-        _ => return None,
-    };
-    Some(ident.to_string())
+fn declared_name(item: &ast::Item) -> Option<String> {
+    let name = match item {
+        ast::Item::Fn(item) => item.name(),
+        ast::Item::Struct(item) => item.name(),
+        ast::Item::Enum(item) => item.name(),
+        ast::Item::Const(item) => item.name(),
+        ast::Item::Static(item) => item.name(),
+        ast::Item::TypeAlias(item) => item.name(),
+        ast::Item::Trait(item) => item.name(),
+        ast::Item::Union(item) => item.name(),
+        _ => None,
+    }?;
+    Some(name.text().to_string())
+}
+
+/// Whitespace removed, so a reformat is not a difference.
+fn shape(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 impl Index {
-    /// Index every Rust file under a crate's `src/` in `files` (path to text).
-    /// A file that does not parse contributes nothing.
+    /// Index the library sources in `files` (path to text) of the crates
+    /// `manifests` (path to `Cargo.toml` text) declare. A file that does not
+    /// parse contributes nothing.
     #[must_use]
-    pub fn new(files: &BTreeMap<String, String>) -> Self {
-        let mut index = Self::default();
+    pub fn new(files: &BTreeMap<String, String>, manifests: &BTreeMap<String, String>) -> Self {
+        let mut index = Self {
+            roots: crate_roots(manifests),
+            ..Self::default()
+        };
         for (path, text) in files {
-            let Some((krate, module)) = module_of(path) else {
+            let Some((krate, module)) = module_of(&index.roots, path) else {
                 continue;
             };
-            let Ok(file) = crate::source::rust(text) else {
+            // A file with a parse error contributes nothing: an index built on
+            // a misread tree could resolve a path to the wrong item.
+            let parse = SourceFile::parse(text, Edition::Edition2024);
+            if !parse.errors().is_empty() {
                 continue;
-            };
-            index.add(&krate, &module, path, &file.items);
+            }
+            index
+                .files
+                .insert(path.clone(), (krate.clone(), module.clone()));
+            let items: Vec<ast::Item> = parse.tree().items().collect();
+            index.add(&krate, &module, &items);
         }
         index
     }
 
-    fn add(&mut self, krate: &str, module: &[String], file: &str, items: &[syn::Item]) {
+    fn add(&mut self, krate: &str, module: &[String], items: &[ast::Item]) {
         let mut inline = Vec::new();
         {
             let entry = self
                 .modules
                 .entry((krate.to_owned(), module.to_vec()))
                 .or_default();
-            entry.file = file.to_owned();
             for item in items {
+                if crate::module_graph::cfg_test(item.syntax()) {
+                    continue;
+                }
                 if let Some(name) = declared_name(item) {
-                    entry.declared.insert(name, file.to_owned());
+                    entry
+                        .declared
+                        .insert(name, item.syntax().text().to_string());
                 }
                 match item {
-                    syn::Item::Use(declaration) => {
-                        let mut pairs = Vec::new();
-                        flatten(&declaration.tree, &mut Vec::new(), &mut pairs);
-                        for (name, target) in pairs {
-                            entry.aliases.insert(name, target);
+                    ast::Item::Use(declaration) => {
+                        if let Some(tree) = declaration.use_tree() {
+                            let mut pairs = Vec::new();
+                            flatten(&tree, &[], &mut pairs);
+                            entry.aliases.extend(pairs);
                         }
                     }
-                    syn::Item::Mod(nested) => {
-                        if let Some((_, nested_items)) = &nested.content {
-                            let is_test = nested.attrs.iter().any(|attr| {
-                                attr.path().is_ident("cfg")
-                                    && attr
-                                        .parse_args::<syn::Ident>()
-                                        .is_ok_and(|arg| arg == "test")
-                            });
-                            if !is_test {
-                                inline.push((nested.ident.to_string(), nested_items.clone()));
-                            }
+                    ast::Item::Module(nested) => {
+                        if let (Some(name), Some(list)) = (nested.name(), nested.item_list()) {
+                            inline
+                                .push((name.text().to_string(), list.items().collect::<Vec<_>>()));
                         }
                     }
                     _ => {}
@@ -166,13 +216,33 @@ impl Index {
         for (name, nested_items) in inline {
             let mut path = module.to_vec();
             path.push(name);
-            self.add(krate, &path, file, &nested_items);
+            self.add(krate, &path, &nested_items);
         }
     }
 
-    /// The defining site of an absolute path (`[crate, module.., Name]`), and
-    /// how many of its segments that consumed; or `None` when it does not
-    /// resolve. Follows aliases, at most `depth` hops.
+    /// The crate whose `crate::` paths a file's code means, when it is a
+    /// library source this index read.
+    #[must_use]
+    pub fn crate_of(&self, path: &str) -> Option<String> {
+        self.files.get(path).map(|(krate, _)| krate.clone())
+    }
+
+    /// The file a module's items live in: the indexed file whose module path
+    /// is the longest prefix of `module` in `krate` (an inline module lives in
+    /// its parent's file).
+    fn file_of(&self, krate: &str, module: &[String]) -> Option<String> {
+        self.files
+            .iter()
+            .filter(|(_, (file_krate, file_module))| {
+                file_krate == krate && module.starts_with(file_module)
+            })
+            .max_by_key(|(_, (_, file_module))| file_module.len())
+            .map(|(path, _)| path.clone())
+    }
+
+    /// The defining site of an absolute path (`[crate, module.., Name, ..]`),
+    /// and how many of its segments that consumed; or `None` when it does not
+    /// resolve within `depth` alias hops.
     fn resolve_from(&self, segments: &[String], depth: u8) -> Option<(Key, usize)> {
         if depth == 0 {
             return None;
@@ -187,12 +257,11 @@ impl Index {
                 module = deeper;
                 continue;
             }
-            if let Some(file) = here.declared.get(segment) {
-                return Some(((file.clone(), segment.clone()), at + 2));
+            if here.declared.contains_key(segment) {
+                let file = self.file_of(krate, &module)?;
+                return Some(((file, segment.clone()), at + 2));
             }
             let target = here.aliases.get(segment)?;
-            // An alias stands for an absolute path: `crate::x` in this crate,
-            // or a sibling crate by name.
             let mut absolute: Vec<String> = match target.first().map(String::as_str) {
                 Some("crate") => std::iter::once(krate.clone())
                     .chain(target[1..].iter().cloned())
@@ -204,18 +273,19 @@ impl Index {
                 Some("super") => return None,
                 _ => target.clone(),
             };
+            let alias_len = absolute.len();
             absolute.extend(rest[at + 1..].iter().cloned());
             let (key, used) = self.resolve_from(&absolute, depth - 1)?;
-            // Segments consumed in the original path: everything up to and
-            // including this one, plus whatever the alias's remainder used.
-            let alias_len = absolute.len() - (rest.len() - at - 1);
+            // The original path consumed everything through this segment,
+            // plus whatever of its remainder the alias's resolution used.
             return Some((key, at + 2 + used.saturating_sub(alias_len)));
         }
         None
     }
 
-    /// The defining site of `path` (`crate::a::B`, `batten_core::x::Y`) read
-    /// from inside `krate`, and how many segments it consumed.
+    /// The defining site of `path` read from inside `krate`, and how many of
+    /// its segments that consumed. Only a path starting at `crate` or at one of
+    /// the tree's crates is resolved.
     #[must_use]
     pub fn resolve(&self, krate: &str, path: &[String]) -> Option<(Key, usize)> {
         let first = path.first()?;
@@ -231,50 +301,68 @@ impl Index {
         self.resolve_from(&absolute, 8)
     }
 
-    /// Every defining site of `name`, across all crates.
-    fn sites(&self, name: &str) -> Vec<String> {
-        let mut files: Vec<String> = self
+    /// Every defining site of `name`: the file and declaration text of each.
+    fn sites(&self, name: &str) -> Vec<(String, String)> {
+        let mut found: Vec<(String, String)> = self
             .modules
-            .values()
-            .filter_map(|module| module.declared.get(name).cloned())
+            .iter()
+            .filter_map(|((krate, module), held)| {
+                let text = held.declared.get(name)?;
+                Some((self.file_of(krate, module)?, text.clone()))
+            })
             .collect();
-        files.sort();
-        files.dedup();
-        files
+        found.sort();
+        found.dedup();
+        found
     }
 }
 
-/// Items that moved between files from `before` to `after`: a name declared in
-/// exactly one file on each side, and a different file on each. The same rule
-/// `git::pair_moves` applies to files: unique on both sides, or not a move.
+/// Items that moved between files from `before` to `after`.
+///
+/// TWO CONDITIONS, AND THE SECOND IS WHAT MAKES IT SAFE. The name is declared
+/// in exactly one file on each side and they differ — `git::pair_moves`' rule
+/// for files — AND the declaration is the same item: its text, with every path
+/// it names resolved, is equal on both sides. Name alone pairs a deleted item
+/// with an unrelated new one that happens to share its name, and a test
+/// switched from one to the other would then compare as unchanged. An item
+/// whose declaration was edited is not a move either, so a test naming it is
+/// judged as modified: the direction that reports.
 #[must_use]
 pub fn moved_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
     let mut moves = BTreeMap::new();
-    for module in before.modules.values() {
-        for name in module.declared.keys() {
-            let (base, head) = (before.sites(name), after.sites(name));
-            if let ([base], [head]) = (base.as_slice(), head.as_slice())
-                && base != head
-            {
-                moves.insert((base.clone(), name.clone()), (head.clone(), name.clone()));
-            }
+    let names: std::collections::BTreeSet<&String> = before
+        .modules
+        .values()
+        .flat_map(|module| module.declared.keys())
+        .collect();
+    for name in names {
+        let (base, head) = (before.sites(name), after.sites(name));
+        let ([(base_file, base_text)], [(head_file, head_text)]) =
+            (base.as_slice(), head.as_slice())
+        else {
+            continue;
+        };
+        if base_file == head_file {
+            continue;
+        }
+        let same = |index: &Index, file: &str, text: &str| {
+            let krate = index.crate_of(file).unwrap_or_default();
+            shape(&canonical(text, &krate, index, &BTreeMap::new()))
+        };
+        if same(before, base_file, base_text) == same(after, head_file, head_text) {
+            moves.insert(
+                (base_file.clone(), name.clone()),
+                (head_file.clone(), name.clone()),
+            );
         }
     }
     moves
 }
 
-/// The crate a file belongs to, for resolving its `crate::` paths: the
-/// directory under `crates/` (`batten-core` is `batten_core`).
-#[must_use]
-pub fn crate_of(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("crates/")?;
-    Some(rest.split('/').next()?.replace('-', "_"))
-}
-
 /// `body` with every resolvable path replaced by the site that defines it,
 /// mapped through `moves`, so two bodies naming the same items compare equal
-/// however they spell them. String and char literals are left untouched: a
-/// path inside a string is data the test asserts on, not a reference.
+/// however they spell them. String, raw-string and char literals are left
+/// untouched: a path inside a string is data the test asserts on.
 #[must_use]
 pub fn canonical(body: &str, krate: &str, index: &Index, moves: &BTreeMap<Key, Key>) -> String {
     let mut out = String::with_capacity(body.len());
@@ -282,31 +370,31 @@ pub fn canonical(body: &str, krate: &str, index: &Index, moves: &BTreeMap<Key, K
     let mut at = 0;
     while at < bytes.len() {
         let rest = &body[at..];
-        // Skip a string or char literal whole.
         if let Some(len) = literal_len(rest) {
             out.push_str(&rest[..len]);
             at += len;
             continue;
         }
-        let starts_word = at == 0 || !is_ident_byte(bytes[at - 1]) && bytes[at - 1] != b':';
-        if starts_word && let Some((segments, len)) = path_at(rest) {
-            if let Some(((file, name), used)) = index.resolve(krate, &segments) {
-                let (file, name) = moves
-                    .get(&(file.clone(), name.clone()))
-                    .cloned()
-                    .unwrap_or((file, name));
-                out.push('⟨');
-                out.push_str(&file);
-                out.push('#');
-                out.push_str(&name);
-                out.push('⟩');
-                for segment in &segments[used.min(segments.len())..] {
-                    out.push_str("::");
-                    out.push_str(segment);
-                }
-                at += len;
-                continue;
+        let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
+        if starts_path
+            && let Some((segments, len)) = path_at(rest)
+            && let Some(((file, name), used)) = index.resolve(krate, &segments)
+        {
+            let (file, name) = moves
+                .get(&(file.clone(), name.clone()))
+                .cloned()
+                .unwrap_or((file, name));
+            out.push('⟨');
+            out.push_str(&file);
+            out.push('#');
+            out.push_str(&name);
+            out.push('⟩');
+            for segment in &segments[used.min(segments.len())..] {
+                out.push_str("::");
+                out.push_str(segment);
             }
+            at += len;
+            continue;
         }
         let next = rest.chars().next().map_or(1, char::len_utf8);
         out.push_str(&rest[..next]);
@@ -345,14 +433,14 @@ fn literal_len(text: &str) -> Option<usize> {
         }
     }
     if text.starts_with('\'') {
-        // A char literal closes within a few bytes; a lifetime does not close.
-        let close = text[1..]
+        // A char literal closes within a few characters; a lifetime does not.
+        let (close, _) = text[1..]
             .char_indices()
             .take(10)
             .find(|&(_, c)| c == '\'')?;
-        let inner = &text[1..1 + close.0];
+        let inner = &text[1..=close];
         if inner.chars().count() == 1 || inner.starts_with('\\') {
-            return Some(1 + close.0 + 1);
+            return Some(close + 2);
         }
     }
     None
@@ -385,4 +473,385 @@ fn path_at(text: &str) -> Option<(Vec<String>, usize)> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    const ROOT: (&str, &str) = ("Cargo.toml", "[package]\nname = \"app\"\n");
+
+    fn tree(files: &[(&str, &str)]) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+        let (manifests, sources): (Vec<_>, Vec<_>) = files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .partition(|(path, _)| path.ends_with("Cargo.toml"));
+        (
+            sources.into_iter().collect(),
+            manifests.into_iter().collect(),
+        )
+    }
+
+    fn index(files: &[(&str, &str)]) -> Index {
+        let (sources, manifests) = tree(files);
+        Index::new(&sources, &manifests)
+    }
+
+    /// Two bodies, each read through its own tree, the base side mapped
+    /// through the moves between them.
+    fn same(
+        before: &[(&str, &str)],
+        after: &[(&str, &str)],
+        base_body: &str,
+        head_body: &str,
+    ) -> bool {
+        let (base, head) = (index(before), index(after));
+        let moves = moved_items(&base, &head);
+        canonical(base_body, "app", &base, &moves)
+            == canonical(head_body, "app", &head, &BTreeMap::new())
+    }
+
+    const BEFORE_MOVE: &[(&str, &str)] = &[
+        ROOT,
+        ("src/lib.rs", "pub mod rules;\npub mod model;\n"),
+        ("src/rules.rs", "pub struct Rule;\n"),
+        ("src/model.rs", ""),
+    ];
+    const AFTER_MOVE: &[(&str, &str)] = &[
+        ROOT,
+        ("src/lib.rs", "pub mod rules;\npub mod model;\n"),
+        ("src/rules.rs", ""),
+        ("src/model.rs", "pub struct Rule;\n"),
+    ];
+
+    /// Fails by: a respelling at a moved item's new home compared as a
+    /// modified assertion, which is what made every move cost an admission.
+    #[test]
+    fn a_path_respelled_at_a_moved_items_home_names_the_same_item() {
+        assert!(same(
+            BEFORE_MOVE,
+            AFTER_MOVE,
+            "{ let r = crate::rules::Rule; }",
+            "{ let r = crate::model::Rule; }",
+        ));
+    }
+
+    /// Fails by: a re-export not followed, so a body spelled through a shim at
+    /// base and at the defining module at head looked modified.
+    #[test]
+    fn a_re_export_names_the_item_it_re_exports() {
+        let files = &[
+            ROOT,
+            ("src/lib.rs", "pub mod rules;\npub mod model;\n"),
+            ("src/rules.rs", "pub use crate::model::Rule;\n"),
+            ("src/model.rs", "pub struct Rule;\n"),
+        ];
+        assert!(same(
+            files,
+            files,
+            "{ crate::rules::Rule::check(); }",
+            "{ crate::model::Rule::check(); }"
+        ));
+    }
+
+    /// Fails by: a sibling crate's module re-export not followed, so a helper
+    /// moved into another crate looked like a different item. The crates come
+    /// from the manifests, under any directory.
+    #[test]
+    fn a_module_re_exported_from_a_sibling_crate_resolves_there() {
+        let core = ("libs/core/Cargo.toml", "[package]\nname = \"app-core\"\n");
+        let before = &[
+            ROOT,
+            core,
+            (
+                "src/lib.rs",
+                "pub use app_core::selector;\npub mod rules;\n",
+            ),
+            ("src/rules.rs", "pub fn glob_match() {}\n"),
+            ("libs/core/src/lib.rs", "pub mod selector;\n"),
+            ("libs/core/src/selector.rs", ""),
+        ];
+        let after = &[
+            ROOT,
+            core,
+            (
+                "src/lib.rs",
+                "pub use app_core::selector;\npub mod rules;\n",
+            ),
+            ("src/rules.rs", ""),
+            ("libs/core/src/lib.rs", "pub mod selector;\n"),
+            ("libs/core/src/selector.rs", "pub fn glob_match() {}\n"),
+        ];
+        assert!(same(
+            before,
+            after,
+            "{ assert!(crate::rules::glob_match()); }",
+            "{ assert!(crate::selector::glob_match()); }",
+        ));
+    }
+
+    /// Fails by: a use tree's rename, group or `self` arm dropped, so a path
+    /// through one resolved nowhere and compared as written.
+    #[test]
+    fn a_use_rename_group_and_self_each_resolve() {
+        let files = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub struct X;\npub struct Y;\n"),
+            (
+                "src/b.rs",
+                "pub use crate::a::{X as Z, Y, self as inner};\n",
+            ),
+        ];
+        assert!(same(files, files, "{ crate::b::Z }", "{ crate::a::X }"));
+        assert!(same(files, files, "{ crate::b::Y }", "{ crate::a::Y }"));
+        assert!(same(
+            files,
+            files,
+            "{ crate::b::inner::X }",
+            "{ crate::a::X }"
+        ));
+    }
+
+    /// Fails by: an inline module skipped (its items would never resolve), or
+    /// a `#[cfg(test)]` module indexed (a test helper would pass for a library
+    /// item).
+    #[test]
+    fn an_inline_module_is_indexed_and_a_cfg_test_module_is_not() {
+        let built = index(&[
+            ROOT,
+            (
+                "src/lib.rs",
+                "pub mod outer { pub struct In; }\n#[cfg(test)]\nmod t { pub struct Hidden; }\n",
+            ),
+        ]);
+        let empty = BTreeMap::new();
+        assert_eq!(
+            canonical("crate::outer::In", "app", &built, &empty),
+            "⟨src/lib.rs#In⟩"
+        );
+        assert_eq!(
+            canonical("crate::t::Hidden", "app", &built, &empty),
+            "crate::t::Hidden"
+        );
+    }
+
+    /// Fails by: the segments after the item dropped, so two bodies calling
+    /// different methods of one type compared equal.
+    #[test]
+    fn a_path_through_an_item_keeps_its_tail() {
+        let built = index(AFTER_MOVE);
+        let empty = BTreeMap::new();
+        assert_eq!(
+            canonical("crate::model::Rule::check()", "app", &built, &empty),
+            "⟨src/model.rs#Rule⟩::check()"
+        );
+        assert!(!same(
+            AFTER_MOVE,
+            AFTER_MOVE,
+            "{ crate::model::Rule::a() }",
+            "{ crate::model::Rule::b() }"
+        ));
+    }
+
+    /// Fails by: resolution by name alone. Two items of one name are two items.
+    #[test]
+    fn a_different_item_of_the_same_name_is_a_different_item() {
+        let files = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub fn parse() {}\n"),
+            ("src/b.rs", "pub fn parse() {}\n"),
+        ];
+        assert!(!same(
+            files,
+            files,
+            "{ crate::a::parse(); }",
+            "{ crate::b::parse(); }"
+        ));
+    }
+
+    /// Fails by: pairing a deleted item with an unrelated new one of its name,
+    /// which let a test switched from one to the other read as unchanged.
+    #[test]
+    fn an_item_deleted_and_another_of_its_name_added_is_not_a_move() {
+        let before = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub fn value() -> u8 { 1 }\n"),
+            ("src/b.rs", ""),
+        ];
+        let after = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", ""),
+            ("src/b.rs", "pub fn value() -> u8 { 2 }\n"),
+        ];
+        assert!(!same(
+            before,
+            after,
+            "{ crate::a::value() }",
+            "{ crate::b::value() }"
+        ));
+    }
+
+    /// Fails by: a moved item whose declaration also changed paired as a move,
+    /// so a test naming it would skip the replay its changed code needs.
+    #[test]
+    fn an_item_whose_declaration_changed_is_not_a_move() {
+        let after = &[
+            ROOT,
+            ("src/lib.rs", "pub mod rules;\npub mod model;\n"),
+            ("src/rules.rs", ""),
+            ("src/model.rs", "pub struct Rule(u8);\n"),
+        ];
+        assert!(!same(
+            BEFORE_MOVE,
+            after,
+            "{ crate::rules::Rule }",
+            "{ crate::model::Rule }"
+        ));
+        assert!(moved_items(&index(BEFORE_MOVE), &index(after)).is_empty());
+    }
+
+    /// Fails by: a name declared twice at base paired with its one head site.
+    #[test]
+    fn a_name_declared_twice_at_base_is_not_paired() {
+        let before = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\npub mod c;\n"),
+            ("src/a.rs", "pub fn parse() {}\n"),
+            ("src/b.rs", ""),
+            ("src/c.rs", "pub fn parse() {}\n"),
+        ];
+        let after = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\npub mod c;\n"),
+            ("src/a.rs", ""),
+            ("src/b.rs", "pub fn parse() {}\n"),
+            ("src/c.rs", ""),
+        ];
+        assert!(moved_items(&index(before), &index(after)).is_empty());
+        assert!(!same(
+            before,
+            after,
+            "{ crate::a::parse(); }",
+            "{ crate::b::parse(); }"
+        ));
+    }
+
+    /// Fails by: a changed assertion hidden behind a path. Only the path is
+    /// canonical; every other token still has to match.
+    #[test]
+    fn an_assertion_that_changed_still_differs() {
+        assert!(!same(
+            BEFORE_MOVE,
+            AFTER_MOVE,
+            "{ assert_eq!(crate::rules::Rule::count(), 2); }",
+            "{ assert_eq!(crate::model::Rule::count(), 3); }",
+        ));
+    }
+
+    /// Fails by: a path inside a string literal rewritten. A string is data.
+    #[test]
+    fn a_path_inside_a_string_is_data() {
+        let files = &[
+            ROOT,
+            ("src/lib.rs", "pub mod rules;\npub mod model;\n"),
+            ("src/rules.rs", "pub use crate::model::Rule;\n"),
+            ("src/model.rs", "pub struct Rule;\n"),
+        ];
+        assert!(!same(
+            files,
+            files,
+            r#"{ assert_eq!(name(), "crate::rules::Rule"); }"#,
+            r#"{ assert_eq!(name(), "crate::model::Rule"); }"#,
+        ));
+    }
+
+    /// Fails by: a raw string rewritten, or a `'"'` char literal read as the
+    /// start of a string that then swallows the code after it.
+    #[test]
+    fn a_raw_string_and_a_char_literal_are_data() {
+        let built = index(BEFORE_MOVE);
+        let body = r##"{ let s = r#"crate::rules::Rule"#; let q = '"'; crate::rules::Rule }"##;
+        assert_eq!(
+            canonical(body, "app", &built, &BTreeMap::new()),
+            r##"{ let s = r#"crate::rules::Rule"#; let q = '"'; ⟨src/rules.rs#Rule⟩ }"##
+        );
+    }
+
+    /// Fails by: a glob treated as naming something, so a path through it
+    /// resolved to a guess.
+    #[test]
+    fn a_glob_names_nothing() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub struct X;\n"),
+            ("src/b.rs", "pub use crate::a::*;\n"),
+        ]);
+        assert_eq!(
+            canonical("crate::b::X", "app", &built, &BTreeMap::new()),
+            "crate::b::X"
+        );
+    }
+
+    /// Fails by: an alias cycle followed forever. It stops, unresolved.
+    #[test]
+    fn an_alias_cycle_stops_at_the_depth_bound() {
+        let built = index(&[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "pub use crate::b::X;\n"),
+            ("src/b.rs", "pub use crate::a::X;\n"),
+        ]);
+        assert_eq!(
+            canonical("crate::a::X", "app", &built, &BTreeMap::new()),
+            "crate::a::X"
+        );
+    }
+
+    /// Fails by: an unresolvable path changed or dropped.
+    #[test]
+    fn an_unresolvable_path_is_left_as_written() {
+        let built = index(&[ROOT, ("src/lib.rs", "")]);
+        let body = "{ std::fs::read(p); super::helper(); 'a: loop {} }";
+        assert_eq!(canonical(body, "app", &built, &BTreeMap::new()), body);
+    }
+
+    /// Fails by: a file's crate or module misread, which every answer rests on.
+    /// The crate is the nearest manifest's package, wherever it sits.
+    #[test]
+    fn a_files_crate_and_module_come_from_its_path() {
+        let roots = crate_roots(
+            &tree(&[
+                ROOT,
+                ("tools/x/Cargo.toml", "[package]\nname = \"x-tool\"\n"),
+                ("ws/Cargo.toml", "[workspace]\nmembers = []\n"),
+            ])
+            .1,
+        );
+        assert_eq!(
+            module_of(&roots, "src/lib.rs"),
+            Some((String::from("app"), vec![]))
+        );
+        assert_eq!(
+            module_of(&roots, "src/mutate/mod.rs"),
+            Some((String::from("app"), vec![String::from("mutate")]))
+        );
+        assert_eq!(
+            module_of(&roots, "tools/x/src/a/b.rs"),
+            Some((
+                String::from("x_tool"),
+                vec![String::from("a"), String::from("b")]
+            ))
+        );
+        assert_eq!(module_of(&roots, "tests/it/main.rs"), None);
+        assert_eq!(module_of(&roots, "src/main.rs"), None);
+        assert_eq!(
+            module_of(&roots, "ws/src/lib.rs"),
+            None,
+            "a virtual manifest is no crate"
+        );
+    }
+}
