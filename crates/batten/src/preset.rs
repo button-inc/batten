@@ -49,10 +49,10 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub use crate::config_check::preset::verdict_rows;
 use crate::error::UsageError;
 pub use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
 use crate::rules::{Rule, RuleKind, RuleScope};
-use crate::verdict::DeclaredVerdict;
 
 impl PresetModule {
     /// The source an engine compiles: the embedded one, or under the
@@ -537,20 +537,6 @@ pub fn mode_sources() -> Vec<(String, String)> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Every verdict row the vendored presets declare, as the registry carries them.
-///
-/// Chained onto the native rows by [`crate::verdict::vendored`]. Derived rather
-/// than declared a second time: before this, adding a preset class meant editing
-/// a table in another module under a comment, and nothing tied the two together.
-#[must_use]
-pub fn verdict_rows() -> Vec<DeclaredVerdict> {
-    MANIFESTS
-        .iter()
-        .flat_map(|manifest| manifest.verdicts.iter())
-        .map(crate::verdict::declared_from)
-        .collect()
 }
 
 #[cfg(test)]
