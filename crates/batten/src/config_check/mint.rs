@@ -396,17 +396,22 @@ pub(crate) fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
     Ok(())
 }
 
-impl Declared {
+/// `Declared` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait DeclaredExt: Sized {
     /// Whether the row consumes its prerequisite.
-    pub(crate) fn spends(&self) -> bool {
-        self.effective_after_mode() == AfterMode::Spend
-    }
-}
+    fn spends(&self) -> bool;
 
-impl Declared {
     /// The row's `after_mode`, `spend` where it declares none.
     #[must_use]
-    pub fn effective_after_mode(&self) -> AfterMode {
+    fn effective_after_mode(&self) -> AfterMode;
+}
+
+impl DeclaredExt for Declared {
+    fn spends(&self) -> bool {
+        self.effective_after_mode() == AfterMode::Spend
+    }
+
+    fn effective_after_mode(&self) -> AfterMode {
         self.after_mode.unwrap_or_default()
     }
 }
