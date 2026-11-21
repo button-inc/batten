@@ -19,6 +19,7 @@
 
 use crate::refusal::{Arm, Refusal};
 use crate::severity::AdvisoryTier;
+use crate::severity::SeverityExt as _;
 
 /// One producer's contribution, with the latency its content demands.
 ///
@@ -305,8 +306,6 @@ fn joined_text(texts: &[String]) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::preset::PresetModuleExt as _;
 
     fn entry(tier: AdvisoryTier, text: &str) -> Advice {
         Advice::new(tier, text)

@@ -38,7 +38,7 @@ pub fn exercise_hook_decode(data: &[u8]) {
         return;
     };
 
-    for &harness in batten::config_model::Harness::ALL {
+    for &harness in <batten::config_model::Harness as batten::hook::HarnessExt>::ALL {
         let first = batten::hook::decode(harness, raw);
 
         // DETERMINISM. Mediation happens once per tool call and its verdict is

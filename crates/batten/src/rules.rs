@@ -320,45 +320,18 @@ pub const fn admissible_at_mediated_call(authority: Authority) -> bool {
     !authority.is_ambient()
 }
 
-impl RuleKind {
+/// `RuleKind` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait RuleKindExt: Sized {
     /// Every kind the engine knows, so the partitions below are total.
     ///
     /// A new variant must be added here or [`tests::all_covers_every_kind`]
     /// fails — which is what keeps [`RuleKind::carries_ambient_authority`] from silently
     /// defaulting a spawning kind to "safe".
-    pub const ALL: &'static [RuleKind] = &[
-        RuleKind::Forbid,
-        RuleKind::Command,
-        RuleKind::Shape,
-        RuleKind::Ratchet,
-        RuleKind::Receipt,
-        RuleKind::Pipeline,
-        RuleKind::Judge,
-        RuleKind::Secrets,
-        RuleKind::Document,
-        RuleKind::Policy,
-        RuleKind::Reference,
-        RuleKind::Native,
-    ];
+    const ALL: &'static [RuleKind];
 
     /// The stable lowercase token used in config and machine output (§6).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            RuleKind::Forbid => "forbid",
-            RuleKind::Command => "command",
-            RuleKind::Shape => "shape",
-            RuleKind::Ratchet => "ratchet",
-            RuleKind::Receipt => "receipt",
-            RuleKind::Pipeline => "pipeline",
-            RuleKind::Judge => "judge",
-            RuleKind::Secrets => "secrets",
-            RuleKind::Document => "document",
-            RuleKind::Policy => "policy",
-            RuleKind::Reference => "reference",
-            RuleKind::Native => "native",
-        }
-    }
+    fn as_str(self) -> &'static str;
 
     /// What this kind may reach beyond the inputs the boundary handed it
     /// (CLOUD-763).
@@ -388,7 +361,124 @@ impl RuleKind {
     /// cross product, and it is **strictly stronger** than the spawn-only pin it
     /// replaces: [`Authority::Acquires`] passes "does it spawn?" and fails this.
     #[must_use]
-    pub const fn authority(self) -> Authority {
+    fn authority(self) -> Authority;
+
+    /// Whether this kind may reach beyond its supplied inputs at all.
+    ///
+    /// The `scopes` predicate and `run_static`'s refusal both read this and
+    /// nothing else, so "which kinds are excluded from the mediated call" and
+    /// "which kinds `batten check` refuses" cannot drift apart.
+    #[must_use]
+    fn carries_ambient_authority(self) -> bool;
+
+    /// The columns this kind cannot load without.
+    #[must_use]
+    fn requires(self) -> &'static [&'static str];
+
+    /// Whether this kind's predicate **decides** the question it claims to
+    /// answer, or only approximates it (CLOUD-331).
+    ///
+    /// The bar to block is decidability against a declared OBJECT, not mere
+    /// computability. A rule can be perfectly deterministic and still be an
+    /// approximation, because the question it is asked is open-ended: `CodeShield`
+    /// is Semgrep and regex with no model in the loop, and its measured recall
+    /// is 0.79 — so 21% of what it looks for passes silently while a
+    /// computability test admits it as blocking.
+    ///
+    /// **The classification is authored, and that is the honest bound on it.**
+    /// What the mechanism buys is that the claim is written down per kind, in
+    /// one place, and that violating it is a failure rather than a design drift.
+    ///
+    /// **Absence fails safe to `Approximating`** — the same reading
+    /// [`crate::effect::Effect::Ask`] gives an unlisted command. A Rust `match`
+    /// has no absent arm, so that default lives where a kind can actually be
+    /// missing: [`decidability_of`], over a finding whose owning row cannot be
+    /// resolved.
+    #[must_use]
+    fn decidability(self) -> Decidability;
+
+    /// Every column this kind accepts — a superset of [`RuleKind::requires`].
+    ///
+    /// Anything outside this set is a usage error rather than an ignored key: a
+    /// `glob` on a shape rule selects files a shape rule never reads, so
+    /// accepting it would let a reviewer believe a rule is scoped when it is not.
+    #[must_use]
+    /// Whether a `fix` on this kind is executed at the mediated boundary
+    /// (CLOUD-1639).
+    ///
+    /// **The kinds that reach `crate::hook`.** `fix` lived on `Command` alone,
+    /// which is a TREE-scope check kind — so the repair column sat on the one
+    /// kind that never sees a call, and `run_all` refused it outright because
+    /// nothing there could run it. These three DO see a call, and the boundary
+    /// runs their repair under the raised class's
+    /// [`crate::preset_catalog::Applicability`].
+    ///
+    /// A match with no wildcard: a kind added later is a compile error here
+    /// rather than one silently answered `false`, which would be a repair a
+    /// consumer declared and nothing ran — the exact false green `run_all`'s
+    /// refusal exists to prevent.
+    fn repairs_at_the_boundary(self) -> bool;
+
+    #[must_use]
+    fn permits(self) -> &'static [&'static str];
+
+    /// The scopes this kind may declare.
+    ///
+    /// The pairing is what makes the scope key a real router rather than a label:
+    /// a file kind scoped to the mediated call, or a shape kind scoped to the
+    /// tree, would be a rule that no surface ever evaluates — present, inert, and
+    /// reading as covered.
+    #[must_use]
+    fn scopes(self) -> &'static [RuleScope];
+
+    /// What evaluating this kind costs, and the narrowest surface it may be
+    /// evaluated on (CLOUD-757's two axes, CLOUD-773's composition input).
+    ///
+    /// Stated per kind rather than inferred, for [`RuleKind::carries_ambient_authority`]'s
+    /// reason: a kind that lands unclassified would compose as whatever the
+    /// default happened to be, and the cheap default is the one direction the
+    /// mistake is expensive in. This is the value [`Rule::derives`] publishes and
+    /// [`Rule::reads`] is judged against — a reference that would make the
+    /// reading rule more expensive or narrower than it declares is refused at
+    /// load rather than answering from a fact that was never resolvable there.
+    #[must_use]
+    fn fact_class(self, scope: RuleScope) -> crate::facts::Class;
+}
+
+impl RuleKindExt for RuleKind {
+    const ALL: &'static [RuleKind] = &[
+        RuleKind::Forbid,
+        RuleKind::Command,
+        RuleKind::Shape,
+        RuleKind::Ratchet,
+        RuleKind::Receipt,
+        RuleKind::Pipeline,
+        RuleKind::Judge,
+        RuleKind::Secrets,
+        RuleKind::Document,
+        RuleKind::Policy,
+        RuleKind::Reference,
+        RuleKind::Native,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            RuleKind::Forbid => "forbid",
+            RuleKind::Command => "command",
+            RuleKind::Shape => "shape",
+            RuleKind::Ratchet => "ratchet",
+            RuleKind::Receipt => "receipt",
+            RuleKind::Pipeline => "pipeline",
+            RuleKind::Judge => "judge",
+            RuleKind::Secrets => "secrets",
+            RuleKind::Document => "document",
+            RuleKind::Policy => "policy",
+            RuleKind::Reference => "reference",
+            RuleKind::Native => "native",
+        }
+    }
+
+    fn authority(self) -> Authority {
         match self {
             // `Ratchet` reaches git plumbing, which is a *process* — and still
             // `Supplied`, because the invocations are fixed literals in this
@@ -430,19 +520,11 @@ impl RuleKind {
         }
     }
 
-    /// Whether this kind may reach beyond its supplied inputs at all.
-    ///
-    /// The `scopes` predicate and `run_static`'s refusal both read this and
-    /// nothing else, so "which kinds are excluded from the mediated call" and
-    /// "which kinds `batten check` refuses" cannot drift apart.
-    #[must_use]
-    pub const fn carries_ambient_authority(self) -> bool {
+    fn carries_ambient_authority(self) -> bool {
         self.authority().is_ambient()
     }
 
-    /// The columns this kind cannot load without.
-    #[must_use]
-    pub const fn requires(self) -> &'static [&'static str] {
+    fn requires(self) -> &'static [&'static str] {
         match self {
             // `pattern` is deliberately absent: `forbid` requires exactly one of
             // `pattern` or `regex`, and this list cannot express "one of"
@@ -583,27 +665,7 @@ impl RuleKind {
         }
     }
 
-    /// Whether this kind's predicate **decides** the question it claims to
-    /// answer, or only approximates it (CLOUD-331).
-    ///
-    /// The bar to block is decidability against a declared OBJECT, not mere
-    /// computability. A rule can be perfectly deterministic and still be an
-    /// approximation, because the question it is asked is open-ended: `CodeShield`
-    /// is Semgrep and regex with no model in the loop, and its measured recall
-    /// is 0.79 — so 21% of what it looks for passes silently while a
-    /// computability test admits it as blocking.
-    ///
-    /// **The classification is authored, and that is the honest bound on it.**
-    /// What the mechanism buys is that the claim is written down per kind, in
-    /// one place, and that violating it is a failure rather than a design drift.
-    ///
-    /// **Absence fails safe to `Approximating`** — the same reading
-    /// [`crate::effect::Effect::Ask`] gives an unlisted command. A Rust `match`
-    /// has no absent arm, so that default lives where a kind can actually be
-    /// missing: [`decidability_of`], over a finding whose owning row cannot be
-    /// resolved.
-    #[must_use]
-    pub const fn decidability(self) -> Decidability {
+    fn decidability(self) -> Decidability {
         match self {
             // THE ONE APPROXIMATING KIND, and it is the archetype: a judge
             // returns a model's opinion, which is CLOUD-93's rejection arriving
@@ -643,27 +705,7 @@ impl RuleKind {
         }
     }
 
-    /// Every column this kind accepts — a superset of [`RuleKind::requires`].
-    ///
-    /// Anything outside this set is a usage error rather than an ignored key: a
-    /// `glob` on a shape rule selects files a shape rule never reads, so
-    /// accepting it would let a reviewer believe a rule is scoped when it is not.
-    #[must_use]
-    /// Whether a `fix` on this kind is executed at the mediated boundary
-    /// (CLOUD-1639).
-    ///
-    /// **The kinds that reach `crate::hook`.** `fix` lived on `Command` alone,
-    /// which is a TREE-scope check kind — so the repair column sat on the one
-    /// kind that never sees a call, and `run_all` refused it outright because
-    /// nothing there could run it. These three DO see a call, and the boundary
-    /// runs their repair under the raised class's
-    /// [`crate::preset_catalog::Applicability`].
-    ///
-    /// A match with no wildcard: a kind added later is a compile error here
-    /// rather than one silently answered `false`, which would be a repair a
-    /// consumer declared and nothing ran — the exact false green `run_all`'s
-    /// refusal exists to prevent.
-    pub const fn repairs_at_the_boundary(self) -> bool {
+    fn repairs_at_the_boundary(self) -> bool {
         match self {
             // `policy` AND ONLY `policy`, AND THE FIXTURE IS WHAT NARROWED IT.
             //
@@ -697,8 +739,7 @@ impl RuleKind {
         }
     }
 
-    #[must_use]
-    pub const fn permits(self) -> &'static [&'static str] {
+    fn permits(self) -> &'static [&'static str] {
         match self {
             // `verbatim` narrows a hashed span, so only the kind that hashes one
             // accepts it: a `verbatim` on a command rule would name a
@@ -895,14 +936,7 @@ impl RuleKind {
         }
     }
 
-    /// The scopes this kind may declare.
-    ///
-    /// The pairing is what makes the scope key a real router rather than a label:
-    /// a file kind scoped to the mediated call, or a shape kind scoped to the
-    /// tree, would be a rule that no surface ever evaluates — present, inert, and
-    /// reading as covered.
-    #[must_use]
-    pub const fn scopes(self) -> &'static [RuleScope] {
+    fn scopes(self) -> &'static [RuleScope] {
         match self {
             // `Document` is `Tree` alone, and that pairing is `facts::DOCUMENT`
             // read back: the fact's narrowest surface is `facts::Surface::Check`,
@@ -944,18 +978,7 @@ impl RuleKind {
         }
     }
 
-    /// What evaluating this kind costs, and the narrowest surface it may be
-    /// evaluated on (CLOUD-757's two axes, CLOUD-773's composition input).
-    ///
-    /// Stated per kind rather than inferred, for [`RuleKind::carries_ambient_authority`]'s
-    /// reason: a kind that lands unclassified would compose as whatever the
-    /// default happened to be, and the cheap default is the one direction the
-    /// mistake is expensive in. This is the value [`Rule::derives`] publishes and
-    /// [`Rule::reads`] is judged against — a reference that would make the
-    /// reading rule more expensive or narrower than it declares is refused at
-    /// load rather than answering from a fact that was never resolvable there.
-    #[must_use]
-    pub const fn fact_class(self, scope: RuleScope) -> crate::facts::Class {
+    fn fact_class(self, scope: RuleScope) -> crate::facts::Class {
         use crate::facts::{Class, Cost, Surface};
         match self {
             // Reads matched files, on the tree surface. `Ratchet` adds fixed git
@@ -1022,13 +1045,20 @@ impl RuleKind {
     }
 }
 
-impl RuleScope {
+/// `RuleScope` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait RuleScopeExt: Sized {
     /// Every scope the engine knows, so vocabulary tests stay total.
-    pub const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
+    const ALL: &'static [RuleScope];
 
     /// The stable lowercase token used in config and machine output (§6).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+}
+
+impl RuleScopeExt for RuleScope {
+    const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
+
+    fn as_str(self) -> &'static str {
         match self {
             RuleScope::Tree => "tree",
             RuleScope::MediatedCall => "mediated_call",
@@ -1091,25 +1121,34 @@ impl VerdictProgramExt for VerdictProgram {
     }
 }
 
-impl Direction {
+/// `Direction` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait DirectionExt: Sized {
     /// Every direction, so a census is derived rather than hand-maintained.
-    pub const ALL: &'static [Direction] = &[Direction::NonDecreasing, Direction::NonIncreasing];
+    const ALL: &'static [Direction];
 
     /// The stable config token.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Direction::NonDecreasing => "non_decreasing",
-            Direction::NonIncreasing => "non_increasing",
-        }
-    }
+    fn as_str(self) -> &'static str;
 
     /// Whether moving from `base` to `working` broke the promise.
     ///
     /// Equality is never a violation in either direction — a ratchet bans
     /// movement, not stasis.
     #[must_use]
-    pub const fn violated(self, base: usize, working: usize) -> bool {
+    fn violated(self, base: usize, working: usize) -> bool;
+}
+
+impl DirectionExt for Direction {
+    const ALL: &'static [Direction] = &[Direction::NonDecreasing, Direction::NonIncreasing];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Direction::NonDecreasing => "non_decreasing",
+            Direction::NonIncreasing => "non_increasing",
+        }
+    }
+
+    fn violated(self, base: usize, working: usize) -> bool {
         match self {
             Direction::NonDecreasing => working < base,
             Direction::NonIncreasing => working > base,
@@ -1929,10 +1968,15 @@ pub struct RunOptions<'a> {
     pub keyed_bases: &'a [String],
 }
 
-impl Half {
+/// `Half` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait HalfExt: Sized {
     /// The stable lowercase token (§6), the `--half` spelling.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+}
+
+impl HalfExt for Half {
+    fn as_str(self) -> &'static str {
         match self {
             Half::Tree => "tree",
             Half::Live => "live",
@@ -9864,10 +9908,14 @@ impl Sets {
 mod tests {
     use super::PathSet;
     #[cfg(test)]
+    use crate::rules::DirectionExt as _;
     #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
     #[cfg(test)]
     use crate::rules::RuleExt as _;
+    #[cfg(test)]
+    use crate::rules::RuleKindExt as _;
+    #[cfg(test)]
+    use crate::rules::RuleScopeExt as _;
     #[cfg(test)]
     use crate::rules::VerdictProgramExt as _;
 
@@ -17738,12 +17786,14 @@ mod half_tests {
     use super::null_live_keys;
     use crate::config_model::{Rule, RuleKind};
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::engine::PinExt as _;
     use crate::facts::{Fact, Subject};
     use crate::preset_catalog::RuleScope;
     #[cfg(test)]
+    use crate::rules::HalfExt as _;
+    #[cfg(test)]
     use crate::rules::RuleExt as _;
+    #[cfg(test)]
+    use crate::rules::RuleKindExt as _;
     use crate::surface_table::Half;
 
     /// A blank row of `kind` on its first permitted scope, plus `extra`.

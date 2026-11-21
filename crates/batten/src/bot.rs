@@ -567,8 +567,6 @@ pub mod forge {
     mod tests {
         use super::*;
         #[cfg(test)]
-        #[cfg(test)]
-        use crate::budget::BudgetExt as _;
 
         fn answer(status: u16, body: &str) -> crate::rest::Answer {
             crate::rest::Answer {

@@ -1632,9 +1632,6 @@ pub(crate) fn make_executable(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn a_pin_is_rewritten_in_place_or_inserted_above_every_table() {
         let release = Pin {

@@ -1618,9 +1618,6 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn a_held_step_lock_excludes_its_own_step_and_no_other() {
         // Fails by: the lock not exclusive (two runners of one step both run),

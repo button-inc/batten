@@ -49,8 +49,11 @@ use crate::attribution::AttributionExt as _;
 use crate::census::ShellCensusExt as _;
 use crate::commit::CommitExt as _;
 use crate::defects::DefectsExt as _;
+use crate::prune::PruneExt as _;
 #[cfg(test)]
 use crate::rules::RuleExt as _;
+#[cfg(test)]
+use crate::rules::RuleKindExt as _;
 use crate::sbom::DeclaredExt as _;
 use crate::verdict::VocabularyExt as _;
 use crate::wiring::WiringExt as _;
@@ -1958,10 +1961,20 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
     ))
 }
 
-impl Unresolvable {
+/// `Unresolvable` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait UnresolvableExt: Sized {
     /// The pointer line a report carries.
     #[must_use]
-    pub fn line(&self) -> String {
+    fn line(&self) -> String;
+
+    /// The row ordinal this drop removed, for a caller pairing rows by
+    /// position. `None` for a key drop, which removes no row.
+    #[must_use]
+    fn row_index(&self) -> Option<usize>;
+}
+
+impl UnresolvableExt for Unresolvable {
+    fn line(&self) -> String {
         match &self.unit {
             Unit::Row { id: Some(id), .. } => format!("{} {id}", self.section),
             Unit::Row { id: None, index } => format!("{} #{index}", self.section),
@@ -1969,10 +1982,7 @@ impl Unresolvable {
         }
     }
 
-    /// The row ordinal this drop removed, for a caller pairing rows by
-    /// position. `None` for a key drop, which removes no row.
-    #[must_use]
-    pub const fn row_index(&self) -> Option<usize> {
+    fn row_index(&self) -> Option<usize> {
         match self.unit {
             Unit::Row { index, .. } => Some(index),
             Unit::Key(_) => None,
@@ -4223,8 +4233,6 @@ mod tests {
 
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::attribution::AttributionExt as _;
     use crate::error::UsageError;
     use std::fs;
 

@@ -347,8 +347,6 @@ pub fn no_fix_reason() -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

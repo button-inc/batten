@@ -151,25 +151,23 @@ const SLOT_NAMES: [&str; SLOTS] = ["subject", "action", "condition"];
 /// namespace this grammar replaced, wearing a delimiter.
 const SLOTS: usize = 3;
 
-impl Applicability {
-    /// Whether this is the default, for `skip_serializing_if`.
-    ///
-    /// Keeps `-J` byte-identical for the 200-odd classes that declare nothing,
-    /// which is what makes the column additive on the machine surface too.
-    #[must_use]
-    pub fn is_default(&self) -> bool {
-        matches!(self, Applicability::Advice)
-    }
-
+/// `Applicability` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ApplicabilityExt: Sized {
     /// Whether the boundary may run a repair for this class.
     #[must_use]
-    pub fn repairs(&self) -> bool {
-        !self.is_default()
-    }
+    fn repairs(&self) -> bool;
 
     /// The stable lowercase spelling, for machine output (§6).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str;
+}
+
+impl ApplicabilityExt for Applicability {
+    fn repairs(&self) -> bool {
+        !self.is_default()
+    }
+
+    fn as_str(self) -> &'static str {
         match self {
             Applicability::Advice => "advice",
             Applicability::Retry => "retry",
@@ -1241,10 +1239,6 @@ pub fn routed_only_into_protection(
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::verdict::RouteKindExt as _;
-    #[cfg(test)]
-    use crate::verdict::VocabularyExt as _;
 
     fn route(id: &str) -> Route {
         Route {

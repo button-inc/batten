@@ -60,6 +60,7 @@
 //! deterministic function of the two configs and nothing else.
 
 use crate::budget::BudgetExt as _;
+use crate::judge::PayloadClassExt as _;
 use crate::rules::RuleExt as _;
 use crate::verdict::VocabularyExt as _;
 use crate::waiver::WaiverExt as _;
@@ -4438,8 +4439,6 @@ fn strictness_token(strictness: Strictness) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
     #[cfg(test)]
     use crate::config::ConfigExt as _;
 

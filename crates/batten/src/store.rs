@@ -1147,8 +1147,6 @@ fn adopt_in(root: &Path, store: Option<&str>, err: &mut dyn std::io::Write) -> R
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
 
     fn material(common: &str, roots: &[&str], remotes: &[(&str, &str)], name: &str) -> KeyMaterial {
         KeyMaterial {

@@ -213,9 +213,6 @@ impl crate::output::Line for Capabilities {
 mod tests {
     use super::*;
     #[cfg(test)]
-    #[cfg(test)]
-    use crate::budget::BudgetExt as _;
-
     #[test]
     fn projecting_no_config_lists_no_gates() {
         // THIS IS A PROJECTION CASE, NOT A REPOSITORY STATE, and saying so is the
