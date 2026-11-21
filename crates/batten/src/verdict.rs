@@ -49,7 +49,9 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 
 use crate::config_check::verdict::vendored;
-use crate::config_model::{DeclaredVerdict, Route, Vocabulary, VocabularyWord};
+#[cfg(test)]
+use crate::config_model::VocabularyWord;
+use crate::config_model::{DeclaredVerdict, Route, Vocabulary};
 use crate::error::UsageError;
 use crate::preset_catalog::{Applicability, RouteKind};
 
@@ -105,37 +107,6 @@ impl RouteKindExt for RouteKind {
             RouteKind::Issue => "issue",
             RouteKind::Override => "override",
         }
-    }
-}
-
-/// `Vocabulary` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait VocabularyExt: Sized {
-    /// The list for one slot, by position.
-    fn slot(&self, position: usize) -> &[VocabularyWord];
-
-    /// Whether this vocabulary declares anything at all.
-    #[must_use]
-    fn is_empty(&self) -> bool;
-
-    /// Every declared word, with the slot it was declared in.
-    fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)>;
-}
-
-impl VocabularyExt for Vocabulary {
-    fn slot(&self, position: usize) -> &[VocabularyWord] {
-        match position {
-            0 => &self.subject,
-            1 => &self.action,
-            _ => &self.condition,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.subject.is_empty() && self.action.is_empty() && self.condition.is_empty()
-    }
-
-    fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)> {
-        (0..SLOTS).flat_map(move |slot| self.slot(slot).iter().map(move |word| (slot, word)))
     }
 }
 
