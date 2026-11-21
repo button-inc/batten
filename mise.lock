@@ -647,6 +647,30 @@ url = "https://dl.deno.land/release/v2.9.6/deno-x86_64-apple-darwin.zip"
 checksum = "sha256:15e5300b0ba3c3695a7621d90160a746ec9e710228cee639afa9d580f6e3cd11"
 url = "https://dl.deno.land/release/v2.9.6/deno-x86_64-pc-windows-msvc.zip"
 
+[[tools."github:mstange/samply"]]
+version = "samply-v0.13.1"
+backend = "github:mstange/samply"
+
+[tools."github:mstange/samply"."platforms.linux-arm64"]
+checksum = "sha256:aa465162b62830168775b7ff4804bc35049436dcbc29bb3d1ea9f580380ea06a"
+url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-unknown-linux-gnu.tar.xz"
+
+[tools."github:mstange/samply"."platforms.linux-x64"]
+checksum = "sha256:61875daad67888798690dea3cb2748279df6ac299c5c6a857d67eed7642473d9"
+url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-unknown-linux-gnu.tar.xz"
+
+[tools."github:mstange/samply"."platforms.macos-arm64"]
+checksum = "sha256:7597239aa3769e75058be5ed359dbfe067f5e7714a5f052c45dd81d509aec17f"
+url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-apple-darwin.tar.xz"
+
+[tools."github:mstange/samply"."platforms.macos-x64"]
+checksum = "sha256:a57f05f9162d06c36df6d51425d976ac774a8cd6dbd84050e6303fa8bf813998"
+url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-apple-darwin.tar.xz"
+
+[tools."github:mstange/samply"."platforms.windows-x64"]
+checksum = "sha256:8fed74dac18197bbb2520125b0199255e09709bed7903a7672a06225a5d7e976"
+url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-pc-windows-msvc.zip"
+
 [[tools."github:nextest-rs/nextest"]]
 version = "cargo-nextest-0.9.104"
 backend = "github:nextest-rs/nextest"

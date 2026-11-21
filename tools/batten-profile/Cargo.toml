@@ -1,0 +1,16 @@
+[package]
+name = "batten-profile"
+description = "Reduce a samply profile to folded stacks and self/inclusive tables a terminal can read."
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+# NEVER RELEASED. A tool this repository runs over its own binary (`skills/profile`).
+publish = false
+
+# ITS OWN WORKSPACE, `batten-semantic`'s shape: a diagnostic that never ships
+# with the engine keeps its dependencies out of the engine's graph. Build it into
+# the root `target/profile-tool` so `batten target prune` collects it.
+[workspace]
+
+[dependencies]
+serde_json = "1"
