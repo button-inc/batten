@@ -30,6 +30,17 @@ pub enum RouteKind {
     Override,
 }
 
+impl RouteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RouteKind::Command => "command",
+            RouteKind::Document => "document",
+            RouteKind::Issue => "issue",
+            RouteKind::Override => "override",
+        }
+    }
+}
+
 /// What the boundary may DO about a class, beyond naming it (CLOUD-1639).
 ///
 /// **Every refusal in this tree is advice**: a class, its pointers, and routes
@@ -77,6 +88,19 @@ pub enum Applicability {
     /// measured, so the reason a retry was rejected has to be somebody's stated
     /// decision rather than a default.
     Silent,
+}
+
+impl Applicability {
+    pub fn repairs(&self) -> bool {
+        !self.is_default()
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Applicability::Advice => "advice",
+            Applicability::Retry => "retry",
+            Applicability::Silent => "silent",
+        }
+    }
 }
 
 impl Applicability {
@@ -2100,6 +2124,16 @@ pub enum RuleScope {
     /// unrelated things across two keys is the cross-vocabulary confusion
     /// [`tests::severity_and_scope_vocabularies_do_not_cross`] exists to prevent.
     MediatedCall,
+}
+
+impl RuleScope {
+    pub const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RuleScope::Tree => "tree",
+            RuleScope::MediatedCall => "mediated_call",
+        }
+    }
 }
 
 /// A `command`-kind route, which is most of them.

@@ -40,12 +40,9 @@
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
 
-use crate::budget::BudgetExt as _;
 use crate::commit::CommitExt as _;
 use crate::config_check::rules::RuleExt as _;
 use crate::rules::RuleExt as _;
-use crate::rules::VerdictProgramExt as _;
-use crate::verdict::ApplicabilityExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

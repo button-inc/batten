@@ -33,8 +33,6 @@
 //! Scanning is inspection-only and byte-stable: for identical config and
 //! identical tree bytes it returns the identical, sorted hit list.
 
-#[cfg(test)]
-use crate::config_check::markers::MarkerExt as _;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -45,20 +43,6 @@ use serde::Serialize;
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_check::markers::validate;
 use crate::config_model::Marker;
-
-/// `Marker` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait MarkerExt: Sized {
-    /// Whether this marker looks at `path`.
-    fn selects(&self, path: &str) -> bool;
-}
-
-impl MarkerExt for Marker {
-    fn selects(&self, path: &str) -> bool {
-        self.glob
-            .as_ref()
-            .is_none_or(|glob| crate::selector::glob_match(glob, path))
-    }
-}
 
 /// One occurrence of a marker: the pointer, never the line.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]

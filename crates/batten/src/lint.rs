@@ -53,8 +53,6 @@
 //! only through a clearly explained question whose presented text and selected
 //! answer are recorded, which is what [`admissions`] now decides over.
 
-use crate::config::ConfigExt as _;
-use crate::config::UnresolvableExt as _;
 use crate::rules::RuleKindExt as _;
 use crate::waiver::WaiverExt as _;
 use std::fmt;

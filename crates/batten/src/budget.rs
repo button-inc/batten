@@ -75,26 +75,6 @@ use crate::severity::RuleSeverity;
 /// right shape here.
 const BYTES_PER_TOKEN: usize = 4;
 
-/// `Budget` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait BudgetExt: Sized {
-    /// The declared sets, in name order — the fixed evaluation and report order.
-    fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)>;
-
-    /// Whether the table declares nothing.
-    #[must_use]
-    fn is_empty(&self) -> bool;
-}
-
-impl BudgetExt for Budget {
-    fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
-        self.0.iter()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
 /// One measured file. Pointer-only: a path and its counts, never a byte of the
 /// content that produced them (non-negotiable rule 4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

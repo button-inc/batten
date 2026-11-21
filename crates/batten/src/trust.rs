@@ -59,8 +59,6 @@
 //! Every comparison is key-local and order-independent, so the report is a
 //! deterministic function of the two configs and nothing else.
 
-use crate::budget::BudgetExt as _;
-use crate::judge::PayloadClassExt as _;
 use crate::rules::RuleExt as _;
 use crate::waiver::WaiverExt as _;
 use std::collections::BTreeSet;
@@ -4437,9 +4435,6 @@ fn strictness_token(strictness: Strictness) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    #[cfg(test)]
-    #[cfg(test)]
-    use crate::config::ConfigExt as _;
 
     fn parse(text: &str) -> Config {
         config::parse(text, "test").unwrap()

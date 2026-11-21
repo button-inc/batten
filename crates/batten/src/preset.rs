@@ -47,7 +47,6 @@
 //! leaving it true by accident.
 
 use crate::rules::RuleExt as _;
-use crate::rules::RuleScopeExt as _;
 use std::collections::BTreeSet;
 use std::path::Path;
 

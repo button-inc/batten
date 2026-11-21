@@ -45,7 +45,6 @@
 //! most important property in this file. Only a zero exit reaches the postures,
 //! and which posture is the CLASS's declaration rather than this module's guess.
 
-use crate::verdict::ApplicabilityExt as _;
 use std::path::Path;
 
 use crate::preset_catalog::Applicability;
