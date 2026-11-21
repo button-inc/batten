@@ -1629,17 +1629,9 @@ pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<P
     Ok(path)
 }
 
-#[cfg(unix)]
+/// [`crate::durable::make_executable`], with an error this crate's callers read.
 pub(crate) fn make_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn make_executable(_path: &Path) -> Result<()> {
-    // Windows has no executable bit; the extension carries it.
-    Ok(())
+    Ok(crate::durable::make_executable(path)?)
 }
 
 #[cfg(test)]
