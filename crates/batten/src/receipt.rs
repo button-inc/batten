@@ -82,13 +82,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 pub(crate) use crate::config_check::receipt::safe_subject;
 #[allow(unused_imports)]
 pub(crate) use crate::config_check::receipt::validate_check_name;
 pub use crate::config_check::receipt::validate_verified_by;
 use crate::config_model::ReceiptKey;
+pub use crate::digest::sha256_hex as hex_sha256;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::output::{Mode, Verbosity};
@@ -1347,27 +1347,6 @@ fn load_statement(path: &Path) -> Option<Statement> {
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
     (statement.statement_type == STATEMENT_TYPE && statement.predicate_type == PREDICATE_TYPE)
         .then_some(statement)
-}
-
-/// Lowercase hex SHA-256 over `bytes` — the value an in-toto digest set's
-/// `sha256` key carries.
-///
-/// Public because the envelope's digest vocabulary is shared: [`crate::design`]
-/// binds a capture with the same digest-set spelling, and a second hash of the
-/// same bytes written in a second module is how two "sha256" fields come to
-/// disagree. A *plain* digest, deliberately not [`crate::identity`]'s
-/// domain-tagged construction: this value is produced by whatever attestation
-/// tool wrote the record, so it must be the ordinary one anybody can reproduce.
-#[must_use]
-pub fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        // Infallible nibble pushes, the same shape as `Fingerprint::to_hex`.
-        hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        hex.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    hex
 }
 
 /// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`):

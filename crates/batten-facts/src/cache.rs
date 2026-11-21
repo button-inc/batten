@@ -41,6 +41,8 @@
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use crate::digest::hex;
+
 /// The signature line the Cache Directory Tagging spec requires, byte for byte.
 const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
      # This file is a cache directory tag created by batten.\n\
@@ -564,16 +566,6 @@ pub mod clock {
 #[must_use]
 pub fn stat_identity(path: &Path) -> Option<String> {
     stamp(path).map(|stamp| stamp.fields)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
 }
 
 #[cfg(test)]

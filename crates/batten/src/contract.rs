@@ -70,7 +70,7 @@ use anyhow::Result;
 use crate::facts::Look;
 use crate::git::tree_files;
 use crate::identity::surface_fingerprint;
-use crate::rules::glob_match;
+use crate::selector::glob_match;
 
 /// The directory, under the git dir, holding one snapshot per session.
 ///

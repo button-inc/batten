@@ -163,10 +163,7 @@ pub fn mint(
     answer: &[u8],
     via: &str,
 ) -> Result<String> {
-    let digest: String = crate::receipt::hex_sha256(answer)
-        .chars()
-        .take(12)
-        .collect();
+    let digest: String = crate::digest::sha256_hex(answer).chars().take(12).collect();
     let path = receipt_path(git_dir, host, session, pr);
     if let Some(store) = path.parent() {
         std::fs::create_dir_all(store)?;

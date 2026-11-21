@@ -760,7 +760,7 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
             "engine install: the release publishes no digest for {asset}, so it cannot be verified"
         ))
     })?;
-    let got = crate::receipt::hex_sha256(archive);
+    let got = crate::digest::sha256_hex(archive);
     if got != want {
         return Err(UsageError::raise(format!(
             "engine install: {asset} hashes {got}, not the {want} its release published; nothing was installed"
@@ -1188,7 +1188,7 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
 /// from; 0 for an item that carries no span.
 fn item_line(text: &str, item: &toml_edit::Item) -> usize {
     item.span()
-        .map_or(0, |span| crate::lint::line_of(text, span.start))
+        .map_or(0, |span| crate::findings::line_of(text, span.start))
 }
 
 /// `url` moved to release `new` (bare, `9.9.9`), or `None` when it names no

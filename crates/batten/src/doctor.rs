@@ -1276,7 +1276,7 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     if left.len() != right.len() {
         return Mediator::Stale;
     }
-    if crate::receipt::hex_sha256(&left) != crate::receipt::hex_sha256(&right) {
+    if crate::digest::sha256_hex(&left) != crate::digest::sha256_hex(&right) {
         return Mediator::Stale;
     }
     // THE INSTALL MATCHES THE BUILD — WHICH SAYS NOTHING ABOUT THE SOURCE
