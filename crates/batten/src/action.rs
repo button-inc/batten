@@ -56,96 +56,9 @@ use std::path::Path;
 )]
 use std::process::{Command, Stdio};
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
+pub use crate::config_model::{Action, HookConfig};
 use crate::error::UsageError;
 use crate::hook::Event;
-
-/// The `[hook]` table: what this repository attaches to hook events.
-///
-/// A table rather than a bare `[[hook.action]]` array at the top level, so the
-/// noun has somewhere to grow — and so the config surface reads the way the
-/// house style names it (§9).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct HookConfig {
-    /// The declared actions, in declaration order. Order is the firing order:
-    /// a reader should be able to predict it from the file without a rule.
-    #[serde(default, rename = "action", skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<Action>,
-    /// The declared handlers, in declaration order (CLOUD-898).
-    ///
-    /// Order is the running order, and it decides which of two refusals is
-    /// reported — so a reader predicts it from the file rather than from a rule,
-    /// exactly as `action`'s firing order is.
-    ///
-    /// A SECOND NOUN IN THE SAME TABLE, not a widening of the first. An action
-    /// is a side effect that cannot change the answer; a handler participates in
-    /// the decision. They share `[hook]` because they answer the same question —
-    /// what does this repository attach to hook events — and stay separate
-    /// because they make opposite promises about the answer.
-    #[serde(default, rename = "handler", skip_serializing_if = "Vec::is_empty")]
-    pub handlers: Vec<crate::handler::Handler>,
-    /// Whether this repository declares its hook surfaces **exclusively**
-    /// batten's: one `batten hook` registration per emitted event, and no other
-    /// command registered natively beside it (CLOUD-893).
-    ///
-    /// **A DECLARATION, and that is what makes it expressible at all.** Whether a
-    /// hook beside batten's is legitimate is a consumer's judgement — the reason
-    /// [`crate::doctor::HarnessWiring::siblings`] gives for being a count and
-    /// never a failure — so the engine may not decide it. What the engine CAN do
-    /// is enforce what a consumer decided, and this is where that decision is
-    /// written down. Naming the invariant in `crates/batten` while leaving the
-    /// choice to the config is what keeps non-negotiable rule 1 intact.
-    ///
-    /// **Raise-only (house-style §8), which is the whole difference between this
-    /// and a waiver.** Absent or `false` is today's behaviour, so no adopter
-    /// inherits a verdict by upgrading; `true` can only ever ADD refusals. That
-    /// is categorically unlike a declaration that suppresses one — a sibling
-    /// table naming an issue that will retire each entry reads as diligence and
-    /// functions as a permanent exemption, and it is what let this repository
-    /// report green over ten non-batten registrations.
-    ///
-    /// It says nothing about handlers: a `[[hook.handler]]` runs BEHIND `batten
-    /// hook` rather than beside it, so it is not a native registration and this
-    /// flag never refuses one.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub exclusive: bool,
-    /// The git hooks this repository runs, by githooks(5) name, each the argv
-    /// batten passes git's own arguments and streams through to (CLOUD-2339).
-    ///
-    /// Every git hook links to the batten binary, which dispatches on argv[0];
-    /// a name with no row exits 0. One table, no directory walk (rule 6).
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub git: std::collections::BTreeMap<String, Vec<String>>,
-}
-
-/// One declared side effect.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Action {
-    /// The stable identifier a failure is reported under.
-    ///
-    /// Separate from the command for [`crate::markers::Marker`]'s reason: the
-    /// argv is free to change without the thing it is called in reports changing
-    /// with it.
-    pub id: String,
-    /// The event this action fires on, as [`Event::as_str`] spells it.
-    ///
-    /// A **normalized** token, never a host's own word: an action declared once
-    /// should fire on every host that offers the moment, and keying it on
-    /// Claude's spelling would silently not fire on Gemini's.
-    pub on: String,
-    /// The command, as argv. Never a shell string.
-    ///
-    /// argv rather than a command line because there is then no quoting layer
-    /// between what an operator wrote and what runs — no word splitting, no
-    /// glob expansion, no `$(…)`. §9's rule is that an extension surface names
-    /// a command already on the operator's PATH; this is that, with the
-    /// arguments spelled out rather than parsed back out of a string.
-    pub run: Vec<String>,
-}
 
 impl Action {
     /// Reject an action that cannot honestly fire.

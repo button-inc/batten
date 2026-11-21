@@ -58,13 +58,11 @@
 //! makes an interrupted fetch leave the cache byte-identical, and it is the
 //! property the obvious streaming idiom destroys silently.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -72,6 +70,7 @@ use crate::error::UsageError;
 use crate::secret::Secret;
 // The section's declaration lives with the model (CLOUD-2789).
 pub use crate::config_model::CredentialProbe;
+pub use crate::config_model::{Artifact, Backend, Provision, ProvisionEnv, Unpack};
 
 /// The subdirectory of the repository's out-of-tree state that holds provisioned
 /// tools.
@@ -83,266 +82,6 @@ const ARTIFACT: &str = "artifact";
 
 /// The subdirectory the unpacked binary lands in.
 const BIN_DIR: &str = "bin";
-
-/// Which resolver a [`Provision`] row is turned into a cached binary by
-/// (CLOUD-970).
-///
-/// **One variant today, and that is the deliverable rather than a placeholder.**
-/// The indirection is what makes a second resolver a row rather than a branch;
-/// a real second backend is the row that proves it was worth having, and landing
-/// one here would be two changes wearing one commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-#[non_exhaustive]
-pub enum Backend {
-    /// Fetch a pinned URL, verify its SHA-256, unpack it, place the binary.
-    ///
-    /// The behaviour every committed row already has, named so it can be one of
-    /// several rather than the only thing a row can mean.
-    #[default]
-    Native,
-}
-
-/// One provisioned tool.
-///
-/// The `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived
-/// schema, the same way [`crate::rules::Rule`] mirrors its severity conditional:
-/// an author editing `batten.toml` against the published schema gets the refusal
-/// in their editor rather than on the next run. It is a **second expression of
-/// one rule, never a second authority** — the loader's check is what decides, and
-/// it is what the error message comes from.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(extend("oneOf" = serde_json::json!([
-    { "required": ["url", "sha256"], "not": { "required": ["platforms"] } },
-    { "required": ["platforms"], "not": { "anyOf": [
-        { "required": ["url"] },
-        { "required": ["sha256"] }
-    ] } }
-])))]
-pub struct Provision {
-    /// Which resolver turns this row into a cached binary (CLOUD-970).
-    ///
-    /// **The row names what it wants; a backend resolves it.** Every entry was
-    /// implicitly one resolver — fetch a URL, verify a checksum, unpack, place a
-    /// binary — and that shape is right but was not named, so a second one could
-    /// not be added without a compatibility branch beside every read of `url`.
-    /// mise's answer to the same problem is the backend (`ubi:`, `aqua:`,
-    /// `cargo:`), and it is the pinned toolchain here, so this is adopting prior
-    /// art rather than expanding the core.
-    ///
-    /// **Absent is [`Backend::Native`], which is what makes this additive.** Every
-    /// committed row keeps its meaning and its bytes; `expand → migrate →
-    /// contract` needs no migrate step when the expansion has a default that IS
-    /// the old behaviour. An unknown backend is a load-time config error naming
-    /// it — never a silent skip, which is the direction a row that resolved to
-    /// nothing would fail in.
-    ///
-    /// Non-negotiable rule 1 draws the boundary: the backend VOCABULARY is
-    /// generic and lives here, while which backend a consumer picks and what it
-    /// resolves lives in that consumer's `batten.toml`.
-    #[serde(default)]
-    pub backend: Backend,
-    /// The entry's name, unique within the manifest. Also the first cache path
-    /// segment, so two tools never share a directory.
-    pub name: String,
-    /// The pinned version. Encoded in the cache path, so two pinned versions
-    /// coexist and a version change is a cache miss rather than an overwrite.
-    pub version: String,
-    /// Where the artifact comes from, when one artifact serves every platform.
-    /// `https://` or `file://` — see the module docs for why those two and no
-    /// others.
-    ///
-    /// Mutually exclusive with [`Provision::platforms`]; see that field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// The SHA-256 of the artifact, lowercase hex. The whole equality test.
-    ///
-    /// Paired with [`Provision::url`], and refused without it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
-    /// Per-platform artifacts, keyed `<os>-<arch>` — `linux-x86_64`,
-    /// `macos-aarch64`, `windows-x86_64`.
-    ///
-    /// **Exactly one of this and the `url`/`sha256` pair**, refused at load
-    /// rather than at fetch. Two spellings exist because two genuinely different
-    /// things get pinned: a platform-independent artifact (a script, a jar, a
-    /// test fixture) has one URL and gains nothing from a table, while a
-    /// compiled tool ships one artifact per target and cannot be expressed
-    /// without one. Collapsing them would force every entry to name a platform
-    /// it does not have, and the xor is the same shape `RuleKind::Forbid`'s
-    /// `pattern`/`regex` predicate already uses.
-    ///
-    /// The key is `{os}-{arch}` read straight off [`std::env::consts`] rather
-    /// than a Rust target triple. That is what the running binary can actually
-    /// observe about itself; a triple would need a mapping table, and the arm
-    /// that guesses `-gnu` versus `-musl` from `os = "linux"` is a guess that
-    /// installs a binary the host cannot run. The granularity is the same one
-    /// `mise.lock` uses, and it inherits the same limitation, stated rather than
-    /// hidden: glibc and musl share the `linux` key.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub platforms: BTreeMap<String, Artifact>,
-    /// What the artifact is, and therefore how to get the binary out of it.
-    #[serde(default)]
-    pub unpack: Unpack,
-    /// Leading path components dropped from every archive entry, as `tar
-    /// --strip-components` (CLOUD-2682). Requires [`Provision::bin`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strip: Option<usize>,
-    /// The binary's path inside the archive after `strip` (CLOUD-2682). Set,
-    /// the whole archive is extracted to `<entry>/tree/` and the binary is
-    /// `tree/<bin>`, beside the files it reads; unset, one file is matched by
-    /// name, as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bin: Option<String>,
-    /// The binary's name inside the artifact, and the name it is cached under.
-    pub binary: String,
-    /// A directory to ALSO place the binary in, so it reaches `PATH`.
-    ///
-    /// Absent for every entry batten invokes itself: the cache path is resolved
-    /// in-process, so `ripsecrets` needs no `PATH` presence and putting it there
-    /// would widen what a consumer's shell can reach for no gain.
-    ///
-    /// **It exists for the bootstrap case, which is the one entry the cache
-    /// cannot serve** (CLOUD-1389). The container's Setup script is one line
-    /// that installs batten, so batten is the first thing present and the task
-    /// runner is not — and every gate in this repository is a `mise run`. A
-    /// runner resolved only inside batten's own process is unreachable from the
-    /// session handlers, the git hooks and the agent's own shell, all of which
-    /// invoke it by bare name.
-    ///
-    /// `~` is expanded, and nothing else is: no `$VAR`, no `$(…)`, no glob. The
-    /// same bound [`crate::startup::Startup::check`] states for argv, and for
-    /// the same reason — an operator reads the declared path and that is the
-    /// path. A relative value is refused at load rather than resolved against
-    /// whatever directory the process happens to be in.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub link: Option<String>,
-    /// Environment this tool needs in its OWN process before it will work.
-    ///
-    /// **This is not `[env]` one layer over, and the difference is the whole
-    /// reason the key exists** (CLOUD-1455). A task runner applies its own `[env]`
-    /// to what it SPAWNS; its own resolver — the HTTP client that fetches what it
-    /// is being asked to install — reads the process environment it was started
-    /// with, and nothing a manifest says can reach back and change that. Measured
-    /// 2026-09-05, the same cold install of one pinned tool, the bypass declared
-    /// two ways: through the runner's `[env]` the install 403s, and with the same
-    /// two variables in the process environment it succeeds.
-    ///
-    /// So the environment has to be applied by whatever LAUNCHES the tool, which
-    /// is what this field is read by — [`link_onto_path`] for everything that
-    /// resolves the tool by bare name, and [`crate::rules::spawn_resolving`]'s
-    /// pinned rung for batten's own spawns. Both, because a row that fixed only
-    /// one would leave the other silently unfixed.
-    ///
-    /// Empty for every entry that needs nothing, which is the ordinary case: an
-    /// entry declaring no rows is copied onto `PATH` exactly as before.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<ProvisionEnv>,
-}
-
-/// One variable a provisioned tool's launcher sets, and how its value is found.
-///
-/// **Both spellings are DERIVED rather than literal, and that is deliberate.** A
-/// literal value would be wrong twice over here: the two things this exists to
-/// carry are a proxy exemption list, which must be added to whatever the host
-/// already exempts rather than replacing it, and a credential, which must never
-/// be written into a tracked file at all. Neither is expressible as a constant,
-/// so the row declares the RULE and the launcher resolves it against the
-/// environment it finds.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(extend("oneOf" = serde_json::json!([
-    { "required": ["prepend_list"], "not": { "required": ["from_first_set"] } },
-    { "required": ["from_first_set"], "not": { "required": ["prepend_list"] } },
-    { "required": ["unset"], "not": { "anyOf": [
-        { "required": ["prepend_list"] },
-        { "required": ["from_first_set"] },
-        { "required": ["reject_prefix"] }
-    ] } }
-])))]
-pub struct ProvisionEnv {
-    /// The variable to set.
-    pub name: String,
-    /// Entries to add to the front of a comma-separated list, keeping whatever
-    /// the host already had and adding nothing twice.
-    ///
-    /// Idempotent by construction: an entry already present is not added again,
-    /// so a launcher that runs a launcher does not grow the value without bound.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prepend_list: Vec<String>,
-    /// Set from the first of these variables that is set and non-empty.
-    ///
-    /// A list rather than one name because the fallback is the point: the same
-    /// tool wants a session credential where one exists and the runner's own
-    /// where it does not, and a row naming one would be dead in whichever
-    /// environment does not have it. **Nothing is written when none is set** —
-    /// an empty credential is refused by some tools and accepted as anonymous by
-    /// others, and inventing one is a claim this row cannot make.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub from_first_set: Vec<String>,
-    /// Apply this row only where the host's trust bundle carries a certificate
-    /// authority whose subject names this ORGANISATION.
-    ///
-    /// **This is what keeps a bypass from being applied to somebody's working
-    /// proxy.** A row without it applies everywhere, which is right for a row
-    /// that only ever adds a credential; it is wrong for one that routes traffic
-    /// around a proxy, because a proxy is a legitimate part of most networks and
-    /// the only one worth going around is one that refuses by policy what it was
-    /// asked to carry.
-    ///
-    /// The condition is the CA rather than the proxy variables, and the
-    /// difference is the whole reason the field is spelled this way. Every
-    /// intercepting environment sets those variables, so keying on them would
-    /// refuse to honour a real proxy the moment somebody configured one. Keying
-    /// on the authority in the trust path names the specific interceptor and
-    /// goes false the day those variables point at a CA the operator chose.
-    ///
-    /// Measured 2026-09-05 in this sandbox: the bundle those variables name
-    /// carries five interception authorities, presenting three different common
-    /// names across the direct and proxied paths, and the ORGANISATION is the
-    /// only field common to all five — so a row matching a common name would
-    /// silently miss whichever path the author did not test.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when_trust_names: Option<String>,
-    /// Treat a candidate whose value starts with this as if it were not set.
-    ///
-    /// **A FAST PATH, NEVER THE DECISION.** The authority on whether a
-    /// credential is usable is [`Credential`], which is measured against the
-    /// forge; this is a cheap syntactic hint that lets an obvious marker lose
-    /// without spending a probe on it. A host that stops prefixing its
-    /// placeholder tomorrow — which this one can, without warning — degrades to
-    /// the measurement rather than to a wrong answer, because the probe is what
-    /// actually decides (CLOUD-1569).
-    ///
-    /// **A placeholder is not a weak credential, it is a MARKER**, and the
-    /// difference decides the verdict. This container injects `GITHUB_TOKEN`
-    /// and `GH_TOKEN` carrying a literal `proxy-` prefix: proxied, the value
-    /// never reaches GitHub because the proxy substitutes its own; fenced, it is
-    /// sent verbatim and GitHub answers `Bad credentials`. So `from_first_set`
-    /// alone cannot express the intent — the placeholder IS set and IS
-    /// non-empty, so it wins the first-set race against nothing (CLOUD-1569).
-    ///
-    /// Applied to every candidate, including the row's own name where it appears
-    /// in the list, which is what lets one row say "prefer a real credential,
-    /// and if there is none, leave nothing behind rather than a marker".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reject_prefix: Option<String>,
-    /// Remove the variable from the launched environment entirely.
-    ///
-    /// **Unset is not "set to empty", and only unset is honest here.** An empty
-    /// `HTTPS_PROXY` is read by some clients as "no proxy" and by others as a
-    /// malformed URL, and an empty credential is refused by some tools and taken
-    /// as anonymous by others — so writing one is a claim this row cannot make.
-    /// The distinction already exists one field up, where `from_first_set`
-    /// resolving to nothing writes nothing.
-    ///
-    /// Pair it with `when_trust_names`: clearing a proxy variable is right in a
-    /// container whose egress is intercepted by an authority the row names, and
-    /// wrong on a machine whose proxy somebody configured deliberately.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub unset: bool,
-}
 
 /// Whether the credential this container was given actually works.
 ///
@@ -384,31 +123,6 @@ pub enum EnvAction {
     Set(Secret),
     /// Remove the variable from the child's environment.
     Unset,
-}
-
-/// One platform's artifact: where it comes from, and what it must hash to.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Artifact {
-    /// Where the artifact comes from. `https://` or `file://`.
-    pub url: String,
-    /// The SHA-256 of the artifact, lowercase hex.
-    pub sha256: String,
-    /// This platform's archive format, when it is not the entry's.
-    ///
-    /// A tool commonly ships a tarball for every Unix target and a zip for
-    /// Windows (uv, zizmor and actionlint all do), so one entry-wide
-    /// [`Provision::unpack`] could not pin all five platforms. Absent means the
-    /// entry's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unpack: Option<Unpack>,
-    /// This platform's [`Provision::strip`], when it is not the entry's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strip: Option<usize>,
-    /// This platform's [`Provision::bin`], when it is not the entry's: Node's
-    /// Linux tarball has `bin/node`, its Windows zip `node.exe` at the top.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bin: Option<String>,
 }
 
 impl Provision {
@@ -479,21 +193,6 @@ impl Provision {
 #[must_use]
 pub fn platform_key() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
-/// How to get the binary out of the fetched artifact.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Unpack {
-    /// The artifact *is* the binary.
-    #[default]
-    None,
-    /// A gzipped tarball; the entry whose file name is
-    /// [`Provision::cached_name`] is extracted and everything else ignored.
-    TarGz,
-    /// A zip archive, read the same way as [`Unpack::TarGz`].
-    Zip,
 }
 
 /// Why an entry is not fresh. Three states rather than a boolean, because
@@ -2664,6 +2363,7 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// CLOUD-2124: the measured case, a scratch clone's debug build provisioning
     /// the host from inside its own checkout, is refused; an installed engine,

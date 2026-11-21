@@ -60,97 +60,14 @@ use std::path::Path;
 
 use anyhow::Result;
 use regex::Regex;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+pub use crate::config_model::{Attribution, Identity};
 use crate::decision::{Caller, Provenance};
 use crate::error::UsageError;
 use crate::git;
 use crate::hook::{Capability, Harness};
 use crate::verdict::{Native, Subject as Pointer};
-
-/// The `[attribution]` table: what produced commits may carry about the tooling.
-///
-/// Consumer-specific by nature (non-negotiable rule 1, extended from consumers to
-/// vendors): the engine holds the matcher, this table holds the answer. A vendor
-/// name is configuration here and never a literal in the crate.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Attribution {
-    /// Patterns refused in the `author` and `committer` identity fields.
-    ///
-    /// Both fields, because the environment sets both and a repair reaching only
-    /// `author` leaves the vendor identity on every commit's `committer` — absent
-    /// from `git log`'s default format and fully public regardless.
-    pub identity_deny: Vec<String>,
-    /// Patterns refused in any trailer, matched against the whole `Key: value`
-    /// line: a co-authorship form lives in the key, a session URL in the value.
-    pub trailer_deny: Vec<String>,
-    /// Patterns refused in the commit message body — attribution-as-advertising.
-    pub body_deny: Vec<String>,
-    /// The carve-out from [`Attribution::trailer_deny`]. Absent or empty exempts
-    /// **nothing**, which is how a silent posture is expressed as data.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub trailer_allow: Vec<String>,
-    /// Identities permitted to have cut a release tag (CLOUD-1794).
-    ///
-    /// AN ALLOW LIST, AND A SEPARATE ONE FROM [`Attribution::identity`], because
-    /// the two answer different questions and measurably hold different values.
-    /// `identity` is what `attribution identity` WRITES into a clone's git config
-    /// — the identity commits must be authored by. A release tag is cut by
-    /// whatever credential the release workflow holds, which renders as that
-    /// account's identity and need not be the committing one. Measured on this
-    /// repository: every tag from v0.0.155 to v0.0.162 was cut by an address that
-    /// is not `identity`'s, and the history carries both as legitimate.
-    ///
-    /// Judging tags against `identity` therefore refuses every release, which is a
-    /// worse outage than the one this gate exists to catch — and is exactly what
-    /// the first draft did before it was run against real tags.
-    ///
-    /// A LIST rather than one value, because the accountable credential changes:
-    /// migrating from a personal token to an org-owned App (CLOUD-94) changes the
-    /// identity tags carry, and a transition where both are briefly valid should
-    /// be expressible without leaving the gate off.
-    ///
-    /// DEFAULTED, AND THAT IS NOT THE SAME CLAIM AS "AN EMPTY LIST IS FINE"
-    /// (CLOUD-1789). The first draft made this mandatory and conflated two
-    /// questions: whether an empty list is a policy — it is not — and whether
-    /// every consumer must answer this one, which it must not. `Attribution`
-    /// carries `deny_unknown_fields`, so a required field here makes any config
-    /// written before this key existed fail to parse, which is a breaking change
-    /// to a table that governs commits rather than tags; it was caught by
-    /// `trust::tests::shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening`,
-    /// whose fixture is a `[attribution]` table with no reason to mention tags.
-    ///
-    /// ABSENT IS COULD-NOT-LOOK, NEVER CLEAN, which is where the "empty is not a
-    /// policy" half survives: [`Attribution::judge_tagger`] refuses to decide over
-    /// an empty list rather than passing every tag. So a consumer that does not
-    /// govern tag identity is unaffected — it never calls the verb — and one that
-    /// calls the verb without declaring the key gets a loud exit `1` instead of a
-    /// false green. That is the asymmetry rather than a softening of it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tag_identity_allow: Vec<String>,
-    /// A committed accountable identity: still parsed, NEVER consulted
-    /// (CLOUD-2659).
-    ///
-    /// Who answers for a commit is the person making it, and a name committed
-    /// here reaches every clone, so `attribution identity` resolves the person at
-    /// run time instead (git, the session owner, the forge user). Optional so a
-    /// table without it loads; kept parseable so a consumer that still carries
-    /// one does not break. A present table is still refused with a blank half.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<Identity>,
-}
-
-/// The identity a commit is accountable to.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Identity {
-    /// `user.name`.
-    pub name: String,
-    /// `user.email`.
-    pub email: String,
-}
 
 impl Identity {
     /// The identity as git renders it in `%an <%ae>` form.

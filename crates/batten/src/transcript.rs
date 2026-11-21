@@ -85,6 +85,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::config_model::TranscriptConfig;
 use crate::error::UsageError;
 use crate::hook::{Harness, RecordShape, TranscriptShape};
 
@@ -2123,72 +2124,6 @@ struct Block {
     content: Option<Value>,
     /// A text block's body, read only for emptiness and never kept.
     text: Option<String>,
-}
-
-/// The configured transcript, as `batten.toml` declares it: where it is, and
-/// whose dialect it is in.
-///
-/// **It used to say "a path, not a format selector", and that was the bug**
-/// (CLOUD-1624). Which host wrote the file was left to the fixtures, so the
-/// engine read every transcript through one host's grammar and reported the zero
-/// events that produces on any other as a clean session. The dialect is a fact
-/// about this consumer's setup, and non-negotiable rule 1 puts a consumer fact
-/// in the consumer's own `batten.toml` rather than in the core.
-///
-/// Host-specific, never consumer-specific, so rule 1 holds in the other
-/// direction too — no consumer's directory layout appears in the engine.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TranscriptConfig {
-    /// Repo-relative path to the completed session transcript.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    /// Which host wrote it, selecting the record grammar to read it with
-    /// (CLOUD-1624).
-    ///
-    /// **Omitted is could-not-look, never a default.** `cli.rs`'s attribution
-    /// host is the precedent and states it: an unnamed host "declares nothing
-    /// rather than borrowing a default's declarations". Defaulting here would
-    /// read an unnamed host's transcript through one host's grammar and report
-    /// the zero events that yields as a clean session — the exact false green
-    /// this key exists to close. A consumer that declares a `path` and no
-    /// `harness` gets [`Capability::Unnamed`] and every gate over the transcript
-    /// abstains.
-    ///
-    /// The fourth fact about one host on this table, joining `path`,
-    /// `memory_root` and the task store for the reason those three already give:
-    /// splitting facts about a single host across tables is the widening rule 6
-    /// forbids.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness: Option<Harness>,
-    /// The host's memory-root prefix, for CLOUD-267's self-persistence match.
-    ///
-    /// Host-adapter data on the same table rather than a second authority: the
-    /// transcript's format and the host's memory layout are two facts about one
-    /// host, and splitting them across tables would be the widening rule 6
-    /// forbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.
-    ///
-    /// A **prefix matched against targets the transcript recorded** — never a
-    /// path this engine opens, stats, or globs, which is what keeps the rule
-    /// inside the repo root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_root: Option<String>,
-    /// Where this host keeps the session's own task store, with `{session}`
-    /// standing in for the id the envelope carries (CLOUD-1376).
-    ///
-    /// ON THIS TABLE RATHER THAN A `[session]` ONE, and the reason is this
-    /// table's own: the transcript's format and the host's memory layout are
-    /// already "two facts about one host", and splitting them across tables
-    /// would be the widening rule 6 forbids. A third fact about the same host
-    /// joins them rather than opening a second authority over the same subject.
-    ///
-    /// A TEMPLATE, because the engine may not derive it. The store lives outside
-    /// the repository root and its layout is the HOST's — deriving it from the
-    /// transcript path would put a directory layout in the engine, which rule 1
-    /// refuses. The consumer names the shape; the engine substitutes one field it
-    /// was handed and opens what the substitution names.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<String>,
 }
 
 /// Where the engine parks a pointer at the live session's task store.

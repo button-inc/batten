@@ -63,6 +63,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::config_model::PlanQuery;
 use crate::facts::Look;
 
 /// The program this module adopts.
@@ -696,42 +697,6 @@ pub fn resolve(root: &Path) -> Look<Contract> {
 // make the engine a second authority on which files a step runs over — the
 // disagreement class `.claude/rules/rust.md` records, in the one place where the
 // other authority is a program somebody else maintains.
-
-/// One declared plan query: which surface to ask about, and what a module needs
-/// to decide over the answer.
-///
-/// **`required` and `prohibited_profiles` are CONSUMER facts** and live in the
-/// row rather than in this crate (non-negotiable rule 1). They are projected
-/// alongside the acquired plan so the module compares two halves of one document
-/// rather than reaching for a second source — the same shape a `[[rule.tools]]`
-/// row's `id` gives its module.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct PlanQuery {
-    /// The key this plan is projected under in `input.tree.plan`.
-    pub id: String,
-    /// Which surface to ask about: a hook name the contract also covers.
-    pub hook: String,
-    /// The steps this consumer requires the plan to include.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required: Vec<String>,
-    /// Profiles whose presence makes the plan unusable for this consumer.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prohibited_profiles: Vec<String>,
-    /// Profiles to ask the runner about, each passed as `--profile <p>`
-    /// (CLOUD-843).
-    ///
-    /// **The runner's own grammar, including its negation** (`!slow`), so a
-    /// consumer can ask what the gate plans with a tier switched OFF — the only
-    /// reading that shows which steps declare that tier, since a step excluded
-    /// for a missing profile is by construction a step that declared it. The
-    /// answer stays hk's: this passes the words and parses nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub profile: Vec<String>,
-}
 
 impl PlanQuery {
     /// Whether this row names a surface the contract does not cover.
