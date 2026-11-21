@@ -174,15 +174,15 @@ fn calls(text: &str, needle: &str) -> Result<String, String> {
             current = resolve(spec);
         } else if let Some(spec) = line.strip_prefix("cfn=") {
             callee = Some(resolve(spec));
-        } else if let Some(rest) = line.strip_prefix("calls=") {
-            if let Some(called) = callee.take().filter(|c| c.contains(needle)) {
-                let n: u64 = rest
-                    .split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse().ok())
-                    .unwrap_or(0);
-                *counted.entry((called, current.clone())).or_default() += n;
-            }
+        } else if let Some(rest) = line.strip_prefix("calls=")
+            && let Some(called) = callee.take().filter(|c| c.contains(needle))
+        {
+            let n: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            *counted.entry((called, current.clone())).or_default() += n;
         }
     }
     if counted.is_empty() {
@@ -245,6 +245,13 @@ fn wrapped(command: &[String]) -> String {
 /// writing `out` and its `.syms.json` sidecar. Every iteration gets its own
 /// stdin through `sh -c '… < payload'`: a bare redirect would be consumed by
 /// the first and leave the rest adjudicating nothing.
+#[expect(
+    clippy::disallowed_types,
+    reason = "two spawns, both the point of the verb: `mise exec -- cargo build --profile \
+              profiling` (status only, output inherited) and `mise exec -- samply record` \
+              (status only, stdout discarded); a never-published diagnostic outside the \
+              engine, so no capture or stream contract applies"
+)]
 fn record(arm: &str, rate: u32, iterations: u32, out: &Path) -> Result<(), String> {
     let repo = std::env::current_dir().map_err(|e| e.to_string())?;
     let (_, payload, argv, staged) =
