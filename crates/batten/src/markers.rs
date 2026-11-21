@@ -38,34 +38,13 @@ use std::io;
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::rules;
 
-/// One suppression marker declared in `batten.toml`.
-///
-/// The two fields are deliberately separate axes: `id` is the stable name a
-/// count is reported under and may not change when the spelling does, while
-/// `token` is the literal text scanned for. Collapsing them would make every
-/// re-spelling of a marker look like a brand-new one whose count starts at
-/// zero — the ratchet defeated by a rename.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Marker {
-    /// The stable identifier counts are reported under.
-    pub id: String,
-    /// The literal text that marks a suppression. Matched as a substring, not a
-    /// pattern: a marker is a fixed shape an author types, and admitting a
-    /// regex here would make the count a function of an expression rather than
-    /// of the tree.
-    pub token: String,
-    /// Which files this marker is looked for in, as a `/`-separated glob. Omit
-    /// to scan the whole tree.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub glob: Option<String>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
+pub use crate::config_model::Marker;
 
 impl Marker {
     /// Reject a marker that cannot honestly be counted.
