@@ -777,24 +777,74 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     // `--all`: every ref is a tip, and the walk keeps only the commits with no
     // parents. Selecting commits, never deciding reachability — the distinction
     // this module's ancestry gate draws.
-    let mut tips: Vec<gix::ObjectId> = all
-        .filter_map(std::result::Result::ok)
+    let references: Vec<gix::Reference<'_>> = all.filter_map(std::result::Result::ok).collect();
+    // KEYED ON WHAT EACH REF NAMES, NOT WHAT IT PEELS TO (CLOUD-2813). Peeling
+    // decompresses every annotated tag object: measured, 25% of a warm `stop`
+    // was spent building this key, after the walk itself was cached. The same
+    // raw targets always peel to the same tips, so they decide a hit, and a
+    // symbolic ref adds nothing a direct ref beside it does not already name.
+    let mut raw: Vec<gix::ObjectId> = references
+        .iter()
+        .filter_map(|reference| reference.target().try_id().map(gix::oid::to_owned))
+        .collect();
+    raw.sort_unstable();
+    raw.dedup();
+    // ONE WALK PER CALL (CLOUD-2813). The walk inflates every commit in the
+    // history, and `store::resolve` reached it three times per `stop`: measured
+    // by callgrind, 3 calls and 1.585 G of the path's 1.845 G instructions. The
+    // answer is a function of the refs' targets ([`RootsKey`]), so within a hook
+    // call's scope it is computed once per distinct set.
+    let key: RootsKey = (repo.git_dir().to_path_buf(), raw);
+    if let Some(found) = with_opens(|opens| opens.2.get(&key).cloned()).flatten() {
+        return Ok(found);
+    }
+    // ACROSS CALLS, INCREMENTALLY (CLOUD-2813). One walk per call is still
+    // O(history) on every hook call, so the last answer is kept under the
+    // repository's state cache: reused when the refs name what they named,
+    // extended from the prior tips when they moved forward.
+    let entry = roots_entry(&repo);
+    let prior = entry
+        .as_ref()
+        .and_then(|(path, cache_key)| read_roots(path, cache_key));
+    if let Some(prior) = prior.as_ref().filter(|prior| prior.raw == key.1) {
+        let found = prior.roots.clone();
+        let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
+        return Ok(found);
+    }
+    // `--all`: every ref is a tip, and the walk keeps only the commits with no
+    // parents. Selecting commits, never deciding reachability — the distinction
+    // this module's ancestry gate draws.
+    let mut tips: Vec<gix::ObjectId> = references
+        .into_iter()
         .filter_map(|reference| reference.into_fully_peeled_id().ok())
         .map(gix::Id::detach)
         .collect();
     tips.sort_unstable();
     tips.dedup();
-    // ONE WALK PER CALL (CLOUD-2813). The walk inflates every commit in the
-    // history, and `store::resolve` reached it three times per `stop`: measured
-    // by callgrind, 3 calls and 1.585 G of the path's 1.845 G instructions. The
-    // answer is a function of the tips ([`RootsKey`]), so within a hook call's
-    // scope it is computed once per distinct tip set.
-    let key: RootsKey = (repo.git_dir().to_path_buf(), tips);
-    if let Some(found) = with_opens(|opens| opens.2.get(&key).cloned()).flatten() {
-        return Ok(found);
+    let found = match prior {
+        Some(ref prior) => roots_since(&repo, &tips, &prior.tips, &prior.roots)
+            .unwrap_or_else(|| all_roots(&repo, &tips)),
+        None => all_roots(&repo, &tips),
+    };
+    if let Some((path, cache_key)) = &entry {
+        write_roots(
+            path,
+            cache_key,
+            &Roots {
+                raw: key.1.clone(),
+                tips,
+                roots: found.clone(),
+            },
+        );
     }
+    let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
+    Ok(found)
+}
+
+/// Every parentless commit reachable from `tips`, sorted: the full walk.
+fn all_roots(repo: &gix::Repository, tips: &[gix::ObjectId]) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
-    if let Ok(walk) = repo.rev_walk(key.1.iter().copied()).all() {
+    if let Ok(walk) = repo.rev_walk(tips.iter().copied()).all() {
         for info in walk.flatten() {
             if info.parent_ids().count() == 0 {
                 found.push(info.id().to_hex().to_string());
@@ -803,8 +853,117 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     }
     found.sort();
     found.dedup();
-    let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
-    Ok(found)
+    found
+}
+
+/// The roots of `tips`, extended from a prior answer instead of walked from
+/// scratch, or `None` when the extension cannot be shown exact.
+///
+/// **Exact or nothing.** Walking from the new tips with the old ones hidden
+/// yields exactly the commits reachable now and not then. If every old tip is
+/// still reachable — still a tip, or a parent of one of those new commits —
+/// then everything reachable then is reachable now, so the roots now are the
+/// old roots plus the new commits' own. A fast-forward commit or fetch always
+/// satisfies that; a rewind, a deleted ref or a missing object does not, and
+/// answers `None`, which the caller turns into the full walk.
+fn roots_since(
+    repo: &gix::Repository,
+    tips: &[gix::ObjectId],
+    old_tips: &[gix::ObjectId],
+    old_roots: &[String],
+) -> Option<Vec<String>> {
+    if old_tips.iter().any(|tip| repo.find_object(*tip).is_err()) {
+        return None;
+    }
+    let walk = repo
+        .rev_walk(tips.iter().copied())
+        .with_hidden(old_tips.iter().copied())
+        .all()
+        .ok()?;
+    let mut parents: std::collections::HashSet<gix::ObjectId> = std::collections::HashSet::new();
+    let mut found: BTreeSet<String> = old_roots.iter().cloned().collect();
+    for info in walk {
+        let info = info.ok()?;
+        let mut parentless = true;
+        for parent in info.parent_ids() {
+            parentless = false;
+            parents.insert(parent.detach());
+        }
+        if parentless {
+            found.insert(info.id().to_hex().to_string());
+        }
+    }
+    let kept = old_tips
+        .iter()
+        .all(|tip| tips.binary_search(tip).is_ok() || parents.contains(tip));
+    kept.then(|| found.into_iter().collect())
+}
+
+/// The cache encoding; bumping it makes every older entry a miss. `2` adds the
+/// refs' raw targets, which decide a hit without peeling.
+const ROOTS_FORMAT: &str = "batten-roots-2";
+
+/// One persisted answer: the refs' raw targets (the hit key), the peeled tips
+/// (what an incremental walk hides), and the roots.
+struct Roots {
+    raw: Vec<gix::ObjectId>,
+    tips: Vec<gix::ObjectId>,
+    roots: Vec<String>,
+}
+
+/// Where this repository's last (tips, roots) answer is kept, and its key, or
+/// `None` for a bare repository or an unresolvable state directory — a miss,
+/// never a failure.
+fn roots_entry(repo: &gix::Repository) -> Option<(PathBuf, String)> {
+    let state = crate::state::repo_state_dir(repo.workdir()?).ok()?;
+    let path = batten_facts::cache::root_under(&state)?.join("roots");
+    let git_dir = repo.git_dir().to_string_lossy();
+    Some((
+        path,
+        batten_facts::cache::key(ROOTS_FORMAT, &[git_dir.as_bytes()]),
+    ))
+}
+
+/// The prior answer: `raw`, `tip` and `root` lines, each a hex id. Anything
+/// unreadable is a miss, and the full walk answers instead.
+fn read_roots(path: &Path, cache_key: &str) -> Option<Roots> {
+    let body = String::from_utf8(batten_facts::cache::read(path, cache_key)?).ok()?;
+    let mut held = Roots {
+        raw: Vec::new(),
+        tips: Vec::new(),
+        roots: Vec::new(),
+    };
+    for line in body.lines() {
+        match line.split_once(' ')? {
+            ("raw", hex) => held.raw.push(gix::ObjectId::from_hex(hex.as_bytes()).ok()?),
+            ("tip", hex) => held
+                .tips
+                .push(gix::ObjectId::from_hex(hex.as_bytes()).ok()?),
+            ("root", hex) => held.roots.push(hex.to_owned()),
+            _ => return None,
+        }
+    }
+    Some(held)
+}
+
+/// Publish the answer, ignoring every failure: the roots are already computed
+/// and correct, and a cache that could refuse the answer would be a defect.
+fn write_roots(path: &Path, cache_key: &str, held: &Roots) {
+    let mut body = String::new();
+    for (label, ids) in [("raw", &held.raw), ("tip", &held.tips)] {
+        for id in ids {
+            body.push_str(label);
+            body.push(' ');
+            body.push_str(&id.to_hex().to_string());
+            body.push('\n');
+        }
+    }
+    for root in &held.roots {
+        body.push_str("root ");
+        body.push_str(root);
+        body.push('\n');
+    }
+    batten_facts::cache::write(path, cache_key, body.as_bytes());
 }
 
 /// Open the repository containing `dir`, isolated from the ambient environment.
@@ -7379,6 +7538,83 @@ mod tests {
         let mut both = vec![first, orphan];
         both.sort();
         assert_eq!(root_commits(&dir).unwrap(), both);
+    }
+
+    /// Fails by: the cross-call root cache answering other than a full walk
+    /// would — after a fast-forward (the incremental path), after a new orphan
+    /// root (added), and after a rewind plus a deleted ref (the fallback, where
+    /// a root must disappear) (CLOUD-2813).
+    #[test]
+    fn the_root_cache_agrees_with_a_full_walk_across_ref_changes() {
+        let (dir, [first, _, third]) = history("roots-cache");
+        set_config_local(&dir, "user.name", "Fixture").expect("name");
+        set_config_local(&dir, "user.email", "fixture@example.invalid").expect("email");
+        let full = |dir: &Path| {
+            let repo = open_fresh(dir).expect("open");
+            let mut tips: Vec<gix::ObjectId> = repo
+                .references()
+                .unwrap()
+                .all()
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.into_fully_peeled_id().ok())
+                .map(gix::Id::detach)
+                .collect();
+            tips.sort_unstable();
+            tips.dedup();
+            all_roots(&repo, &tips)
+        };
+        let tips_now = |dir: &Path| -> Vec<gix::ObjectId> {
+            let repo = open_fresh(dir).expect("open");
+            let mut tips: Vec<gix::ObjectId> = repo
+                .references()
+                .unwrap()
+                .all()
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.into_fully_peeled_id().ok())
+                .map(gix::Id::detach)
+                .collect();
+            tips.sort_unstable();
+            tips.dedup();
+            tips
+        };
+        // A first answer is written to the cache, which must exist: a cache
+        // that silently never writes would pass every equality below.
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        let (entry, _) = roots_entry(&open_fresh(&dir).unwrap()).expect("a cache entry path");
+        assert!(entry.exists(), "the roots cache was never written");
+        let repo = gix::open(&dir).expect("open");
+        let tree = repo.empty_tree().id;
+        let tip = gix::ObjectId::from_hex(third.as_bytes()).unwrap();
+        let before = tips_now(&dir);
+        // Fast-forward: HEAD gains a child of its old tip — the incremental path.
+        repo.commit("HEAD", "fourth\n", tree, [tip])
+            .expect("a child commit");
+        let after = tips_now(&dir);
+        assert_eq!(
+            roots_since(&repo, &after, &before, std::slice::from_ref(&first)),
+            Some(full(&dir))
+        );
+        assert_eq!(root_commits(&dir).unwrap(), full(&dir));
+        // A new orphan root under a new ref.
+        let orphan = repo
+            .commit("refs/heads/orphan", "orphan\n", tree, None::<gix::ObjectId>)
+            .expect("an orphan")
+            .detach();
+        let with_orphan = root_commits(&dir).unwrap();
+        assert!(with_orphan.contains(&orphan.to_hex().to_string()));
+        assert_eq!(with_orphan, full(&dir));
+        // A deleted ref: the orphan's root is unreachable and must go. The
+        // extension cannot show itself exact, so it declines.
+        let with_ref = tips_now(&dir);
+        fs::remove_file(dir.join(".git/refs/heads/orphan")).expect("delete the ref");
+        assert_eq!(
+            roots_since(&repo, &tips_now(&dir), &with_ref, &with_orphan),
+            None
+        );
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        assert_eq!(root_commits(&dir).unwrap(), full(&dir));
     }
 
     /// Fails by: any history walk answering other than git does over the
