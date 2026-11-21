@@ -37,6 +37,13 @@ hk = "1.56.1"                                                # git-hook runner (
 # on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
 # measures (see .github/workflows/perf.yml for why measurement is scheduled).
 "aqua:sharkdp/hyperfine" = "1.20.0"
+# The sampling profiler `skills/profile` reaches for (Firefox Profiler format,
+# perf_event_open directly, so no `perf` binary and no kernel headers). Callgrind
+# answers "which function" at 20-100x slowdown; a sampler answers it at native
+# speed, with wall-clock attribution, which a ~300 ms path needs. Prebuilt
+# release assets for every `lock-complete` platform; `github:` and locked, since
+# the proxy serves a third-party asset by URL but refuses its release listing.
+"github:mstange/samply" = "samply-v0.13.1"
 # NOTE: no cargo-msrv pin, and since CLOUD-593 no MSRV gate needs one. It was
 # already unpinnable — upstream ships no aarch64-unknown-linux binary in ANY
 # release, so a release-asset backend locks no `linux-arm64` entry and `mise run

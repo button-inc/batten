@@ -14545,6 +14545,46 @@ id = "module read first"
 kind = "document"
 target = "policy/sed-line-address.rego"
 
+# A CPU profiler on a stripped binary (`skills/profile`). `release` strips, so
+# callgrind names only addresses: measured on `stop`, 1.8 G instructions under
+# `???:0x…` frames and a rebuild before one function could be named. The
+# refusal is where the skill reaches the agent, at the call that needs it.
+[[rule]]
+id = "program measure unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/profile-stripped.rego"
+severity = "deny"
+
+# A binary in a release output directory: `target/release/x` or
+# `target/<triple>/release/x`, at the start of the word or after a slash, so a
+# `--flag=target/release/…` value is not read as the profiled program.
+[[pattern]]
+id = "release-binary-path"
+regex = '(^|/)target/([^/]+/)?release/[^/]+$'
+
+[[verdict]]
+id = "program measure unread"
+gloss = "a CPU profiler is pointed at a stripped release binary, whose profile can name no function"
+class = """
+`[profile.release]` strips symbols, so callgrind attributes every instruction \
+to a bare address and the run answers nothing. Measured on `stop`: 1.8 G \
+instructions, 85% under one chain of `???:0x…` frames. The `profiling` Cargo \
+profile keeps release code generation and adds symbols, and `skills/profile` \
+carries the rest of the recipe that was rediscovered on every run.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise exec -- cargo build --profile profiling -p batten --bin batten, backgrounded, then profile target/profiling/batten"
+
+[[verdict.route]]
+id = "prompt read first"
+kind = "document"
+target = "skills/profile/SKILL.md"
+
 [[verdict]]
 id = "test name undefined"
 gloss = "an obligation this row declared names no case, or a case with no mutation that could kill it"
