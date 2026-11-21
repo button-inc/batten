@@ -14590,40 +14590,21 @@ id = "prompt read first"
 kind = "document"
 target = "skills/profile/SKILL.md"
 
-# A merge commit on a branch that lands by fast-forward (CLOUD-2813). A rejected
-# push was merged three times on #1276 instead of rebased, and one merge carried
-# conflict markers into a pushed skill. `linear-check` asks only whether the head
-# contains `origin/main`, so nothing refused it. The pre-push `branch-linear`
-# step in `hk.pkl` is the backstop for a merge made any other way.
+# The vendored `linear-history` preset (CLOUD-2273), enabled beside
+# `trunk-based` (CLOUD-2813). It refuses `git merge` unless `--ff-only`, and a
+# `git pull` that does not rebase, at the call. Shipped since v0.0.217 and never
+# enabled here, so on #1276 a rejected push was merged three times, one merge
+# carrying six conflict markers into a pushed skill. A repo-local module
+# re-implementing it was written first and deleted: two gates over one practice
+# is a second authority. The pre-push `branch-linear` step in `hk.pkl` is the
+# backstop for a merge made any other way.
 [[rule]]
-id = "commit place wrong"
+id = "commit write loose"
 no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
-module = "policy/merge-commit-linear.rego"
+preset = "linear-history"
 severity = "deny"
-
-[[verdict]]
-id = "commit place wrong"
-gloss = "a merge commit is made on a branch that lands by fast-forward into a linear history"
-class = """
-History here is linear: a branch lands by fast-forward (`rules/commits.md`). A \
-push refused because the remote holds commits this checkout lacks is rebased \
-onto them, never merged with them; a merge commit puts a second parent into a \
-history that has none, and its conflict resolution is a commit nobody wrote. \
-Measured on #1276: three merges, one carrying six conflict markers into a pushed \
-skill.
-"""
-
-[[verdict.route]]
-id = "branch write first"
-kind = "command"
-target = "git fetch origin <branch>, then git rebase FETCH_HEAD (or git pull --rebase); resolve each conflict in the commit that caused it, then push with --force-with-lease=<branch>:<the remote head you rebased onto>"
-
-[[verdict.route]]
-id = "prompt read first"
-kind = "document"
-target = "rules/commits.md"
 
 [[verdict]]
 id = "test name undefined"
