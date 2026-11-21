@@ -1,0 +1,26 @@
+[package]
+name = "batten-semantic"
+description = "Semantic codemods over rust-analyzer: names resolved per crate and per cfg, never guessed from spelling."
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+# NEVER RELEASED (CLOUD-2803). A tool this repository runs over its own tree.
+publish = false
+
+# ITS OWN WORKSPACE, AND THAT IS THE POINT. `ra_ap_load-cargo` publishes
+# nothing past 0.0.358, whose crates pin `unicode-ident =1.0.24`; the engine's
+# `ra_ap_syntax 0.0.362` pins `=1.0.27`, and cargo unifies a 1.x crate across a
+# workspace, so the two cannot share one. Its own lockfile keeps every version
+# this tool needs away from what the engine ships. Build it into the root
+# `target/semantic` (`mise run semantic`) so `batten target prune` collects it.
+[workspace]
+
+[dependencies]
+ra_ap_load-cargo = "=0.0.358"
+ra_ap_ide = "=0.0.358"
+ra_ap_ide_db = "=0.0.358"
+ra_ap_hir = "=0.0.358"
+ra_ap_project_model = "=0.0.358"
+ra_ap_paths = "=0.0.358"
+ra_ap_vfs = "=0.0.358"
+ra_ap_syntax = "=0.0.358"
