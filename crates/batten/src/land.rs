@@ -2116,6 +2116,11 @@ pub fn verify(
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
+    // THE TREE IT STARTS ON, READ BEFORE IT RUNS (CLOUD-2780). Read after, the
+    // start count equalled the end count, so an edit left by the gate's own
+    // stages compared unmoved and was recorded against HEAD.
+    let start = head.clone();
+    let start_dirty = crate::git::uncommitted(&started).ok();
     // THE GATE'S OWN WINDOW: the low-water mark it is judged by is read from here.
     crate::low_water::reset();
     let classified =
@@ -2124,8 +2129,6 @@ pub fn verify(
                 log = handles;
                 (code, found)
             });
-    let start = head.clone();
-    let start_dirty = crate::git::uncommitted(&started).ok();
     let verified = match classified {
         Ok(ran) => gate_said(head, ran, environment, crate::low_water::read()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
