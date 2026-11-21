@@ -522,10 +522,14 @@ pub fn use_leaves(tree: &ast::UseTree) -> Vec<UseLeaf> {
         if path.last().is_some_and(|last| last == "self") {
             path.pop();
         }
-        let rename = tree
-            .rename()
-            .and_then(|rename| rename.name())
-            .map(|name| name.text().to_string());
+        // `Trait as _` binds no name: its leaf is named `_`, which no path
+        // resolves through, so a consumer regenerating it keeps the `as _`.
+        let rename = tree.rename().and_then(|rename| {
+            rename
+                .name()
+                .map(|name| name.text().to_string())
+                .or_else(|| rename.underscore_token().map(|_| String::from("_")))
+        });
         let renamed = rename.is_some();
         if let Some(name) = rename.or_else(|| path.last().cloned()) {
             out.push(UseLeaf {

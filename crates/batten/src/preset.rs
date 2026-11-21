@@ -49,11 +49,13 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub use crate::config_check::preset::verdict_rows;
 use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
+use crate::preset_catalog::Manifest;
+use crate::preset_catalog::PresetModule;
 use crate::preset_catalog::RuleScope;
-pub use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
+use crate::preset_catalog::find;
+use crate::preset_catalog::names;
 
 impl PresetModule {
     /// The source an engine compiles: the embedded one, or under the
@@ -543,12 +545,11 @@ pub fn mode_sources() -> Vec<(String, String)> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{
-        MANIFESTS, Manifest, PresetModule, eject, ejected_from, ejected_source, find,
-        helpers_defined, mode_sources, names, uses, verdict_rows,
-    };
+    use super::{eject, ejected_from, ejected_source, helpers_defined, mode_sources, uses};
+    use crate::config_check::preset::verdict_rows;
     use crate::config_model::Rule;
     use crate::preset_catalog::RuleScope;
+    use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
 
     use std::collections::BTreeSet;
 
