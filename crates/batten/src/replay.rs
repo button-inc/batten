@@ -214,6 +214,26 @@ pub fn compare_moved(
     translate: &dyn Fn(&str) -> String,
     elsewhere: &dyn Fn(&str) -> bool,
 ) -> Changed {
+    let same = |body: &str| body.to_owned();
+    compare_canonical(base, head, translate, elsewhere, &same, &same)
+}
+
+/// [`compare_moved`], with each body also read by the ITEMS it names rather
+/// than how it spells them (CLOUD-2789): `canon_base` and `canon_head` replace
+/// every path they resolve with the site defining it ([`crate::item_index`]),
+/// so `crate::rules::Rule` at base and `crate::config_model::Rule` at head are
+/// one item when `Rule` moved, or `rules` re-exported it. A respelled path is
+/// then no change; every other token is still compared, so a changed assertion
+/// is still modified. `elsewhere` receives the canonical base shape.
+#[must_use]
+pub fn compare_canonical(
+    base: &str,
+    head: &str,
+    translate: &dyn Fn(&str) -> String,
+    elsewhere: &dyn Fn(&str) -> bool,
+    canon_base: &dyn Fn(&str) -> String,
+    canon_head: &dyn Fn(&str) -> String,
+) -> Changed {
     let index = |source: &str| -> BTreeMap<String, TestFn> {
         tests_in(source)
             .unwrap_or_default()
@@ -226,7 +246,12 @@ pub fn compare_moved(
     for (inner, old) in &before {
         let base_body = translate(&base[old.body.0..old.body.1]);
         match after.get(inner) {
-            Some(new) if differs(&base_body, &head[new.body.0..new.body.1]) => {
+            Some(new)
+                if differs(
+                    &canon_base(&base_body),
+                    &canon_head(&head[new.body.0..new.body.1]),
+                ) =>
+            {
                 changed.modified.push(Modified {
                     inner: inner.clone(),
                     base_body,
@@ -235,7 +260,7 @@ pub fn compare_moved(
                 });
             }
             Some(_) => {}
-            None if elsewhere(&shape(&base_body)) => {}
+            None if elsewhere(&shape(&canon_base(&base_body))) => {}
             None => changed.removed.push((inner.clone(), old.line)),
         }
     }
@@ -487,18 +512,44 @@ pub fn run(
         .filter_map(|(old, new)| Some((old.clone(), new.clone()?)))
         .filter(|(old, new)| old != new)
         .collect();
-    // Every test body at HEAD, by shape, read only if some base test left its
-    // file: what tells a test that moved from one that is gone.
+    // Which item each path names, at base and at HEAD, and the items the
+    // branch moved between files (CLOUD-2789): a body is judged by what it
+    // names, so a path respelled at an item's new home is no change.
+    let base_index = crate::item_index::Index::new(&before);
+    let head_index = crate::item_index::Index::new(&after);
+    let item_moves = crate::item_index::moved_items(&base_index, &head_index);
+    let no_moves = BTreeMap::new();
+    // `crate::` names the file's own crate only for a file under a crate's
+    // `src/`; in an integration test it is the test crate, which is not
+    // indexed, so only its `batten::` paths resolve.
+    let krate_of = |path: &str| -> String {
+        if path.contains("/src/") {
+            crate::item_index::crate_of(path).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    };
+    // Every test body at HEAD, by canonical shape, read only if some base test
+    // left its file: what tells a test that moved from one that is gone.
     let head_shapes: std::cell::OnceCell<BTreeSet<String>> = std::cell::OnceCell::new();
     let shapes_at_head = || {
         head_shapes.get_or_init(|| {
             after
-                .values()
-                .flat_map(|text| {
+                .iter()
+                .flat_map(|(path, text)| {
+                    let krate = krate_of(path);
                     tests_in(text)
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|test| shape(&text[test.body.0..test.body.1]))
+                        .map(|test| {
+                            shape(&crate::item_index::canonical(
+                                &text[test.body.0..test.body.1],
+                                &krate,
+                                &head_index,
+                                &no_moves,
+                            ))
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect()
         })
@@ -515,11 +566,14 @@ pub fn run(
             continue;
         }
         let test_path = head_path.as_deref().unwrap_or(path);
-        let changed = compare_moved(
+        let (base_krate, head_krate) = (krate_of(path), krate_of(test_path));
+        let changed = compare_canonical(
             base_text,
             head_text,
             &|body| translate(body, test_path, &moves),
             &|body| shapes_at_head().contains(body),
+            &|body| crate::item_index::canonical(body, &base_krate, &base_index, &item_moves),
+            &|body| crate::item_index::canonical(body, &head_krate, &head_index, &no_moves),
         );
         for (inner, line) in changed.removed {
             findings.push(Finding {
