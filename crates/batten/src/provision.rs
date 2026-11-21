@@ -1425,7 +1425,7 @@ fn credential_declaration_in(start: &Path) -> std::result::Result<CredentialProb
     // the `.ok()` chain this function used to be, and reported to the operator
     // as "no probe declared" over a repository whose `[credential]` table was
     // right there.
-    let at = root.join(crate::config::CONFIG_FILE);
+    let at = root.join(crate::config_model::CONFIG_FILE);
     let config =
         crate::config::load(&at).map_err(|err| format!("{} will not load: {err}", at.display()))?;
     config

@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config_model::Config;
 use crate::error::UsageError;
 use crate::identity::{canonical_repo_path, surface_fingerprint};
 use crate::{git, trust};
@@ -60,7 +60,7 @@ use crate::{git, trust};
 ///
 /// `batten.toml` governs every consumer by definition, so it is the honest
 /// floor: an epoch over nothing would be a constant, which attributes nothing.
-pub const DEFAULT_TRACKED: &str = crate::config::CONFIG_FILE;
+pub const DEFAULT_TRACKED: &str = crate::config_model::CONFIG_FILE;
 
 /// The paths whose bytes the epoch covers, canonicalized and sorted.
 ///
@@ -281,7 +281,7 @@ fn write_cache(path: &Path, key: &str, epoch: &str) {
 fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
     match base_ref {
         Some(reference) => trust::load_base(dir, reference),
-        None => crate::config::load(&dir.join(crate::config::CONFIG_FILE)),
+        None => crate::config::load(&dir.join(crate::config_model::CONFIG_FILE)),
     }
 }
 
@@ -315,7 +315,7 @@ pub fn for_rule(dir: &Path, base_ref: Option<&str>, rule: &str, verdict: &str) -
     let mut module = None;
     for path in &tracked {
         let contents = read_tracked(dir, path, base_ref)?;
-        if path == crate::config::CONFIG_FILE {
+        if path == crate::config_model::CONFIG_FILE {
             let (projected, declared) = project(&contents, rule, verdict)?;
             module = declared;
             entries.push((path.clone(), projected));
@@ -382,7 +382,7 @@ pub fn for_rule_cached(
         return Ok(value.to_owned());
     }
     let value = for_rule(dir, None, rule, verdict)?;
-    let module = crate::fsio::read(dir.join(crate::config::CONFIG_FILE))
+    let module = crate::fsio::read(dir.join(crate::config_model::CONFIG_FILE))
         .ok()
         .and_then(|text| project(&text, rule, verdict).ok())
         .and_then(|(_, module)| module);

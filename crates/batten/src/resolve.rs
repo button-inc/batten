@@ -505,7 +505,7 @@ pub struct Resolved {
     pub protected: Vec<String>,
     /// The refinement gate's thresholds (CLOUD-472), from the committed
     /// authority alone. `None` is could-not-look and asks for no ratchet.
-    pub ready: Option<crate::config::Ready>,
+    pub ready: Option<crate::config_model::Ready>,
     /// This board's column vocabulary (CLOUD-1623), from the **committed
     /// authority alone**.
     ///
@@ -518,7 +518,7 @@ pub struct Resolved {
     /// **committed authority alone**. `None` accepts nothing, which is the only
     /// safe reading: a local layer that could add an exemption would be a
     /// weakening, and §8 admits raise-only overrides.
-    pub perf: Option<crate::config::Perf>,
+    pub perf: Option<crate::config_model::Perf>,
     /// Programs that only read their operands, so naming a protected path is not
     /// a mutation (CLOUD-1141).
     ///
@@ -669,7 +669,7 @@ pub struct Resolved {
     pub must_land_on: Option<String>,
     /// Who takes the last step (CLOUD-2656), as the authority states it, else
     /// the agent.
-    pub landed_by: crate::config::LandedBy,
+    pub landed_by: crate::config_model::LandedBy,
     /// The hook actions (CLOUD-91), as the authority states it. Not layered,
     /// and the one key where that is a security property rather than a
     /// consistency one: an action is a command, so a local file able to add one

@@ -1445,7 +1445,7 @@ pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> 
     // and the abstention stands rather than becoming that key's usage error.
     if overrides.config_from.is_none()
         && overrides.config_in.is_none()
-        && !Path::new(crate::config::CONFIG_FILE).is_file()
+        && !Path::new(crate::config_model::CONFIG_FILE).is_file()
     {
         if let Ok(path) = named_path("record decide", &family) {
             remove_stale(&path)?;

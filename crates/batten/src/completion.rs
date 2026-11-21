@@ -215,10 +215,10 @@ impl Step {
 /// The step a raised claim owes, given who lands and where the commits are
 /// (CLOUD-2656). Under `"agent"` it is always `land`, today's behaviour.
 #[must_use]
-pub const fn next_step(landed_by: crate::config::LandedBy, push: PushState) -> Step {
+pub const fn next_step(landed_by: crate::config_model::LandedBy, push: PushState) -> Step {
     match landed_by {
-        crate::config::LandedBy::Agent => Step::Land,
-        crate::config::LandedBy::Person => match push {
+        crate::config_model::LandedBy::Agent => Step::Land,
+        crate::config_model::LandedBy::Person => match push {
             PushState::Pushed => Step::MergeHeld,
             PushState::Unpushed => Step::Push,
             PushState::NoUpstream => Step::NoUpstream,
