@@ -11,7 +11,10 @@
 //!
 //! `cargo run -p batten-codemods --example codemod -- <recipe>` runs one by name.
 
+use std::collections::BTreeMap;
+
 use batten::codemod::{self, CouldNotLook, Edition};
+use batten::item_index;
 
 /// One named migration.
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +78,39 @@ pub const RECIPES: &[Recipe] = &[
 #[must_use]
 pub fn named(name: &str) -> Option<&'static Recipe> {
     RECIPES.iter().find(|recipe| recipe.name == name)
+}
+
+/// One named migration whose rewrite of a file depends on the other files:
+/// moving a path to an item's home needs every crate's modules resolved.
+#[derive(Debug, Clone, Copy)]
+pub struct TreeRecipe {
+    /// What the driver is asked for.
+    pub name: &'static str,
+    /// The move, in one line.
+    pub summary: &'static str,
+    /// Path suffixes it never rewrites, as [`Recipe::skip`].
+    pub skip: &'static [&'static str],
+    /// The rewrite of a tree: every `.rs` file (path to text) and every
+    /// `Cargo.toml` (path to text), both relative to the tree's root, in;
+    /// each file whose text changes, out.
+    pub apply: fn(
+        files: &BTreeMap<String, String>,
+        manifests: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String>,
+}
+
+/// Every tree recipe, in the order they were first run.
+pub const TREE_RECIPES: &[TreeRecipe] = &[TreeRecipe {
+    name: "respell-through-shims",
+    summary: "a path through a `pub use crate::…` below a crate root names the item's home, and the shim goes private (CLOUD-2793)",
+    skip: &["mutation_markers.rs"],
+    apply: item_index::respell_through_shims,
+}];
+
+/// The tree recipe named `name`.
+#[must_use]
+pub fn named_tree(name: &str) -> Option<&'static TreeRecipe> {
+    TREE_RECIPES.iter().find(|recipe| recipe.name == name)
 }
 
 fn rand_random(source: &str, _base: &str) -> Result<String, CouldNotLook> {
