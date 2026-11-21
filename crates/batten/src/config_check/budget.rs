@@ -1,4 +1,3 @@
-use crate::budget::BudgetExt as _;
 use crate::config_model::Budget;
 use crate::error::UsageError;
 

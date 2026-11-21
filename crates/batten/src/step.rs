@@ -101,7 +101,6 @@
 //! crosses that hop is a file list, never a verdict: no `Finding` is minted on
 //! this path and no rule is evaluated.
 
-use crate::exec::ExecConfigExt as _;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;

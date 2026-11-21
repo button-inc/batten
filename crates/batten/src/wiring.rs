@@ -57,7 +57,7 @@ use anyhow::Result;
 
 use crate::{git, hook};
 // The section's declaration lives with the model (CLOUD-2789).
-use crate::config_model::{Disarm, Wiring};
+use crate::config_model::Disarm;
 
 /// The event map inside a wiring file.
 ///
@@ -831,65 +831,6 @@ fn add_missing(
 // disk shows no registration at all — so a disarm that read the disk to decide
 // what to disarm would find nothing, exactly when it is needed. The paths are the
 // consumer's to declare and this module never guesses one.
-
-/// `Wiring` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait WiringExt: Sized {
-    /// Refuse a row that could write outside the home directory.
-    ///
-    /// Refused at LOAD rather than skipped at the write, for the reason every
-    /// other table in this file's `validate_sections` neighbourhood is: a row
-    /// that parses and is then silently ignored is a gate that is off, and the
-    /// author has no way to find out. The three refusals are the three ways a
-    /// relative-to-`$HOME` path stops being one.
-    ///
-    /// # Errors
-    ///
-    /// Returns the offending key's reason when a `path` is empty, absolute, or
-    /// climbs out with `..`, or when a `marker` is blank.
-    fn validate(&self) -> Result<(), String>;
-}
-
-impl WiringExt for Wiring {
-    fn validate(&self) -> Result<(), String> {
-        for row in &self.disarm {
-            if row.path.is_empty() {
-                return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
-            }
-            let path = Path::new(&row.path);
-            // A root is the refusal, not absoluteness: on Windows `\x` has a root
-            // and is still relative, yet it escapes `$HOME`, and every absolute
-            // path has one too. A drive-relative `C:x` has neither and still
-            // passes here (CLOUD-2472).
-            if path.has_root() {
-                return Err(format!(
-                    "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \
-                     the home directory, because a shim over a tracked file would be a mutation of \
-                     the tree",
-                    row.path
-                ));
-            }
-            if path
-                .components()
-                .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
-                return Err(format!(
-                    "[[wiring.disarm]]: `path` {:?} climbs out of the home directory with `..`",
-                    row.path
-                ));
-            }
-            // A blank marker matches every body, so the first pass would report
-            // `shimmed` over a file it never touched — the false green this whole
-            // module is built to refuse, one table over.
-            if row.marker.trim().is_empty() {
-                return Err(format!(
-                    "[[wiring.disarm]]: `marker` for {:?} is blank, so no body could carry it",
-                    row.path
-                ));
-            }
-        }
-        Ok(())
-    }
-}
 
 /// What one declared script was found to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
