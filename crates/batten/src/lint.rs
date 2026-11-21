@@ -61,6 +61,8 @@ use serde::Deserialize;
 use toml::Spanned;
 
 use crate::config::{self, Config};
+#[allow(unused_imports)]
+pub(crate) use crate::findings::line_of;
 use crate::severity::RuleSeverity;
 use crate::trust;
 
@@ -591,12 +593,6 @@ fn waiver_smells(
         let _ = &waiver.path;
     }
     found
-}
-
-/// Convert a byte offset into a 1-based line number.
-pub(crate) fn line_of(text: &str, offset: usize) -> usize {
-    text.get(..offset)
-        .map_or(1, |prefix| prefix.matches('\n').count() + 1)
 }
 
 /// Every smell in `text`, sorted.

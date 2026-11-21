@@ -40,8 +40,6 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::rules;
-
 // The section's declaration lives with the model (CLOUD-2789).
 pub use crate::config_check::markers::validate;
 pub use crate::config_model::Marker;
@@ -51,7 +49,7 @@ impl Marker {
     fn selects(&self, path: &str) -> bool {
         self.glob
             .as_ref()
-            .is_none_or(|glob| rules::glob_match(glob, path))
+            .is_none_or(|glob| crate::selector::glob_match(glob, path))
     }
 }
 

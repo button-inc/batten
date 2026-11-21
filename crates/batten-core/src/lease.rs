@@ -753,7 +753,7 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
                     anyhow::anyhow!("lease: a reference delta runs off the end of the pack")
                 })?;
                 cursor += 20;
-                let id = hex_of(raw);
+                let id = crate::digest::hex(raw);
                 let index = objects
                     .iter()
                     .position(|object| object.id == id)
@@ -835,15 +835,6 @@ const OFS_DELTA: u8 = 6;
 
 /// The pack type number for a delta naming its base by object id.
 const REF_DELTA: u8 = 7;
-
-/// Forty hex characters for twenty bytes.
-fn hex_of(raw: &[u8]) -> String {
-    raw.iter().fold(String::with_capacity(40), |mut out, byte| {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
-}
 
 /// Read an offset delta's base distance — git's other variable-length integer.
 ///
