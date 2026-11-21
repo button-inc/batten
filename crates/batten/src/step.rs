@@ -724,6 +724,13 @@ pub fn run_step(
     command: &[String],
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // ONE RUNNER PER STEP AT A TIME (CLOUD-2783). hk's hooks start the same
+    // step in parallel, each found no receipt, and each ran it: measured on lap
+    // 33, `lint:clippy` ran three times at once, ~20 minutes a lap. Held across
+    // check, run and record, so a second runner waits, then reads the first's
+    // receipt as a hit. A lock that cannot be taken runs unlocked: it is an
+    // economy, and the step's verdict is its command's alone.
+    let _held = step_lock(step);
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
     if let Answer::Hit(key) = &answer {
@@ -1050,6 +1057,68 @@ fn trace_file(step: &str) -> Option<std::path::PathBuf> {
         "{TRACES}-{}.trace",
         crate::tools::digest(step.as_bytes())
     )))
+}
+
+/// The exclusive lock one runner of `step` holds (CLOUD-2783), blocking until
+/// any other runner of the same step lets go; released when the file drops.
+/// `None` where the git dir or the lock cannot be had.
+fn step_lock(step: &str) -> Option<std::fs::File> {
+    let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
+    step_lock_at(&git_dir, step)
+}
+
+/// [`step_lock`] under an explicit git dir, for a case to hold.
+fn step_lock_at(git_dir: &Path, step: &str) -> Option<std::fs::File> {
+    let path = git_dir.join(format!("{LOCKS}-{}", crate::tools::digest(step.as_bytes())));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
+
+/// The prefix of each step's run lock under the git dir.
+const LOCKS: &str = "batten-step-lock";
+
+/// Remove every step trace under `git_dir` whose step no runner holds, and
+/// answer how many and how many bytes (CLOUD-2783).
+///
+/// A run removes its own trace once read, but a run that is killed first
+/// leaves it: a stopped lap left a 15 GB `ci-suite` trace in `.git`, and the
+/// disk admission refused the next lap with nothing it could collect. A trace
+/// and its step's lock share one digest, so a trace whose lock can be taken has
+/// no writer: that is the whole test, exact rather than an age guess.
+#[must_use]
+pub fn sweep_orphaned_traces(git_dir: &Path) -> (usize, u64) {
+    let mut swept = (0, 0);
+    for entry in std::fs::read_dir(git_dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(digest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(&format!("{TRACES}-")))
+            .and_then(|rest| rest.strip_suffix(".trace"))
+        else {
+            continue;
+        };
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(git_dir.join(format!("{LOCKS}-{digest}")));
+        let free = lock.as_ref().is_ok_and(|file| file.try_lock().is_ok());
+        if !free {
+            continue;
+        }
+        let bytes = entry.metadata().map_or(0, |meta| meta.len());
+        if std::fs::remove_file(entry.path()).is_ok() {
+            swept.0 += 1;
+            swept.1 += bytes;
+        }
+    }
+    swept
 }
 
 /// The prefix of each step's last trace, and its undeclared listing, under the
@@ -1547,6 +1616,47 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_step_lock_excludes_its_own_step_and_no_other() {
+        // Fails by: the lock not exclusive (two runners of one step both run),
+        // or keyed by something coarser than the step (two steps serialise).
+        let dir = crate::scratch::scratch("step-lock");
+        let held = step_lock_at(&dir, "lint:clippy").expect("the first runner locks");
+        let path =
+            |step: &str| dir.join(format!("{LOCKS}-{}", crate::tools::digest(step.as_bytes())));
+        let same = std::fs::File::open(path("lint:clippy")).unwrap();
+        assert!(
+            matches!(same.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+            "a second runner of the same step waits"
+        );
+        assert!(
+            step_lock_at(&dir, "cross-check").is_some(),
+            "another step is not held up"
+        );
+        drop(held);
+        assert!(same.try_lock().is_ok(), "and the lock is released on drop");
+    }
+
+    #[test]
+    fn only_a_trace_no_runner_holds_is_swept() {
+        // Fails by: a live runner's trace removed from under it, or a killed
+        // runner's trace kept for ever (the 15 GB that blocked lap 34).
+        let dir = crate::scratch::scratch("step-trace-sweep");
+        let trace = |step: &str| {
+            dir.join(format!(
+                "{TRACES}-{}.trace",
+                crate::tools::digest(step.as_bytes())
+            ))
+        };
+        std::fs::write(trace("running"), "live").unwrap();
+        std::fs::write(trace("killed"), "orphaned").unwrap();
+        let held = step_lock_at(&dir, "running").expect("the live runner locks");
+        assert_eq!(sweep_orphaned_traces(&dir), (1, 8));
+        assert!(trace("running").exists(), "a held step's trace stays");
+        assert!(!trace("killed").exists(), "an unheld one is gone");
+        drop(held);
+    }
 
     #[test]
     fn the_stored_key_is_the_last_field_of_the_first_line() {
