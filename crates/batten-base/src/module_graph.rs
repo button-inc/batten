@@ -285,53 +285,141 @@ pub fn run_cycle(
 /// How many inherent impls sit away from their type (CLOUD-2792).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImplCensus {
-    /// Impls of a type declared in exactly one other top-level module.
+    /// Impls whose self type resolves to a declaration in another top-level
+    /// module.
     pub outside: usize,
-    /// Impls of a name declared in two or more modules: no single home.
+    /// Impls of a type declared in this tree whose declaring module the
+    /// census could not resolve (a glob import, a path it does not read):
+    /// counted, so an unread impl cannot hide.
     pub ambiguous: usize,
 }
 
-/// Count every `impl T { … }` with no trait, outside test code, whose `T` is
-/// not declared in the impl's own top-level module.
+/// Count every `impl T { … }` with no trait, outside test code, whose `T`
+/// does not resolve to a declaration in the impl's own top-level module.
 ///
-/// `T` is the self type with references stripped, read to its last path
-/// segment. Its home is the top-level module whose non-test items declare a
-/// struct, enum, union or type alias of that name (an associated type is not
-/// a declaration). A name declared nowhere is a foreign type, which Rust gives
-/// no inherent impl, so it is not counted; one declared in two modules is
-/// AMBIGUOUS, and counted as such so it cannot hide an impl.
+/// `T` is the self type, references stripped and generic arguments dropped,
+/// RESOLVED the way the file reads it, not matched by name: a name its own
+/// file declares is home; otherwise the file's `use` leaf for it, or the
+/// path as written, names the module (`crate::`, `self::`, `super::`, or in
+/// the crate root a child module), and a landing on a crate-root re-export
+/// follows it once. Matching by name alone counted every impl of a name two
+/// modules both declare (a private `Entry` in each) as having no home: 153
+/// of the first 193.
+///
+/// A type declared nowhere in the tree is foreign, which Rust gives no
+/// inherent impl, so it is not counted.
 ///
 /// # Errors
 ///
 /// The root cannot be read, or a file does not parse.
 pub fn impl_census(root: &Path) -> anyhow::Result<ImplCensus> {
+    let (modules, _) = sources(root)?;
     let parsed = parsed_sources(root)?;
     let mut homes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (node, tree) in &parsed {
-        for syntax in tree.syntax().descendants() {
-            let name = match_ast_name(&syntax);
-            if let Some(name) = name.filter(|_| !cfg_test(&syntax)) {
-                homes.entry(name).or_default().insert(node.clone());
+    let declared: Vec<BTreeSet<String>> = parsed
+        .iter()
+        .map(|(node, _, tree)| {
+            let names: BTreeSet<String> = tree
+                .syntax()
+                .descendants()
+                .filter(|syntax| !cfg_test(syntax))
+                .filter_map(|syntax| match_ast_name(&syntax))
+                .collect();
+            for name in &names {
+                homes.entry(name.clone()).or_default().insert(node.clone());
             }
-        }
-    }
+            names
+        })
+        .collect();
+    let lib_aliases = parsed
+        .iter()
+        .find(|(node, _, _)| node == LIB)
+        .map(|(_, _, tree)| top_level_aliases(tree))
+        .unwrap_or_default();
+    let resolver = Resolver {
+        modules: &modules,
+        homes: &homes,
+        lib_aliases: &lib_aliases,
+    };
     let mut census = ImplCensus::default();
-    for (node, tree) in &parsed {
+    for ((node, module, tree), names) in parsed.iter().zip(&declared) {
+        let aliases = top_level_aliases(tree);
         for found in tree.syntax().descendants().filter_map(ast::Impl::cast) {
             if found.trait_().is_some() || cfg_test(found.syntax()) {
                 continue;
             }
-            let Some(name) = self_type_name(&found) else {
+            let Some(path) = self_type_path(&found) else {
                 continue;
             };
-            match homes.get(&name) {
-                Some(home) if home.len() > 1 => census.ambiguous += 1,
-                Some(home) if !home.contains(node) => census.outside += 1,
-                _ => {}
+            let Some(name) = path.last().filter(|name| homes.contains_key(*name)) else {
+                continue;
+            };
+            let home = if path.len() == 1 && names.contains(name) {
+                Some(node.clone())
+            } else if path.len() == 1 {
+                aliases
+                    .get(name)
+                    .and_then(|target| resolver.node_of(target, module, 2))
+            } else {
+                resolver.node_of(&path, module, 2)
+            };
+            match home {
+                Some(home) if home == *node => {}
+                Some(_) => census.outside += 1,
+                None => census.ambiguous += 1,
             }
         }
     }
     Ok(census)
+}
+
+/// A file's top-level `use` leaves: the name each makes visible, to its path.
+fn top_level_aliases(tree: &SourceFile) -> BTreeMap<String, Vec<String>> {
+    tree.items()
+        .filter_map(|item| match item {
+            ast::Item::Use(declaration) => declaration.use_tree(),
+            _ => None,
+        })
+        .flat_map(|tree| use_leaves(&tree))
+        .map(|leaf| (leaf.name, leaf.path))
+        .collect()
+}
+
+/// Resolves a type path to the top-level module declaring it.
+struct Resolver<'a> {
+    modules: &'a BTreeSet<String>,
+    homes: &'a BTreeMap<String, BTreeSet<String>>,
+    lib_aliases: &'a BTreeMap<String, Vec<String>>,
+}
+
+impl Resolver<'_> {
+    /// The top-level module declaring `path`'s last segment, read from a file
+    /// at `module`, or `None` when the path does not resolve to a module
+    /// that declares it. A landing on the crate root follows the root's own
+    /// re-export of the name, at most `hops` times.
+    fn node_of(&self, path: &[String], module: &[String], hops: u8) -> Option<String> {
+        let (head, rest) = path.split_first()?;
+        let name = path.last()?;
+        let node = match head.as_str() {
+            "crate" if rest.len() >= 2 => rest[0].clone(),
+            "crate" => LIB.to_owned(),
+            "self" => module.first().cloned().unwrap_or_else(|| LIB.to_owned()),
+            "super" if module.len() >= 2 => module[0].clone(),
+            "super" => LIB.to_owned(),
+            child if module.is_empty() && self.modules.contains(child) => child.to_owned(),
+            _ => return None,
+        };
+        let declares = |node: &str| {
+            self.homes
+                .get(name)
+                .is_some_and(|declaring| declaring.contains(node))
+        };
+        if node == LIB && !declares(LIB) {
+            let target = self.lib_aliases.get(name)?;
+            return self.node_of(target, &[], hops.checked_sub(1)?);
+        }
+        declares(&node).then_some(node)
+    }
 }
 
 /// The type name a node declares, when it is a struct, enum, union or a type
@@ -357,14 +445,31 @@ fn match_ast_name(syntax: &SyntaxNode) -> Option<String> {
     Some(name.text().to_string())
 }
 
-/// An impl's self type, references stripped, as its last path segment.
-fn self_type_name(found: &ast::Impl) -> Option<String> {
+/// An impl's self type, references stripped, as its path's segments with
+/// generic arguments dropped.
+fn self_type_path(found: &ast::Impl) -> Option<Vec<String>> {
     let mut ty = found.self_ty()?;
     loop {
         match ty {
             ast::Type::RefType(reference) => ty = reference.ty()?,
             ast::Type::PathType(path) => {
-                return Some(path.path()?.segment()?.name_ref()?.text().to_string());
+                let mut depth = 0_usize;
+                let bare: String = path
+                    .path()?
+                    .syntax()
+                    .text()
+                    .to_string()
+                    .chars()
+                    .filter(|c| {
+                        match c {
+                            '<' => depth += 1,
+                            '>' => depth = depth.saturating_sub(1),
+                            _ => return depth == 0 && !c.is_whitespace(),
+                        }
+                        false
+                    })
+                    .collect();
+                return Some(bare.split("::").map(str::to_owned).collect());
             }
             _ => return None,
         }
@@ -416,7 +521,7 @@ pub struct ShimCensus {
 /// The root cannot be read, or a file does not parse.
 pub fn shim_census(root: &Path) -> anyhow::Result<ShimCensus> {
     let mut census = ShimCensus::default();
-    for (node, tree) in parsed_sources(root)? {
+    for (node, _, tree) in parsed_sources(root)? {
         if node == LIB {
             continue;
         }
@@ -470,14 +575,14 @@ pub fn run_shims(
 }
 
 /// Every library source under `root`, parsed, with its graph node.
-fn parsed_sources(root: &Path) -> anyhow::Result<Vec<(String, SourceFile)>> {
+fn parsed_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<String>, SourceFile)>> {
     let (_, files) = sources(root)?;
     files
         .into_iter()
-        .map(|(node, _, file)| {
+        .map(|(node, module, file)| {
             let source = crate::fsio::read_to_string(&file)?;
             let tree = parse(&source).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
-            Ok((node, tree))
+            Ok((node, module, tree))
         })
         .collect()
 }
@@ -1032,16 +1137,40 @@ mod tests {
         assert_eq!(census, ImplCensus::default());
     }
 
-    /// Fails by: a name declared twice hiding its impl, or charged to one of
-    /// its homes. It is ambiguous, and the gate counts it.
+    /// The measured 153: matched by name, an impl of a name two modules both
+    /// declare had no home. Fails by: an impl beside its own declaration
+    /// counted because another module declares the same name; or one that
+    /// names its type through a `use` charged to the wrong module.
     #[test]
-    fn an_impl_of_a_name_declared_twice_is_ambiguous_and_gated() {
+    fn an_impl_is_resolved_the_way_its_file_reads_the_name() {
+        let census = impls(
+            &[
+                ("lib.rs", "mod a;\nmod b;\nmod c;\n"),
+                ("a.rs", "pub struct Pin;\nimpl Pin { fn f() {} }\n"),
+                ("b.rs", "pub type Pin = u8;\n"),
+                ("c.rs", "use crate::a::Pin;\nimpl Pin { fn g() {} }\n"),
+            ],
+            "impls-resolved",
+        );
+        assert_eq!(
+            census,
+            ImplCensus {
+                outside: 1,
+                ambiguous: 0
+            }
+        );
+    }
+
+    /// Fails by: an impl whose type the census cannot resolve (named through
+    /// a glob) hidden, rather than counted ambiguous and gated.
+    #[test]
+    fn an_impl_the_census_cannot_resolve_is_ambiguous_and_gated() {
         let root = crate_root(
             "impls-ambiguous",
             &[
                 ("lib.rs", "mod a;\nmod b;\n"),
-                ("a.rs", "pub struct Pin;\nimpl Pin { fn f() {} }\n"),
-                ("b.rs", "pub type Pin = u8;\n"),
+                ("a.rs", "pub struct Pin;\n"),
+                ("b.rs", "use crate::a::*;\nimpl Pin { fn f() {} }\n"),
             ],
         );
         assert_eq!(
