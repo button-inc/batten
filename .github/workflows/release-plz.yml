@@ -693,11 +693,14 @@ jobs:
       # release-plz clones the repo into a temp dir; `git fetch origin main` there
       # has no credentials (actions/checkout's auth lives only on the main clone),
       # so it cannot rebase the release branch onto main — the PR is then re-opened
-      # on a stale base and can never fast-forward. An insteadOf carrying the
+      # on a stale base and can never fast-forward. An `extraheader` carrying the
       # token gives every github.com git operation (including that temp clone) a
-      # credential. It travels as `GIT_CONFIG_*` environment on the two steps
-      # that clone, which git reads as configuration, so no step writes a global
-      # config and no later step inherits the credential.
+      # credential. It travels as `GIT_CONFIG_*` environment on the step that
+      # clones, which git reads as configuration, so no step writes a global
+      # config and no later step inherits the credential. A HEADER, NOT A URL
+      # (CLOUD-2334): a `user:token@` URL is the shape the secret scanner reads
+      # as an embedded credential, and suppressing that by waiver left the false
+      # positive standing on a timer.
       # THIS JOB NO LONGER TAGS, PUBLISHES, DISPATCHES OR TRACKS (CLOUD-2033).
       # `mise run release` tagged `HEAD` and created a draft on every push to
       # `main`, so `main` pinned an unpublished tag from the push until the build
@@ -720,8 +723,8 @@ jobs:
         if: steps.settings.outputs.green == 'true'
         env:
           GIT_CONFIG_COUNT: 1
-          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/
+          GIT_CONFIG_KEY_0: http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0: "AUTHORIZATION: bearer ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}"
 
       # THE ENGINE PIN MOVES WITH THE VERSION, IN THE RELEASE PR ITSELF (CLOUD-2063).
       # `batten.toml` pins `engine = { release = "v<X>" }`, and every build checks
