@@ -89,6 +89,8 @@
 //! discarded document is an author who believes they are deciding something.
 
 #[cfg(test)]
+use crate::config_check::handler::HandlerExt as _;
+#[cfg(test)]
 use crate::hook::EventExt as _;
 use regex::Regex;
 use std::io::Read;

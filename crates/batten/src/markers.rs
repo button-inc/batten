@@ -33,6 +33,8 @@
 //! Scanning is inspection-only and byte-stable: for identical config and
 //! identical tree bytes it returns the identical, sorted hit list.
 
+#[cfg(test)]
+use crate::config_check::markers::MarkerExt as _;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
