@@ -743,6 +743,47 @@ fn a_commit_made_while_the_gate_ran_voids_it() {
     );
 }
 
+/// **AN EDIT LEFT IN THE TREE VOIDS IT TOO** (CLOUD-2780, CLOUD-2781).
+///
+/// HEAD does not move here: the gate edits a tracked file and leaves it dirty,
+/// so the stages after the edit compiled bytes no commit holds. The dirty count
+/// the comparison starts from was read AFTER the gate returned, equal to the
+/// count it ends on, so this came back clean and was recorded against HEAD.
+#[test]
+fn an_edit_left_while_the_gate_ran_voids_it() {
+    let dir = common::scratch("land-lap-tree-dirtied");
+    common::init_repo(&dir);
+    std::fs::write(dir.join("tracked.txt"), "base\n").expect("write the tracked file");
+    common::git_in(&dir, &["add", "tracked.txt"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base"]);
+    let head = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let command = vec![
+        String::from("sh"),
+        String::from("-c"),
+        format!("printf 'edited\\n' > {}", dir.join("tracked.txt").display()),
+    ];
+    let verified = land::verify(&dir, "work", &command, &[], &[]).expect("run the gate");
+
+    assert!(
+        matches!(
+            verified,
+            land::Verified::Refused {
+                cause: land::Refusal::Voided { dirty, .. },
+                ..
+            } if dirty == 1
+        ),
+        "a gate whose tree was edited under it is voided: {verified:?}"
+    );
+    assert_ne!(
+        land::last_verified(&dir, "work").as_deref(),
+        Some(head.as_str()),
+        "and HEAD is never recorded as verified on that run's word"
+    );
+}
+
 /// A bench registering ONLY `path write held`, from its committed bytes, so no
 /// other row's refusal can stand in for this one's.
 fn lap_tree_bench(name: &str) -> std::path::PathBuf {
