@@ -6,7 +6,6 @@
 //! load that depends on every module whose section it validates, so the model
 //! stops tying its readers into one cycle. `config` re-exports every name here.
 
-use crate::verdict::VocabularyExt as _;
 use std::collections::BTreeMap;
 
 use anyhow::Result;
@@ -6556,6 +6555,36 @@ pub struct Vocabulary {
     /// Slot 3: the state that makes it a refusal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub condition: Vec<VocabularyWord>,
+}
+
+// DEMOTED BESIDE THE TYPE (CLOUD-2803, Lakos). These read only the three
+// slots, so they belong to the type's own layer. As `verdict::VocabularyExt`
+// they made every caller import from `verdict`, and the edge
+// `config_model -> verdict` alone held 13 modules in the largest cycle.
+impl Vocabulary {
+    /// The list for one slot, by position: 0 subject, 1 action, else condition.
+    #[must_use]
+    pub fn slot(&self, position: usize) -> &[VocabularyWord] {
+        match position {
+            0 => &self.subject,
+            1 => &self.action,
+            _ => &self.condition,
+        }
+    }
+
+    /// Whether this vocabulary declares anything at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.subject.is_empty() && self.action.is_empty() && self.condition.is_empty()
+    }
+
+    /// Every declared word, with the slot it was declared in.
+    pub fn words(&self) -> impl Iterator<Item = (usize, &VocabularyWord)> {
+        [&self.subject, &self.action, &self.condition]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(slot, words)| words.iter().map(move |word| (slot, word)))
+    }
 }
 
 /// One declared refusal class.

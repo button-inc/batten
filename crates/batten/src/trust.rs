@@ -62,7 +62,6 @@
 use crate::budget::BudgetExt as _;
 use crate::judge::PayloadClassExt as _;
 use crate::rules::RuleExt as _;
-use crate::verdict::VocabularyExt as _;
 use crate::waiver::WaiverExt as _;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -4823,7 +4822,7 @@ mod tests {
     /// for the same reason: the authority on which fields exist is the struct,
     /// and any second list of them is the drift being fixed.
     fn config_fields() -> Vec<&'static str> {
-        let source = include_str!("config.rs");
+        let source = include_str!("config_model.rs");
         let start = source
             .find("pub struct Config {")
             .expect("Config is declared here");
@@ -6122,8 +6121,9 @@ mod tests {
         // exempts — and the failure direction is worse here: an exemption that
         // names nothing merely never fires, while a NARROWING key that names
         // nothing is a name a later column could accidentally acquire.
+        // `Rule` and its rows moved to `config_model` (CLOUD-2789 phase 2).
         let source = concat!(
-            include_str!("rules.rs"),
+            include_str!("config_model.rs"),
             include_str!("../../batten-facts/src/facts.rs")
         );
         for (key, reason) in RULE_NARROWING_ON_ARRIVAL {
@@ -6360,7 +6360,7 @@ mod tests {
         // The fail-safe direction one level down from `CENSUS`: a column added to
         // `Rule` is compared until somebody exempts it here, so this only has to
         // keep the exemptions honest.
-        let source = include_str!("rules.rs");
+        let source = include_str!("config_model.rs");
         let start = source
             .find("pub struct Rule {")
             .expect("Rule is declared here");

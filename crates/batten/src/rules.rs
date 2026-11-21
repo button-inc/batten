@@ -11442,7 +11442,8 @@ mod tests {
 
     /// Every `Rule` column, read off the struct's own source.
     fn rule_fields() -> Vec<&'static str> {
-        let source = include_str!("rules.rs");
+        // `Rule` moved to `config_model` (CLOUD-2789 phase 2).
+        let source = include_str!("config_model.rs");
         let start = source
             .find("pub struct Rule {")
             .expect("Rule is declared here");
