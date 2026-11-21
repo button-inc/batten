@@ -187,14 +187,7 @@ signal-hook.workspace = true
 
 # The disk watcher's wake on every write to the volume (CLOUD-2782): a
 # fanotify filesystem mark, which no other platform has.
-[target.'cfg(target_os = "linux")'.dependencies]
-nix.workspace = true
-
-# File identity for the collector's kept set (CLOUD-2197): `(dev, ino)` on unix
-# is `std`, and its Windows analogue is not.
-[target.'cfg(windows)'.dependencies]
-winapi-util.workspace = true
-
+#
 # The global allocator (CLOUD-2315), Linux only. Its C source needs a platform
 # SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear of. On
 # musl — the build `install.sh` ships to every Linux consumer — it needs a musl C
@@ -202,7 +195,13 @@ winapi-util.workspace = true
 # point cc-rs at the same zig through `cargo-zigbuild`, so what ships is what is
 # checked (CLOUD-2344).
 [target.'cfg(target_os = "linux")'.dependencies]
+nix.workspace = true
 mimalloc.workspace = true
+
+# File identity for the collector's kept set (CLOUD-2197): `(dev, ino)` on unix
+# is `std`, and its Windows analogue is not.
+[target.'cfg(windows)'.dependencies]
+winapi-util.workspace = true
 
 # The running programs' executables on macOS (CLOUD-2197); Linux reads `/proc`.
 [target.'cfg(target_os = "macos")'.dependencies]
