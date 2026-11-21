@@ -397,36 +397,53 @@ impl Index {
 /// switched from one to the other would then compare as unchanged. An item
 /// whose declaration was edited is not a move either, so a test naming it is
 /// judged as modified: the direction that reports.
+///
+/// TO A FIXPOINT (CLOUD-2804): a declaration naming another moved item reads
+/// equal only once that move is known, so each pass compares the base side
+/// through every move found so far, until a pass finds none. A pass only adds
+/// moves and a paired candidate leaves the list, so it ends.
 #[must_use]
 pub fn moved_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
-    let mut moves = BTreeMap::new();
     let names: std::collections::BTreeSet<&String> = before
         .modules
         .values()
         .flat_map(|module| module.declared.keys())
         .collect();
-    for name in names {
-        let (base, head) = (before.sites(name), after.sites(name));
-        let ([(base_file, base_text)], [(head_file, head_text)]) =
-            (base.as_slice(), head.as_slice())
-        else {
-            continue;
-        };
-        if base_file == head_file {
-            continue;
+    let mut candidates: Vec<(String, (String, String), (String, String))> = names
+        .into_iter()
+        .filter_map(|name| {
+            let (base, head) = (before.sites(name), after.sites(name));
+            let ([base_site], [head_site]) = (base.as_slice(), head.as_slice()) else {
+                return None;
+            };
+            (base_site.0 != head_site.0)
+                .then(|| (name.clone(), base_site.clone(), head_site.clone()))
+        })
+        .collect();
+    let read = |index: &Index, file: &str, text: &str, moves: &BTreeMap<Key, Key>| {
+        let krate = index.crate_of(file).unwrap_or_default();
+        shape(&canonical(text, &krate, index, moves))
+    };
+    let no_moves = BTreeMap::new();
+    let mut moves = BTreeMap::new();
+    loop {
+        let found: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, (base_file, base_text), (head_file, head_text)))| {
+                read(before, base_file, base_text, &moves)
+                    == read(after, head_file, head_text, &no_moves)
+            })
+            .map(|(at, _)| at)
+            .collect();
+        if found.is_empty() {
+            return moves;
         }
-        let same = |index: &Index, file: &str, text: &str| {
-            let krate = index.crate_of(file).unwrap_or_default();
-            shape(&canonical(text, &krate, index, &BTreeMap::new()))
-        };
-        if same(before, base_file, base_text) == same(after, head_file, head_text) {
-            moves.insert(
-                (base_file.clone(), name.clone()),
-                (head_file.clone(), name.clone()),
-            );
+        for at in found.into_iter().rev() {
+            let (name, (base_file, _), (head_file, _)) = candidates.swap_remove(at);
+            moves.insert((base_file, name.clone()), (head_file, name));
         }
     }
-    moves
 }
 
 /// `body` with every resolvable path replaced by the site that defines it,
@@ -1357,6 +1374,39 @@ mod tests {
             "{ crate::model::Rule }"
         ));
         assert!(moved_items(&index(BEFORE_MOVE), &index(after)).is_empty());
+    }
+
+    /// Fails by: an item whose declaration names another moved item read as
+    /// edited, because its declaration was compared before that move was
+    /// known (CLOUD-2804: `testing.rs`' tests calling `init_on_main`, which
+    /// calls the moved git layer, were each `test-removed`).
+    #[test]
+    fn an_item_naming_another_moved_item_moves_with_it() {
+        let before = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            (
+                "src/a.rs",
+                "pub fn inner() {}\npub fn outer() { crate::a::inner() }\n",
+            ),
+            ("src/b.rs", ""),
+        ];
+        let after = &[
+            ROOT,
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", ""),
+            (
+                "src/b.rs",
+                "pub fn inner() {}\npub fn outer() { crate::b::inner() }\n",
+            ),
+        ];
+        assert_eq!(moved_items(&index(before), &index(after)).len(), 2);
+        assert!(same(
+            before,
+            after,
+            "{ crate::a::outer(); }",
+            "{ crate::b::outer(); }"
+        ));
     }
 
     /// Fails by: a name declared twice at base paired with its one head site.
