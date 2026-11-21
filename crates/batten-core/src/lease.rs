@@ -1641,7 +1641,6 @@ impl Default for Terms {
 /// refuse either way, because acquiring a lease that has nowhere to live is not
 /// something a missing remote makes safe.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TermsMissing {
     /// No remote is configured, so this clone cannot participate in a lease.
     NoRemote,
@@ -3864,6 +3863,10 @@ pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries
 }
 
 /// This clone's bookkeeping directory and its holder id.
+///
+/// # Errors
+///
+/// The repository cannot be read, or no holder id can be minted.
 pub fn identity(root: &Path) -> std::result::Result<(Local, String), String> {
     let git_dir =
         crate::git::git_dir(root).map_err(|err| format!("cannot read this repository: {err}"))?;

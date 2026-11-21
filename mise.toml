@@ -978,14 +978,15 @@ description = "Clippy with warnings denied"
 # line), so the variable rides the step's own argv rather than the task's `env`,
 # where it would also send the engine's `cargo run` into `target/clippy` and pay
 # a second full debug build of it there.
-# ONE ROW PER PACKAGE CUT OUT OF `batten` (CLOUD-2789): `batten-facts` and
-# `batten-base` are each keyed
+# ONE ROW PER PACKAGE CUT OUT OF `batten` (CLOUD-2789): `batten-facts`,
+# `batten-base` and `batten-core` are each keyed
 # on its own sources, so an edit confined to `batten` hits their receipts, and
 # the workspace row excludes them, so every package is still linted once.
 run = [
   "{{vars.batten}} step run lint:clippy:facts -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-facts --all-targets --all-features -- -D warnings",
   "{{vars.batten}} step run lint:clippy:base -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-base --all-targets --all-features -- -D warnings",
-  "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --exclude batten-facts --exclude batten-base --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy:core -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-core --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --exclude batten-facts --exclude batten-base --exclude batten-core --all-targets --all-features -- -D warnings",
 ]
 # ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
@@ -4250,7 +4251,8 @@ run = [
   "mise run target-ensure x86_64-unknown-linux-musl",
   "{{vars.batten}} step run cross-check:facts -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-facts --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
   "{{vars.batten}} step run cross-check:base -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-base --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
-  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --exclude batten-facts --exclude batten-base --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check:core -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-core --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --exclude batten-facts --exclude batten-base --exclude batten-core --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
 ]
 
 [tasks."test:musl"]

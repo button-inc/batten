@@ -24,7 +24,7 @@ use crate::common;
 /// absent here may carry none.
 const CEILINGS: &[(&str, usize)] = &[
     ("crates/batten/src/admission.rs", 1),
-    ("crates/batten/src/git.rs", 3),
+    ("crates/batten-core/src/git.rs", 3),
     ("crates/batten/src/hook.rs", 3),
     ("crates/batten/src/lib.rs", 5),
     ("crates/batten/src/perf.rs", 5),
@@ -91,7 +91,7 @@ fn the_census_sees_the_calls_it_ratchets() {
     let found = bare_calls(&common::at_root("."));
     assert!(
         found
-            .get("crates/batten/src/git.rs")
+            .get("crates/batten-core/src/git.rs")
             .is_some_and(|calls| *calls > 0),
         "the census read no bare `{NEEDLE}` in git.rs, so it reads nothing: {found:?}"
     );

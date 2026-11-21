@@ -348,7 +348,7 @@ fn a_path_outside_the_suite_is_not_this_rules_business() {
     let root = repo(
         "fixture-forks-outside",
         &[],
-        &[("crates/batten/src/git.rs", &format!("{FORKING}\n"))],
+        &[("crates/batten-core/src/git.rs", &format!("{FORKING}\n"))],
     );
     assert!(
         verdicts(&root).is_empty(),

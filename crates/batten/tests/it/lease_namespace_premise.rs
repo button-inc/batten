@@ -46,7 +46,7 @@ use std::fs;
 use common::at_root;
 
 /// The module whose doc comment carries the premise.
-const LEASE: &str = "crates/batten/src/lease.rs";
+const LEASE: &str = "crates/batten-core/src/lease.rs";
 
 fn lease_source() -> String {
     fs::read_to_string(at_root(LEASE)).expect("the lease module is readable")

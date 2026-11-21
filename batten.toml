@@ -4393,6 +4393,7 @@ line_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
   "crates/batten-base/src/**/*.rs",
+  "crates/batten-core/src/**/*.rs",
 ]
 module = "policy/durable-write.rego"
 severity = "deny"
@@ -6138,7 +6139,7 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
 pattern = "clippy::disallowed_methods"
 direction = "non_increasing"
 base = "origin/main"
@@ -7598,6 +7599,7 @@ line_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
   "crates/batten-base/src/**/*.rs",
+  "crates/batten-core/src/**/*.rs",
 ]
 module = "policy/obligations-bound.rego"
 severity = "deny"
@@ -7997,6 +7999,7 @@ line_sources = [
   "crates/batten/src/*.rs",
   "crates/batten-facts/src/*.rs",
   "crates/batten-base/src/*.rs",
+  "crates/batten-core/src/*.rs",
   "mise-tasks/*.sh",
   "batten.toml",
 ]
@@ -8012,6 +8015,7 @@ invocation_sources = [
   "crates/batten/src/*.rs",
   "crates/batten-facts/src/*.rs",
   "crates/batten-base/src/*.rs",
+  "crates/batten-core/src/*.rs",
 ]
 module = "policy/ancestry-decides-nothing.rego"
 severity = "deny"
@@ -9897,6 +9901,7 @@ delta_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
   "crates/batten-base/src/**/*.rs",
+  "crates/batten-core/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 # AND `line_sources` FOR THE WORKING SIDE, because the two keys fill different
@@ -9915,6 +9920,7 @@ line_sources = [
   "crates/batten/src/**/*.rs",
   "crates/batten-facts/src/**/*.rs",
   "crates/batten-base/src/**/*.rs",
+  "crates/batten-core/src/**/*.rs",
   "policy/spawn-adapters.rego",
 ]
 
@@ -11697,7 +11703,7 @@ landing_paths = [
   "mise-tasks/land.sh",
   "mise-tasks/land-lock.sh",
   "crates/batten/src/land.rs",
-  "crates/batten/src/lease.rs",
+  "crates/batten-core/src/lease.rs",
   # `fast_forward.rs` carries the half of the landing protocol that ASKS for the
   # merge and recognises the answer — the `/fast-forward` comment, its keyed
   # verdict and the anti-livelock fence. A head that predates a change there is
@@ -18240,6 +18246,7 @@ inputs = [
   "crates/batten-fsio",
   "crates/batten/Cargo.toml",
   "crates/batten-base/Cargo.toml",
+  "crates/batten-core/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
   "Cargo.toml",
@@ -18262,6 +18269,7 @@ inputs = [
   "crates/batten/tests/fixtures/ci",
   "crates/batten/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
+  "crates/batten-core/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
   "Cargo.toml",
   "Cargo.lock",
@@ -18430,8 +18438,50 @@ inputs = [
   "crates/batten-fsio",
   "crates/batten/Cargo.toml",
   "crates/batten-base/Cargo.toml",
+  "crates/batten-core/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo",
+]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "cross-check", "--json"],
+]
+
+# The third per-package pair (CLOUD-2789): `batten-core` reaches
+# `batten-base`, `batten-facts`, `batten-fsio` and `batten-stream`, and nothing
+# in `batten`.
+[[step]]
+id = "lint:clippy:core"
+inputs = [
+  "crates/batten-core",
+  "crates/batten-base",
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten-stream",
+  "crates/batten/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "clippy.toml",
+  ".clippy.toml",
+  ".cargo",
+]
+tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
+
+[[step]]
+id = "cross-check:core"
+inputs = [
+  "crates/batten-core",
+  "crates/batten-base",
+  "crates/batten-facts",
+  "crates/batten-fsio",
+  "crates/batten-stream",
+  "crates/batten/Cargo.toml",
+  "crates/batten-codemods/Cargo.toml",
   "Cargo.toml",
   "Cargo.lock",
   ".cargo",
@@ -18453,6 +18503,7 @@ inputs = [
   "crates/batten/tests/fixtures/ci",
   "crates/batten/Cargo.toml",
   "crates/batten-codemods/Cargo.toml",
+  "crates/batten-core/Cargo.toml",
   "crates/batten-stream/Cargo.toml",
   "Cargo.toml",
   "Cargo.lock",
@@ -18785,7 +18836,7 @@ run = ["mise", "run", "lint:clippy"]
 [[rule]]
 id = "path read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
 pattern = 'fs::read('
 direction = "non_increasing"
 base = "origin/main"
@@ -18796,7 +18847,7 @@ no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio
 [[rule]]
 id = "source read loose"
 kind = "ratchet"
-glob = "crates/{batten,batten-facts,batten-base}/src/**/*.rs"
+glob = "crates/{batten,batten-facts,batten-base,batten-core}/src/**/*.rs"
 pattern = 'fs::read_to_string('
 direction = "non_increasing"
 base = "origin/main"
