@@ -326,3 +326,79 @@ fn a_union_build_that_failed_names_its_kept_output() {
         text(&output)
     );
 }
+
+/// A crate whose test names an item through a path, for the item-move cases
+/// (CLOUD-2790): `value` lives in `a`, the test spells `crate::a::value`.
+const ITEMS_LIB: &str = "\
+pub mod a;
+pub mod b;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn named() {
+        assert_eq!(crate::a::value(), 1);
+    }
+}
+";
+
+fn items_repo(name: &str) -> (PathBuf, String) {
+    let dir = common::scratch(name);
+    common::write(&dir, "Cargo.toml", MANIFEST);
+    common::write(&dir, "src/lib.rs", ITEMS_LIB);
+    common::write(&dir, "src/a.rs", "pub fn value() -> u8 {\n    1\n}\n");
+    common::write(&dir, "src/b.rs", "");
+    common::write(&dir, ".gitignore", "target/\nCargo.lock\n");
+    common::init_repo(&dir);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-qm", "base"]);
+    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    (dir, base)
+}
+
+/// `value` moves to `b`, returning `returns`, and the test's assertion becomes
+/// `body`.
+fn moved_to_b(dir: &Path, body: &str, returns: &str) {
+    common::write(dir, "src/a.rs", "");
+    common::write(
+        dir,
+        "src/b.rs",
+        &format!("pub fn value() -> u8 {{\n    {returns}\n}}\n"),
+    );
+    common::write(
+        dir,
+        "src/lib.rs",
+        &ITEMS_LIB.replace("assert_eq!(crate::a::value(), 1);", body),
+    );
+    common::git_in(dir, &["add", "-A"]);
+    common::git_in(dir, &["commit", "-qm", "head"]);
+}
+
+/// Fails by: a path respelled at a moved item's new home read as a modified
+/// assertion — the admission every respelled test used to cost. The crate sits
+/// at the repository's root, so this also shows the index reads the tree's own
+/// manifest rather than this repository's `crates/` layout.
+#[test]
+fn a_test_respelled_at_a_moved_items_home_is_clean() {
+    let (dir, base) = items_repo("replay-item-moved");
+    moved_to_b(&dir, "assert_eq!(crate::b::value(), 1);", "1");
+    let output = replay(&dir, &base);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(output.stdout.is_empty(), "{}", text(&output));
+}
+
+/// Fails by: an unrelated item that merely shares the deleted one's name read
+/// as its move, so a test switched to it passed unjudged.
+#[test]
+fn a_test_switched_to_another_item_of_its_name_is_reported() {
+    let (dir, base) = items_repo("replay-item-switched");
+    moved_to_b(&dir, "assert_eq!(crate::b::value(), 2);", "2");
+    let output = replay(&dir, &base);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("test-expectation-changed src/lib.rs::tests::named"),
+        "{}",
+        text(&output)
+    );
+}

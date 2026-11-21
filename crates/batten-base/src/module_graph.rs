@@ -481,7 +481,7 @@ fn from_root(segments: &[String], module: &[String]) -> Option<String> {
 }
 
 /// Whether `node` sits inside an item carrying `#[cfg(test)]`.
-fn cfg_test(node: &SyntaxNode) -> bool {
+pub fn cfg_test(node: &SyntaxNode) -> bool {
     node.ancestors().any(|ancestor| {
         ast::AnyHasAttrs::cast(ancestor).is_some_and(|item| {
             item.attrs().any(|attr| {
