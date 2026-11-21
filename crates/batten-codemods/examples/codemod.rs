@@ -38,6 +38,12 @@ fn main() -> std::io::Result<()> {
         }
         return Ok(());
     }
+    // `fix [cargo args…]`: apply rustc's machine-applicable suggestions to a
+    // fixpoint, imports decided per build (`batten_codemods::fix`).
+    if asked == "fix" {
+        let scope: Vec<String> = args.collect();
+        return run_fix(&mut out, &scope);
+    }
     if let Some(chosen) = recipe::named_tree(&asked) {
         let root = args.next().unwrap_or_else(|| String::from("."));
         return run_tree(&mut out, chosen, std::path::Path::new(&root));
@@ -151,6 +157,59 @@ fn run_tree(
         chosen.name,
         files.len()
     )
+}
+
+/// The most passes `fix` runs: each pass is two `cargo check`s, and a
+/// suggestion that keeps reappearing must not loop forever.
+const FIX_PASSES: usize = 8;
+
+/// `cargo check` over `units` (`--lib --bins` or `--tests --examples
+/// --benches`) plus the caller's `scope`, as cargo's JSON stream.
+fn check_stream(units: &[&str], scope: &[String]) -> std::io::Result<String> {
+    use batten::capture::Streamed as _;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: asking the compiler for its diagnostics is this mode's whole input; the codemods crate is never released"
+    )]
+    let mut command = std::process::Command::new("cargo");
+    let output = command
+        .args(["check", "--message-format", "json"])
+        .args(units)
+        .args(scope)
+        .streamed_output()?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Plan and apply passes until one changes nothing; one count line per pass.
+fn run_fix(out: &mut impl std::io::Write, scope: &[String]) -> std::io::Result<()> {
+    let read = |path: &str| batten::fsio::read_to_string(path).ok();
+    for pass in 1..=FIX_PASSES {
+        let non_test = check_stream(&["--lib", "--bins"], scope)?;
+        let test = check_stream(&["--tests", "--examples", "--benches"], scope)?;
+        let plan = recipe::fix::plan(&non_test, &test, &read);
+        let (mut applied, mut refused) = (0_usize, 0_usize);
+        for (path, suggestions) in &plan.edits {
+            let written = read(path)
+                .and_then(|text| recipe::fix::apply(&text, suggestions).ok())
+                .is_some_and(|text| {
+                    batten::durable::replace(std::path::Path::new(path), text).is_ok()
+                });
+            if written {
+                applied += suggestions.len();
+            } else {
+                refused += 1;
+            }
+        }
+        writeln!(
+            out,
+            "fix pass {pass}: applied {applied}, gated {}, left {}, refused {refused}, errors {}",
+            plan.gated, plan.left, plan.errors
+        )?;
+        if applied == 0 {
+            return Ok(());
+        }
+    }
+    writeln!(out, "fix: stopped after {FIX_PASSES} passes")
 }
 
 /// Every `.rs` file under `dir`, fixtures and build output excluded: a fixture
