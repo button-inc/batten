@@ -264,6 +264,8 @@ name = "batten-codemods"
 version = "0.0.220"
 dependencies = [
  "batten",
+ "rustfix",
+ "serde_json",
 ]
 
 [[package]]
@@ -3366,6 +3368,17 @@ name = "rustc-literal-escaper"
 version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfe6f213fb658c8fb95baabd5420393438cf5a98d707f5dd701d9197c705f71e"
+
+[[package]]
+name = "rustfix"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c614151d9f1b1e1f23041dacbf5f8dfab85687455b9e553f19f3d70275d1fe1c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "rustix"
