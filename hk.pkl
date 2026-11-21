@@ -1133,6 +1133,14 @@ hooks {
         check =
           "env BATTEN_BIN=batten MISE_TASK_TIMINGS=0 mise run -q modules-cycle ::: modules-shims ::: modules-impls"
       }
+      // A conflict marker is refused at the commit, not first in the slow lap
+      // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`
+      // and was pushed before `source carry broken` ever ran. `--assume-in-merge`
+      // because a merge commit is exactly when markers are staged.
+      ["merge-conflict-markers"] {
+        glob = List("**")
+        check = "hk util check-merge-conflict --assume-in-merge {{files}}"
+      }
     }
   }
   // `git revert` and `git cherry-pick` commit through the sequencer, which runs
