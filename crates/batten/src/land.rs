@@ -45,6 +45,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result};
 
 use crate::gitwrite::{self, Rebase};
+pub use crate::preset_catalog::RED_HEAD;
 
 /// What one replay did.
 ///
@@ -1393,17 +1394,6 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
         &answers.iter().map(Answered::line).collect::<Vec<_>>(),
     )
 }
-
-/// The receipt family recording a head whose wait stopped red (CLOUD-2270).
-///
-/// Branch-keyed, `red-head.<slug>`, and REPLACED rather than appended: it
-/// answers "what does this branch's head owe a push", which is current state,
-/// never history. `red-head` reads it as a mediated fact.
-///
-/// Also the PRESET's name, by construction rather than coincidence: the
-/// manifest spells itself with this constant, so the landing's "is the preset
-/// enabled" lookup and the record cannot be renamed apart.
-pub const RED_HEAD: &str = "red-head";
 
 /// A red reading's two pointer lists: each failed required check's newest run
 /// as `(id, name)`, and each required check whose newest run is still going.

@@ -98,6 +98,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
+pub use crate::config_model::preset_names;
 use crate::error::UsageError;
 use crate::facts::Look;
 use crate::rules::{Rule, RuleKind};
@@ -289,18 +290,6 @@ pub struct Violation {
 // The reason this comment says so at all is the failure CLOUD-970 names: a
 // resolver landing while this text still claims no network exists, so the next
 // reader inherits a guarantee nobody is holding.
-
-/// Every vendored preset's name, in a stable order.
-///
-/// Derived from [`crate::preset::MANIFESTS`] so the binary and the published
-/// schema cannot
-/// disagree about what may be enabled — the same discipline `surface::SURFACE`
-/// carries, and the reason an unknown name is a config error rather than a
-/// silent no-op.
-#[must_use]
-pub fn preset_names() -> Vec<&'static str> {
-    crate::preset::names()
-}
 
 // `preset_modules` is gone (CLOUD-1181): the load site reads the whole manifest
 // now, so a second lookup returning only the modules was one more place that

@@ -142,6 +142,7 @@ pub mod policy;
 pub use batten_base::preflight;
 pub use batten_core::pr_watch;
 pub mod preset;
+pub mod preset_catalog;
 pub mod probe;
 pub use batten_base::probe_verdict;
 pub use batten_base::propose;
