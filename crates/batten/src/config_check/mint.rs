@@ -1,6 +1,5 @@
 use crate::config_check::receipt::safe_subject;
 use crate::config_model::{AfterMode, MintDeclared as Declared, MintKey, MintMode};
-use crate::mint::AuthorityExt as _;
 
 /// A compiled authority a template may ask for a value.
 ///
@@ -15,6 +14,15 @@ use crate::mint::AuthorityExt as _;
 pub(crate) enum Authority {
     /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
     Ready,
+}
+
+impl Authority {
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        match name {
+            "ready" => Some(Self::Ready),
+            _ => None,
+        }
+    }
 }
 
 /// One element of a body template.
@@ -48,6 +56,24 @@ pub(crate) enum Piece {
     /// naming one field of it would hand the predicate a payload it could not
     /// judge while looking exactly like one it could.
     Authority(Authority),
+}
+
+impl Piece {
+    pub(crate) fn reads_the_result(&self) -> bool {
+        match self {
+            // `{authority:…}` is grouped with the path forms rather than given its
+            // own arm because `clippy::match_same_arms` refuses a repeated body —
+            // the distinction a reader wants lives here, as `git.rs` states for the
+            // same lint. It judges the whole result DOCUMENT where the others read
+            // a path into it, and both consult the result, which is all this asks.
+            Piece::Path(_)
+            | Piece::Digest(_)
+            | Piece::Slug(_)
+            | Piece::Join(_)
+            | Piece::Authority(_) => true,
+            Piece::Literal(_) | Piece::Now | Piece::Git(_) => false,
+        }
+    }
 }
 
 /// Split a body template into its pieces, or name the first thing wrong with it.

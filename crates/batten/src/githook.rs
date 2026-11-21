@@ -12,7 +12,6 @@
 //! which lives here in the entry point. The fourth, a probe for `doctor`, is
 //! `doctor gate`'s stat of the link.
 
-use crate::exec::ExecConfigExt as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

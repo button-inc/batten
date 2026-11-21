@@ -95,14 +95,40 @@ fn site(suggestion: &Suggestion) -> Option<(String, Range<usize>)> {
 pub struct Streams<'a> {
     /// `--lib --bins`: the non-test build.
     pub non_test: &'a str,
-    /// `--lib --bins --profile test`: the same sources with `cfg(test)`, the
-    /// only stream that decides whether tests use an import.
+    /// `cargo test --no-run --lib --bins`: the same sources compiled as their
+    /// own test units, with `cfg(test)`; the only stream that decides whether
+    /// tests use an import (`check --profile test` does not set it).
     pub unit_test: &'a str,
     /// `--tests --examples --benches`: the other targets. Cargo builds the
     /// library NON-test as their dependency, so its warnings repeat here;
     /// read as "unused in a test build" they turned a gate into a deletion
     /// on the applier's first real run (`verdict.rs`, `VocabularyWord`).
     pub other: &'a str,
+}
+
+/// Only the lines of a cargo JSON stream whose `package_id` names `package`.
+///
+/// A build of one package's test unit also builds its workspace dependencies
+/// non-test, and their warnings share the stream: measured, a
+/// `test --no-run --lib --workspace` stream held 8 `unused_imports` against
+/// the non-test stream's 5, because `batten-codemods` builds `batten` as a
+/// dependency. Filtered to `package`, a `test --no-run --lib -p package`
+/// stream holds that package's library test unit and nothing else. A
+/// `package_id` is `path+file:///…/<dir>#<version>` or `…#<name>@<version>`.
+#[must_use]
+pub fn only_package(stream: &str, package: &str) -> String {
+    let (by_dir, by_name) = (format!("/{package}#"), format!("#{package}@"));
+    stream
+        .lines()
+        .filter(|line| {
+            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|value| {
+                value["package_id"]
+                    .as_str()
+                    .is_some_and(|id| id.contains(&by_dir) || id.contains(&by_name))
+            })
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
 /// Plan one pass from the three streams. `read` returns a file's current
@@ -258,6 +284,16 @@ mod tests {
         assert_eq!((plan.gated, plan.left, plan.errors), (1, 0, 0));
         let fixed = apply(SRC, &plan.edits["src/a.rs"]).expect("the edits apply");
         assert_eq!(fixed, "#[cfg(test)]\nuse std::fmt;\nfn f() {}\n");
+    }
+
+    /// Fails by: a line from another package's unit kept, which put a
+    /// dependency's non-test warnings in the test stream.
+    #[test]
+    fn only_the_named_packages_messages_are_kept() {
+        let mine = r#"{"reason":"compiler-message","package_id":"path+file:///w/crates/batten#0.1.0","message":{}}"#;
+        let theirs = r#"{"reason":"compiler-message","package_id":"path+file:///w/crates/batten-codemods#0.1.0","message":{}}"#;
+        let kept = only_package(&format!("{mine}\n{theirs}\n"), "batten");
+        assert_eq!(kept, format!("{mine}\n"));
     }
 
     /// Fails by: a removal reported by both builds applied twice and refused

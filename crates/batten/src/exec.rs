@@ -252,39 +252,6 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
 pub(crate) const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// `OutputStyle` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub(crate) trait OutputStyleExt: Sized {
-    /// mise's `style_only()`: the stream style with the suppression removed.
-    ///
-    /// `quiet` and `silent` are not stream styles — they are statements about
-    /// whose output is suppressed — so asking one of them how to render a line
-    /// has no answer, and the default is what mise falls back to.
-    fn style_only(self) -> Self;
-
-    /// Whether Batten's own record is suppressed.
-    fn suppresses_batten(self) -> bool;
-
-    /// Whether the child's own bytes are suppressed even under `--tee`.
-    fn suppresses_child(self) -> bool;
-}
-
-impl OutputStyleExt for OutputStyle {
-    fn style_only(self) -> Self {
-        match self {
-            OutputStyle::Quiet | OutputStyle::Silent => OutputStyle::Interleave,
-            other => other,
-        }
-    }
-
-    fn suppresses_batten(self) -> bool {
-        matches!(self, OutputStyle::Quiet | OutputStyle::Silent)
-    }
-
-    fn suppresses_child(self) -> bool {
-        matches!(self, OutputStyle::Silent)
-    }
-}
-
 impl Default for ExecConfig {
     /// [`ExecConfig::DEFAULT`], and derived from it rather than derived by the
     /// compiler.
@@ -295,28 +262,6 @@ impl Default for ExecConfig {
     fn default() -> Self {
         Self::DEFAULT
     }
-}
-
-/// `ExecConfig` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait ExecConfigExt: Sized {
-    /// The settings a caller that reads no config gets.
-    ///
-    /// A `const` rather than `Default::default()` at each call site so the
-    /// library entry points can name it in a `&`-position without a temporary,
-    /// and so "the default is off" is one object a reader can follow.
-    const DEFAULT: Self;
-}
-
-impl ExecConfigExt for ExecConfig {
-    const DEFAULT: Self = Self {
-        manage_process_group: false,
-        tee: false,
-        format: OutputFormat::Human,
-        style: OutputStyle::Interleave,
-        jobs: 1,
-        continue_on_error: false,
-        progress: Progress::Silent,
-    };
 }
 
 /// Whether Batten manages this invocation's process group — computed **once**.

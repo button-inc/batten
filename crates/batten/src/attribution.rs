@@ -72,19 +72,6 @@ use crate::git;
 use crate::hook::Capability;
 use crate::verdict::Subject as Pointer;
 
-/// `Identity` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
-pub trait IdentityExt: Sized {
-    /// The identity as git renders it in `%an <%ae>` form.
-    #[must_use]
-    fn rendered(&self) -> String;
-}
-
-impl IdentityExt for Identity {
-    fn rendered(&self) -> String {
-        format!("{} <{}>", self.name, self.email)
-    }
-}
-
 /// The compiled form of one pattern list.
 struct Matchers(Vec<Regex>);
 

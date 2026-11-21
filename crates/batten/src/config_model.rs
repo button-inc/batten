@@ -18,6 +18,8 @@ use crate::preset_catalog::RuleScope;
 use crate::preset_catalog::{Applicability, RouteKind};
 use crate::severity::{AdvisoryTier, RuleSeverity};
 use crate::sink::Sink;
+use std::collections::BTreeSet;
+use std::path::Path;
 
 /// The config schema version this build understands. A file declaring any other
 /// version is refused rather than partially interpreted.
@@ -785,6 +787,148 @@ pub struct Config {
     pub steps: Vec<crate::step_table::Step>,
 }
 
+impl Config {
+    pub fn declaring_nothing() -> Self {
+        Config {
+            credential: None,
+            forge: None,
+            unresolvable: Vec::new(),
+            records: Vec::new(),
+            version: SUPPORTED_VERSION,
+            deferrals: Vec::new(),
+            host: None,
+            min_batten_version: None,
+            engine: None,
+            // Declaring nothing declares no landing path set, which the reader
+            // takes as could-not-look — the same direction every other absent
+            // table here takes.
+            lease: None,
+            receipt: None,
+            strictness: None,
+            fail_on_warning: None,
+            update_notice: None,
+            rules: Vec::new(),
+            patterns: Vec::new(),
+            traversals: Vec::new(),
+            registers: Vec::new(),
+            verdicts: Vec::new(),
+            vocabulary: crate::config_model::Vocabulary::default(),
+            scope: Vec::new(),
+            protected: Vec::new(),
+            // Declaring nothing means declaring no threshold either, which the
+            // reader takes as could-not-look and exempts everything — the same
+            // direction every other field here grants.
+            ready: None,
+            board: None,
+            // Declaring nothing accepts no regression, which is also the safe
+            // reading: an authority that cannot be read must not exempt a path.
+            perf: None,
+            // Declaring nothing enforces no gate. `batten mutate` then reads the
+            // environment alone and refuses when that is empty too, so an
+            // unreadable authority cannot become a sweep over nothing.
+            mutate: None,
+            // No protected paths means the unknown-program clause has nothing to
+            // guard, so an empty reader set costs nothing here and is the honest
+            // value: a config declaring nothing declares no readers either.
+            protected_readers: Vec::new(),
+            unlanded: Vec::new(),
+            contract: None,
+            epoch: None,
+            verbs: Vec::new(),
+            redirects: Vec::new(),
+            facts: Vec::new(),
+            mints: Vec::new(),
+            recorders: Vec::new(),
+            programs: BTreeMap::new(),
+            markers: Vec::new(),
+            exec: None,
+            mcp: None,
+            capture: None,
+            exec_patterns: Vec::new(),
+            // No declared classifier means every gate refusal reads as being
+            // about the tree, which is the advice that was always given and is
+            // right in the common case — the safe direction for an authority
+            // that could not be read.
+            verify_environment_patterns: Vec::new(),
+            waivers: Vec::new(),
+            // An authority that declares no budget grants no exemption from one
+            // either — there is simply no threshold, which is what `None` says.
+            budget: None,
+            refusal: None,
+            advisory: None,
+            outcome: Vec::new(),
+            hook_output: None,
+            must_land_on: None,
+            landed_by: None,
+            // An authority that cannot be read attaches no side effects. The
+            // safe direction is unambiguous here: firing a command an
+            // unreadable config might have declared is the one outcome nobody
+            // could justify.
+            hook: None,
+            judge: None,
+            // Declaring no ceiling is not declaring a ceiling of zero: the audit
+            // falls back to the engine default, so an unreadable authority
+            // withholds no gate here — it only fails to tighten one.
+            design: None,
+            ci: None,
+            // No `[prune]` is no build tree named and no floor declared, which is
+            // exactly what an unreadable authority grants: the verb reports that
+            // nothing was asked for rather than inventing a number about somebody
+            // else's target directory.
+            prune: None,
+            task: None,
+            defects: None,
+            provisions: Vec::new(),
+            // Declaring no container preconditions is the ordinary case: a
+            // project that states none has nothing for `batten startup` to
+            // decide, which is a different thing from one whose checks all pass.
+            startup: Vec::new(),
+            // Declaring no transcript is the ordinary case, and it is not the
+            // same as pointing at one that is missing: the first says the
+            // capability was never claimed, the second that it was claimed and
+            // is unavailable. Only the second is worth reporting.
+            transcript: None,
+            // Declaring no drain pacing is "no opinion", which resolves to the
+            // engine's defaults — NOT "do not drain". The asymmetry with the
+            // keys above is deliberate: those are policy this authority grants,
+            // and an authority granting nothing must grant nothing, where this
+            // is pacing for a surface that runs regardless. An authority that
+            // cannot be read still has a drain; it simply has no view on how
+            // often it speaks.
+            drain: None,
+
+            // An authority that declares no attribution policy grants no
+            // exemption from one: there is simply nothing to judge by, and the
+            // gate says so (exit 1) rather than passing over commits it never
+            // read.
+            attribution: None,
+            // And no commit convention: absent is "no rule was declared", which
+            // the gate answers 1 to rather than waving commits through.
+            commit: None,
+            bot_lane: None,
+            // An authority that cannot be read grants no permission to answer
+            // from a pin either. The default is the strict one, and an absent
+            // authority must not be the way to reach the lenient one.
+            trust: None,
+            // An authority declaring no scripts disarms none. Absent is the
+            // honest empty here rather than a conservative default with teeth:
+            // the engine cannot know what a launcher on this host writes, and
+            // guessing a path would be exactly the consumer identifier rule 1
+            // keeps out.
+            wiring: None,
+            // An authority declaring no census declares nowhere shell lives; the
+            // verb says so rather than counting a tree it was told nothing about.
+            census: None,
+            // No subject declared, so `batten sbom` has nothing to name.
+            sbom: None,
+            // An authority declaring no steps keys no receipt: every `batten step`
+            // call is a miss that runs the step and records nothing, which is the
+            // cache off rather than a cache answering for anything.
+            steps: Vec::new(),
+        }
+    }
+}
+
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
 /// unit 10, ported off `mise-tasks/perf-compare.sh`'s `EXEMPT` heredoc).
 ///
@@ -1246,6 +1390,22 @@ pub struct Unresolvable {
     pub unit: Unit,
 }
 
+impl Unresolvable {
+    pub fn line(&self) -> String {
+        match &self.unit {
+            Unit::Row { id: Some(id), .. } => format!("{} {id}", self.section),
+            Unit::Row { id: None, index } => format!("{} #{index}", self.section),
+            Unit::Key(key) => format!("{}.{key}", self.section),
+        }
+    }
+    pub fn row_index(&self) -> Option<usize> {
+        match self.unit {
+            Unit::Row { index, .. } => Some(index),
+            Unit::Key(_) => None,
+        }
+    }
+}
+
 /// The GRANULARITY of one drop, which differs because the units do.
 ///
 /// **This distinction is the type's whole reason to be an enum, and collapsing
@@ -1483,6 +1643,30 @@ pub struct Defects {
     pub classes: Vec<String>,
 }
 
+impl Defects {
+    pub fn validate(&self) -> Result<()> {
+        if self.path.trim().is_empty() {
+            return Err(UsageError::raise(
+                "defects.path: names no file; a ledger with no path is not a ledger".to_owned(),
+            ));
+        }
+        if self.classes.is_empty() {
+            return Err(UsageError::raise(
+                "defects.classes: declares no class; every record would be refused, which is a \
+                 table that cannot be used rather than one that permits nothing"
+                    .to_owned(),
+            ));
+        }
+        let unique: BTreeSet<&String> = self.classes.iter().collect();
+        if unique.len() != self.classes.len() {
+            return Err(UsageError::raise(
+                "defects.classes: contains a duplicate".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ---- `engine` (CLOUD-2789: moved from `engine`, which re-exports it) ----
 
 /// The engine a config needs: exactly one of a release tag or a source digest.
@@ -1521,6 +1705,35 @@ pub struct Marker {
     /// to scan the whole tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glob: Option<String>,
+}
+
+impl Marker {
+    pub(crate) fn selects(&self, path: &str) -> bool {
+        self.glob
+            .as_ref()
+            .is_none_or(|glob| crate::selector::glob_match(glob, path))
+    }
+}
+
+impl Marker {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.id.is_empty() {
+            return Err(UsageError::raise("marker: `id` must not be empty"));
+        }
+        if self.token.is_empty() {
+            return Err(UsageError::raise(format!(
+                "marker {}: `token` must not be empty; an empty token matches every line",
+                self.id
+            )));
+        }
+        if self.glob.as_deref() == Some("") {
+            return Err(UsageError::raise(format!(
+                "marker {}: `glob` must not be empty; omit the key to scan the whole tree",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 // ---- `hookcost` (CLOUD-2789: moved from `hookcost`, which re-exports it) ----
@@ -1716,6 +1929,15 @@ pub struct ShellCensus {
 #[serde(transparent)]
 pub struct Budget(pub BTreeMap<String, BudgetSet>);
 
+impl Budget {
+    pub fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
+        self.0.iter()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// One `[budget.<name>]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1857,6 +2079,18 @@ pub struct ExecConfig {
     pub progress: ExecProgress,
 }
 
+impl ExecConfig {
+    pub const DEFAULT: Self = Self {
+        manage_process_group: false,
+        tee: false,
+        format: OutputFormat::Human,
+        style: OutputStyle::Interleave,
+        jobs: 1,
+        continue_on_error: false,
+        progress: ExecProgress::Silent,
+    };
+}
+
 /// hk's format axis, adopted rather than invented.
 ///
 /// `hk/src/structured_output.rs` already spells these three for a tool that
@@ -1917,6 +2151,21 @@ pub enum OutputStyle {
     Quiet,
     /// Nobody speaks.
     Silent,
+}
+
+impl OutputStyle {
+    pub(crate) fn style_only(self) -> Self {
+        match self {
+            OutputStyle::Quiet | OutputStyle::Silent => OutputStyle::Interleave,
+            other => other,
+        }
+    }
+    pub(crate) fn suppresses_batten(self) -> bool {
+        matches!(self, OutputStyle::Quiet | OutputStyle::Silent)
+    }
+    pub(crate) fn suppresses_child(self) -> bool {
+        matches!(self, OutputStyle::Silent)
+    }
 }
 
 /// Whether a stream that is not teed still echoes its progress lines
@@ -2154,6 +2403,16 @@ pub enum PayloadClass {
     FileText,
 }
 
+impl PayloadClass {
+    pub const ALL: &'static [PayloadClass] = &[PayloadClass::SpanText, PayloadClass::FileText];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PayloadClass::SpanText => "span_text",
+            PayloadClass::FileText => "file_text",
+        }
+    }
+}
+
 // ---- `wiring` (CLOUD-2789: moved from `wiring`, which re-exports it) ----
 
 /// The `[wiring]` table: what this consumer's launcher re-arms every spawn.
@@ -2166,6 +2425,48 @@ pub struct Wiring {
     /// The declared scripts, in the order the config lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disarm: Vec<Disarm>,
+}
+
+impl Wiring {
+    pub fn validate(&self) -> Result<(), String> {
+        for row in &self.disarm {
+            if row.path.is_empty() {
+                return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
+            }
+            let path = Path::new(&row.path);
+            // A root is the refusal, not absoluteness: on Windows `\x` has a root
+            // and is still relative, yet it escapes `$HOME`, and every absolute
+            // path has one too. A drive-relative `C:x` has neither and still
+            // passes here (CLOUD-2472).
+            if path.has_root() {
+                return Err(format!(
+                    "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \
+                     the home directory, because a shim over a tracked file would be a mutation of \
+                     the tree",
+                    row.path
+                ));
+            }
+            if path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(format!(
+                    "[[wiring.disarm]]: `path` {:?} climbs out of the home directory with `..`",
+                    row.path
+                ));
+            }
+            // A blank marker matches every body, so the first pass would report
+            // `shimmed` over a file it never touched — the false green this whole
+            // module is built to refuse, one table over.
+            if row.marker.trim().is_empty() {
+                return Err(format!(
+                    "[[wiring.disarm]]: `marker` for {:?} is blank, so no body could carry it",
+                    row.path
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One declared script to neutralise.
@@ -5035,6 +5336,73 @@ pub struct VerdictProgram {
     pub any_argument: Option<bool>,
 }
 
+impl VerdictProgram {
+    pub(crate) fn matches(&self, program: &str, words: &[&str]) -> bool {
+        if self.program != program {
+            return false;
+        }
+        let first = words.first().copied();
+        if let Some(allowed) = self.subcommands.as_deref() {
+            let Some(first) = first else { return false };
+            if !allowed.iter().any(|candidate| candidate == first) {
+                return false;
+            }
+            let Some(nested) = self.nested.as_deref() else {
+                return true;
+            };
+            return words
+                .get(1)
+                .is_some_and(|second| nested.iter().any(|candidate| candidate == second));
+        }
+        if let Some(queries) = self.except.as_deref() {
+            return first.is_some_and(|first| !queries.iter().any(|query| query == first));
+        }
+        self.any_argument.unwrap_or_default() && first.is_some()
+    }
+}
+
+impl VerdictProgram {
+    pub(crate) fn validate(&self, rule: &str) -> anyhow::Result<()> {
+        let refuse = |detail: &str| {
+            Err(UsageError::raise(format!(
+                "rule {rule}: verdict {}: {detail}",
+                self.program
+            )))
+        };
+        if self.program.trim().is_empty() || self.program.split_whitespace().count() != 1 {
+            return Err(UsageError::raise(format!(
+                "rule {rule}: a verdict entry names one program, not {:?}",
+                self.program
+            )));
+        }
+        for (name, list) in [
+            ("subcommands", self.subcommands.as_deref()),
+            ("nested", self.nested.as_deref()),
+            ("except", self.except.as_deref()),
+        ] {
+            if list.is_some_and(<[String]>::is_empty) {
+                return refuse(&format!("`{name}` is empty, so it narrows nothing"));
+            }
+        }
+        if self.subcommands.is_some() && self.except.is_some() {
+            return refuse("`subcommands` and `except` are opposite readings of the same position");
+        }
+        if self.nested.is_some() && self.subcommands.is_none() {
+            return refuse(
+                "`nested` needs `subcommands` — a second word with no first names nothing",
+            );
+        }
+        let any = self.any_argument.unwrap_or_default();
+        if any && (self.subcommands.is_some() || self.except.is_some()) {
+            return refuse("`any_argument` already admits every word, so it cannot be narrowed");
+        }
+        if !any && self.subcommands.is_none() && self.except.is_none() {
+            return refuse("declares no condition, so it never matches");
+        }
+        Ok(())
+    }
+}
+
 /// The mediator a [`Rule::require_via`] row requires (CLOUD-271).
 ///
 /// One variant, deliberately, and it is a variant rather than a string because
@@ -5090,6 +5458,22 @@ pub enum Direction {
     NonDecreasing,
     /// The count may fall or hold, never rise. The new-`#[ignore]` guard.
     NonIncreasing,
+}
+
+impl Direction {
+    pub const ALL: &'static [Direction] = &[Direction::NonDecreasing, Direction::NonIncreasing];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Direction::NonDecreasing => "non_decreasing",
+            Direction::NonIncreasing => "non_increasing",
+        }
+    }
+    pub fn violated(self, base: usize, working: usize) -> bool {
+        match self {
+            Direction::NonDecreasing => working < base,
+            Direction::NonIncreasing => working > base,
+        }
+    }
 }
 
 /// The `[hook]` table: what this repository attaches to hook events.
@@ -5258,6 +5642,12 @@ pub struct Identity {
     pub name: String,
     /// `user.email`.
     pub email: String,
+}
+
+impl Identity {
+    pub fn rendered(&self) -> String {
+        format!("{} <{}>", self.name, self.email)
+    }
 }
 
 /// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
