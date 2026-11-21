@@ -63,7 +63,7 @@
 //! future evaluator gained IO with no new dependency.
 //!
 //! That is the whole argument for admitting consumer-authored code to the
-//! mediated call. A [`crate::rules::RuleKind::Command`] row spawns a process with
+//! mediated call. A [`crate::config_model::RuleKind::Command`] row spawns a process with
 //! the calling user's authority and can acquire anything; a module sees the
 //! fields the boundary resolved and acquires nothing. "Consumer-authored" was
 //! only ever a proxy for "ambient authority", and this kind separates them.
@@ -98,7 +98,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
-pub use crate::config_model::preset_names;
+use crate::config_model::preset_names;
 use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
 use crate::facts::Look;
@@ -250,7 +250,7 @@ pub struct Violation {
     pub counted: bool,
 }
 
-// `PRESETS` moved to `crate::preset::MANIFESTS` (CLOUD-1181). It was one of
+// `PRESETS` moved to `crate::preset_catalog::MANIFESTS` (CLOUD-1181). It was one of
 // three parallel tables describing a preset, none of which knew about the
 // others; the doc comment that stood here — why Batten ships defaults, why this
 // is not the OCI distribution CLOUD-129 rejected, and why rule 1 is most
@@ -621,7 +621,7 @@ impl Bundle {
 
     /// The severity a denial from this bundle is reported at.
     ///
-    /// Resolved exactly as [`crate::rules::Rule::severity_for`] resolves it —
+    /// Resolved exactly as [`crate::config_model::Rule::severity_for`] resolves it —
     /// the predicate's own where the row named one, the row's otherwise
     /// (CLOUD-832) — because the id a finding is reported under and the severity
     /// it is reported at have to come from one answer.
@@ -778,13 +778,13 @@ pub struct Vocabulary<'a> {
     /// The `[[pattern]]` table (CLOUD-885).
     pub patterns: &'a [crate::pattern::NamedPattern],
     /// The `[[verdict]]` table (CLOUD-1050).
-    pub verdicts: &'a [crate::verdict::DeclaredVerdict],
+    pub verdicts: &'a [crate::config_model::DeclaredVerdict],
     /// The `[vocabulary]` word lists (CLOUD-1638).
     ///
     /// `None` where the consumer declared none, which is the same exemption the
     /// class grammar takes: a tree with no lists cannot satisfy membership, so
     /// holding its finding ids to them would be a demand with no fix available.
-    pub words: Option<&'a crate::verdict::Vocabulary>,
+    pub words: Option<&'a crate::config_model::Vocabulary>,
     /// The `[[recorder]]` table (CLOUD-1051).
     ///
     /// Here for the reason stated above rather than as a third thing bolted on:
@@ -1162,10 +1162,10 @@ pub fn load(
 /// every hook call was 0.65 ms spent on nothing. `Some` registry is therefore
 /// also what gates [`check_loaded`].
 fn check_tables(
-    verdicts: &[crate::verdict::DeclaredVerdict],
+    verdicts: &[crate::config_model::DeclaredVerdict],
     checks: ModuleChecks,
 ) -> Result<(
-    Option<Vec<crate::verdict::DeclaredVerdict>>,
+    Option<Vec<crate::config_model::DeclaredVerdict>>,
     BTreeSet<String>,
 )> {
     if checks == ModuleChecks::SkipOnHotPath {
@@ -1188,7 +1188,7 @@ fn check_preset_scope(
     let decided: Vec<&str> = manifest
         .scopes()
         .into_iter()
-        .map(crate::config_model::RuleScope::as_str)
+        .map(crate::preset_catalog::RuleScope::as_str)
         .collect();
     Err(UsageError::raise(format!(
         "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
@@ -1221,7 +1221,7 @@ fn check_loaded(
     rule: &Rule,
     bundle: &Bundle,
     (declared_patterns, sources): Cited<'_>,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     source: &str,
     (emitted, per_rule): Raised<'_>,
 ) -> Result<()> {
@@ -3049,7 +3049,7 @@ fn bundle_members(
 /// A [`UsageError`] (exit `1`) naming the offending key and the module path.
 /// Pointer-only: never a line of the module body.
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
-    let tree_scoped = rule.scope == crate::config_model::RuleScope::Tree;
+    let tree_scoped = rule.scope == crate::preset_catalog::RuleScope::Tree;
     let emittable = tree_keys();
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal: `load` has already
@@ -3176,7 +3176,7 @@ fn record_raised(
 /// A RETIRED class is excluded deliberately — its token is a tombstone rather
 /// than a name in use, and refusing a row for spelling one would refuse a name
 /// nothing answers to.
-fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<String> {
+fn collidable_tokens(verdicts: &[crate::config_model::DeclaredVerdict]) -> BTreeSet<String> {
     // ALL THREE SOURCES. The consumer's rows, this binary's native sites, and
     // the VENDORED PRESETS — the third is the one that bites: `trunk push
     // forced` is a preset's class, and a set built from the first two refuses
@@ -3223,7 +3223,7 @@ fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<S
 /// A [`UsageError`] (exit `1`) naming the module and the id.
 fn check_finding_ids(
     sources: &[(String, String)],
-    vocabulary: Option<&crate::verdict::Vocabulary>,
+    vocabulary: Option<&crate::config_model::Vocabulary>,
     tokens: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(grammar) = vocabulary else {
@@ -3384,7 +3384,7 @@ fn check_collapse(
 }
 
 fn check_registry_is_exhausted(
-    verdicts: &[crate::verdict::DeclaredVerdict],
+    verdicts: &[crate::config_model::DeclaredVerdict],
     emitted: &BTreeSet<String>,
 ) -> Result<()> {
     let native = crate::verdict::native_tokens();
@@ -3431,10 +3431,10 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
 pub fn registry_for(
-    verdicts: &[crate::verdict::DeclaredVerdict],
-) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
+    verdicts: &[crate::config_model::DeclaredVerdict],
+) -> Result<Vec<crate::config_model::DeclaredVerdict>> {
     let mut registry = verdicts.to_vec();
-    for entry in crate::verdict::vendored() {
+    for entry in crate::config_check::verdict::vendored() {
         registry.retain(|row| row.id != entry.id);
         registry.push(entry);
     }
@@ -3452,8 +3452,8 @@ pub fn registry_for(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
-fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
-    let vendored: BTreeSet<String> = crate::verdict::vendored()
+fn check_no_vendored_collision(verdicts: &[crate::config_model::DeclaredVerdict]) -> Result<()> {
+    let vendored: BTreeSet<String> = crate::config_check::verdict::vendored()
         .into_iter()
         .map(|entry| entry.id)
         .collect();
@@ -3505,7 +3505,7 @@ fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> 
 fn check_verdicts_are_declared(
     rule: &Rule,
     bundle: &Bundle,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     source: &str,
 ) -> Result<()> {
     // Derived here rather than handed in, so the call site is one line at each
@@ -5196,7 +5196,7 @@ pub(crate) fn suite_input(
     // shape, and the reason neither surface needs a fixture key.
     Ok(crate::rules::tree_document(
         documents,
-        &crate::rules::Declared {
+        &crate::config_check::rules::Declared {
             documents: &crate::rules::declared_documents(rule, tracked)?,
             lines: &crate::rules::declared_lines(rule, tracked)?,
             invocations: &crate::rules::declared_invocations(rule, tracked)?,
@@ -5298,7 +5298,7 @@ pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
     let crate::facts::Look::Is(suite) = test(
         bundle,
         &input,
-        rule.scope == crate::config_model::RuleScope::MediatedCall,
+        rule.scope == crate::preset_catalog::RuleScope::MediatedCall,
     )?
     else {
         return Ok(None);
@@ -5374,7 +5374,7 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         let bundles = [a.clone(), quiet];
         assert_eq!(publishers_of(&bundles, "a"), BTreeSet::from(["row"]));
         assert!(publishers_of(&bundles, "nothing").is_empty());
-        assert_eq!(preset_names(), crate::preset::names());
+        assert_eq!(preset_names(), crate::preset_catalog::names());
     }
 
     #[test]
@@ -5479,7 +5479,7 @@ rules contains not_quoted\n";
 
     #[test]
     fn a_preset_row_compiles_its_scope_s_modules_less_what_it_excepts() {
-        let manifest = crate::preset::find("git").expect("git ships");
+        let manifest = crate::preset_catalog::find("git").expect("git ships");
         let module = manifest.modules[0].name();
         let sources = preset_sources(&git_row(""), manifest, "git").unwrap();
         assert_eq!(sources.len(), 1);
@@ -5496,7 +5496,7 @@ rules contains not_quoted\n";
             "excepting every module decides nothing"
         );
         let mut tree = git_row("");
-        tree.scope = crate::rules::RuleScope::Tree;
+        tree.scope = crate::preset_catalog::RuleScope::Tree;
         assert!(
             preset_sources(&tree, manifest, "git").is_err(),
             "no module at that scope"
@@ -5505,7 +5505,7 @@ rules contains not_quoted\n";
 
     #[test]
     fn an_ejected_copy_is_paired_with_the_vendored_module_its_header_names() {
-        let manifest = crate::preset::find("git").expect("git ships");
+        let manifest = crate::preset_catalog::find("git").expect("git ships");
         let module = &manifest.modules[0];
         let copy = format!(
             "# batten-ejected: git/{} version {}\npackage x\n",
@@ -5554,7 +5554,7 @@ rules contains not_quoted\n";
         policy_row(id, scope, "module = \"policy/m.rego\"", extra)
     }
 
-    fn class(id: &str, extra: &str) -> crate::verdict::DeclaredVerdict {
+    fn class(id: &str, extra: &str) -> crate::config_model::DeclaredVerdict {
         toml::from_str(&format!(
             "id = \"{id}\"\ngloss = \"g\"\nclass = \"c\"\n{extra}"
         ))
@@ -5808,24 +5808,24 @@ violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects
     }
 
     /// Two tree modules, one reading a provider's language, and one mediated.
-    const MIXED: crate::preset::Manifest = crate::preset::Manifest {
+    const MIXED: crate::preset_catalog::Manifest = crate::preset_catalog::Manifest {
         name: "mixed",
         version: 1,
         modules: &[
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::Tree,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:mixed>/t1.rego",
                 source: "package t1\n",
             },
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::Tree,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::Tree,
                 provider: Some("github"),
                 pointer: "<preset:mixed>/t2.rego",
                 source: "package t2\n",
             },
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::MediatedCall,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:mixed>/m.rego",
                 source: "package m\n",
@@ -5933,7 +5933,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     #[test]
     fn a_module_raises_only_live_declared_tokens_and_names_them_literally() {
         let row = module_row("a", "mediated_call", "");
-        let check = |bundle: &Bundle, registry: &[crate::verdict::DeclaredVerdict]| {
+        let check = |bundle: &Bundle, registry: &[crate::config_model::DeclaredVerdict]| {
             check_verdicts_are_declared(&row, bundle, registry, "policy/a.rego")
                 .map_err(|err| format!("{err:#}"))
         };
@@ -5999,7 +5999,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
         let tokens = collidable_tokens(&[live, retired]);
         assert!(tokens.contains("x y z") && !tokens.contains("old y z"));
         assert!(tokens.contains(native));
-        let vendored = crate::preset::verdict_rows()
+        let vendored = crate::config_check::preset::verdict_rows()
             .into_iter()
             .next()
             .expect("a vendored class");
@@ -6017,7 +6017,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     #[test]
     fn ids_are_held_to_the_grammar_claimed_once_and_declared_before_a_severity_names_them() {
         let sources = sources_of(&[("policy/x.rego", "rules contains \"x\"\n")]);
-        let grammar = crate::verdict::Vocabulary::default();
+        let grammar = crate::config_model::Vocabulary::default();
         let x = BTreeSet::from(["x".to_owned()]);
         assert!(check_finding_ids(&sources, Some(&grammar), &BTreeSet::new()).is_err());
         assert!(check_finding_ids(&sources, Some(&grammar), &x).is_ok());
@@ -6097,12 +6097,12 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         preset.preset = None;
         assert!(source_key(&preset).is_err());
 
-        let mut config: crate::config::Config = toml::from_str("version = 1\n").unwrap();
+        let mut config: crate::config_model::Config = toml::from_str("version = 1\n").unwrap();
         assert!(Vocabulary::from(&config).words.is_none());
         config
             .vocabulary
             .subject
-            .push(crate::verdict::VocabularyWord {
+            .push(crate::config_model::VocabularyWord {
                 word: "x".to_owned(),
                 gloss: "g".to_owned(),
             });

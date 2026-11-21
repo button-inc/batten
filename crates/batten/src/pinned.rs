@@ -112,7 +112,7 @@ pub(crate) const STORE: &str = "batten-facts";
 /// The record's name inside [`STORE`].
 const RECORD: &str = "pinned-programs";
 
-/// The mediator this fact asks. One name, matching [`crate::rules::RequireVia`]'s
+/// The mediator this fact asks. One name, matching [`crate::config_model::RequireVia`]'s
 /// single variant — a second spelling of "which pin" is a second thing to drift.
 pub(crate) const MEDIATOR: &str = "mise";
 

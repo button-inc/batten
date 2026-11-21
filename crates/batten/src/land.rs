@@ -44,10 +44,10 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 
-pub(crate) use crate::config_model::BRANCH_KEYED_RECEIPTS;
-pub use crate::config_model::LAP_RECORD;
+use crate::config_model::BRANCH_KEYED_RECEIPTS;
+use crate::config_model::LAP_RECORD;
 use crate::gitwrite::{self, Rebase};
-pub use crate::preset_catalog::RED_HEAD;
+use crate::preset_catalog::RED_HEAD;
 
 /// What one replay did.
 ///
@@ -2036,7 +2036,7 @@ pub fn verify(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
 ) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
@@ -2145,13 +2145,13 @@ pub fn verify(
 /// a restated default is a field whose deletion changes nothing (CLOUD-2509);
 /// the assertion below pins it at compile time, so a default flipped for
 /// another caller cannot stream a gate log into the lap.
-const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
+const VERIFY_SETTINGS: crate::config_model::ExecConfig = crate::config_model::ExecConfig {
     manage_process_group: true,
     // EACH STAGE'S RESULT AS IT LANDS (#1276): the log stays stored and named
     // by a pointer at the end, but a lap that ran an hour said nothing until
     // then. One line per stage and per mutant row, never the payload.
-    progress: crate::exec::Progress::Echo,
-    ..crate::exec::ExecConfig::DEFAULT
+    progress: crate::config_model::ExecProgress::Echo,
+    ..crate::config_model::ExecConfig::DEFAULT
 };
 const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
 
@@ -2163,7 +2163,7 @@ const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.t
 fn gate_said(
     head: String,
     ran: (i32, Vec<crate::outputs::Hit>),
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
     low_water: Option<u64>,
 ) -> Verified {
     match ran {
@@ -2317,7 +2317,7 @@ pub fn verify_raced(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
     trunk: Option<(&crate::main_watch::Config, &str)>,
     stall: Option<&Stall>,
 ) -> Result<Verified> {

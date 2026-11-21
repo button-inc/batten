@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -16,8 +16,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use batten::config_model::RuleKind;
 use batten::decision::Outcome;
-use batten::rules::{Decidability, RuleKind};
+use batten::rules::Decidability;
 use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
     Fixture, StateHome, batten, declared_board, declared_patterns, git_in, run, scratch,
@@ -667,9 +668,9 @@ fn exit_code_contract() {
 ///
 /// Longest-first because `config show` and `config` are both rows and the
 /// argument vector matches the prefix of either; the leaf is the one that ran.
-fn declaring_row(args: &[&str]) -> Option<&'static batten::surface::CommandDecl> {
+fn declaring_row(args: &[&str]) -> Option<&'static batten::surface_table::CommandDecl> {
     let joined = args.join(" ");
-    batten::surface::SURFACE
+    batten::surface_table::SURFACE
         .iter()
         .filter(|row| joined == row.path || joined.starts_with(&format!("{} ", row.path)))
         .max_by_key(|row| row.path.len())
@@ -740,7 +741,7 @@ fn assert_observations_are_declared(cases: &[Case]) {
 /// them at once.
 #[test]
 fn every_leaf_verb_declares_its_exit_set() {
-    let paths: Vec<&str> = batten::surface::SURFACE
+    let paths: Vec<&str> = batten::surface_table::SURFACE
         .iter()
         .map(|row| row.path)
         .collect();
@@ -752,7 +753,7 @@ fn every_leaf_verb_declares_its_exit_set() {
 
     let mut undeclared = Vec::new();
     let mut overdeclared = Vec::new();
-    for row in batten::surface::SURFACE {
+    for row in batten::surface_table::SURFACE {
         match (is_leaf(row.path), row.exits.is_empty()) {
             (true, true) => undeclared.push(row.path),
             (false, false) => overdeclared.push(row.path),
@@ -782,7 +783,7 @@ fn a_declared_exit_set_is_never_a_code_outside_the_contract() {
     // code every verb reaches, and a set nobody can satisfy is a gate that
     // decides nothing. Every leaf can complete, and every leaf can be invoked
     // wrongly, so `Success` and `Usage` are on every leaf by construction.
-    for row in batten::surface::SURFACE
+    for row in batten::surface_table::SURFACE
         .iter()
         .filter(|row| !row.exits.is_empty())
     {
@@ -1870,7 +1871,7 @@ enum Channel {
 /// totality assertion still passed. Derived, so a new variant is covered the day
 /// it is declared.
 fn harnesses() -> Vec<&'static str> {
-    batten::hook::Harness::ALL
+    batten::config_model::Harness::ALL
         .iter()
         .map(|harness| harness.as_str())
         .collect()
@@ -1882,7 +1883,7 @@ fn harnesses() -> Vec<&'static str> {
 /// in-band posture and forgotten in a test list would silently stop being
 /// checked on the channel it actually uses.
 fn reads_a_deny_body(harness: &str) -> bool {
-    batten::hook::Harness::ALL
+    batten::config_model::Harness::ALL
         .iter()
         .find(|candidate| candidate.as_str() == harness)
         .is_some_and(|candidate| candidate.reason_travels_in_band())
@@ -2486,7 +2487,7 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
 /// One golden row: an event's host spelling, and what a banned command does at it.
 struct EventRow {
     /// The normalized event this row pins.
-    event: batten::hook::Event,
+    event: batten::config_model::Event,
     /// The host's own spelling, as it appears in `hook_event_name`.
     spelling: &'static str,
     /// Whether the **mediated-call** policy adjudicates at this event.
@@ -2509,25 +2510,25 @@ struct EventRow {
 
 const EVENTS: &[EventRow] = &[
     EventRow {
-        event: batten::hook::Event::PreTool,
+        event: batten::config_model::Event::PreTool,
         spelling: "PreToolUse",
         adjudicated: true,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PostTool,
+        event: batten::config_model::Event::PostTool,
         spelling: "PostToolUse",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Stop,
+        event: batten::config_model::Event::Stop,
         spelling: "Stop",
         adjudicated: false,
         state_decided: true,
     },
     EventRow {
-        event: batten::hook::Event::SessionStart,
+        event: batten::config_model::Event::SessionStart,
         spelling: "SessionStart",
         adjudicated: false,
         state_decided: false,
@@ -2539,13 +2540,13 @@ const EVENTS: &[EventRow] = &[
     // nobody keyed policy on. `an_event_a_host_does_not_declare_degrades_cleanly`
     // is what tells the two apart, through the ladder.
     EventRow {
-        event: batten::hook::Event::TaskCompleted,
+        event: batten::config_model::Event::TaskCompleted,
         spelling: "TaskCompleted",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::ConfigChange,
+        event: batten::config_model::Event::ConfigChange,
         spelling: "ConfigChange",
         adjudicated: false,
         state_decided: false,
@@ -2556,7 +2557,7 @@ const EVENTS: &[EventRow] = &[
     // drain rides this boundary; the command matcher does not adjudicate at it,
     // and no host offers a deny channel there.
     EventRow {
-        event: batten::hook::Event::PostToolBatch,
+        event: batten::config_model::Event::PostToolBatch,
         spelling: "PostToolBatch",
         adjudicated: false,
         state_decided: false,
@@ -2567,115 +2568,115 @@ const EVENTS: &[EventRow] = &[
     // rule KIND selects for it yet, not that nothing could. When one does, this
     // row flips and `payload_at` is already able to prove it.
     EventRow {
-        event: batten::hook::Event::UserPromptSubmit,
+        event: batten::config_model::Event::UserPromptSubmit,
         spelling: "UserPromptSubmit",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PostToolFailure,
+        event: batten::config_model::Event::PostToolFailure,
         spelling: "PostToolUseFailure",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Notification,
+        event: batten::config_model::Event::Notification,
         spelling: "Notification",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::UserPromptExpansion,
+        event: batten::config_model::Event::UserPromptExpansion,
         spelling: "UserPromptExpansion",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::SessionEnd,
+        event: batten::config_model::Event::SessionEnd,
         spelling: "SessionEnd",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::StopFailure,
+        event: batten::config_model::Event::StopFailure,
         spelling: "StopFailure",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::SubagentStart,
+        event: batten::config_model::Event::SubagentStart,
         spelling: "SubagentStart",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::SubagentStop,
+        event: batten::config_model::Event::SubagentStop,
         spelling: "SubagentStop",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PreCompact,
+        event: batten::config_model::Event::PreCompact,
         spelling: "PreCompact",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PostCompact,
+        event: batten::config_model::Event::PostCompact,
         spelling: "PostCompact",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PreModelSwitch,
+        event: batten::config_model::Event::PreModelSwitch,
         spelling: "PreModelSwitch",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PostModelSwitch,
+        event: batten::config_model::Event::PostModelSwitch,
         spelling: "PostModelSwitch",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PermissionRequest,
+        event: batten::config_model::Event::PermissionRequest,
         spelling: "PermissionRequest",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::PermissionDenied,
+        event: batten::config_model::Event::PermissionDenied,
         spelling: "PermissionDenied",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Setup,
+        event: batten::config_model::Event::Setup,
         spelling: "Setup",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::TeammateIdle,
+        event: batten::config_model::Event::TeammateIdle,
         spelling: "TeammateIdle",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::TaskCreated,
+        event: batten::config_model::Event::TaskCreated,
         spelling: "TaskCreated",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Elicitation,
+        event: batten::config_model::Event::Elicitation,
         spelling: "Elicitation",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::ElicitationResult,
+        event: batten::config_model::Event::ElicitationResult,
         spelling: "ElicitationResult",
         adjudicated: false,
         state_decided: false,
@@ -2686,43 +2687,43 @@ const EVENTS: &[EventRow] = &[
     // (exit 0). `state_decided` is the arm that admits both and still holds
     // that the answer never names the payload's command.
     EventRow {
-        event: batten::hook::Event::WorktreeCreate,
+        event: batten::config_model::Event::WorktreeCreate,
         spelling: "WorktreeCreate",
         adjudicated: false,
         state_decided: true,
     },
     EventRow {
-        event: batten::hook::Event::WorktreeRemove,
+        event: batten::config_model::Event::WorktreeRemove,
         spelling: "WorktreeRemove",
         adjudicated: false,
         state_decided: true,
     },
     EventRow {
-        event: batten::hook::Event::InstructionsLoaded,
+        event: batten::config_model::Event::InstructionsLoaded,
         spelling: "InstructionsLoaded",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::CwdChanged,
+        event: batten::config_model::Event::CwdChanged,
         spelling: "CwdChanged",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::FileChanged,
+        event: batten::config_model::Event::FileChanged,
         spelling: "FileChanged",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::DirectoryAdded,
+        event: batten::config_model::Event::DirectoryAdded,
         spelling: "DirectoryAdded",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::MessageDisplay,
+        event: batten::config_model::Event::MessageDisplay,
         spelling: "MessageDisplay",
         adjudicated: false,
         state_decided: false,
@@ -2730,31 +2731,31 @@ const EVENTS: &[EventRow] = &[
     // CLOUD-2700: Codex's and Copilot's PascalCase names, which the converged
     // decoder reads.
     EventRow {
-        event: batten::hook::Event::ModelRequest,
+        event: batten::config_model::Event::ModelRequest,
         spelling: "PreModelRequest",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::ModelResponse,
+        event: batten::config_model::Event::ModelResponse,
         spelling: "PostModelRequest",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Interrupt,
+        event: batten::config_model::Event::Interrupt,
         spelling: "Interrupt",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::ErrorOccurred,
+        event: batten::config_model::Event::ErrorOccurred,
         spelling: "ErrorOccurred",
         adjudicated: false,
         state_decided: false,
     },
     EventRow {
-        event: batten::hook::Event::Unrecognized,
+        event: batten::config_model::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
         adjudicated: false,
         state_decided: false,
@@ -2776,7 +2777,7 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
     let dir = repo_with_gh_policy("event-census");
     for row in EVENTS {
         assert_eq!(
-            batten::hook::Event::normalize(row.spelling),
+            batten::config_model::Event::normalize(row.spelling),
             row.event,
             "{}: spelling does not normalize to the event it claims",
             row.spelling
@@ -2839,35 +2840,39 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
 /// The events only one host spells (CLOUD-2700): no converged name exists, so
 /// each is fed through its own host's decoder rather than `Event::normalize`,
 /// which keeps host vocabulary out of the harness-blind core.
-const HOST_EVENTS: &[(batten::hook::Harness, batten::hook::Event, &str)] = &[
+const HOST_EVENTS: &[(
+    batten::config_model::Harness,
+    batten::config_model::Event,
+    &str,
+)] = &[
     (
-        batten::hook::Harness::GeminiCli,
-        batten::hook::Event::ToolSelection,
+        batten::config_model::Harness::GeminiCli,
+        batten::config_model::Event::ToolSelection,
         "BeforeToolSelection",
     ),
     (
-        batten::hook::Harness::Cursor,
-        batten::hook::Event::AgentResponse,
+        batten::config_model::Harness::Cursor,
+        batten::config_model::Event::AgentResponse,
         "afterAgentResponse",
     ),
     (
-        batten::hook::Harness::Cursor,
-        batten::hook::Event::AgentThought,
+        batten::config_model::Harness::Cursor,
+        batten::config_model::Event::AgentThought,
         "afterAgentThought",
     ),
     (
-        batten::hook::Harness::Cursor,
-        batten::hook::Event::WorkspaceOpen,
+        batten::config_model::Harness::Cursor,
+        batten::config_model::Event::WorkspaceOpen,
         "workspaceOpen",
     ),
     (
-        batten::hook::Harness::Cursor,
-        batten::hook::Event::TabFileRead,
+        batten::config_model::Harness::Cursor,
+        batten::config_model::Event::TabFileRead,
         "beforeTabFileRead",
     ),
     (
-        batten::hook::Harness::Cursor,
-        batten::hook::Event::TabFileEdit,
+        batten::config_model::Harness::Cursor,
+        batten::config_model::Event::TabFileEdit,
         "afterTabFileEdit",
     ),
 ];
@@ -2959,7 +2964,7 @@ fn the_census_covers_every_normalized_event() {
     covered.dedup();
     // A row is fed to a host as `hook_event_name`, and no host spells a forge
     // event, so `host_emitted` exempts it; `forge_events.rs` pins its decision.
-    let mut required: Vec<&str> = batten::hook::Event::ALL
+    let mut required: Vec<&str> = batten::config_model::Event::ALL
         .iter()
         .filter(|event| event.host_emitted())
         .map(|event| event.as_str())
@@ -3117,7 +3122,7 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
             .args(["adjudicate", "--harness", token])
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
-            .streamed_output_keeping(batten::exec::Keep {
+            .streamed_output_keeping(batten::capture::Keep {
                 stdin: true,
                 stdout: false,
                 stderr: false,
@@ -3873,12 +3878,12 @@ struct CensusGap {
 /// claim the keyless site to avoid saying what it bans here.
 fn census_gaps(config: &str, cases: &[ShapeCase]) -> Vec<CensusGap> {
     let parsed = batten::config::parse(config, "batten.toml").expect("parse the config");
-    let rows: Vec<&batten::rules::Rule> = parsed
+    let rows: Vec<&batten::config_model::Rule> = parsed
         .rules
         .iter()
         .filter(|rule| {
-            rule.kind == batten::rules::RuleKind::Shape
-                && rule.scope == batten::rules::RuleScope::MediatedCall
+            rule.kind == batten::config_model::RuleKind::Shape
+                && rule.scope == batten::preset_catalog::RuleScope::MediatedCall
         })
         .collect();
 
@@ -3898,7 +3903,7 @@ fn census_gaps(config: &str, cases: &[ShapeCase]) -> Vec<CensusGap> {
         // about the working tree can move its answer.
         let owed = if row.while_marker.is_some() {
             CensusSite::Marked
-        } else if row.counts == Some(batten::rules::CeilingUnit::TrackedArtifacts) {
+        } else if row.counts == Some(batten::config_model::CeilingUnit::TrackedArtifacts) {
             CensusSite::Manifest
         } else if row.requires_key.is_some() {
             CensusSite::Keyless
@@ -6371,8 +6376,8 @@ fn census_brief() -> String {
 /// Derived from the declaration rather than listed: the path, then the positional
 /// [`CENSUS_POSITIONALS`] names for it, then `-J`. A verb with a positional and no
 /// row fails loudly here rather than being handed a value that means nothing to it.
-fn census_argv(decl: &batten::surface::CommandDecl, seeded: &str) -> Vec<String> {
-    let positionals: Vec<&batten::surface::FlagDecl> =
+fn census_argv(decl: &batten::surface_table::CommandDecl, seeded: &str) -> Vec<String> {
+    let positionals: Vec<&batten::surface_table::FlagDecl> =
         decl.flags.iter().filter(|flag| flag.positional).collect();
     let mut argv: Vec<String> = decl.path.split(' ').map(ToOwned::to_owned).collect();
     let found = CENSUS_POSITIONALS
@@ -6425,8 +6430,8 @@ fn census_argv(decl: &batten::surface::CommandDecl, seeded: &str) -> Vec<String>
 }
 
 /// Every verb that declares the `-J` data channel.
-fn data_channel_verbs() -> Vec<&'static batten::surface::CommandDecl> {
-    let verbs: Vec<&batten::surface::CommandDecl> = batten::surface::SURFACE
+fn data_channel_verbs() -> Vec<&'static batten::surface_table::CommandDecl> {
+    let verbs: Vec<&batten::surface_table::CommandDecl> = batten::surface_table::SURFACE
         .iter()
         .filter(|decl| decl.data_channel)
         .collect();
@@ -11438,7 +11443,7 @@ fn every_harness_the_enum_declares_is_in_the_attribution_matrix() {
     // The guard on the list above. `Harness::ALL` is the authority; this asserts
     // the matrix ranges over all of it, so a seventh host fails here rather than
     // silently going uncovered by every case below.
-    let declared: Vec<&str> = batten::hook::Harness::ALL
+    let declared: Vec<&str> = batten::config_model::Harness::ALL
         .iter()
         .map(|harness| harness.as_str())
         .collect();
@@ -14227,7 +14232,7 @@ fn a_reader_that_hangs_up_ends_the_run_without_a_diagnosis() {
         .env("RUST_BACKTRACE", "1")
         .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
-        .streamed_output_keeping(batten::exec::Keep {
+        .streamed_output_keeping(batten::capture::Keep {
             stdin: false,
             stdout: true,
             stderr: true,

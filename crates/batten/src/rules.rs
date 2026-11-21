@@ -49,23 +49,25 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub(crate) use crate::config_check::rules::Declared;
-pub use crate::config_check::rules::{COLUMN_CENSUS, ColumnCensus, Declares, TreeOnlyColumn};
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::rules::{
-    Located, pointer_for, validate_composition, validate_rows,
-};
-pub use crate::config_check::rules::{validate, validate_in, validate_keying};
+#[cfg(test)]
+use crate::config_check::rules::Located;
+#[cfg(test)]
+use crate::config_check::rules::validate;
+#[cfg(test)]
+use crate::config_check::rules::validate_composition;
+use crate::config_check::rules::{COLUMN_CENSUS, Declares};
 #[cfg(test)]
 use crate::config_model::preset_name_schema;
 pub use crate::config_model::{
     CallEvent, CeilingUnit, Conserves, Direction, FieldBound, GitRead, NativeGate, ReceiptKey,
-    ReceiptTrigger, RequireVia, Rewrite, Rule, RuleKind, RuleScope, VerdictProgram,
+    ReceiptTrigger, RequireVia, Rewrite, Rule, RuleKind, VerdictProgram,
 };
 use crate::error::UsageError;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
+pub use crate::preset_catalog::RuleScope;
 use crate::refusal::{Fix, Refusal};
-pub use crate::selector::glob_match;
+use crate::selector::glob_match;
 use crate::severity::{self, ReportLevel, RuleSeverity};
 pub use crate::surface_table::Half;
 
@@ -641,7 +643,7 @@ impl RuleKind {
     /// kind that never sees a call, and `run_all` refused it outright because
     /// nothing there could run it. These three DO see a call, and the boundary
     /// runs their repair under the raised class's
-    /// [`crate::verdict::Applicability`].
+    /// [`crate::preset_catalog::Applicability`].
     ///
     /// A match with no wildcard: a kind added later is a compile error here
     /// rather than one silently answered `false`, which would be a repair a
@@ -1020,9 +1022,9 @@ impl RuleScope {
     }
 }
 
-// A rule's declared output lives in `sink` (CLOUD-2789), so the store reads
-// it without reaching up into `rules`.
-pub use crate::sink::{Sink, SinkKey};
+use crate::sink::Sink;
+#[cfg(test)]
+use crate::sink::SinkKey;
 
 /// Each rule that declares a sink, as its id and that sink: what `sink`'s
 /// store questions take, so the store never needs the whole `Rule`.
@@ -1034,7 +1036,7 @@ fn declared_sinks(rules: &[Rule]) -> impl Iterator<Item = (&str, &Sink)> {
 
 // Housed in `crate::facts` (CLOUD-2789), which reads it too; the path here is
 // unchanged.
-pub use crate::facts::selects_tool_name;
+use crate::facts::selects_tool_name;
 
 impl VerdictProgram {
     /// Whether `program` and `words` — the effective program and the non-flag
@@ -1753,7 +1755,7 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 /// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
 pub fn run_static(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     // The declared pattern table (CLOUD-885), riding beside `provisions` for the
     // same reason it does: a second config table the rule set evaluates against.
     vocabulary: crate::policy::Vocabulary<'_>,
@@ -1794,7 +1796,7 @@ pub fn run_static(
 /// cannot honestly run.
 pub fn run_static_over(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     opts: RunOptions<'_>,
@@ -1809,7 +1811,7 @@ pub fn run_static_over(
 /// As [`run_all`]: a config fault at load, or a rule whose command fails to run.
 pub fn run_all_over(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     opts: RunOptions<'_>,
@@ -1948,7 +1950,7 @@ enum RunKind {
 
 fn run_over(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     opts: RunOptions<'_>,
@@ -1962,7 +1964,7 @@ fn run_over(
 
 fn run_static_inner(
     rules: &[Rule],
-    _provisions: &[crate::provision::Provision],
+    _provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     opts: RunOptions<'_>,
@@ -1995,7 +1997,7 @@ fn run_static_inner(
             return Err(UsageError::raise(
                 Refusal::declared(
                     &rule.id,
-                    crate::verdict::Native::SpawningRuleOnReadVerb,
+                    crate::error::Native::SpawningRuleOnReadVerb,
                     &[crate::verdict::Subject::Artifact {
                         artifact: rule.kind.as_str().to_owned(),
                     }],
@@ -2062,7 +2064,7 @@ fn run_static_inner(
 /// failure while walking the tree as an internal error (→ exit `3`).
 pub fn run_recorded(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     // WHICH CONFIG-FAULT CHECKS THIS CALLER IS ENTITLED TO (CLOUD-1480). The
@@ -2130,7 +2132,7 @@ pub fn run_recorded(
 /// class (§7), never a policy verdict about the repository.
 pub fn run_all(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
 ) -> anyhow::Result<Scan> {
@@ -2157,7 +2159,7 @@ pub fn run_all(
 
 fn run_all_inner(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
     opts: RunOptions<'_>,
@@ -2297,7 +2299,7 @@ fn workers_for(surface: crate::facts::Surface) -> usize {
 /// error (→ exit `3`).
 fn run(
     rules: &[Rule],
-    provisions: &[crate::provision::Provision],
+    provisions: &[crate::config_model::Provision],
     root: &Path,
     bundles: &[crate::policy::Bundle],
     // The declared recorders, so their records can be projected (CLOUD-1051).
@@ -2468,7 +2470,7 @@ fn run(
     // VERB-WRITTEN STORES ARE READ UNCONDITIONALLY, which is why the guard above
     // is no longer the whole answer (CLOUD-472). A `[[recorder]]` store exists
     // because config declared one, so a repository declaring none has nothing to
-    // read. `crate::record::VERB_WRITTEN` is different in kind: the ENGINE owns
+    // read. `crate::config_check::record::VERB_WRITTEN` is different in kind: the ENGINE owns
     // both the writer and the reader, so there is no declaration for a consumer
     // to forget and no config to make the gate conditional on. Reading them only
     // when some unrelated recorder happened to be declared would make a gate's
@@ -3096,7 +3098,7 @@ struct RunInputs<'a> {
     /// Which half of a split `enforce` this run judges (step 13a); under
     /// [`Half::Tree`] the tree document passes through [`null_live_keys`].
     half: Option<Half>,
-    provisions: &'a [crate::provision::Provision],
+    provisions: &'a [crate::config_model::Provision],
     files: &'a [String],
     /// The file set a rule is SELECTED against, which is `files` narrowed by the
     /// caller's declared change-set (CLOUD-519), and `files` itself when no flag
@@ -3158,7 +3160,7 @@ struct RunInputs<'a> {
     /// Here rather than re-resolved per violation: it is config, fixed for the
     /// life of the run, and this is the shape `Vocabulary` already threads for
     /// exactly that reason.
-    verdicts: &'a [crate::verdict::DeclaredVerdict],
+    verdicts: &'a [crate::config_model::DeclaredVerdict],
     /// The declared tables a `reference` row and a traversal read, resolved
     /// once for the run (CLOUD-2005, CLOUD-1868).
     tables: &'a RunTables<'a>,
@@ -4797,9 +4799,9 @@ fn plan_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, Option<cra
 fn plan_facts_from(
     rules: &[Rule],
     root: &Path,
-    acquire: impl Fn(&Path, &crate::hk::PlanQuery) -> crate::facts::Look<crate::hk::Planned>,
+    acquire: impl Fn(&Path, &crate::config_model::PlanQuery) -> crate::facts::Look<crate::hk::Planned>,
 ) -> Option<BTreeMap<String, Option<crate::hk::Planned>>> {
-    let declared: Vec<crate::hk::PlanQuery> = rules
+    let declared: Vec<crate::config_model::PlanQuery> = rules
         .iter()
         .flat_map(|rule| rule.plan.iter().cloned())
         .collect();
@@ -5412,7 +5414,7 @@ pub const MODULE_PIN_STALE: &str = "module pin stale";
 fn ejected_behind(
     rule: &Rule,
     root: &Path,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     findings: &mut Vec<Finding>,
 ) {
     let paths: Vec<String> = match (rule.module.as_deref(), rule.bundle.as_deref()) {
@@ -5723,7 +5725,7 @@ fn policy_rule(
 /// registry narrower than the one the module was compiled against rather than a
 /// state a loaded config can reach.
 fn policy_remediation(
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     token: &str,
 ) -> Option<Remediation> {
     if let Some(command) = crate::verdict::first_command_route(registry, token) {
@@ -9553,8 +9555,8 @@ const DOCUMENT_NO_DOCUMENT: &str = "no-document";
 // The tree walk and its boundary marker live in `git`, and the glob in the
 // `selector` leaf (CLOUD-2789), so `git` reads the tree without reaching up
 // into `rules`.
-pub use crate::git::{NESTED_REPOSITORY_MARKER, tree_files};
-pub use crate::selector::Selector;
+use crate::git::tree_files;
+use crate::selector::Selector;
 
 /// The marker that turns a glob into an exclude inside an ordered
 /// include/exclude list: gitignore's `!` prefix, so a reader who knows one knows
@@ -14521,7 +14523,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         rule.tool = Some("save_issue".to_owned());
         rule.checks = Some(vec!["c".to_owned()]);
         rule.key = Some(ReceiptKey::Named);
-        rule.key_from = Some(crate::hook::Field::InputId);
+        rule.key_from = Some(crate::config_model::Field::InputId);
         rule.reason = Some("re-read the row before editing it".to_owned());
         rule.key_shape = Some("[unclosed".to_owned());
         let err = rule
@@ -14605,7 +14607,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 let mut rule = blank("r", kind);
                 rule.tool = Some("save_issue".to_owned());
                 rule.checks = Some(vec!["c".to_owned()]);
-                rule.when_present = Some(crate::hook::Field::InputState);
+                rule.when_present = Some(crate::config_model::Field::InputState);
                 rule.when_value = Some(folds_to_nothing.to_owned());
                 let err = rule
                     .validate()
@@ -14748,7 +14750,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn a_ceiling_is_whole_and_its_rewrites_belong_to_the_artifact_unit() {
         let partial = Rule {
-            measures: Some(crate::hook::Field::Prompt),
+            measures: Some(crate::config_model::Field::Prompt),
             ..blank("c", RuleKind::Shape)
         };
         assert!(
@@ -14756,7 +14758,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
         let ceiling = |counts| Rule {
             tool: Some(String::from("Task")),
-            measures: Some(crate::hook::Field::Prompt),
+            measures: Some(crate::config_model::Field::Prompt),
             counts: Some(counts),
             max: Some(3),
             resolves: vec![Rewrite {
@@ -14825,8 +14827,11 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
         assert!(
             refusal(
-                keyed(ReceiptKey::Head, Some(crate::hook::Field::SessionId))
-                    .validate_receipt_columns()
+                keyed(
+                    ReceiptKey::Head,
+                    Some(crate::config_model::Field::SessionId)
+                )
+                .validate_receipt_columns()
             )
             .contains("belongs to `key = \"named\"`")
         );
@@ -14846,7 +14851,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 .contains("names no branch-keyed receipt family")
         );
         assert_eq!(
-            refusal(marked(crate::land::BRANCH_KEYED_RECEIPTS[0]).validate_marker()),
+            refusal(marked(crate::config_model::BRANCH_KEYED_RECEIPTS[0]).validate_marker()),
             ""
         );
     }
@@ -15134,7 +15139,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             .get("enum")
             .and_then(serde_json::Value::as_array)
             .expect("an enum of names");
-        assert_eq!(names.len(), crate::policy::preset_names().len());
+        assert_eq!(names.len(), crate::config_model::preset_names().len());
         assert!(!names.is_empty());
     }
 
@@ -15652,7 +15657,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// The first manifest a preset ships, and a module header copied from it at
     /// `version`.
     fn ejected_header(version: u32) -> String {
-        let manifest = &crate::preset::MANIFESTS[0];
+        let manifest = &crate::preset_catalog::MANIFESTS[0];
         format!(
             "# batten-ejected: {}/m version {version}\npackage batten.x\n",
             manifest.name
@@ -15665,7 +15670,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// Fails by: emitting nothing, or the version comparison inverted.
     #[test]
     fn a_copy_behind_its_preset_warns() {
-        let shipped = crate::preset::MANIFESTS[0].version;
+        let shipped = crate::preset_catalog::MANIFESTS[0].version;
         assert!(
             shipped > 0,
             "a stale copy needs a version below the shipped one"
@@ -15712,7 +15717,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn only_a_policy_row_off_the_hook_is_checked_for_a_stale_copy() {
         let dir = temp_dir("rules-evaluate-ejected");
-        let shipped = crate::preset::MANIFESTS[0].version;
+        let shipped = crate::preset_catalog::MANIFESTS[0].version;
         write(&dir, "old.rego", &ejected_header(shipped - 1));
         // Held back by an unmet requirement, so only the stale-copy check runs.
         let held = |id: &str, kind| Rule {
@@ -15795,7 +15800,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                     rule: String::from("a"),
                     key: SinkKey::Rule,
                     kind: crate::facts::Production::Journal,
-                    digest: crate::receipt::hex_sha256(subject.as_bytes()),
+                    digest: crate::digest::sha256_hex(subject.as_bytes()),
                     count: 2,
                 },
                 crate::sink::Requested {
@@ -15993,7 +15998,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     fn a_declared_plan_that_could_not_be_taken_is_present_and_empty() {
         let dir = temp_dir("rules-plan-facts");
         let row = Rule {
-            plan: vec![crate::hk::PlanQuery {
+            plan: vec![crate::config_model::PlanQuery {
                 id: String::from("q"),
                 hook: String::from("no-such-hook"),
                 required: Vec::new(),
@@ -16020,7 +16025,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn a_declared_plan_the_runner_took_is_kept() {
         let dir = temp_dir("rules-plan-taken");
-        let query = |id: &str| crate::hk::PlanQuery {
+        let query = |id: &str| crate::config_model::PlanQuery {
             id: String::from(id),
             hook: String::from(id),
             required: Vec::new(),

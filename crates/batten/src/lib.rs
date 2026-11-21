@@ -9,7 +9,7 @@
 //! keeps the binary's `main` trivial.
 
 // `token_enum!` lives in `batten-facts` with `error::Native`, the first enum
-// declared through it (CLOUD-2789); `rules::NativeGate` and `lint` declare
+// declared through it (CLOUD-2789); `crate::config_model::NativeGate` and `lint` declare
 // through it here. Moving the crate's other hand-kept tokened enums onto it is
 // CLOUD-2454.
 #[macro_use]
@@ -246,18 +246,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+pub use crate::config_model::Config;
+pub use crate::surface_table::SpecFormat;
+pub use crate::surface_table::Verbosity;
 pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
     DefectsCommand, DesignCommand, GenerateCommand, HkCommand, LandedCommand, LintCommand,
     OverrideCommand, PolicyCommand, PrCommand, PresetCommand, ProvisionCommand, ReadyCommand,
-    ReceiptCommand, SemverCommand, SingletonCommand, SpecFormat, StateCommand, TaskCommand,
-    WiringCommand, WorktreeCommand,
+    ReceiptCommand, SemverCommand, SingletonCommand, StateCommand, TaskCommand, WiringCommand,
+    WorktreeCommand,
 };
-pub use config::Config;
 pub use effect::Effect;
 pub use error::{Passthrough, UsageError};
 pub use exit::ExitCode;
-pub use output::{Mode, Presentation, Verbosity};
+pub use output::{Mode, Presentation};
 pub use refusal::{Denial, Fix, Refusal};
 pub use resolve::{Contributor, Origin, Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
@@ -733,7 +735,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 
 /// `batten forge intake` (CLOUD-2690): one forge event payload on stdin,
 /// normalized, deduplicated against the seen ring, and dispatched through
-/// [`dispatch_envelope`] as [`hook::Harness::ExitCode`] — the handlers,
+/// [`dispatch_envelope`] as [`crate::config_model::Harness::ExitCode`] — the handlers,
 /// actions and rules a harness hook gets, and no second dispatcher.
 ///
 /// The `--event` form exits on the exit-code contract: 0 dispatched or seen,
@@ -1075,9 +1077,9 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
     if let Some(judging_ref) = overrides.config_from.as_deref() {
-        return git::show(dir, judging_ref, config::CONFIG_FILE).ok();
+        return git::show(dir, judging_ref, crate::config_model::CONFIG_FILE).ok();
     }
-    config::read_text(&dir.join(config::CONFIG_FILE))
+    config::read_text(&dir.join(crate::config_model::CONFIG_FILE))
         .ok()
         .map(|text| String::clone(&text))
 }
@@ -1226,9 +1228,9 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
     // as they arrive and its child's own code, `101` included: that verb is a
     // transparent passthrough and the code is not Batten's to re-table.
-    let passthrough = exec::ExecConfig {
+    let passthrough = crate::config_model::ExecConfig {
         tee: true,
-        ..exec::ExecConfig::DEFAULT
+        ..crate::config_model::ExecConfig::DEFAULT
     };
     exec::run_in_with_env(
         &root,
@@ -1351,7 +1353,7 @@ fn say_follow_once(
 /// then disagree with the engine on disk.
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
-    let path = root.join(config::CONFIG_FILE);
+    let path = root.join(crate::config_model::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&path).map_err(|why| {
         UsageError::raise(format!(
             "engine update: cannot read {} ({why}), so there is no pin to move",
@@ -1717,7 +1719,8 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
 /// of `engine outdated`; it only reads.
 fn declared_release() -> Result<(std::path::PathBuf, String, Option<crate::config_model::Pin>)> {
     let root = git::worktree_root(Path::new("."))?;
-    let text = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join(crate::config_model::CONFIG_FILE))
+        .unwrap_or_default();
     let pin = engine::declared(&text);
     Ok((root, text, pin))
 }
@@ -1811,7 +1814,7 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         // the config: absent, or naming both or neither.
         unpinned @ (Some(engine::PinKind::Malformed) | None) => {
             clear_outdated(ask)?;
-            let path = root.join(config::CONFIG_FILE);
+            let path = root.join(crate::config_model::CONFIG_FILE);
             let what = if unpinned.is_some() {
                 engine::MALFORMED_PIN
             } else {
@@ -2005,7 +2008,7 @@ enum Want {
 
 /// The `engine` pin of the worktree at `root`, when there is one.
 fn worktree_pin(root: Option<&Path>) -> Option<crate::config_model::Pin> {
-    let text = crate::fsio::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(root?.join(crate::config_model::CONFIG_FILE)).ok()?;
     engine::declared(&text)
 }
 
@@ -2427,7 +2430,7 @@ fn run_outdated(
     let record = match (record, thresholds) {
         (None, _) => None,
         (Some(family), (Some(max_releases), Some(max_days))) => Some(Record {
-            family: record::safe_component("family", &family)?,
+            family: crate::config_check::record::safe_component("family", &family)?,
             max_releases,
             max_days,
         }),
@@ -2454,7 +2457,7 @@ fn engine_pin(
     check: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let path = root.join(config::CONFIG_FILE);
+    let path = root.join(crate::config_model::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&path)?;
     let source = || -> Result<crate::config_model::Pin> {
         Ok(crate::config_model::Pin {
@@ -2506,7 +2509,7 @@ fn engine_pin(
 ///
 /// Every finding is a pointer: the file, the token, the pin.
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
-    let config_path = root.join(config::CONFIG_FILE);
+    let config_path = root.join(crate::config_model::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&config_path)?;
     let tag = match engine::declared(&text).map(crate::config_model::Pin::kind) {
         None => return Ok(ExitCode::Success),
@@ -3380,7 +3383,7 @@ fn run_init(
 ) -> Result<ExitCode> {
     match init::apply(Path::new("."), dry_run)? {
         init::Outcome::Created => {
-            writeln!(out, "{}", config::CONFIG_FILE)?;
+            writeln!(out, "{}", crate::config_model::CONFIG_FILE)?;
             // THE STARTER IS WRITTEN PINNED (CLOUD-2595 §2c): the same key the
             // Gradle-style write adds, for the engine that wrote it. Offline, or
             // on a build no release publishes, it stays unpinned and says so.
@@ -3411,13 +3414,20 @@ fn run_init(
                 mode,
                 Verbosity::Normal,
                 err,
-                &format!("wrote {}; run `batten check` next", config::CONFIG_FILE),
+                &format!(
+                    "wrote {}; run `batten check` next",
+                    crate::config_model::CONFIG_FILE
+                ),
             )?;
             Ok(ExitCode::Success)
         }
         init::Outcome::WouldCreate => {
-            writeln!(out, "{}", config::CONFIG_FILE)?;
-            writeln!(err, "init: would write {}", config::CONFIG_FILE)?;
+            writeln!(out, "{}", crate::config_model::CONFIG_FILE)?;
+            writeln!(
+                err,
+                "init: would write {}",
+                crate::config_model::CONFIG_FILE
+            )?;
             Ok(ExitCode::Success)
         }
         // Unprefixed and ungated: this is the verdict, not a message about one.
@@ -3427,13 +3437,13 @@ fn run_init(
         init::Outcome::Exists => {
             let refusal = Refusal::declared(
                 init::CONFIG_EXISTS,
-                verdict::Native::InitWouldOverwrite,
+                crate::error::Native::InitWouldOverwrite,
                 &[verdict::Subject::Path {
-                    path: config::CONFIG_FILE.to_owned(),
+                    path: crate::config_model::CONFIG_FILE.to_owned(),
                 }],
                 Fix::Run(format!(
                     "edit {file} in place, or move it aside and run `batten init` again",
-                    file = config::CONFIG_FILE
+                    file = crate::config_model::CONFIG_FILE
                 )),
             );
             output::verdict(err, &refusal.render_finding(refusal::Arm::Full))?;
@@ -3565,7 +3575,7 @@ fn run_hk(
             // route rather than re-choosing a remedy here.
             let refusal = Refusal::declared(
                 hk::DRIFT_RULE,
-                verdict::Native::PlanReadStale,
+                crate::error::Native::PlanReadStale,
                 &[verdict::Subject::Path {
                     path: hk::ARTIFACT.to_owned(),
                 }],
@@ -3769,12 +3779,12 @@ fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -
 /// A verb over a ledger nobody declared measured nothing, and answering "no
 /// records" there would be the false green the engine exists to catch — the same
 /// reading `policy budget` gives an absent budget.
-fn declared_ledger(overrides: &Overrides) -> Result<(defects::Defects, PathBuf)> {
+fn declared_ledger(overrides: &Overrides) -> Result<(crate::config_model::Defects, PathBuf)> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let declared = config.defects.ok_or_else(|| {
         UsageError::raise(format!(
             "no [defects] in {}; there is no ledger to read",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })?;
     let repo = git::repo_root(Path::new("."))?;
@@ -3872,7 +3882,7 @@ fn run_defects_add(
             "defects add: stdin line {} is {}; `classes` in {} declares the taxonomy",
             problem.line,
             problem.id,
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         )));
     }
 
@@ -4890,7 +4900,7 @@ fn run_mcp_posture(
 /// Where the host keeps THIS project's MCP connection logs, or `None`.
 ///
 /// The home-relative tree is the harness table's fact
-/// ([`hook::Harness::mcp_logs`]); the host keys it by the working directory with
+/// ([`crate::config_model::Harness::mcp_logs`]); the host keys it by the working directory with
 /// every separator written as `-`, which is the host's layout rather than a
 /// consumer's.
 fn mcp_log_root() -> Option<PathBuf> {
@@ -4910,7 +4920,7 @@ fn mcp_log_root() -> Option<PathBuf> {
 /// for.
 struct McpAnswer<'a> {
     /// The table the reduction is declared in.
-    config: &'a mcp::McpConfig,
+    config: &'a crate::config_model::McpConfig,
     /// The method that was called.
     method: &'a str,
     /// Which `[[mcp.source]]` row resolved the wiring, by id.
@@ -4921,7 +4931,7 @@ struct McpAnswer<'a> {
     ///
     /// Borrowed rather than resolved here: this boundary already loaded the
     /// config, and a second load would be a second answer to what the rows are.
-    mints: &'a [crate::mint::Declared],
+    mints: &'a [crate::config_model::MintDeclared],
     /// The named-regex table, for a body's `{authority:…}` piece.
     patterns: &'a [crate::pattern::NamedPattern],
 }
@@ -5163,7 +5173,7 @@ fn run_target(
             };
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 "target prune: this build cannot load the whole config, so it reclaims by the committed [prune] table alone",
             )?;
@@ -5176,7 +5186,7 @@ fn run_target(
         // somebody else's build. Not a refusal: nothing was asked for.
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             "target prune: no [prune] table, so this repository declares no build tree to collect",
         )?;
@@ -5195,7 +5205,7 @@ fn run_target(
     if !tree.is_dir() && (root.is_some() || !here.join("Cargo.toml").is_file()) {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             &format!(
                 "target prune: {} is not a build tree and nothing was examined",
@@ -5209,7 +5219,7 @@ fn run_target(
     let Some((min, max)) = declared.free_band() else {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             "target prune: [prune] declares no min_free_mb/max_free_mb, so there is no band to collect toward",
         )?;
@@ -5219,7 +5229,7 @@ fn run_target(
     if *dry_run {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             &format!(
                 "target prune: would collect under {} — superseded units, then least recently used — toward max_free_mb {max} (min_free_mb {min})",
@@ -5260,7 +5270,7 @@ fn run_target(
 /// Free space that cannot be read is could-not-look.
 fn collect_on_demand(
     here: &Path,
-    declared: &prune::Prune,
+    declared: &crate::config_model::Prune,
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -5272,7 +5282,7 @@ fn collect_on_demand(
         return Ok(ExitCode::Success);
     };
     for line in done.lines() {
-        output::message(mode, output::Verbosity::Normal, err, &line)?;
+        output::message(mode, crate::surface_table::Verbosity::Normal, err, &line)?;
     }
     Ok(ExitCode::Success)
 }
@@ -6863,7 +6873,10 @@ fn run_record_decide(
     // previous turn's stranding turned into a blocker at `verify` and `land`,
     // which the retired body (stderr and an exit code, no record) never was.
     // Removed whatever the decision said, so no rule reads it afterwards.
-    record::clear_named("record decide", &record::safe_component("family", family)?)?;
+    record::clear_named(
+        "record decide",
+        &crate::config_check::record::safe_component("family", family)?,
+    )?;
     decided
 }
 
@@ -6885,7 +6898,7 @@ fn run_pr_unsubscribed(
         endpoint: request.endpoint.clone(),
         tool: request.tool.clone(),
         arguments: request.arguments.clone(),
-        family: record::safe_component("family", &request.family)?,
+        family: crate::config_check::record::safe_component("family", &request.family)?,
     };
     let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
         UsageError::raise("pr unsubscribed: not a git repository, so there is no receipt store")
@@ -7029,7 +7042,7 @@ fn run_pr(
 /// Absent is a USAGE ERROR rather than a silent skip: a lane assembled from
 /// engine defaults would file a row asserting a bump nobody configured, which is
 /// the class this whole surface exists to refuse.
-fn bot_lane(overrides: &Overrides) -> Result<bot::BotLane> {
+fn bot_lane(overrides: &Overrides) -> Result<crate::config_model::BotLane> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     config.bot_lane.ok_or_else(|| {
         UsageError::raise(
@@ -7046,7 +7059,10 @@ fn bot_lane(overrides: &Overrides) -> Result<bot::BotLane> {
 /// somebody the lane does not know, or whose diff touches no manifest it owns,
 /// gets no row. The alternative is a tracker row asserting a bump nobody
 /// proposed.
-fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, String)> {
+fn derive_row(
+    lane: &crate::config_model::BotLane,
+    number: &str,
+) -> Result<(bot::Pull, String, String)> {
     let pull = bot::forge::pull(&lane.repo, number)?;
     // Each refusal is `issue file refused` with what it names as subjects
     // (CLOUD-2078): the pull request, then why no row can be derived from it.
@@ -7054,7 +7070,7 @@ fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, S
         let mut subjects = vec![verdict::artifact(&format!("#{number}"))];
         subjects.extend(why);
         let refusal = refusal::Refusal::engine(
-            verdict::Native::IssueFileRefused,
+            crate::error::Native::IssueFileRefused,
             &subjects,
             refusal::Fix::None,
         );
@@ -7172,7 +7188,12 @@ fn run_pr_file(
 ///
 /// The marker goes LAST, after the derived block, so it is the one line a reader
 /// never has to look at and the one line `ensure` always finds.
-fn file_mirror(lane: &bot::BotLane, number: &str, title: &str, body: &str) -> Result<String> {
+fn file_mirror(
+    lane: &crate::config_model::BotLane,
+    number: &str,
+    title: &str,
+    body: &str,
+) -> Result<String> {
     let marked = format!("{body}\n\n<!-- {}{number} -->\n", lane.marker_prefix);
     bot::forge::open_issue(&lane.repo, title, &marked)
 }
@@ -7194,7 +7215,7 @@ fn run_pr_link(
 
 /// The body rewrite, shared by `pr link` and `pr ensure`.
 fn link(
-    lane: &bot::BotLane,
+    lane: &crate::config_model::BotLane,
     number: &str,
     key: &str,
     mode: Mode,
@@ -7725,7 +7746,7 @@ fn run_claim_bot(
         &branch,
         &attested,
         Some(base.as_str()),
-        &receipt::rfc3339_utc(now_unix()),
+        &crate::clock::rfc3339_utc(now_unix()),
     )?;
     output::message(
         mode,
@@ -8377,7 +8398,7 @@ fn run_ready_lint(
     // the pointer-first shape behind a `batten: ` message prefix.
     for finding in &report.findings {
         let refused = refusal::Refusal::engine(
-            verdict::Native::IssueGradeRefused,
+            crate::error::Native::IssueGradeRefused,
             &[verdict::artifact(&format!(
                 "{}:{} {}",
                 payload.id, finding.line, finding.rule
@@ -8403,14 +8424,14 @@ fn run_ready_lint(
             Verbosity::Normal,
             err,
             &refusal::Refusal::engine(
-                verdict::Native::IssueGradePartial,
+                crate::error::Native::IssueGradePartial,
                 &[verdict::artifact(&format!(
                     "{}:{}",
                     payload.id, report.unjudged_line
                 ))],
                 refusal::Fix::None,
             )
-            .with_severity(refusal::Severity::Warn)
+            .with_severity(crate::grammar::Severity::Warn)
             .render_finding(refusal::Arm::Full),
         )?;
     }
@@ -8588,7 +8609,7 @@ fn print_claim_refusals(
 ) -> Result<()> {
     for refused in refusals {
         let line = refusal::Refusal::engine(
-            verdict::Native::ClaimMintRefused,
+            crate::error::Native::ClaimMintRefused,
             &[verdict::artifact(&format!(
                 "{} {}",
                 refused.id, refused.rule
@@ -8722,7 +8743,7 @@ fn run_claim_check(
             &verdict,
             request,
             Some(base.as_str()),
-            &receipt::rfc3339_utc(now_unix()),
+            &crate::clock::rfc3339_utc(now_unix()),
         )?;
     }
     if !json {
@@ -8825,7 +8846,7 @@ fn run_claim_carry(
     match carry::judge(&before, &after, &other) {
         Ok(carried) => {
             let receipts = git::git_dir(repo)?.join("batten-receipts");
-            let at = receipt::rfc3339_utc(
+            let at = crate::clock::rfc3339_utc(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |since| since.as_secs()),
@@ -9069,7 +9090,7 @@ fn run_capture_prune(
         let held = capture::list(repo)?.len();
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             &format!("capture prune: would remove {held} capture(s)"),
         )?;
@@ -9089,7 +9110,7 @@ fn run_capture_prune(
     let removed = capture::prune(repo)?;
     output::message(
         mode,
-        output::Verbosity::Normal,
+        crate::surface_table::Verbosity::Normal,
         err,
         &format!("capture prune: removed {removed} capture(s)"),
     )?;
@@ -9125,7 +9146,7 @@ fn run_wiring(
             let linked = wiring::link_commit_gate(Path::new("."), body)?;
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
             )?;
@@ -9142,7 +9163,7 @@ fn run_wiring(
                 for name in names {
                     output::message(
                         mode,
-                        output::Verbosity::Normal,
+                        crate::surface_table::Verbosity::Normal,
                         err,
                         &format!("wiring gate: {name} {reason}"),
                     )?;
@@ -9202,7 +9223,7 @@ fn run_wiring_register(
             for event in &events {
                 output::message(
                     mode,
-                    output::Verbosity::Normal,
+                    crate::surface_table::Verbosity::Normal,
                     err,
                     &format!(
                         "wiring register: {}:{event} {verb} on the committed surface",
@@ -9227,7 +9248,7 @@ fn run_wiring_register(
         None => {
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 "wiring register: no session root resolves, so no registration is owed",
             )?;
@@ -9243,7 +9264,7 @@ fn run_wiring_register(
         for event in &done.events {
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 &format!(
                     "wiring register: claude-code:{event} {verb} at {}",
@@ -9254,7 +9275,7 @@ fn run_wiring_register(
         if !check && !done.authoritative && !done.events.is_empty() {
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 "wiring register: this environment is not declared disposable, so nothing was \
                  written. Set BATTEN_ENVIRONMENT=disposable where the home directory is \
@@ -9358,7 +9379,7 @@ fn run_wiring_reclaim(
     };
     output::message(
         mode,
-        output::Verbosity::Normal,
+        crate::surface_table::Verbosity::Normal,
         err,
         &format!(
             "wiring reclaim: {verb} {} sibling registration(s) across {} surface(s) read",
@@ -9369,7 +9390,7 @@ fn run_wiring_reclaim(
     for row in &done.rows {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             &format!(
                 "wiring reclaim: {}:{} {} {}",
@@ -9387,7 +9408,7 @@ fn run_wiring_reclaim(
     if !dry_run && !done.authoritative && done.siblings() > 0 {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             "wiring reclaim: this environment is not declared disposable, so nothing was \
              removed — these registrations are somebody's own. Set BATTEN_ENVIRONMENT=disposable \
@@ -9400,7 +9421,7 @@ fn run_wiring_reclaim(
     if !dry_run && done.authoritative && done.siblings() > 0 {
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             "wiring reclaim: this session already loaded the wiring that was just removed — \
              restart the harness before reading `doctor hooks` as green",
@@ -9448,7 +9469,7 @@ fn run_wiring_reclaim(
         };
         output::message(
             mode,
-            output::Verbosity::Normal,
+            crate::surface_table::Verbosity::Normal,
             err,
             &format!(
                 "wiring reclaim: {verb} {} of {} declared script(s)",
@@ -9463,7 +9484,7 @@ fn run_wiring_reclaim(
         for row in &disarmed.rows {
             output::message(
                 mode,
-                output::Verbosity::Normal,
+                crate::surface_table::Verbosity::Normal,
                 err,
                 &format!(
                     "wiring reclaim: {} {}",
@@ -9618,7 +9639,7 @@ fn run_state_list(
         // piped run prints nothing unless the caller asked for detail.
         output::message(
             mode,
-            output::Verbosity::Verbose,
+            crate::surface_table::Verbosity::Verbose,
             err,
             "no store is bound to this repository yet",
         )?;
@@ -9655,7 +9676,7 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
     let declared = config.budget.as_ref().ok_or_else(|| {
         UsageError::raise(format!(
             "no [budget.<name>] in {}; there is no budget to judge",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })?;
     let reports = budget::measure_all(Path::new("."), Some(declared))?;
@@ -9775,7 +9796,7 @@ fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let names: std::collections::BTreeSet<&str> = config
         .rules
         .iter()
-        .filter(|rule| rule.scope == crate::config_model::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == crate::preset_catalog::RuleScope::MediatedCall)
         .filter_map(|rule| rule.tool.as_deref())
         .collect();
     if json {
@@ -9856,7 +9877,7 @@ fn run_policy_explain(
     let config = resolve::resolve(Path::new("."), overrides).ok();
     let registry = match &config {
         Some(config) => policy::registry_for(&config.verdicts)?,
-        None => verdict::vendored(),
+        None => crate::config_check::verdict::vendored(),
     };
     let mut documents: Vec<serde_json::Value> = Vec::new();
     let mut misses: Vec<&str> = Vec::new();
@@ -9916,7 +9937,7 @@ fn run_policy_history(names: &[String], json: bool, out: &mut dyn Write) -> Resu
     let root = Path::new(".");
     let mut documents = Vec::new();
     let mut misses: Vec<&str> = Vec::new();
-    let mut assembler = history::Assembler::new(root, config::CONFIG_FILE)?;
+    let mut assembler = history::Assembler::new(root, crate::config_model::CONFIG_FILE)?;
     for name in names {
         let found = assembler
             .assemble(name)
@@ -9940,7 +9961,7 @@ fn run_policy_history(names: &[String], json: bool, out: &mut dyn Write) -> Resu
     }
     Err(error::UsageError::raise(format!(
         "no `[[rule]]` or `[[verdict]]` row of the committed {} declares `{}` at HEAD",
-        config::CONFIG_FILE,
+        crate::config_model::CONFIG_FILE,
         misses.join("`, `"),
     )))
 }
@@ -9949,7 +9970,7 @@ fn run_policy_history(names: &[String], json: bool, out: &mut dyn Write) -> Resu
 fn explain_name(
     name: &str,
     config: Option<&resolve::Resolved>,
-    registry: &[verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
 ) -> Result<Vec<Explained>> {
     let mut sections = Vec::new();
     // THE ROW FIRST: where a name is both a row and a class, the row is the more
@@ -10023,7 +10044,11 @@ fn flat_section(name: &str, heading: &str, key: &'static str, definition: &str) 
 }
 
 /// A class, as `policy explain` prints it (CLOUD-1053).
-fn explain_class(name: &str, resolved: &verdict::DeclaredVerdict, retired: bool) -> Explained {
+fn explain_class(
+    name: &str,
+    resolved: &crate::config_model::DeclaredVerdict,
+    retired: bool,
+) -> Explained {
     use std::fmt::Write as _;
     let mut text = format!("{} {}\n", resolved.id, resolved.gloss);
     if retired {
@@ -10052,7 +10077,7 @@ fn explain_class(name: &str, resolved: &verdict::DeclaredVerdict, retired: bool)
 /// `rm` and `mv` rows land in.
 fn explain_redirects(
     name: &str,
-    redirects: &[redirect::Redirect],
+    redirects: &[crate::config_model::Redirect],
     verbs: &[verbs::MutatingVerb],
 ) -> Result<Explained> {
     use std::fmt::Write as _;
@@ -10182,14 +10207,14 @@ fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
     writeln!(
         out,
         "{} rule `{}` except",
-        config::CONFIG_FILE,
+        crate::config_model::CONFIG_FILE,
         ejection.row
     )?;
     let verb = if ejection.added { "added" } else { "kept" };
     writeln!(
         out,
         "{} rule `{}` {verb}",
-        config::CONFIG_FILE,
+        crate::config_model::CONFIG_FILE,
         ejection.copies
     )?;
     Ok(ExitCode::Success)
@@ -10233,7 +10258,7 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let path = transcript::configured_path(config.transcript.as_ref()).ok_or_else(|| {
         UsageError::raise(format!(
             "no [transcript] path in {}; there is no session to measure",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })?;
     let label = path.display().to_string();
@@ -10464,7 +10489,7 @@ fn run_override_spend(
 /// keeps the two callers agreeing.** `admit_mediated` only ever looks up a
 /// `Call` anchor, so a `Finding` one minted for a hook refusal would be a silent
 /// no-op — answered, spent, and queried by nothing. It cannot be minted: a rule
-/// id is unique across the whole `[[rule]]` table ([`rules::validate`]) and each
+/// id is unique across the whole `[[rule]]` table ([`crate::config_check::rules::validate`]) and each
 /// row declares ONE scope, so a mediated rule's id names no tree-scoped row, and
 /// the `Scope::Tree` run below skips a row whose scope is not `Tree` before it
 /// can produce a finding. The match count is therefore `0` for every mediated
@@ -10965,7 +10990,7 @@ fn parse_answers(raw: &str) -> std::collections::BTreeMap<String, String> {
 /// programmatically cannot reconstruct from either alone.
 fn explain_json(
     name: &str,
-    resolved: &verdict::DeclaredVerdict,
+    resolved: &crate::config_model::DeclaredVerdict,
     retired: bool,
 ) -> serde_json::Value {
     let routes: Vec<serde_json::Value> = resolved
@@ -11073,7 +11098,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         match policy::test(
             bundle,
             &input,
-            rule.scope == crate::config_model::RuleScope::MediatedCall,
+            rule.scope == crate::preset_catalog::RuleScope::MediatedCall,
         )? {
             facts::Look::Is(suite) => reports.push(SuiteReport {
                 bundle: rule.id.clone(),
@@ -11157,12 +11182,12 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
 /// An absent table is exit `1`, never a clean pass: "this repository declares no
 /// attribution policy" and "these commits are clean" are different answers, and
 /// collapsing them would report green over a gate that never ran.
-fn attribution_policy(overrides: &Overrides) -> Result<attribution::Attribution> {
+fn attribution_policy(overrides: &Overrides) -> Result<crate::config_model::Attribution> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     config.attribution.clone().ok_or_else(|| {
         UsageError::raise(format!(
             "no [attribution] in {}; there is no attribution policy to judge by",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })
 }
@@ -11204,12 +11229,12 @@ struct Expectation {
 /// An absent table is exit `1`, never a clean pass: "this repository declares no
 /// commit convention" and "these subjects are conventional" are different
 /// answers, and collapsing them would report green over a gate that never ran.
-fn commit_policy(overrides: &Overrides) -> Result<commit::Commit> {
+fn commit_policy(overrides: &Overrides) -> Result<crate::config_model::Commit> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     config.commit.clone().ok_or_else(|| {
         UsageError::raise(format!(
             "no [commit] in {}; there is no subject convention to judge by",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         ))
     })
 }
@@ -11408,7 +11433,7 @@ fn run_perf_latency(
 ///
 /// Absent is an empty table rather than a refusal: a consumer that accepts no
 /// regression is the ordinary case, and it must not have to say so.
-fn exempt_rows(overrides: &Overrides) -> Result<Vec<config::PerfExempt>> {
+fn exempt_rows(overrides: &Overrides) -> Result<Vec<crate::config_model::PerfExempt>> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     Ok(config.perf.map(|perf| perf.exempt).unwrap_or_default())
 }
@@ -14321,10 +14346,10 @@ fn run_land_fast_forward(
     // a gap in which this lap's own run is created and then excluded by its own
     // fence — a lap that can never read its own answer.
     //
-    // `receipt::rfc3339_utc` rather than a second formatter: it is already the
+    // `crate::clock::rfc3339_utc` rather than a second formatter: it is already the
     // crate's one epoch-to-ISO-8601 spelling and its tests pin the instants a
     // hand-rolled one gets wrong (leap years, the 2100 non-leap century).
-    let since = receipt::rfc3339_utc(now_unix());
+    let since = crate::clock::rfc3339_utc(now_unix());
 
     match fast_forward::ask(&ask)? {
         fast_forward::Asked::Refused(status) => {
@@ -14645,7 +14670,7 @@ fn run_land_replay(
 /// cannot be read: the fail-open direction every disk arm takes.
 fn disk_watcher<'a>(
     root: &Path,
-    config: Option<&'a prune::Prune>,
+    config: Option<&'a crate::config_model::Prune>,
 ) -> Option<disk_watch::DiskWatch<'a>> {
     let config = config.filter(|config| config.free_band().is_some())?;
     let free_mb = prune::sampler(root.join(&config.root)).ok()?;
@@ -15093,7 +15118,7 @@ fn verify_refusal(
             String::from("fix the cause the gate log names, then run the lap again.")
         }
     };
-    let class = verdict::Native::CheckRunRed;
+    let class = crate::error::Native::CheckRunRed;
     refusal::Refusal::engine(class, &[verdict::artifact(sha)], refusal::Fix::Run(advice))
 }
 
@@ -15127,7 +15152,7 @@ fn verify_refusal(
 ///
 /// A root that will not resolve falls back to the anchor: this function's whole
 /// posture is that a reading it cannot take yields no rows rather than an error.
-fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
+fn verify_environment(root: &Path) -> Vec<crate::config_model::OutputPattern> {
     let anchor = git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf());
     let site = config::authority_site(&anchor, None);
     config::load_site(&site)
@@ -15381,7 +15406,7 @@ fn fast_forward_lane(
 /// is, and the guard is judged by trunk's policy rather than by the head's.
 ///
 /// `None` is could-not-look and every caller reads it that way.
-fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::Lease> {
+fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<crate::config_model::Lease> {
     // ANCHORED ON THE WORKING TREE'S ROOT, BECAUSE `authority_site` PERFORMS NO
     // DIRECTORY WALK BY DESIGN (house-style §8, review of #848). `root` is
     // `Path::new(".")` from `run_lease`, so a call from a subdirectory resolved
@@ -17878,8 +17903,8 @@ fn run_registered_runner(
 fn mutate_table(
     root: &Path,
     err: &mut dyn Write,
-) -> Result<std::result::Result<Option<config::Mutate>, ExitCode>> {
-    let config = match config::load_authority(&root.join(config::CONFIG_FILE)) {
+) -> Result<std::result::Result<Option<crate::config_model::Mutate>, ExitCode>> {
+    let config = match config::load_authority(&root.join(crate::config_model::CONFIG_FILE)) {
         Ok((config, _)) => config,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason:#}")?;
@@ -17895,7 +17920,7 @@ fn mutate_table(
             err,
             "::error:: mutate: {} {} is not a `[mutate]` key this build reads, so the \
              enforced set cannot be read whole",
-            config::CONFIG_FILE,
+            crate::config_model::CONFIG_FILE,
             dropped.line()
         )?;
         return Ok(Err(ExitCode::Usage));
@@ -18626,7 +18651,7 @@ fn commit_admissions(
             // glob select this path", never a second matcher here.
             let selectors = protected
                 .iter()
-                .map(|glob| rules::Selector::new(glob))
+                .map(|glob| crate::selector::Selector::new(glob))
                 .collect::<Result<Vec<_>>>()?;
             let staged = git::staged_paths(root)?
                 .into_iter()
@@ -18771,11 +18796,11 @@ fn commit_arm_sequencing(
     }
     let selectors = ledgers
         .iter()
-        .map(|glob| rules::Selector::new(glob))
+        .map(|glob| crate::selector::Selector::new(glob))
         .collect::<Result<Vec<_>>>()?;
 
     let mut globs = ledgers.clone();
-    globs.push(config::CONFIG_FILE.to_owned());
+    globs.push(crate::config_model::CONFIG_FILE.to_owned());
 
     match (range, message) {
         (Some(range), None) => {
@@ -18788,12 +18813,12 @@ fn commit_arm_sequencing(
                 // introduced set is empty by construction and neither blob is
                 // read. This is what keeps the clause free on the overwhelming
                 // majority of commits.
-                if !write.paths.contains(config::CONFIG_FILE) {
+                if !write.paths.contains(crate::config_model::CONFIG_FILE) {
                     continue;
                 }
                 let parent = format!("{}^", write.commit);
                 let Ok(git::BaseBlob::Found { .. }) =
-                    git::read_at(root, &parent, config::CONFIG_FILE)
+                    git::read_at(root, &parent, crate::config_model::CONFIG_FILE)
                 else {
                     // Either the parent does not resolve, or it carried no config
                     // at all. The first is could-not-look; the second is a
@@ -18817,15 +18842,15 @@ fn commit_arm_sequencing(
             // the commit-to-be and `HEAD` is its parent, so a refusal here means
             // the self-authorizing commit is never created.
             let staged = git::staged_paths(root)?;
-            if !staged.contains(config::CONFIG_FILE) {
+            if !staged.contains(crate::config_model::CONFIG_FILE) {
                 return Ok(Vec::new());
             }
-            let index = git::staged_facts(root, &[config::CONFIG_FILE.to_owned()])?;
-            let Some(after) = index.get(config::CONFIG_FILE) else {
+            let index = git::staged_facts(root, &[crate::config_model::CONFIG_FILE.to_owned()])?;
+            let Some(after) = index.get(crate::config_model::CONFIG_FILE) else {
                 return Ok(Vec::new());
             };
             let Ok(git::BaseBlob::Found { text: before, .. }) =
-                git::read_at(root, "HEAD", config::CONFIG_FILE)
+                git::read_at(root, "HEAD", crate::config_model::CONFIG_FILE)
             else {
                 return Ok(Vec::new());
             };
@@ -18880,7 +18905,7 @@ fn introduced_arms(
 ) -> Option<std::collections::BTreeMap<String, String>> {
     let held = conserves_arms(before, "the parent revision's batten.toml")?;
     Some(
-        conserves_arms(after, config::CONFIG_FILE)?
+        conserves_arms(after, crate::config_model::CONFIG_FILE)?
             .into_iter()
             .filter(|(token, _)| !held.contains_key(token))
             .map(|(token, pointer)| (pointer, token))
@@ -18895,10 +18920,10 @@ fn arm_sequence(
     rev: &str,
     label: String,
     paths: &std::collections::BTreeSet<String>,
-    selectors: &[rules::Selector],
+    selectors: &[crate::selector::Selector],
 ) -> commit::ArmSequence {
-    let before = git::show(root, parent, config::CONFIG_FILE).unwrap_or_default();
-    let after = git::show(root, rev, config::CONFIG_FILE).unwrap_or_default();
+    let before = git::show(root, parent, crate::config_model::CONFIG_FILE).unwrap_or_default();
+    let after = git::show(root, rev, crate::config_model::CONFIG_FILE).unwrap_or_default();
     let introduced = introduced_arms(&before, &after).unwrap_or_default();
     if introduced.is_empty() {
         // No arm arrived, so no line can spend one. Returning early keeps the
@@ -18946,7 +18971,7 @@ fn commit_label(sha: &str) -> String {
 /// commits nobody read.
 fn commit_claims(
     range: &str,
-    claims: &commit::Claims,
+    claims: &crate::config_model::Claims,
     overrides: &Overrides,
 ) -> Result<Vec<commit::Finding>> {
     let root = Path::new(".");
@@ -19716,7 +19741,7 @@ fn first_line(path: &std::path::Path) -> facts::Look<String> {
 /// an edit span not found — and it ALLOWS, for `discards`' reason.
 fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     if envelope.operation != hook::Operation::Write
-        || envelope.writes.as_deref() != Some(config::CONFIG_FILE)
+        || envelope.writes.as_deref() != Some(crate::config_model::CONFIG_FILE)
     {
         return facts::Look::CouldNotLook;
     }
@@ -19725,8 +19750,8 @@ fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
         return facts::Look::CouldNotLook;
     };
     let (Ok(head), Ok(current)) = (
-        git::show(root, "HEAD", config::CONFIG_FILE),
-        crate::fsio::read_to_string(root.join(config::CONFIG_FILE)),
+        git::show(root, "HEAD", crate::config_model::CONFIG_FILE),
+        crate::fsio::read_to_string(root.join(crate::config_model::CONFIG_FILE)),
     ) else {
         return facts::Look::CouldNotLook;
     };
@@ -20391,7 +20416,7 @@ fn preapproval_context(
     decision: &hook::Decision,
     envelope: &hook::Envelope,
     advice: &mut Vec<advisory::Advice>,
-    ceiling: Option<&advisory::Channel>,
+    ceiling: Option<&crate::config_model::Channel>,
 ) -> Option<String> {
     if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
         return None;
@@ -20600,7 +20625,7 @@ impl Drop for Spool {
 /// # THE OPERATION IS ASKED, NOT INFERRED FROM AN ABSENCE
 ///
 /// A first attempt read `command.is_empty() && writes.is_none()` and called that
-/// "cannot mutate". **It is not.** [`hook::Harness::operation_of`] maps an MCP
+/// "cannot mutate". **It is not.** [`crate::config_model::Harness::operation_of`] maps an MCP
 /// call to [`hook::Operation::Mcp`], a subagent spawn to `Subagent` and an
 /// unrecognised tool to `Other` — and every one of those carries an empty
 /// command and no write, exactly as [`is_adjudicable`]'s own doc says. Measured
@@ -20714,9 +20739,9 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
 /// handler or action table nobody could read declares no handler and no action
 /// this build can honour. Refusing the whole call over that is the same collapse
 /// `run_hook`'s arm exists to stop, reached through a different function.
-fn hook_table(overrides: &Overrides) -> Option<crate::action::HookConfig> {
+fn hook_table(overrides: &Overrides) -> Option<crate::config_model::HookConfig> {
     let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return None;
     }
     // Through the call's one resolve (CLOUD-2315): this was a second full
@@ -20748,7 +20773,7 @@ fn hook_table(overrides: &Overrides) -> Option<crate::action::HookConfig> {
 fn names_the_config_authority(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     let name = normalized.strip_prefix("./").unwrap_or(&normalized);
-    name == config::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
+    name == crate::config_model::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
 }
 
 /// Is this line of a load error toml's quote of the config source?
@@ -20788,7 +20813,7 @@ fn unadjudicable_remedy() -> Fix {
          repair the file with those; where the config is newer than this binary, \
          `{}` installs its pin, and `{}` builds a source pin on the project's toolchain; \
          those two are the commands admitted",
-        config::CONFIG_FILE,
+        crate::config_model::CONFIG_FILE,
         resolve::LOCAL_CONFIG_FILE,
         engine::repair_at(&root, engine::REPAIR),
         engine::repair_at(&root, engine::REPAIR_PINNED),
@@ -20796,7 +20821,11 @@ fn unadjudicable_remedy() -> Fix {
 }
 
 /// What a hook call judges with: its policy, its waivers and its disk collector.
-type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
+type HookConfig = (
+    hook::Policy,
+    Vec<crate::config_model::Waiver>,
+    Option<crate::config_model::Prune>,
+);
 
 /// The hook's config, or the floor over a config that will not load: a read
 /// and the repair write pass with no rules, and everything else is refused
@@ -20897,7 +20926,7 @@ fn config_write_breaks(
     overrides: &Overrides,
     harness: crate::config_model::Harness,
 ) -> Option<hook::Decision> {
-    if envelope.writes.as_deref() != Some(config::CONFIG_FILE)
+    if envelope.writes.as_deref() != Some(crate::config_model::CONFIG_FILE)
         || overrides.config_from.is_some()
         || overrides.config_in.is_some()
     {
@@ -20915,7 +20944,7 @@ fn config_write_breaks(
         std::process::id()
     ));
     std::fs::create_dir_all(&scratch).ok()?;
-    let probe = scratch.join(config::CONFIG_FILE);
+    let probe = scratch.join(crate::config_model::CONFIG_FILE);
     let loaded = durable::replace(&probe, landed.as_bytes()).ok().map(|()| {
         let mut moved = overrides.clone();
         moved.config_in = Some(scratch.to_string_lossy().into_owned());
@@ -20944,7 +20973,7 @@ fn config_write_breaks(
                     .to_owned(),
             ),
         )
-        .at(config::CONFIG_FILE),
+        .at(crate::config_model::CONFIG_FILE),
     ))
 }
 
@@ -21181,7 +21210,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
         return Ok(None);
     }
     let root = hook_authority_root();
-    let Ok(text) = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)) else {
+    let Ok(text) = crate::fsio::read_to_string(root.join(crate::config_model::CONFIG_FILE)) else {
         return Ok(None);
     };
     if engine::declared(&text).and_then(|pin| pin.source).is_none() {
@@ -21412,7 +21441,7 @@ fn settle_repair(
         // because the call as made did not happen.
         crate::repair::Outcome::Retry => hook::Decision::Deny(refusal::Refusal::declared(
             refusal.rule(),
-            crate::verdict::Native::CallRetryNow,
+            crate::error::Native::CallRetryNow,
             &[],
             refusal::Fix::None,
         )),
@@ -22015,7 +22044,10 @@ impl advisory::Sighter for HookSighter<'_> {
 /// An emission's text, closed with where its overflow went when the ceiling
 /// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
 /// the closing line names its view, as every stored output is named (CLOUD-2284).
-fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
+fn closed_emission(
+    emission: advisory::Emission,
+    ceiling: Option<&crate::config_model::Channel>,
+) -> String {
     let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
         return emission.text;
     };
@@ -22286,7 +22318,7 @@ fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
         return;
     }
     let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
     let Ok(resolved) = resolve::resolve(here, overrides) else {
@@ -22313,7 +22345,7 @@ fn adopt_engine_pin(
         return;
     }
     let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
     if let Ok(Some(tag)) = adopt_engine_key(here, overrides) {
@@ -22327,8 +22359,14 @@ fn adopt_engine_pin(
 /// The record a written pin is reported by: `batten note call fix silent at
 /// batten.toml engine (pinned <tag>)`.
 fn adopted_line(tag: &str) -> String {
-    let head = refusal::head(refusal::Severity::Note, verdict::Native::CallFixSilent.id());
-    format!("{head} at {} engine (pinned {tag})", config::CONFIG_FILE)
+    let head = crate::grammar::head(
+        crate::grammar::Severity::Note,
+        crate::error::Native::CallFixSilent.id(),
+    );
+    format!(
+        "{head} at {} engine (pinned {tag})",
+        crate::config_model::CONFIG_FILE
+    )
 }
 
 /// Pin this engine's own release into `root`'s `batten.toml`, as the `engine`
@@ -22360,7 +22398,7 @@ fn adopt_engine_key(root: &Path, overrides: &Overrides) -> Result<Option<String>
     // ABSOLUTE, because the state directory is keyed by the repository's path:
     // the hook and `init` hand in `.`.
     let root = &git::canonical(root);
-    let path = root.join(config::CONFIG_FILE);
+    let path = root.join(crate::config_model::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&path)?;
     if engine::declared(&text).is_some() {
         return Ok(None);
@@ -22424,7 +22462,7 @@ fn report_container_health(
     let here = hook_session_home();
     // A tree with no consumer has nothing to be misconfigured FOR, which is
     // `refresh_pinned`'s narrowing and for the same reason.
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
     let report = doctor::diagnose(here);
@@ -22867,7 +22905,9 @@ fn bound_result(
     }
     fn replace_bulk(value: &mut serde_json::Value, pointer: &str) {
         match value {
-            serde_json::Value::String(text) if text.len() > capture::LEAF_KEEP_BYTES => {
+            serde_json::Value::String(text)
+                if text.len() > crate::stream_input::LEAF_KEEP_BYTES =>
+            {
                 pointer.clone_into(text);
             }
             serde_json::Value::Array(items) => {
@@ -23035,7 +23075,7 @@ fn dispatch_handlers(
         if let Some((id, reason)) = dispatched.preapproval() {
             // `call grant now`, the row and its reason as subjects (CLOUD-2078).
             return Some(hook::Decision::Preapproved(refusal::Refusal::engine(
-                verdict::Native::CallGrantNow,
+                crate::error::Native::CallGrantNow,
                 &[
                     verdict::artifact(&format!("hook.handler.{id}")),
                     verdict::artifact(reason.trim_end()),
@@ -23047,7 +23087,7 @@ fn dispatch_handlers(
     };
     let refused = crate::refusal::Refusal::declared(
         format!("hook.handler.{id}"),
-        verdict::Native::HandlerDenied,
+        crate::error::Native::HandlerDenied,
         // THE HANDLER'S OWN WORDS TRAVEL AS A SUBJECT, not as the reason
         // (CLOUD-1050). The class is Batten's — "a configured hook handler denied
         // the call" — and the handler's text is what it denied over, which is a
@@ -23180,7 +23220,7 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
     // Config is optional here, unlike for the mediated-call policy: the at-risk
     // half is a property of the checkout and answers with or without a
     // `batten.toml`, and the config-supplied target simply goes unset.
-    let target = if here.join(config::CONFIG_FILE).exists() {
+    let target = if here.join(crate::config_model::CONFIG_FILE).exists() {
         resolve::resolve(here, overrides)?.must_land_on.clone()
     } else {
         None
@@ -23199,7 +23239,7 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 /// mediated-call rule set and is deliberately not loaded for a bypassed or
 /// nothing-to-judge call, while the action table is keyed on the event alone.
 ///
-/// The hot path is preserved all the same, and structurally: `action::validate`
+/// The hot path is preserved all the same, and structurally: `crate::config_check::action::validate`
 /// refuses an action on `pre-tool`, so this returns before touching config for
 /// the one event that runs on every mediated tool call.
 fn fire_actions(envelope: &hook::Envelope, overrides: &Overrides, err: &mut dyn Write) {
@@ -23284,7 +23324,7 @@ fn emit_channel(
     out: &mut dyn Write,
     err: &mut dyn Write,
     mut advice: Vec<advisory::Advice>,
-    ceiling: Option<&advisory::Channel>,
+    ceiling: Option<&crate::config_model::Channel>,
     decision: &hook::Decision,
 ) -> Result<()> {
     push_repair_record(decision, envelope, &mut advice);
@@ -23320,7 +23360,10 @@ fn worktree_answer(
     envelope: &hook::Envelope,
     raw: &str,
     decision: &hook::Decision,
-    (advice, ceiling): (&mut Vec<advisory::Advice>, Option<&advisory::Channel>),
+    (advice, ceiling): (
+        &mut Vec<advisory::Advice>,
+        Option<&crate::config_model::Channel>,
+    ),
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
@@ -23453,7 +23496,7 @@ fn report_contract_drift(
         return;
     }
     let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return;
     }
     let Ok(repo) = git::repo_root(here) else {
@@ -23782,7 +23825,7 @@ fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Budge
 /// absent target counted only where a literal entry names it exactly.
 fn set_members(
     root: &Path,
-    set: &budget::BudgetSet,
+    set: &crate::config_model::BudgetSet,
     target: &str,
     target_exists: bool,
 ) -> Option<std::collections::BTreeMap<String, String>> {
@@ -23825,7 +23868,7 @@ fn print_rule_remedies(
     err: &mut dyn Write,
     found: &[crate::findings::Finding],
     declared: &[crate::config_model::Rule],
-    registry: &[verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
 ) -> Result<()> {
     let rules: std::collections::BTreeSet<&str> = found
         .iter()
@@ -23870,7 +23913,7 @@ fn unix_millis() -> u64 {
 fn drained_refusals(
     records: &[findings::FindingRecord],
     drained: &drain::Drained,
-    registry: &[verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
 ) -> Vec<refusal::Refusal> {
     drained
         .rules
@@ -23905,7 +23948,7 @@ fn drain_advisories(
     // authority of its own the drain returned early while the store it wanted was
     // bound perfectly well one directory up.
     let here = hook_session_home();
-    if !here.join(config::CONFIG_FILE).exists() {
+    if !here.join(crate::config_model::CONFIG_FILE).exists() {
         return Ok(());
     }
     let Ok(repo) = git::repo_root(here) else {
@@ -24194,7 +24237,7 @@ fn record_one_agent_fact(
         // clock read in this crate is: a predicate that read one would stop being
         // a pure function of its inputs. The stamp is provenance beside the
         // answer — `facts::sourced` never consults it.
-        seen_at: receipt::rfc3339_utc(
+        seen_at: crate::clock::rfc3339_utc(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since_epoch| since_epoch.as_secs()),
@@ -24358,7 +24401,7 @@ fn record_history_reads(envelope: &hook::Envelope) {
     };
     // The ONE committed authority, at its one location (house style §8): no
     // directory walk to resolve, so its git path is the constant.
-    let Ok(head) = git::show(root, "HEAD", config::CONFIG_FILE) else {
+    let Ok(head) = git::show(root, "HEAD", crate::config_model::CONFIG_FILE) else {
         return;
     };
     let now = boundary_epoch();
@@ -24585,7 +24628,7 @@ fn stop_nudges(
             .map(|row| verdict::artifact(&format!("{row} filed")))
             .collect();
         rungs.push(refusal::Refusal::engine(
-            verdict::Native::IssueListUnclear,
+            crate::error::Native::IssueListUnclear,
             &subjects,
             refusal::Fix::None,
         ));
@@ -25305,7 +25348,7 @@ fn watchdog_stop(
         return (None, None);
     }
     let said = refusal::Refusal::engine(
-        verdict::Native::StopConditionUnmet,
+        crate::error::Native::StopConditionUnmet,
         &[verdict::artifact(&format!("task {} crashed", entry.task))],
         refusal::Fix::Run(fix),
     );
@@ -25559,7 +25602,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
             }
             handler::Outcome::Deny(text) => Some(refusal::Refusal::declared(
                 format!("hook.handler.{}", ran.id),
-                verdict::Native::HandlerDenied,
+                crate::error::Native::HandlerDenied,
                 &[verdict::artifact(text.trim_end())],
                 refusal::Fix::None,
             )),
@@ -25637,7 +25680,7 @@ fn write_records_for(
     // resolved the branch for nothing.
     if !recorders
         .iter()
-        .any(|row| rules::selects_tool_name(&row.tool, raw_tool))
+        .any(|row| crate::facts::selects_tool_name(&row.tool, raw_tool))
     {
         return;
     }
@@ -25685,7 +25728,7 @@ fn write_records_for(
         &git_dir,
         &branch,
         &context,
-        rules::selects_tool_name,
+        crate::facts::selects_tool_name,
         raw_tool,
     );
 }
@@ -25716,7 +25759,7 @@ fn defer_backgrounded(
         now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
     };
     let selected = recorders.iter().any(|row| {
-        rules::selects_tool_name(&row.tool, raw_tool)
+        crate::facts::selects_tool_name(&row.tool, raw_tool)
             && !matches!(
                 crate::recorder::outcome(row, &context),
                 crate::recorder::Outcome::NotSelected
@@ -25802,7 +25845,7 @@ fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
 /// in the binary reaches it, and the name says who it is for.
 #[doc(hidden)]
 pub fn mint_receipts_for_test(
-    declared: &[crate::mint::Declared],
+    declared: &[crate::config_model::MintDeclared],
     tool: &str,
     input: &serde_json::Value,
     result: &serde_json::Value,
@@ -25828,7 +25871,7 @@ pub fn mint_receipts_for_test(
 /// **`tool` is the name the BOUNDARY saw**, and the two boundaries spell it
 /// differently: the hook passes the host's `raw_tool` (`mcp__Linear__get_issue`)
 /// and dispatch passes the bare method (`get_issue`).
-/// [`rules::selects_tool_name`] matches a whole name or a whole final
+/// [`crate::facts::selects_tool_name`] matches a whole name or a whole final
 /// `__`-delimited segment, so a row spelling the segment — the spelling
 /// CLOUD-178 already prescribes, because a connector's prefix rotates between
 /// registration episodes — mints on both. The consequence stated rather than
@@ -25841,7 +25884,7 @@ pub fn mint_receipts_for_test(
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
 fn mint_receipts(
-    declared: &[crate::mint::Declared],
+    declared: &[crate::config_model::MintDeclared],
     tool: &str,
     input: &serde_json::Value,
     result: &serde_json::Value,
@@ -25864,10 +25907,10 @@ fn mint_receipts(
     // WRITERS FIRST, whatever the declaration order: a dependent declared
     // before its writer would otherwise claim an older record before this
     // call's writer had marked it as this call's own.
-    let mut ordered: Vec<&crate::mint::Declared> = declared.iter().collect();
+    let mut ordered: Vec<&crate::config_model::MintDeclared> = declared.iter().collect();
     ordered.sort_by_key(|mint| mint.after.is_some());
     for mint in ordered {
-        if !rules::selects_tool_name(&mint.tool, tool) {
+        if !crate::facts::selects_tool_name(&mint.tool, tool) {
             continue;
         }
         // THE ROW'S OWN SELECTOR, and it is checked before any git work
@@ -25888,13 +25931,13 @@ fn mint_receipts(
         // economy `receipt::verdicts` states one channel over: a caller must not
         // pay a git invocation for a question it never asks.
         let suffix = match mint.key {
-            crate::mint::MintKey::Named => {
+            crate::config_model::MintKey::Named => {
                 let Some(subject) = crate::mint::subject(mint, input, result) else {
                     continue;
                 };
                 subject
             }
-            crate::mint::MintKey::Branch => {
+            crate::config_model::MintKey::Branch => {
                 let Ok(Some(branch)) = git::current_branch(root) else {
                     continue;
                 };
@@ -25924,7 +25967,7 @@ fn mint_receipts(
             // reviewer reads the WORKING TREE, so refusing to record a dispatch
             // taken over uncommitted work attests less than actually happened
             // rather than more. The gitlink defect is its own row.
-            crate::mint::MintKey::Delta => {
+            crate::config_model::MintKey::Delta => {
                 let Some(base) = mint.key_base.as_deref() else {
                     continue;
                 };
@@ -25958,7 +26001,9 @@ fn mint_receipts(
             None => None,
             // CHECKED, NEVER SPENT (CLOUD-2680): a bridge on file under this
             // row's key admits every `require` dependent over the same change.
-            Some(after) if mint.effective_after_mode() == crate::mint::AfterMode::Require => {
+            Some(after)
+                if mint.effective_after_mode() == crate::config_model::AfterMode::Require =>
+            {
                 let required = format!("{after}.{suffix}");
                 if written_now.contains(&required) {
                     continue;
@@ -25982,9 +26027,9 @@ fn mint_receipts(
             }
         };
         let written = match mint.mode {
-            crate::mint::MintMode::Replace => crate::durable::replace(&path, &record),
-            crate::mint::MintMode::Append => crate::durable::append(&path, &record),
-            crate::mint::MintMode::Clear => clear_minted(&path),
+            crate::config_model::MintMode::Replace => crate::durable::replace(&path, &record),
+            crate::config_model::MintMode::Append => crate::durable::append(&path, &record),
+            crate::config_model::MintMode::Clear => clear_minted(&path),
         };
         if written.is_ok() {
             written_now.insert(filename);
@@ -26014,7 +26059,7 @@ fn clear_minted(path: &Path) -> std::io::Result<()> {
 /// Record the human's answer to a host question into the asked ledger
 /// (CLOUD-1078).
 ///
-/// Selected by [`hook::Harness::question_tool`] and by nothing a config can
+/// Selected by [`crate::config_model::Harness::question_tool`] and by nothing a config can
 /// name, so no branch can widen what counts as an answer. The record is read off
 /// the RESULT — the host's report of what was shown and chosen — and never off
 /// the input, which the agent wrote. Silent on every failure, as every recorder
@@ -26142,7 +26187,7 @@ fn mint_with_policy(
     // first; a call some row names is untouched.
     if !declared
         .iter()
-        .any(|mint| rules::selects_tool_name(&mint.tool, raw_tool))
+        .any(|mint| crate::facts::selects_tool_name(&mint.tool, raw_tool))
     {
         return;
     }
@@ -26178,12 +26223,12 @@ fn defer_mints(policy: &hook::Policy, raw_tool: &str, input: &serde_json::Value,
 /// selector: a row naming the tool whose selector refuses the input owes nothing,
 /// and neither does a matching selector under another tool.
 fn mint_owed(
-    declared: &[crate::mint::Declared],
+    declared: &[crate::config_model::MintDeclared],
     raw_tool: &str,
     input: &serde_json::Value,
 ) -> bool {
     declared.iter().any(|mint| {
-        rules::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
+        crate::facts::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
     })
 }
 
@@ -26337,7 +26382,7 @@ fn stored_row(
         // The clock is read at the boundary, as `record_agent_fact` reads it and
         // for the same reason. It is a fact about the CALL, which is why it may
         // live on this row while the content-addressed blob still refuses one.
-        seen_at: Some(receipt::rfc3339_utc(
+        seen_at: Some(crate::clock::rfc3339_utc(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since_epoch| since_epoch.as_secs()),
@@ -26435,7 +26480,7 @@ fn record_absence(
 /// A capture notice as the class it belongs to (CLOUD-2078): the reason id is
 /// its one subject.
 fn capture_notice(reason: &str) -> refusal::Refusal {
-    let class = verdict::Native::OutputWriteMissing;
+    let class = crate::error::Native::OutputWriteMissing;
     refusal::Refusal::engine(class, &[verdict::artifact(reason)], refusal::Fix::None)
 }
 
@@ -26457,7 +26502,7 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
 /// is what sizes the band.
 fn collect_before_admitting(
     envelope: &hook::Envelope,
-    pruning: Option<&prune::Prune>,
+    pruning: Option<&crate::config_model::Prune>,
     advice: &mut Vec<advisory::Advice>,
     err: &mut dyn Write,
 ) {
@@ -26501,7 +26546,10 @@ fn collect_before_admitting(
         let after = collected.as_ref().map_or(before, |done| done.free_after_mb);
         let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);
     }
-    if let (Some(done), Some((min, _))) = (collected, band.and_then(prune::Prune::free_band)) {
+    if let (Some(done), Some((min, _))) = (
+        collected,
+        band.and_then(crate::config_model::Prune::free_band),
+    ) {
         // WHAT STOPPED IT SHORT, named (CLOUD-2225): a lock a running build
         // holds, and a live build, each a subject rather than a guess.
         let mut subjects = vec![
@@ -26520,11 +26568,11 @@ fn collect_before_admitting(
             subjects.push(verdict::artifact("live-build"));
         }
         let finding = refusal::Refusal::engine(
-            verdict::Native::CargoRetireNow,
+            crate::error::Native::CargoRetireNow,
             &subjects,
             refusal::Fix::None,
         )
-        .with_severity(refusal::Severity::Note);
+        .with_severity(crate::grammar::Severity::Note);
         push_finding(advice, severity::AdvisoryTier::Advisory, finding);
     }
 }
@@ -26534,9 +26582,11 @@ fn collect_before_admitting(
 /// Read separately from the policy load below, and deliberately tolerant: a
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
-fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = crate::fsio::read_to_string(hook_session_home().join(config::CONFIG_FILE)).ok()?;
-    let parsed: config::Config = toml::from_str(&text).ok()?;
+fn capture_budget() -> Option<crate::config_model::CaptureConfig> {
+    let text =
+        crate::fsio::read_to_string(hook_session_home().join(crate::config_model::CONFIG_FILE))
+            .ok()?;
+    let parsed: crate::config_model::Config = toml::from_str(&text).ok()?;
     parsed.capture
 }
 
@@ -26663,8 +26713,10 @@ fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
 
 /// The root a directory places in, where that root carries the authority.
 fn authority_placed(dir: &Path) -> Option<PathBuf> {
-    match git::placement(dir, config::CONFIG_FILE) {
-        git::Placement::Root(root) if root.join(config::CONFIG_FILE).is_file() => Some(root),
+    match git::placement(dir, crate::config_model::CONFIG_FILE) {
+        git::Placement::Root(root) if root.join(crate::config_model::CONFIG_FILE).is_file() => {
+            Some(root)
+        }
         _ => None,
     }
 }
@@ -26675,7 +26727,7 @@ fn session_home(session: Option<&str>, start_root: Option<&Path>) -> Option<Path
     let Some(session) = session else {
         return start_root.map(Path::to_path_buf);
     };
-    let home = state::recorded_session_authority(session, config::CONFIG_FILE);
+    let home = state::recorded_session_authority(session, crate::config_model::CONFIG_FILE);
     if let Some(start_root) = start_root
         && (home.is_none() || same_repository(home.as_deref(), start_root))
     {
@@ -26700,7 +26752,7 @@ fn same_repository(home: Option<&Path>, root: &Path) -> bool {
 fn placed_roots(targets: &[PathBuf]) -> Option<Vec<PathBuf>> {
     let mut roots = Vec::new();
     for target in targets {
-        match git::placement(target, config::CONFIG_FILE) {
+        match git::placement(target, crate::config_model::CONFIG_FILE) {
             git::Placement::Root(root) => roots.push(root),
             git::Placement::Outside => {}
             git::Placement::Unplaceable => return None,
@@ -26713,7 +26765,7 @@ fn placed_roots(targets: &[PathBuf]) -> Option<Vec<PathBuf>> {
 fn target_root(placed: Option<&[PathBuf]>) -> Option<PathBuf> {
     placed?
         .iter()
-        .find(|root| root.join(config::CONFIG_FILE).is_file())
+        .find(|root| root.join(crate::config_model::CONFIG_FILE).is_file())
         .cloned()
 }
 
@@ -26734,10 +26786,10 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
             .is_none_or(|roots| roots.iter().any(|root| *root != text(home)))
     });
     let grade = home.filter(|_| outward).and_then(|home| {
-        let loaded = config::load(&home.join(config::CONFIG_FILE)).ok()?;
+        let loaded = config::load(&home.join(crate::config_model::CONFIG_FILE)).ok()?;
         Some(rules::native_grade(
             &loaded.rules,
-            rules::NativeGate::RepositoryReach,
+            crate::config_model::NativeGate::RepositoryReach,
         ))
     });
     hook::Reach {
@@ -26751,7 +26803,7 @@ fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> ho
 fn load_policy(
     overrides: &Overrides,
     harness: crate::config_model::Harness,
-) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
+) -> Result<(hook::Policy, Vec<crate::config_model::Waiver>)> {
     load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
 }
 
@@ -26780,7 +26832,7 @@ fn load_hook_config(
     // NO AUTHORITY STILL HAS THE HOST'S MODE (CLOUD-2201): rules stay fail-open,
     // and the mode modules alone load, so auto mode grants and plan mode refuses
     // writes wherever the session's shell happens to stand.
-    if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
+    if overrides.config_from.is_none() && !here.join(crate::config_model::CONFIG_FILE).exists() {
         return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
@@ -27155,21 +27207,26 @@ fn exec_lock(request: &cli::ExecRequest) -> Result<Option<exec::Lock>> {
 
 fn load_exec_settings(
     overrides: &Overrides,
-) -> Result<(Vec<outputs::OutputPattern>, exec::ExecConfig)> {
+) -> Result<(
+    Vec<crate::config_model::OutputPattern>,
+    crate::config_model::ExecConfig,
+)> {
     let here = Path::new(".");
     // The flag before the file, for the reason `load_policy` states at length
     // (CLOUD-719). The failure here is quieter than the hook's and still real:
     // deleting `batten.toml` drops every `[[exec_pattern]]` row, so a wrapped
     // command that lies with exit `0` stops being promoted to a failure — the
     // one thing CLOUD-117 built this table to catch.
-    if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
-        return Ok((Vec::new(), exec::ExecConfig::DEFAULT));
+    if overrides.config_from.is_none() && !here.join(crate::config_model::CONFIG_FILE).exists() {
+        return Ok((Vec::new(), crate::config_model::ExecConfig::DEFAULT));
     }
     // One resolve for both, because they are one question — what this repository
     // declared about wrapped commands. Two calls would read the authority twice
     // and could, on a file rewritten in between, answer from two different epochs.
     let config = resolve::resolve(here, overrides)?;
-    let settings = config.exec.unwrap_or(exec::ExecConfig::DEFAULT);
+    let settings = config
+        .exec
+        .unwrap_or(crate::config_model::ExecConfig::DEFAULT);
     Ok((config.exec_patterns, settings))
 }
 
@@ -27353,7 +27410,7 @@ fn render(
             // ONCE PER WINDOW like every finding: no human is prompted on a
             // pre-approved call, so its reason is read by the model, for which
             // a repeat of the definition is a copy of what is already above.
-            let grant = grant.with_severity(refusal::Severity::Note);
+            let grant = grant.with_severity(crate::grammar::Severity::Note);
             let arm = arm_for(hook::HookSource::Harness, envelope, &grant);
             let reason = grant.render_finding(arm);
             match hook::encode_preapproval(
@@ -27595,7 +27652,7 @@ enum Surface {
 
 /// Run every configured judge row, and register what the judges said.
 ///
-/// **This function returns no [`rules::Finding`], and that is its contract.** A
+/// **This function returns no [`crate::findings::Finding`], and that is its contract.** A
 /// judge outcome goes to the store through [`findings::record_advisory`] and
 /// nowhere else, so `any_blocking` never sees one and `--fail-on-warning` has
 /// nothing to promote (§0.3, CLOUD-56). The exit code of the run that called
@@ -27655,7 +27712,7 @@ fn run_judges(
                 rule: rule.id.clone(),
                 path: Some((*path).clone()),
                 line: None,
-                class: judge::PayloadClass::FileText,
+                class: crate::config_model::PayloadClass::FileText,
                 bytes: crate::fsio::read(root.join(path)).unwrap_or_default(),
             });
         }
@@ -28435,7 +28492,7 @@ fn record_unlanded_step(
 /// clone's could-not-look; nothing else.
 fn owed_step(
     outcome: &completion::Outcome,
-    landed_by: config::LandedBy,
+    landed_by: crate::config_model::LandedBy,
     push: impl FnOnce() -> completion::PushState,
 ) -> Option<Step> {
     match outcome {
@@ -28451,8 +28508,8 @@ fn owed_step(
 
 /// Where the claim's commits are relative to its upstream (CLOUD-2656). Read
 /// only in person mode; any failure is could-not-look, never pushed.
-fn push_state(repo: &Path, landed_by: config::LandedBy) -> completion::PushState {
-    if landed_by == config::LandedBy::Agent {
+fn push_state(repo: &Path, landed_by: crate::config_model::LandedBy) -> completion::PushState {
+    if landed_by == crate::config_model::LandedBy::Agent {
         return completion::PushState::NotComputable;
     }
     let Ok(upstream) = git::upstream_of_head(repo) else {
@@ -28489,11 +28546,11 @@ fn claim_step(git_dir: Option<&Path>, branch: &str, key: &str) -> Step {
 /// The refusal a claim's step speaks under (CLOUD-2656).
 fn step_refusal(step: Step, count: u64) -> refusal::Refusal {
     let (class, fact) = match step {
-        Step::Push => (verdict::Native::CommitPushMissing, Some("unpushed")),
-        Step::NoUpstream => (verdict::Native::CommitPushMissing, Some("no-upstream")),
-        Step::PushUnknown | Step::Shallow => (verdict::Native::CommitShipUnknown, None),
-        Step::MergeHeld => (verdict::Native::CommitMergeHeld, None),
-        _ => (verdict::Native::CommitShipMissing, None),
+        Step::Push => (crate::error::Native::CommitPushMissing, Some("unpushed")),
+        Step::NoUpstream => (crate::error::Native::CommitPushMissing, Some("no-upstream")),
+        Step::PushUnknown | Step::Shallow => (crate::error::Native::CommitShipUnknown, None),
+        Step::MergeHeld => (crate::error::Native::CommitMergeHeld, None),
+        _ => (crate::error::Native::CommitShipMissing, None),
     };
     let mut subjects = vec![verdict::artifact(completion::RULE_ID)];
     if let Some(fact) = fact {
@@ -28523,7 +28580,7 @@ fn unlanded_unknown_pointer() -> Option<refusal::Refusal> {
     }
     let _ = crate::durable::append(&spoken, &key);
     Some(refusal::Refusal::engine(
-        verdict::Native::CommitShipUnknown,
+        crate::error::Native::CommitShipUnknown,
         &[verdict::artifact(completion::RULE_ID)],
         refusal::Fix::None,
     ))
@@ -28668,7 +28725,7 @@ fn report_transcript_capability(
 
 fn scan_self_writes(
     capability: &transcript::Capability,
-    declared: Option<&transcript::TranscriptConfig>,
+    declared: Option<&crate::config_model::TranscriptConfig>,
 ) -> Vec<selfwrite::Detection> {
     match capability {
         transcript::Capability::Present(stream) => selfwrite::scan(
@@ -28837,7 +28894,7 @@ fn anchor() -> PathBuf {
 /// question of the full set.
 ///
 /// The drift it reports joins `findings` on exactly the terms `budget` and
-/// `defects` join on — an unmatched entry is an ordinary [`rules::Finding`], so
+/// `defects` join on — an unmatched entry is an ordinary [`crate::findings::Finding`], so
 /// it is waivable, appears in `-J`, reaches the store and decides the exit code
 /// without any of that being re-implemented on a private verdict path.
 /// [`baseline::Drifted::is_reportable`] is what keeps a *hold* out of it: an
@@ -29090,7 +29147,7 @@ impl<'a> CheckScope<'a> {
     /// Which scope the flags name, refusing the pair that names two.
     ///
     /// The mutual exclusion is enforced here rather than by `clap`, because
-    /// `surface::FlagDecl` has no conflict column and adding one to express a
+    /// `crate::surface_table::FlagDecl` has no conflict column and adding one to express a
     /// constraint that appears on a single verb would widen the spec — and the
     /// schema derived from it — for every row that does not need it. The caller
     /// sees the same exit `1` either way.
@@ -29114,7 +29171,7 @@ impl<'a> CheckScope<'a> {
     /// **An unresolvable rev is a usage error, never an empty scope.** A
     /// narrowing that matched nothing and exited `0` is the vacuous pass in its
     /// purest form — the caller reads "the gate passed" from a gate that scanned
-    /// no file — which is the same reasoning `surface::CHECK_RULE` states for a
+    /// no file — which is the same reasoning `crate::surface_table::CHECK_RULE` states for a
     /// `--rule` naming no declared row, and `git::count_at_rev`'s for a ratchet
     /// base that will not resolve.
     ///
@@ -29608,7 +29665,7 @@ fn supplied_instant(raw: Option<&str>) -> Result<std::time::SystemTime> {
 
 type RuleRunner = fn(
     &[crate::config_model::Rule],
-    &[provision::Provision],
+    &[crate::config_model::Provision],
     policy::Vocabulary<'_>,
     &Path,
     rules::RunOptions<'_>,
@@ -29640,7 +29697,7 @@ fn perform_requested_sinks(surface: Surface, root: &Path, scan: &rules::Scan) {
     let branch = if scan
         .requested
         .iter()
-        .any(|request| request.key == rules::SinkKey::Branch)
+        .any(|request| request.key == crate::sink::SinkKey::Branch)
     {
         git::current_branch(root).ok().flatten()
     } else {
@@ -30454,8 +30511,8 @@ fn announce_degrade(mode: Mode, err: &mut dyn Write, base: Option<&trust::Loaded
 /// reports as removed, each under its own key path.
 fn config_delta(base: Option<&trust::Loaded>) -> Option<Vec<trust::Weakening>> {
     let base = base?;
-    let working = config::load(&Path::new(".").join(config::CONFIG_FILE))
-        .unwrap_or_else(|_| config::Config::declaring_nothing());
+    let working = config::load(&Path::new(".").join(crate::config_model::CONFIG_FILE))
+        .unwrap_or_else(|_| crate::config_model::Config::declaring_nothing());
     Some(trust::weakenings(&base.config, &working))
 }
 
@@ -30646,7 +30703,7 @@ fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Re
     } else {
         against
     };
-    let Ok(published) = git::show(Path::new("."), against, config::SCHEMA_PATH) else {
+    let Ok(published) = git::show(Path::new("."), against, crate::config_model::SCHEMA_PATH) else {
         // THE DOCUMENT IS EMITTED ANYWAY. A data channel that is sometimes absent
         // is unparseable by the caller that asked for it, so the could-not-look
         // answer is a document too — distinguished by `baseline`, never by an
@@ -31677,7 +31734,7 @@ fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
 /// binary does not have — which is the property `derived-check` gates.
 ///
 /// Man pages and markdown join on the same terms (CLOUD-69): every format here
-/// walks the one [`surface::SURFACE`]-built tree, and every one of them returns
+/// walks the one [`crate::surface_table::SURFACE`]-built tree, and every one of them returns
 /// bytes for the caller to redirect.
 fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
@@ -31710,12 +31767,16 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // Two surfaces, two derivations (CLOUD-239): one schema describing both
         // is what let a validator vouch for override keys the loader drops.
         GenerateCommand::Schema { surface } => match surface {
-            cli::SchemaSurface::Authority => writeln!(out, "{}", config::schema()?)?,
-            cli::SchemaSurface::Override => writeln!(out, "{}", config::override_schema()?)?,
-            cli::SchemaSurface::PolicyInput => {
+            crate::surface_table::SchemaSurface::Authority => {
+                writeln!(out, "{}", config::schema()?)?
+            }
+            crate::surface_table::SchemaSurface::Override => {
+                writeln!(out, "{}", config::override_schema()?)?
+            }
+            crate::surface_table::SchemaSurface::PolicyInput => {
                 writeln!(out, "{}", policy::tree_input_schema()?)?;
             }
-            cli::SchemaSurface::PolicyCall => {
+            crate::surface_table::SchemaSurface::PolicyCall => {
                 writeln!(out, "{}", policy::call_input_schema()?)?;
             }
         },
@@ -31811,7 +31872,7 @@ pub fn land_conflict_stop(
             "a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
         ));
     }
-    let class = crate::verdict::Native::CommitPortBlocked;
+    let class = crate::error::Native::CommitPortBlocked;
     crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::Run(said.join("; ")))
 }
 
@@ -31848,7 +31909,7 @@ pub fn land_red_refusal_running(
             .map(|name| crate::verdict::artifact(&format!("{name} still running"))),
     );
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::JobRunRed,
+        crate::error::Native::JobRunRed,
         &subjects,
         crate::refusal::Fix::Run(String::from(
             "reproduce each named check locally: a rebase clears nothing here, so the lap stops",
@@ -31875,7 +31936,7 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
         )
     };
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::LaneCountSpent,
+        crate::error::Native::LaneCountSpent,
         &[
             crate::verdict::artifact(&format!("{laps} lap(s)")),
             crate::verdict::artifact(&format!("{} CI matri(ces)", ledger.spent())),
@@ -31969,7 +32030,7 @@ pub fn land_ready_owes(
     root: &Path,
     now: std::time::SystemTime,
 ) -> Result<Option<refusal::Refusal>> {
-    if !root.join(config::CONFIG_FILE).is_file() {
+    if !root.join(crate::config_model::CONFIG_FILE).is_file() {
         return Ok(None);
     }
     let harness = crate::config_model::Harness::ClaudeCode;
@@ -32229,7 +32290,8 @@ mod tests {
             "tool_name": "Write",
             "tool_input": { "file_path": "new.txt", "content": "written\n" },
         });
-        let envelope = hook::decode(hook::Harness::ClaudeCode, &raw.to_string()).unwrap();
+        let envelope =
+            hook::decode(crate::config_model::Harness::ClaudeCode, &raw.to_string()).unwrap();
         assert_eq!(
             projected_write(&root, "new.txt", &envelope),
             Some((None, "written\n".to_owned())),
@@ -32250,7 +32312,7 @@ mod tests {
     /// Fails by: `&&` read as `||`, or either half dropped.
     #[test]
     fn a_mint_is_owed_only_when_its_tool_and_selector_both_select() {
-        let mint: crate::mint::Declared = serde_json::from_value(serde_json::json!({
+        let mint: crate::config_model::MintDeclared = serde_json::from_value(serde_json::json!({
             "name": "issue-read",
             "tool": "get_issue",
             "key": "named",
@@ -32486,7 +32548,7 @@ mod tests {
     fn red_and_spent_render_their_classes_with_their_counts() {
         use crate::refusal::Arm;
         let red = land_red_refusal("deadbeef", &["test (ubuntu) failure".to_owned()]);
-        assert_eq!(red.verdict(), Some(crate::verdict::Native::JobRunRed.id()));
+        assert_eq!(red.verdict(), Some(crate::error::Native::JobRunRed.id()));
         let line = red.render_finding(Arm::Full);
         assert!(
             line.contains("deadbeef") && line.contains("test (ubuntu) failure"),
@@ -32502,7 +32564,7 @@ mod tests {
         let spent = land_spent_refusal(3, &ledger);
         assert_eq!(
             spent.verdict(),
-            Some(crate::verdict::Native::LaneCountSpent.id())
+            Some(crate::error::Native::LaneCountSpent.id())
         );
         let line = spent.render_finding(Arm::Full);
         assert!(
@@ -32896,13 +32958,13 @@ mod tests {
         let root = crate::scratch::scratch("set-members");
         std::fs::write(root.join("a.md"), "a").unwrap();
         std::fs::write(root.join("b.md"), "b").unwrap();
-        let set = |files: &[&str], embedded: bool| budget::BudgetSet {
+        let set = |files: &[&str], embedded: bool| crate::config_model::BudgetSet {
             files: files.iter().map(|file| (*file).to_owned()).collect(),
             max_tokens: 1,
             max_lines: None,
             max_bytes_per_file: None,
             embedded: if embedded {
-                vec![budget::EmbeddedDecl {
+                vec![crate::config_model::EmbeddedDecl {
                     path: String::from("c.toml"),
                     key: String::from("k"),
                 }]
@@ -33007,7 +33069,7 @@ mod tests {
         let owed = |reason| {
             owed_step(
                 &completion::Outcome::NotComputable { reason },
-                config::LandedBy::Agent,
+                crate::config_model::LandedBy::Agent,
                 || completion::PushState::NotComputable,
             )
         };

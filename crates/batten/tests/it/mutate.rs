@@ -113,7 +113,7 @@
 use crate::common;
 // Only the unix cases capture a child, so only they need the adapter's trait.
 #[cfg(unix)]
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -529,7 +529,7 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
                 .arg(&copy)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
-                .streamed_output_keeping(batten::exec::Keep {
+                .streamed_output_keeping(batten::capture::Keep {
                     stdin: true,
                     stdout: false,
                     stderr: true,

@@ -26,7 +26,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// A fixture repository carrying a declaring file and, optionally, the suite it
 /// names.

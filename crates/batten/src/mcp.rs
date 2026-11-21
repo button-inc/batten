@@ -77,17 +77,24 @@
 use std::path::Path;
 
 use crate::Result;
+use crate::config_check::mcp::Part;
+use crate::config_check::mcp::escapes;
+use crate::config_check::mcp::parts;
+#[cfg(test)]
+use crate::config_check::mcp::placeholders;
+#[cfg(test)]
+use crate::config_check::mcp::validate;
+#[cfg(test)]
+use crate::config_check::mcp::validate_credential;
+use crate::config_model::Base;
+use crate::config_model::McpConfig;
+use crate::config_model::McpCredential as Credential;
+use crate::config_model::McpSource as Source;
+use crate::config_model::Reduce;
+use crate::config_model::ResultRow;
+#[cfg(test)]
+use crate::config_model::authorization;
 use crate::facts::{Format, Look, Node, TOKEN_MAX};
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::mcp::validate;
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::mcp::{
-    Part, escapes, parts, placeholders, validate_credential, validate_endpoint_selectors,
-};
-pub use crate::config_model::{
-    Base, McpConfig, McpCredential as Credential, McpSource as Source, Reduce, ResultRow,
-    authorization,
-};
 
 impl Credential {
     /// The header name and finished value this row sends a resolved value as.

@@ -291,7 +291,7 @@ fn a_config_fault_s_class_explains_while_the_config_is_still_broken() {
 #[test]
 fn every_class_the_loader_raises_has_a_case_above() {
     let mut covered: Vec<&str> = FAULTS.iter().map(|(class, _, _)| *class).collect();
-    let mut declared: Vec<&str> = batten::verdict::Native::CONFIG_FAULTS
+    let mut declared: Vec<&str> = batten::error::Native::CONFIG_FAULTS
         .iter()
         .map(|native| native.id())
         .collect();

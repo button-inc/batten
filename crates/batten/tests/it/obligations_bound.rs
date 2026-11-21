@@ -39,7 +39,9 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule, RuleKind, RuleScope};
+use batten::config_model::{Rule, RuleKind};
+use batten::preset_catalog::RuleScope;
+use batten::rules;
 
 /// A fixture repository carrying a board record and, optionally, the case file
 /// an obligation names.
@@ -125,27 +127,27 @@ fn row() -> Rule {
 /// recorder the config declares, so the closing set would resolve to nothing and
 /// every refusal case would pass for the wrong reason. Measured here, in exactly
 /// that shape, before this second row existed.
-fn recorders() -> Vec<batten::recorder::Declared> {
+fn recorders() -> Vec<batten::config_model::RecorderDeclared> {
     vec![
         declared("board-writes", "save_issue", "issue"),
         declared("pr-closes", "pull_request_read", "closes"),
     ]
 }
 
-fn declared(name: &str, tool: &str, kind: &str) -> batten::recorder::Declared {
-    batten::recorder::Declared {
+fn declared(name: &str, tool: &str, kind: &str) -> batten::config_model::RecorderDeclared {
+    batten::config_model::RecorderDeclared {
         name: name.to_owned(),
         record: name.to_owned(),
         tool: tool.to_owned(),
-        key: batten::recorder::RecordKey::Branch,
+        key: batten::config_model::RecordKey::Branch,
         requires: Vec::new(),
         refused_when_input: Vec::new(),
         refused_when_result: Vec::new(),
         requires_input_matching: std::collections::BTreeMap::new(),
         requires_recorded: None,
-        columns: vec![batten::recorder::Column {
+        columns: vec![batten::config_model::Column {
             name: "kind".to_owned(),
-            value: batten::recorder::Value::Literal(kind.to_owned()),
+            value: batten::config_model::Value::Literal(kind.to_owned()),
             minus: None,
             without: None,
             counted_with: None,

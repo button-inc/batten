@@ -25,7 +25,9 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule, RuleKind, RuleScope};
+use batten::config_model::{Rule, RuleKind};
+use batten::preset_catalog::RuleScope;
+use batten::rules;
 
 /// A fixture repository whose base is one commit back, with the plan record on
 /// disk exactly where `batten record plan` writes it.
@@ -330,8 +332,8 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
 #[test]
 fn the_plan_store_is_declared_as_verb_written() {
     assert!(
-        batten::record::VERB_WRITTEN.contains(&"plan"),
+        batten::config_check::record::VERB_WRITTEN.contains(&"plan"),
         "the engine must read the store the verb writes: {:?}",
-        batten::record::VERB_WRITTEN
+        batten::config_check::record::VERB_WRITTEN
     );
 }

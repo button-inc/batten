@@ -41,8 +41,9 @@
 
 use std::path::Path;
 
-pub use crate::config_check::refusal::validate;
-pub use crate::config_model::Ceiling;
+#[cfg(test)]
+use crate::config_check::refusal::validate;
+use crate::config_model::Ceiling;
 use serde::{Serialize, Serializer};
 
 /// A mediated call refused by policy: maps to [`ExitCode::Violation`] (exit `2`)
@@ -190,7 +191,7 @@ pub struct Refusal {
     /// is where the registry is already in hand, which keeps the projection pure
     /// and the boundary free of a second registry lookup.
     #[serde(skip)]
-    routes: Vec<crate::verdict::Route>,
+    routes: Vec<crate::config_model::Route>,
     /// The rendered pointers, as [`crate::verdict::render_subjects`] spells them
     /// (CLOUD-2075). The ` at <subjects>` clause of both arms.
     #[serde(skip)]
@@ -221,7 +222,7 @@ pub struct Refusal {
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
-    /// [`crate::verdict::Native`] variant and so cannot raise a class nobody
+    /// [`crate::error::Native`] variant and so cannot raise a class nobody
     /// declared — the coupling is the type system's rather than a convention's.
     /// `None` for a refusal composed from a consumer's `[[rule]]` row, whose
     /// remedy is the consumer's declared `reason` under house style §8 and which
@@ -678,9 +679,11 @@ pub enum Arm {
     Pointer,
 }
 
-// The line's grammar lives in the `grammar` leaf (CLOUD-2789), so the modules
-// below this one can spell a finding's head without reaching up here.
-pub use crate::grammar::{PROVENANCE, Severity, head, is_headed};
+use crate::grammar::PROVENANCE;
+use crate::grammar::Severity;
+use crate::grammar::head;
+#[cfg(test)]
+use crate::grammar::is_headed;
 use crate::grammar::{RULE_HOP_PLACEHOLDER, plain};
 
 /// The two names a finding line labels, so a reader can always tell a rule
@@ -852,8 +855,8 @@ pub fn override_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) ->
 }
 
 /// One route's text, or `None` where it does not render.
-fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String> {
-    use crate::verdict::RouteKind;
+fn route_text(refusal: &Refusal, route: &crate::config_model::Route) -> Option<String> {
+    use crate::preset_catalog::RouteKind;
     if route.kind == RouteKind::Override {
         let class = refusal.verdict()?;
         if !refusal.finding_paths.is_empty() {
@@ -899,7 +902,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
         (head, lines.collect::<Vec<_>>().join("\n"))
     };
     if let Some(usage) = failure.downcast_ref::<crate::UsageError>() {
-        use crate::verdict::Native;
+        use crate::error::Native;
         let class = usage.verdict.unwrap_or(Native::UsageRefused);
         let (head, rest) = split(&usage.message);
         // ALREADY A FINDING: a raiser that rendered its own refusal (`check`'s
@@ -920,7 +923,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
             rest.push(tail);
         }
     }
-    let refusal = Refusal::engine(crate::verdict::Native::RunBroken, &subjects, Fix::None);
+    let refusal = Refusal::engine(crate::error::Native::RunBroken, &subjects, Fix::None);
     Some((refusal, rest.join("\n")))
 }
 
@@ -936,7 +939,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
 #[must_use]
 pub fn of_rule(
     rule: &str,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     remediation: Option<&crate::findings::Remediation>,
 ) -> Option<Refusal> {
     let severity = Severity::Remedy;
@@ -1016,9 +1019,9 @@ impl Refusal {
     /// Name the reader each document route's target is read through, where the
     /// consumer's `[[redirect]]` declares one (CLOUD-2075).
     #[must_use]
-    pub fn read_through(mut self, redirects: &[crate::redirect::Redirect]) -> Refusal {
+    pub fn read_through(mut self, redirects: &[crate::config_model::Redirect]) -> Refusal {
         for route in &self.routes {
-            if route.kind == crate::verdict::RouteKind::Document
+            if route.kind == crate::preset_catalog::RouteKind::Document
                 && let Some(reader) = crate::redirect::resolve_read(redirects, &route.target)
             {
                 self.readers.insert(route.target.clone(), reader.to_owned());
@@ -1032,9 +1035,9 @@ impl Refusal {
     /// drops (CLOUD-2145). [`Refusal::remedy`] then does not say it twice.
     #[must_use]
     pub fn with_command_route(mut self, command: &str) -> Refusal {
-        self.routes.push(crate::verdict::Route {
+        self.routes.push(crate::config_model::Route {
             id: "rule fix".to_owned(),
-            kind: crate::verdict::RouteKind::Command,
+            kind: crate::preset_catalog::RouteKind::Command,
             target: command.to_owned(),
             precondition: None,
         });
@@ -1046,9 +1049,9 @@ impl Refusal {
     /// (CLOUD-2207's view of a stored response).
     #[must_use]
     pub fn with_document_route(mut self, path: &str) -> Refusal {
-        self.routes.push(crate::verdict::Route {
+        self.routes.push(crate::config_model::Route {
             id: "view read first".to_owned(),
-            kind: crate::verdict::RouteKind::Document,
+            kind: crate::preset_catalog::RouteKind::Document,
             target: path.to_owned(),
             precondition: None,
         });
@@ -1112,14 +1115,14 @@ impl Refusal {
     pub fn preconditions(&self) -> Vec<(&str, &str)> {
         self.routes
             .iter()
-            .filter(|route| route.kind == crate::verdict::RouteKind::Override)
+            .filter(|route| route.kind == crate::preset_catalog::RouteKind::Override)
             .filter_map(|route| Some((route.id.as_str(), route.precondition.as_deref()?)))
             .collect()
     }
 
     /// Build one of Batten's OWN refusals, from a declared class (CLOUD-1050).
     ///
-    /// The caller names a [`crate::verdict::Native`] variant and the pointers it
+    /// The caller names a [`crate::error::Native`] variant and the pointers it
     /// can offer; the gloss and the remedy come off the vendored registry, so
     /// neither is a string this call site chose. That is what makes CLOUD-122's
     /// contract structural on the native path: [`crate::verdict::validate`]
@@ -1134,11 +1137,11 @@ impl Refusal {
     #[must_use]
     pub fn declared(
         rule: impl Into<String>,
-        native: crate::verdict::Native,
+        native: crate::error::Native,
         subjects: &[crate::verdict::Subject],
         fix: Fix,
     ) -> Refusal {
-        let registry = crate::verdict::vendored();
+        let registry = crate::config_check::verdict::vendored();
         Refusal::from_class(rule, &registry, native.id(), subjects, fix)
     }
 
@@ -1152,7 +1155,7 @@ impl Refusal {
     /// `hook.handler.<id>`, a capture reason.
     #[must_use]
     pub fn engine(
-        native: crate::verdict::Native,
+        native: crate::error::Native,
         subjects: &[crate::verdict::Subject],
         fix: Fix,
     ) -> Refusal {
@@ -1163,7 +1166,7 @@ impl Refusal {
     ///
     /// **Not a third constructor** (CLOUD-1285 is explicit about not writing
     /// one): [`Refusal::declared`] is this function with the token taken from a
-    /// [`crate::verdict::Native`], and every line below used to live there. It is
+    /// [`crate::error::Native`], and every line below used to live there. It is
     /// split out because a POLICY MODULE's refusal carries a token the module
     /// raised and the consumer's registry declares, so there is no `Native` to
     /// name — and before this that path called [`Refusal::new`] and threw the
@@ -1172,7 +1175,7 @@ impl Refusal {
     #[must_use]
     pub fn from_class(
         rule: impl Into<String>,
-        registry: &[crate::verdict::DeclaredVerdict],
+        registry: &[crate::config_model::DeclaredVerdict],
         token: &str,
         subjects: &[crate::verdict::Subject],
         fix: Fix,
@@ -1374,11 +1377,11 @@ mod tests {
     #[test]
     fn an_engine_finding_carries_no_rule_label() {
         let refusal = Refusal::engine(
-            crate::verdict::Native::RunBroken,
+            crate::error::Native::RunBroken,
             &[crate::verdict::artifact("disk full")],
             Fix::None,
         );
-        let class = crate::verdict::Native::RunBroken.id();
+        let class = crate::error::Native::RunBroken.id();
         for arm in [Arm::Pointer, Arm::Full] {
             let line = refusal.render_finding(arm);
             assert!(
@@ -1401,7 +1404,7 @@ mod tests {
     fn absorbing_joins_a_new_subject_and_its_bindings_once() {
         let refusal = |subject: &str| {
             Refusal::engine(
-                crate::verdict::Native::RunBroken,
+                crate::error::Native::RunBroken,
                 &[crate::verdict::artifact(subject)],
                 Fix::None,
             )
@@ -1456,7 +1459,7 @@ mod tests {
         let (refusal, rest) = of_failure(&failure).expect("an internal failure renders");
         assert_eq!(
             refusal.verdict(),
-            Some(crate::verdict::Native::RunBroken.id())
+            Some(crate::error::Native::RunBroken.id())
         );
         let line = refusal.render_finding(Arm::Pointer);
         let outer = line.find("write the store").expect("outer cause named");
@@ -1491,7 +1494,7 @@ mod tests {
     fn a_rendered_usage_refusal_is_not_wrapped_in_a_second_finding() {
         let inner = Refusal::declared(
             "banned",
-            crate::verdict::Native::SpawningRuleOnReadVerb,
+            crate::error::Native::SpawningRuleOnReadVerb,
             &[crate::verdict::artifact("command")],
             Fix::None,
         )
@@ -1538,7 +1541,7 @@ mod tests {
         // construct a refusal with no way out even by omission.
         let refusal = Refusal::declared(
             "provision",
-            crate::verdict::Native::ScannerUnprovisioned,
+            crate::error::Native::ScannerUnprovisioned,
             &[crate::verdict::Subject::Artifact {
                 artifact: "gitleaks".to_owned(),
             }],
@@ -1575,7 +1578,7 @@ mod tests {
         // silently flattened three tiers into one.
         let refusal = Refusal::declared(
             "protected-mutation",
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[],
             Fix::Run("use `serena rename_memory`".to_owned()),
         );
@@ -1637,7 +1640,7 @@ mod tests {
     fn the_pointer_arm_is_a_byte_prefix_of_the_full_arm() {
         let refusal = Refusal::declared(
             "protected-mutation",
-            crate::verdict::Native::ProtectedMutation,
+            crate::error::Native::ProtectedMutation,
             &[crate::verdict::Subject::Path {
                 path: "docs/a.md".to_owned(),
             }],
@@ -1799,7 +1802,7 @@ mod tests {
     fn only_a_classed_refusal_differing_in_subjects_absorbs() {
         let refusal = |subject: &str| {
             Refusal::engine(
-                crate::verdict::Native::RunBroken,
+                crate::error::Native::RunBroken,
                 &[crate::verdict::artifact(subject)],
                 Fix::None,
             )
@@ -1819,7 +1822,7 @@ mod tests {
     #[test]
     fn a_refusals_routes_name_their_kinds() {
         let route =
-            |id: &str, kind, target: &str, precondition: Option<&str>| crate::verdict::Route {
+            |id: &str, kind, target: &str, precondition: Option<&str>| crate::config_model::Route {
                 id: id.to_owned(),
                 kind,
                 target: target.to_owned(),
@@ -1829,19 +1832,19 @@ mod tests {
         refusal.routes.extend([
             route(
                 "run it",
-                crate::verdict::RouteKind::Command,
+                crate::preset_catalog::RouteKind::Command,
                 "rules/y.md",
                 Some("p"),
             ),
             route(
                 "admit",
-                crate::verdict::RouteKind::Override,
+                crate::preset_catalog::RouteKind::Override,
                 "",
                 Some("owner said so"),
             ),
         ]);
         assert_eq!(refusal.preconditions(), [("admit", "owner said so")]);
-        let redirect = crate::redirect::Redirect {
+        let redirect = crate::config_model::Redirect {
             glob: "rules/**".to_owned(),
             mutation: "m".to_owned(),
             read: Some("reader".to_owned()),
@@ -1859,12 +1862,12 @@ mod tests {
                 .iter()
                 .any(|route| route.contains("mise run x"))
         );
-        let native = Refusal::engine(crate::verdict::Native::RunBroken, &[], Fix::None);
+        let native = Refusal::engine(crate::error::Native::RunBroken, &[], Fix::None);
         assert_eq!(
             native.gloss(),
             crate::verdict::gloss_of(
-                &crate::verdict::vendored(),
-                crate::verdict::Native::RunBroken.id()
+                &crate::config_check::verdict::vendored(),
+                crate::error::Native::RunBroken.id()
             )
             .unwrap_or_default()
         );
@@ -1886,22 +1889,22 @@ mod tests {
             .collect();
         let with_override = |refusal: Refusal| {
             let mut refusal = refusal;
-            refusal.routes.push(crate::verdict::Route {
+            refusal.routes.push(crate::config_model::Route {
                 id: "admit".to_owned(),
-                kind: crate::verdict::RouteKind::Override,
+                kind: crate::preset_catalog::RouteKind::Override,
                 target: String::new(),
                 precondition: None,
             });
             refusal
         };
-        let class = crate::verdict::Native::RunBroken.id();
+        let class = crate::error::Native::RunBroken.id();
         let mediated = with_override(Refusal::engine(
-            crate::verdict::Native::RunBroken,
+            crate::error::Native::RunBroken,
             &subjects,
             Fix::None,
         ));
         let gathered = with_override(
-            Refusal::engine(crate::verdict::Native::RunBroken, &subjects, Fix::None)
+            Refusal::engine(crate::error::Native::RunBroken, &subjects, Fix::None)
                 .over_findings(&paths),
         );
         // The override route is the one pushed last; the class's own come first.

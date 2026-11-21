@@ -92,7 +92,7 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
     // enabled and both must resolve. Looping the pair rather than a single value
     // is what keeps the reachability claim honest for such a preset: enabling the
     // half a consumer happens not to want must not be the half that fails.
-    for manifest in batten::preset::MANIFESTS {
+    for manifest in batten::preset_catalog::MANIFESTS {
         for scope in manifest.scopes() {
             let root = Fixture::new(&format!(
                 "preset-enable-{}-{}",
@@ -110,7 +110,7 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                  {}\
                  severity = \"deny\"\n",
                 scope.as_str(),
-                if scope == batten::rules::RuleScope::Tree {
+                if scope == batten::preset_catalog::RuleScope::Tree {
                     "sources = [\"**/*.md\"]\n"
                 } else {
                     ""

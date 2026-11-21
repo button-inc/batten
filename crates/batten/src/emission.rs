@@ -367,7 +367,7 @@ mod tests {
 
     /// The shipped threshold, so these cases are pinned against the default a
     /// consumer actually gets rather than a number chosen to make them pass.
-    const DEFAULT_PERCENT: u32 = crate::drain::DEFAULT_FLAP_PERCENT;
+    const DEFAULT_PERCENT: u32 = crate::config_model::DEFAULT_FLAP_PERCENT;
 
     // Acceptance (b). The load-bearing case: two worktrees at two refs, each
     // perfectly monotone, interleaved in one log. Read per identity alone this is

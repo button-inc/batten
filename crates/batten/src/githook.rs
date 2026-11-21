@@ -15,9 +15,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub use crate::config_check::githook::validate;
 use crate::exit::ExitCode;
-use crate::{exec, git, hook, resolve};
+use crate::{exec, git, resolve};
 
 /// Run as a git hook: argv[0] is a githooks(5) name (CLOUD-2339).
 ///
@@ -40,7 +39,7 @@ use crate::{exec, git, hook, resolve};
 pub fn dispatched(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<ExitCode> {
     let invoked = PathBuf::from(args.next()?);
     let name = invoked.file_name()?.to_str()?.to_owned();
-    if !hook::is_git_hook(&name) {
+    if !crate::config_model::is_git_hook(&name) {
         return None;
     }
     let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
@@ -83,9 +82,9 @@ fn run(name: &str, rest: &[String], err: &mut dyn Write) -> ExitCode {
     // TEED, AS `step run` IS (CLOUD-2091, CLOUD-2284): stored alone, a failing
     // command's words reached nobody — this line names no handle, and git shows
     // the person committing only what the hook printed.
-    let settings = exec::ExecConfig {
+    let settings = crate::config_model::ExecConfig {
         tee: true,
-        ..exec::ExecConfig::DEFAULT
+        ..crate::config_model::ExecConfig::DEFAULT
     };
     match exec::classify_in_env(&root, &command, &[], &settings, &published) {
         Ok((0, ..)) => ExitCode::Success,

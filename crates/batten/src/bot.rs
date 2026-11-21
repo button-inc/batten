@@ -47,7 +47,6 @@ use anyhow::Result;
 use crate::error::UsageError;
 
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::BotLane;
 
 /// The placeholders [`BotLane::body_template`] may carry.
 ///

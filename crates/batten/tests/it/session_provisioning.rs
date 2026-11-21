@@ -116,8 +116,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
-use batten::exec::StreamedChild as _;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -851,7 +851,7 @@ const UNHEARD: [&str; 1] = ["head-move-mediator-check"];
 /// whether that spelling is in `delivered_on` — so the census cannot drift from
 /// what the door actually renders.
 fn claude_hears(on: &str) -> bool {
-    let wiring = batten::hook::Harness::ClaudeCode
+    let wiring = batten::config_model::Harness::ClaudeCode
         .wiring()
         .expect("Claude Code is an installable harness");
     let Some((_, spelling)) = wiring
@@ -861,7 +861,7 @@ fn claude_hears(on: &str) -> bool {
     else {
         return false;
     };
-    let capabilities = batten::hook::Harness::ClaudeCode.capabilities();
+    let capabilities = batten::config_model::Harness::ClaudeCode.capabilities();
     capabilities.advisory_reachable(spelling)
 }
 

@@ -15,10 +15,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::exec::Streamed as _;
+use batten::capture::Streamed as _;
 // Only the unix cases wait on a spawned child.
 #[cfg(unix)]
-use batten::exec::StreamedChild as _;
+use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use common::{Fixture, StateHome, batten, git_in, scratch};
 /// it — through the binary's own helper, so a fixture cannot pin a digest the
 /// engine would never produce.
 fn digest(bytes: &[u8]) -> String {
-    batten::provision::digest(bytes)
+    batten::digest::sha256_hex(bytes)
 }
 
 /// A repository plus an isolated `HOME`/`XDG_DATA_HOME`, so the out-of-tree
@@ -531,7 +531,7 @@ fn a_platform_row_names_its_own_unpack() {
     let env = Env::new("provision-platform-unpack");
     let archive = zip(&[(&exe("demo"), BINARY)]);
     let (url, sha) = env.artifact("demo.zip", &archive);
-    let host = batten::provision::platform_key();
+    let host = batten::config_check::provision::platform_key();
     env.config(&format!(
         "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
          binary = \"demo\"\nunpack = \"tar_gz\"\n\n[provision.platforms.{host}]\n\
@@ -882,7 +882,7 @@ fn a_platform_row_names_its_own_strip_and_bin() {
         ("tool-1.0/data", b"data".as_slice()),
     ]);
     let (url, sha) = env.artifact("tool.zip", &archive);
-    let host = batten::provision::platform_key();
+    let host = batten::config_check::provision::platform_key();
     env.config(&format!(
         "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
          binary = \"demo\"\nunpack = \"tar_gz\"\nbin = \"wrong\"\n\n\
@@ -1837,7 +1837,7 @@ fn the_engine_names_no_consumer_of_its_own() {
 /// asserts the round trip rather than the declaration.
 #[test]
 fn the_credential_table_carries_the_names_the_engine_dropped() {
-    let declared: batten::provision::CredentialProbe = toml::from_str(
+    let declared: batten::config_model::CredentialProbe = toml::from_str(
         "probe_url = \"https://example.invalid/probe\"\nnames = [\"A_TOKEN\", \"B_TOKEN\"]\n",
     )
     .expect("the `[credential]` table parses");
@@ -1847,7 +1847,7 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     // a probe and no names still loads — the engine reports and authorises no
     // removal — because refusing the config would make a launcher that cannot
     // start over a field it could have reported.
-    let bare: batten::provision::CredentialProbe =
+    let bare: batten::config_model::CredentialProbe =
         toml::from_str("probe_url = \"https://example.invalid/probe\"\n")
             .expect("names is optional");
     assert!(bare.names.is_empty());

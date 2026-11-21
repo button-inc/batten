@@ -84,7 +84,7 @@
 //! meaning — [`Verdict`] enumerates them.
 //!
 //! And a verdict, however it lands, is **advisory**: nothing here constructs a
-//! [`crate::rules::Finding`], so `any_blocking` and `--fail-on-warning` cannot
+//! [`crate::findings::Finding`], so `any_blocking` and `--fail-on-warning` cannot
 //! see a judge outcome. The advisory surface is unable to block by type rather
 //! than by policy.
 
@@ -101,7 +101,7 @@ use crate::error::UsageError;
 use crate::identity;
 use crate::rules::PathSet;
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Judge, PayloadClass};
+use crate::config_model::{Judge, PayloadClass};
 
 /// The `{{model}}` placeholder [`Judge::model`] substitutes for in [`Judge::run`].
 ///
@@ -113,7 +113,7 @@ pub const MODEL_PLACEHOLDER: &str = "{{model}}";
 
 /// The argv a judge row's command resolves to: program first, arguments after.
 ///
-/// Splitting on whitespace is the same reading [`crate::rules::Rule::program`]
+/// Splitting on whitespace is the same reading [`crate::config_model::Rule::program`]
 /// gives a `command` rule's `check`, and for the same reason — one authority for
 /// "which token is the program", so a `doctor` PATH probe and the runner can
 /// never disagree about which binary they are talking about.

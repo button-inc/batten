@@ -41,15 +41,17 @@
 //!   surface that is down is a defect in the surface, not in the redirect, and
 //!   a second sanctioned writer would have hidden it permanently.
 //!
-//! The glob matcher is [`crate::rules::glob_match`] — one glob semantics for the
+//! The glob matcher is [`crate::selector::glob_match`] — one glob semantics for the
 //! whole engine, never a second implementation.
 
+#[cfg(test)]
+use crate::config_check::redirect::invocation;
+#[cfg(test)]
+use crate::config_check::redirect::validate;
+#[cfg(test)]
+use crate::config_check::redirect::validate_remedies;
+use crate::config_model::Redirect;
 use crate::selector::glob_match;
-// The section's declaration lives with the model (CLOUD-2789).
-#[allow(unused_imports)]
-pub(crate) use crate::config_check::redirect::{invocation, is_flag, is_placeholder};
-pub use crate::config_check::redirect::{validate, validate_remedies};
-pub use crate::config_model::Redirect;
 
 /// The table with every `read` dropped whose `read_server` `resolves` says no
 /// source can reach (CLOUD-2229): a refusal must name a route that can be taken.

@@ -1022,7 +1022,7 @@ fn committed(root: &Path, table: Option<&crate::config_model::Mutate>) -> Result
     let mut names: Vec<String> = Vec::new();
     for entry in declared {
         let expanded = if entry.contains('*') {
-            let selector = crate::rules::Selector::new(entry)?;
+            let selector = crate::selector::Selector::new(entry)?;
             let matched: Vec<String> = tracked
                 .iter()
                 .filter(|path| selector.matches(path))
@@ -4584,7 +4584,10 @@ fn is_gate(lines: &[String]) -> bool {
 ///
 /// With a committed `[mutate]` table, a DECLARATION ARM joins them (CLOUD-2010).
 #[must_use]
-pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<String, String> {
+pub fn subjects(
+    root: &Path,
+    table: Option<&crate::config_model::Mutate>,
+) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     if let Ok(entries) = std::fs::read_dir(root.join("mise-tasks")) {
         for entry in entries.filter_map(std::result::Result::ok) {
@@ -4657,7 +4660,7 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
 /// census that declares none is unchanged.
 fn declaring_files(
     root: &Path,
-    table: &crate::config::Mutate,
+    table: &crate::config_model::Mutate,
     found: &mut BTreeMap<String, String>,
 ) {
     let scope = crate::rules::PathSet::scope(&table.scope).ok();
@@ -4712,7 +4715,7 @@ fn exemption_is_filed(row: &str) -> bool {
 pub fn census(
     root: &Path,
     names: &[String],
-    table: Option<&crate::config::Mutate>,
+    table: Option<&crate::config_model::Mutate>,
     registry: &Registry,
 ) -> Census {
     let subjects = subjects(root, table);
@@ -6584,7 +6587,7 @@ mod tests {
             put(&root, path, &declaring);
         }
         crate::gitwrite::commit_paths(&root, &paths.map(String::from), "fixture").expect("commit");
-        let table = |scope: &[&str]| crate::config::Mutate {
+        let table = |scope: &[&str]| crate::config_model::Mutate {
             gates: Vec::new(),
             scope: scope.iter().map(|glob| (*glob).to_owned()).collect(),
             command: Vec::new(),

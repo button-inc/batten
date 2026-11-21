@@ -66,9 +66,11 @@
 use serde::Serialize;
 
 use crate::capture::Stream;
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_check::outputs::{validate, validate_environment, validate_named};
-pub use crate::config_model::{OutputPattern, Watched};
+#[cfg(test)]
+use crate::config_check::outputs::validate;
+#[cfg(test)]
+use crate::config_check::outputs::validate_environment;
+use crate::config_model::{OutputPattern, Watched};
 
 impl Watched {
     /// Every value, so anything ranging over the vocabulary is derived.

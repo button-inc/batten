@@ -30,7 +30,8 @@
 
 use std::path::Path;
 
-use batten::hook::{Envelope, Harness, Policy};
+use batten::config_model::Harness;
+use batten::hook::{Envelope, Policy};
 
 /// A repository whose `batten.toml` registers one module and nothing else — no
 /// receipt row, no keyed shape row, no waiver.

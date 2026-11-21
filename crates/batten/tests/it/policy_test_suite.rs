@@ -35,9 +35,9 @@
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Suite};
-use batten::rules::Rule;
 
 use crate::common;
 
@@ -59,7 +59,7 @@ use common::{Fixture, run, stdout};
 /// alternative is naming a `Vec` at every load site. A test binary is a
 /// short-lived process and the table is tens of entries.
 fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
-    let table: &'static [batten::verdict::DeclaredVerdict] =
+    let table: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     batten::policy::Vocabulary {
         patterns: &[],

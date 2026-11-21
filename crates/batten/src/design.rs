@@ -80,7 +80,6 @@ use crate::severity::RuleSeverity;
 pub const STREAM: &str = "-";
 
 // The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::Design;
 
 /// The engine's per-capture ceiling when a config names none.
 ///

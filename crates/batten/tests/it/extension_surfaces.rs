@@ -390,7 +390,7 @@ fn the_extension_guide_gives_every_rule_kind_a_row_in_the_table() {
         .lines()
         .filter(|line| line.starts_with('|'))
         .collect();
-    let missing: Vec<&str> = batten::rules::RuleKind::ALL
+    let missing: Vec<&str> = batten::config_model::RuleKind::ALL
         .iter()
         .map(|kind| kind.as_str())
         .filter(|token| !rows.iter().any(|row| row.contains(&format!("`{token}`"))))
@@ -415,12 +415,12 @@ fn the_extension_headings_count_matches_the_enum() {
         "twelve",
     ];
     let expected = spelled
-        .get(batten::rules::RuleKind::ALL.len() - 1)
+        .get(batten::config_model::RuleKind::ALL.len() - 1)
         .expect("the spelled-out numbers cover the enum");
     assert!(
         heading.contains(expected),
         "the heading says `{heading}` over {} rule kinds — it should say `{expected}`",
-        batten::rules::RuleKind::ALL.len()
+        batten::config_model::RuleKind::ALL.len()
     );
 }
 
@@ -434,7 +434,7 @@ fn the_starter_config_names_every_shipped_preset() {
     for file in ["crates/batten/src/starter.toml", "batten.example.toml"] {
         let text =
             fs::read_to_string(at_root(file)).unwrap_or_else(|_| panic!("{file} is readable"));
-        let missing: Vec<&str> = batten::preset::MANIFESTS
+        let missing: Vec<&str> = batten::preset_catalog::MANIFESTS
             .iter()
             .map(|manifest| manifest.name)
             .filter(|name| !text.contains(name))

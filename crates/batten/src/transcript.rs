@@ -85,9 +85,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::config_check::transcript::validate;
+#[cfg(test)]
+use crate::config_check::transcript::validate;
 use crate::config_model::Harness;
-pub use crate::config_model::TranscriptConfig;
+use crate::config_model::TranscriptConfig;
 use crate::error::UsageError;
 use crate::hook::{RecordShape, TranscriptShape};
 

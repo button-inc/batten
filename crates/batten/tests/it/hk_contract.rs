@@ -297,8 +297,8 @@ fn the_generator_is_a_write_and_the_gate_is_a_read() {
 /// artifact rather than quoting either plan (non-negotiable rule 4).
 #[test]
 fn the_refusal_is_a_declared_class_with_a_route() {
-    let registry = batten::verdict::vendored();
-    let token = batten::verdict::Native::PlanReadStale.id();
+    let registry = batten::config_check::verdict::vendored();
+    let token = batten::error::Native::PlanReadStale.id();
     let row = registry
         .iter()
         .find(|declared| declared.id == token)
@@ -373,7 +373,7 @@ fn a_drifted_contract_exits_two_and_names_the_class() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(batten::verdict::Native::PlanReadStale.id()),
+        stderr.contains(batten::error::Native::PlanReadStale.id()),
         "the refusal names its declared class: {stderr}"
     );
     assert!(

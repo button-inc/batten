@@ -45,9 +45,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::config_model::Prune;
+#[cfg(test)]
+use crate::config_model::default_root;
 use crate::error::UsageError;
-// The section's declaration lives with the model (CLOUD-2789).
-pub use crate::config_model::{Prune, default_root};
 
 /// The band a `[prune]` table declaring none collects at, `(min_free_mb,
 /// max_free_mb)`: measured on #1132 (2026-10-12), each targeted build consumed
@@ -882,7 +883,7 @@ mod tests {
     /// A directory holding exactly `config` as its committed authority.
     fn authority(name: &str, config: &str) -> PathBuf {
         let root = build_root(name);
-        if let Err(why) = std::fs::write(root.join(crate::config::CONFIG_FILE), config) {
+        if let Err(why) = std::fs::write(root.join(crate::config_model::CONFIG_FILE), config) {
             panic!("fixture: could not write the config: {why}");
         }
         root

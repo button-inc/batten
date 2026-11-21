@@ -3,7 +3,7 @@
 //! A ratchet compares a count at a base rev against a count in the working
 //! tree. The base half reads `git ls-tree -r`, which reports a submodule as one
 //! gitlink and does not recurse; the working half reads
-//! [`batten::rules::tree_files`], which used to walk a submodule like any other
+//! [`batten::git::tree_files`], which used to walk a submodule like any other
 //! directory. A `non_decreasing` row spanning one therefore sat permanently
 //! above its base — measured on this repository as base 637 against working
 //! 1404, a fixed `+767` — so no deletion could pull it back under and **the
@@ -29,7 +29,7 @@ use crate::common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use batten::rules::tree_files;
+use batten::git::tree_files;
 use common::{Fixture, git_in, run, stdout};
 
 /// Where the submodule is mounted in every fixture below — the same path

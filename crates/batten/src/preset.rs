@@ -50,8 +50,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub use crate::config_check::preset::verdict_rows;
-use crate::config_model::{Rule, RuleKind, RuleScope};
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
+use crate::preset_catalog::RuleScope;
 pub use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
 
 impl PresetModule {
@@ -546,7 +547,8 @@ mod tests {
         MANIFESTS, Manifest, PresetModule, eject, ejected_from, ejected_source, find,
         helpers_defined, mode_sources, names, uses, verdict_rows,
     };
-    use crate::rules::{Rule, RuleScope};
+    use crate::config_model::Rule;
+    use crate::preset_catalog::RuleScope;
 
     use std::collections::BTreeSet;
 
@@ -806,7 +808,7 @@ mod tests {
             .flat_map(|manifest| manifest.verdicts.iter())
             .filter(|entry| {
                 entry.routes.iter().any(|route| {
-                    route.kind == crate::verdict::RouteKind::Command
+                    route.kind == crate::preset_catalog::RouteKind::Command
                         && route.target.starts_with("run ")
                 })
             })

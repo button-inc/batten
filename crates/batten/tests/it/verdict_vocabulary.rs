@@ -337,7 +337,7 @@ fn the_space_form_is_the_cheapest_spelling_of_a_name() {
 
 /// Every live class this repository loads: the vendored registry merged with
 /// the committed `[[verdict]]` rows.
-fn live_classes() -> Vec<batten::verdict::DeclaredVerdict> {
+fn live_classes() -> Vec<batten::config_model::DeclaredVerdict> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config = batten::config::load(&root.join("batten.toml"))
         .expect("this repository's committed config loads");
@@ -369,7 +369,7 @@ fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
         .collect();
     over.sort();
     assert!(over.is_empty(), "first sightings over 160 tokens: {over:?}");
-    let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
+    let vendored: std::collections::BTreeSet<String> = batten::config_check::verdict::vendored()
         .into_iter()
         .map(|class| class.id)
         .collect();

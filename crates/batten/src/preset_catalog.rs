@@ -35,7 +35,7 @@ pub enum RouteKind {
 /// **Every refusal in this tree is advice**: a class, its pointers, and routes
 /// the agent must walk itself. Two outcomes the field treats as first-class are
 /// unrepresentable — *repaired, re-run* and *repaired, proceed* — and
-/// [`crate::rules::Rule::fix`] has existed for them since CLOUD-81, executed by
+/// [`crate::config_model::Rule::fix`] has existed for them since CLOUD-81, executed by
 /// nothing.
 ///
 /// # THE DEFAULT IS `advice`, AND THAT IS WHAT MAKES THIS ADDITIVE
