@@ -12,12 +12,13 @@
 //! [`tests::every_leaf_verb_dispatches`] fails if a row ever ships without its
 //! arm, so a declared command can never parse into `None` and silently succeed.
 
-use clap::{ArgMatches, ValueEnum};
+use clap::ArgMatches;
 
 use crate::config_model::Strictness;
 use crate::hook::{Field as HookFieldName, Harness};
 use crate::rules::ReceiptKey;
 use crate::surface;
+pub use crate::surface_table::{SchemaSurface, SpecFormat};
 
 /// The parsed invocation: the global flags plus the chosen command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2577,50 +2578,6 @@ pub enum GenerateCommand {
         /// The harness whose wiring to emit.
         harness: crate::hook::Harness,
     },
-}
-
-/// The formats `batten spec` can emit.
-///
-/// One, deliberately. House-style §2 and §11 advertised `kdl|json`; KDL was
-/// never implemented and never had a consumer, and JSON is the agent-facing
-/// contract (§6). The document is corrected rather than the binary, and
-/// `spec::tests::the_spec_emits_exactly_the_committed_formats` pins the list so
-/// a second format is added to both at once (CLOUD-244).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[non_exhaustive]
-pub enum SpecFormat {
-    /// Byte-stable JSON — the agent-facing contract (§6).
-    Json,
-}
-
-/// The surfaces a schema can describe (CLOUD-239, CLOUD-879).
-///
-/// Two config surfaces, two derivations. `batten.toml` is the committed
-/// authority; `batten.local.toml` is the raise-only override, which accepts a
-/// strict subset and refuses the rest. One schema describing both is what let a
-/// validator green-light keys the loader drops.
-///
-/// **And two POLICY-INPUT surfaces, which is why this is no longer
-/// `ConfigSurface`.** CLOUD-879 derives the documents a Rego module reads as
-/// `input` — one per scope — from the fact model, and neither is a config
-/// surface: naming them under the old type would have made the type's name a lie
-/// about half its variants. Renaming is the smaller lie to fix, and the two
-/// existing flag values are untouched.
-///
-/// A flag on the existing emitter rather than a second sub-verb: CLOUD-244
-/// records that §2 and the landed surface already disagree about where schema
-/// emission lives, and adding a verb would deepen that before it is settled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[non_exhaustive]
-pub enum SchemaSurface {
-    /// The committed authority: `batten.toml`.
-    Authority,
-    /// The raise-only override layer: `batten.local.toml`.
-    Override,
-    /// The `input` document a `scope = "tree"` Rego module reads.
-    PolicyInput,
-    /// The `input` document a `scope = "mediated_call"` Rego module reads.
-    PolicyCall,
 }
 
 /// Parse the process arguments into a [`Cli`].
