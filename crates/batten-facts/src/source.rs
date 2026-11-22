@@ -78,6 +78,44 @@ pub fn rust(source: &str) -> Result<syn::File, Refused> {
     syn::parse_file(source).map_err(|_| Refused)
 }
 
+/// Parse Rust source text into the LOSSLESS syntax tree — **the one
+/// `ra_ap_syntax` parse call in the workspace** (CLOUD-1008).
+///
+/// Lossless is the reason it exists beside [`rust`]: every byte of the input,
+/// comments and whitespace included, is a token of this tree, so a comment span
+/// and a string span are both answerable — the half `syn` measurably cannot
+/// give (this module's header). `ra_ap_syntax` has been pinned since CLOUD-1580,
+/// so this answers CLOUD-1008's open question with no new parser dependency,
+/// which is the condition CLOUD-1009's D4 set.
+///
+/// The parse itself, errors and all: a codemod reports how many errors the
+/// parser found and declines to rewrite. A fact producer wants [`rust_tree`],
+/// which maps a refused parse to could-not-look.
+#[must_use]
+pub fn rust_parse(
+    source: &str,
+    edition: ra_ap_syntax::Edition,
+) -> ra_ap_syntax::Parse<ra_ap_syntax::SourceFile> {
+    ra_ap_syntax::SourceFile::parse(source, edition)
+}
+
+/// [`rust_parse`] in the shape a fact producer wants: the tree, or
+/// could-not-look when the parser reported any error. **Never a partial tree**:
+/// a tree with error nodes in it answers for less of its file than it looks
+/// like it does, which is the vacuous pass this module refuses.
+#[must_use]
+pub fn rust_tree(
+    source: &str,
+    edition: ra_ap_syntax::Edition,
+) -> crate::facts::Look<ra_ap_syntax::SourceFile> {
+    let parse = rust_parse(source, edition);
+    if parse.errors().is_empty() {
+        crate::facts::Look::Is(parse.tree())
+    } else {
+        crate::facts::Look::CouldNotLook
+    }
+}
+
 /// [`rust`] in the shape the fact producers want: a parsed file, or the
 /// could-not-look arm.
 ///
@@ -98,6 +136,7 @@ pub fn rust_or_could_not_look(source: &str) -> crate::facts::Look<syn::File> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn a_parse_failure_is_could_not_look_and_an_empty_file_is_not() {
@@ -142,14 +181,30 @@ mod tests {
         // ran -- a mention carrying the open paren is indistinguishable from a
         // call, and the honest fix is prose that does not imitate one rather
         // than a needle loosened until it stops seeing this file.
-        let needle = ["syn::parse", "_file("].concat();
-        let mut sites: Vec<String> = Vec::new();
+        //
+        // EVERY CRATE'S LIBRARY SOURCE, AND BOTH PARSERS (CLOUD-1008). This gate
+        // walked only its own crate's `src`, so once the crate split moved the
+        // parse here it saw none of the five crates that read Rust; and it
+        // counted only `syn`, while `ra_ap_syntax` was parsed at 25 sites across
+        // six modules, each with its own edition and error mapping. Integration
+        // tests under `tests/` are not library code and keep their own parses.
+        let needles = [
+            ["syn::parse", "_file("].concat(),
+            ["SourceFile::", "parse("].concat(),
+        ];
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits in the workspace's crates directory");
+        let mut sites: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         // WALKS THE SUBTREE rather than one directory, for the reason the
         // document gate's own walker states: `read_dir` does not descend, so a
-        // `.rs` file under a future `src/<module>/` would go unscanned and the
-        // gate would stop holding SILENTLY. The crate is flat today, which is
-        // exactly when this is cheap to get right.
-        let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        // `.rs` file under a `src/<module>/` would go unscanned and the gate
+        // would stop holding SILENTLY.
+        let mut pending: Vec<std::path::PathBuf> = std::fs::read_dir(crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path().join("src"))
+            .filter(|src| src.is_dir())
+            .collect();
         while let Some(dir) = pending.pop() {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -161,20 +216,53 @@ mod tests {
                     continue;
                 }
                 let source = crate::fsio::read_to_string(&path).unwrap();
-                for _ in 0..source.matches(needle.as_str()).count() {
-                    sites.push(path.display().to_string());
+                for needle in &needles {
+                    for _ in 0..source.matches(needle.as_str()).count() {
+                        sites
+                            .entry(needle.as_str())
+                            .or_default()
+                            .push(path.display().to_string());
+                    }
                 }
             }
         }
 
         // ANTI-VACUITY, in the same function (CLOUD-418): a needle that stopped
         // matching would report "one" as "zero" and pass forever, so zero fails
-        // here exactly as two does.
-        assert_eq!(
-            sites.len(),
-            1,
-            "exactly one Rust parse may exist in the crate; found {sites:?}"
-        );
+        // here exactly as two does, per parser.
+        for needle in &needles {
+            let found = sites.get(needle.as_str()).cloned().unwrap_or_default();
+            assert_eq!(
+                found.len(),
+                1,
+                "exactly one {needle}...) may exist across the workspace's library source; found {found:?}"
+            );
+        }
+    }
+
+    /// Fails by: a refused parse handed back as a partial tree, or an empty
+    /// file read as could-not-look.
+    #[test]
+    fn the_lossless_parse_is_could_not_look_on_any_error_and_keeps_comments() {
+        let edition = ra_ap_syntax::Edition::Edition2024;
+        assert!(matches!(rust_tree("", edition), crate::facts::Look::Is(_)));
+        assert!(matches!(
+            rust_tree("fn (", edition),
+            crate::facts::Look::CouldNotLook
+        ));
+        // LOSSLESS: the ordinary comment `syn` drops is a token here, which is
+        // the comment span CLOUD-1008 asks for.
+        let crate::facts::Look::Is(tree) = rust_tree("// ordinary\nfn f() {}\n", edition) else {
+            panic!("the fixture parses");
+        };
+        use ra_ap_syntax::AstNode as _;
+        let comments = tree
+            .syntax()
+            .descendants_with_tokens()
+            .filter(|element| element.kind() == ra_ap_syntax::SyntaxKind::COMMENT)
+            .count();
+        assert_eq!(comments, 1);
+        assert_eq!(tree.syntax().to_string(), "// ordinary\nfn f() {}\n");
     }
 
     #[test]

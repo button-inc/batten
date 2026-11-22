@@ -22,6 +22,10 @@ anyhow.workspace = true
 hmac.workspace = true
 json5.workspace = true
 proc-macro2.workspace = true
+# `source::rust_parse`, the one lossless Rust parse in the workspace (CLOUD-1008):
+# every crate that reads Rust source parses through this crate, so the parser
+# lives where the parse does.
+ra_ap_syntax.workspace = true
 batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
 blake3.workspace = true
 regex.workspace = true
