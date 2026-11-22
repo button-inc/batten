@@ -324,7 +324,6 @@ mod ratchet_at_call;
 // there — `rules/rust.md`'s stated exception to the `cfg!`-inside-a-case rule,
 // and the shape `ntia` above already uses.
 #[cfg(unix)]
-mod modules_cycle;
 mod modules_ratchet;
 #[cfg(unix)]
 mod own_image_spawn;

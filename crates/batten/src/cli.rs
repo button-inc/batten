@@ -535,31 +535,6 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ModulesCommand {
-    /// Print the largest strongly connected component of the module graph
-    /// under `root`, refusing a count above `max`.
-    Cycle {
-        /// The source root, the directory holding `lib.rs`.
-        root: String,
-        /// The most modules the component may hold, as written; `None` never
-        /// refuses. The verb parses it, so a bad value is its usage error.
-        max: Option<String>,
-    },
-    /// Print how many inherent impls sit away from their type's module
-    /// (CLOUD-2792), refusing a count above `max`.
-    Impls {
-        /// The source root, the directory holding `lib.rs`.
-        root: String,
-        /// The most outside-plus-ambiguous impls allowed, as written.
-        max: Option<String>,
-    },
-    /// Print how many re-exports of the crate's own items sit outside its
-    /// root (CLOUD-2792), refusing a count above `max`.
-    Shims {
-        /// The source root, the directory holding `lib.rs`.
-        root: String,
-        /// The most re-export leaves allowed, as written.
-        max: Option<String>,
-    },
     /// Print every module-graph metric of `root` as one record line
     /// (CLOUD-2821).
     Metrics {
@@ -4128,18 +4103,6 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
 /// The `modules` sub-verb a parse resolved to (CLOUD-2789).
 fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
     match matches.subcommand()? {
-        ("cycle", matches) => Some(ModulesCommand::Cycle {
-            root: matches.get_one::<String>("root").cloned()?,
-            max: matches.get_one::<String>("max").cloned(),
-        }),
-        ("impls", matches) => Some(ModulesCommand::Impls {
-            root: matches.get_one::<String>("root").cloned()?,
-            max: matches.get_one::<String>("max").cloned(),
-        }),
-        ("shims", matches) => Some(ModulesCommand::Shims {
-            root: matches.get_one::<String>("root").cloned()?,
-            max: matches.get_one::<String>("max").cloned(),
-        }),
         ("metrics", matches) => Some(ModulesCommand::Metrics {
             root: matches.get_one::<String>("root").cloned()?,
         }),
