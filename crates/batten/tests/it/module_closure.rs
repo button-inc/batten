@@ -271,6 +271,20 @@ fn collect_under(dir: &Path, module: &str, found: &mut Vec<(String, PathBuf)>) {
     }
 }
 
+/// Whether a workspace crate other than `batten` carries `module`, as a file
+/// or a directory module under its `src`.
+fn in_another_crate(module: &str) -> bool {
+    fs::read_dir(at_root("crates"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|krate| krate.file_name().is_some_and(|name| name != "batten"))
+        .any(|krate| {
+            let src = krate.join("src");
+            src.join(format!("{module}.rs")).is_file() || src.join(module).is_dir()
+        })
+}
+
 /// Transitive closure of one module, including itself.
 fn closure(graph: &BTreeMap<String, BTreeSet<String>>, start: &str) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
@@ -298,14 +312,39 @@ fn distribution(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<(usize, Strin
 
 #[test]
 fn no_module_leaves_the_plumbing() {
-    let plumbing: BTreeSet<String> = distribution(&module_graph())
+    let graph = module_graph();
+    let plumbing: BTreeSet<String> = distribution(&graph)
         .into_iter()
         .filter(|(size, _)| *size <= PLUMBING_CEILING)
         .map(|(_, module)| module)
         .collect();
 
     let recorded: BTreeSet<String> = PLUMBING.iter().map(|name| (*name).to_owned()).collect();
-    let left: Vec<&String> = recorded.difference(&plumbing).collect();
+
+    // A recorded module this crate no longer HAS left by leaving the crate:
+    // the split (CLOUD-2789) moved it into a package below, where Cargo's
+    // acyclic package graph holds it more strongly than a closure ceiling can.
+    // That is only true of a module some other workspace crate really carries;
+    // one found nowhere was deleted, and is reported like any other departure.
+    let (moved, vanished): (Vec<&String>, Vec<&String>) = recorded
+        .iter()
+        .filter(|module| !graph.contains_key(module.as_str()))
+        .partition(|module| in_another_crate(module));
+    assert!(
+        vanished.is_empty(),
+        "these plumbing modules are in no workspace crate: {vanished:?}. A deleted \
+         module leaves PLUMBING by an edit, never silently.",
+    );
+    if !moved.is_empty() {
+        report(&format!(
+            "plumbing that left for a lower package: {moved:?}"
+        ));
+    }
+
+    let left: Vec<&String> = recorded
+        .iter()
+        .filter(|module| graph.contains_key(module.as_str()) && !plumbing.contains(*module))
+        .collect();
 
     assert!(
         left.is_empty(),
@@ -368,17 +407,37 @@ fn the_gap_holds_only_the_recorded_middle() {
     // Two failures are still news. A module of [`MIDDLE`] climbing back to the
     // core undoes a break. A module arriving in the gap from the core is
     // progress, reported and recorded deliberately, never asserted on.
-    let sizes = distribution(&module_graph());
+    let graph = module_graph();
+    let sizes = distribution(&graph);
     let middle: BTreeSet<&str> = MIDDLE.iter().copied().collect();
 
-    let climbed: Vec<&(usize, String)> = sizes
+    // Each climbed module with the direct edges that put it there: the ones
+    // landing on a module that is itself core-sized. A failure that names the
+    // edge to cut is a failure a reader can act on without a second tool.
+    let core: BTreeSet<&str> = sizes
+        .iter()
+        .filter(|(size, _)| *size >= CORE_FLOOR)
+        .map(|(_, module)| module.as_str())
+        .collect();
+    let climbed: Vec<(usize, &str, Vec<&str>)> = sizes
         .iter()
         .filter(|(size, module)| *size >= CORE_FLOOR && middle.contains(module.as_str()))
+        .map(|(size, module)| {
+            let into_core = graph
+                .get(module)
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .filter(|to| core.contains(to))
+                .collect();
+            (*size, module.as_str(), into_core)
+        })
         .collect();
     assert!(
         climbed.is_empty(),
-        "these modules were below the core and reach it again: {climbed:?}. Each \
-         grew an edge back into the largest cycle; re-read the split plan.",
+        "these modules were below the core and reach it again, each with its edges \
+         into the core: {climbed:?}. Each grew an edge back into the largest cycle; \
+         re-read the split plan.",
     );
 
     let arrived: Vec<&(usize, String)> = sizes

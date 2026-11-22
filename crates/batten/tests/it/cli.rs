@@ -7249,7 +7249,7 @@ fn the_committed_repo_config_gates_a_repository() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "batten deny source carry broken at crates/**\n",
+        "batten deny source carry broken at **\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7302,11 +7302,17 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let dir = repo_with_config("config-committed-glob-miss", &contents);
     let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
+    // The row's glob is `**` since c430dcd1 (a conflict marker is refused in
+    // every file, at the commit), so no tracked path lies outside it. What the
+    // glob still cannot select is a path the tree's inputs exclude: an IGNORED
+    // file. That is the miss this case needs — a marker hk would fail on, in a
+    // file the delegate would read happily, that no selection may hand it.
     let marker = format!("{} HEAD\n", "<".repeat(7));
+    fs::write(dir.join(".gitignore"), "notes.txt\n").expect("write the ignore file");
     fs::write(dir.join("notes.txt"), marker).expect("write out-of-glob source");
 
     // `enforce --rule`, not a bare `enforce`. The property is about ONE row —
-    // `source carry broken`, `kind = "command"`, `glob = "crates/**"` — and the
+    // `source carry broken`, `kind = "command"`, `glob = "**"` — and the
     // narrowing is what makes the assertion say so. Unnarrowed, exit 0 and an
     // empty stdout also claimed that none of the other 103 rows fires on this
     // fixture, which is incidental to the property and cost 206s of a 1482s

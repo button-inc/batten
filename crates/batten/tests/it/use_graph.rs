@@ -25,6 +25,31 @@ fn root_table() -> RootExports {
     }
 }
 
+/// Every root name the crate root re-exports from a WORKSPACE crate: the leaf
+/// of each `pub use batten_<x>::<name>;`, read off the root's own `use` edges.
+fn workspace_shims() -> std::collections::BTreeSet<String> {
+    let members: std::collections::BTreeSet<String> = std::fs::read_dir("..")
+        .expect("the workspace's crates directory")
+        .flatten()
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .map(|name| name.replace('-', "_"))
+        })
+        .collect();
+    let source = std::fs::read_to_string("src/lib.rs").expect("the crate root is readable");
+    let Look::Is(edges) = use_edges(&source) else {
+        panic!("the crate root must parse");
+    };
+    edges
+        .into_iter()
+        .filter(|edge| edge.origin == Origin::External && members.contains(&edge.to))
+        .map(|edge| edge.item)
+        .collect()
+}
+
 /// Every module's resolved edges, keyed by file name.
 fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
     let root = root_table();
@@ -65,7 +90,9 @@ fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
 /// suite. A count over a class every new module joins is a maintenance tax that
 /// looks like a measurement. The bound that survives is the one the class is:
 /// every phantom edge is a root name the root itself imported from ANOTHER crate,
-/// and `Result` is the only such name in this tree.
+/// and those names are `Result` plus the split's shims: each module cut into a
+/// lower package keeps its old root name (CLOUD-2789), read off the root's own
+/// `use` edges by `workspace_shims` rather than listed.
 ///
 /// **The discriminator is `via_root`, not the item's case, and that correction
 /// came from the tree.** The first version of this case asked whether a resolved
@@ -110,9 +137,18 @@ fn the_syntactic_tier_diverges_in_two_classes() {
          of these sites, and an empty set means the root table stopped resolving them rather than \
          that the tree stopped having them"
     );
+    // The split's shims (CLOUD-2789): each module cut into a lower package is
+    // re-exported at the root under its old name (`pub use batten_core::git;`),
+    // so `use crate::git` reaches another crate — a phantom edge BY DESIGN, read
+    // off the root's own `use` edges rather than listed here. What stays a new
+    // class is a root name re-exported from a crate OUTSIDE the workspace.
+    let shims = workspace_shims();
     let foreign: Vec<&String> = phantom_internal
         .iter()
-        .filter(|site| !site.ends_with(" Result"))
+        .filter(|site| {
+            let name = site.rsplit(' ').next().unwrap_or_default();
+            name != "Result" && !shims.contains(name)
+        })
         .collect();
     assert!(
         foreign.is_empty(),

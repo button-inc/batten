@@ -92,22 +92,35 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
     // network caller land while still reporting the sentence above. A gate that
     // cannot see the call it is about is the dead-gate class one layer out of
     // Rego.
-    let root = at_root("crates/batten/src");
+    // EVERY CRATE'S ENGINE SOURCES (CLOUD-2789): `lease.rs` and `rest.rs` moved
+    // into `batten-core` and `batten-base`, and a walk of `crates/batten/src`
+    // alone stopped seeing two of the declared callers, which is a gate that
+    // cannot see the calls it is about.
+    //
+    // A CALL NODE on the one lossless parse, not a substring: a doc comment
+    // naming `fetch::get(` is a token, and so is a string holding it.
+    use ra_ap_syntax::{AstNode as _, ast};
     let mut callers: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&root)
-        .expect("the crate's sources are here")
-        .flatten()
-    {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let Ok(source) = fs::read_to_string(&path) else {
-            continue;
+    for path in common::engine_sources() {
+        let source = fs::read_to_string(&path).expect("a tracked engine source");
+        let batten_facts::facts::Look::Is(file) =
+            batten_facts::source::rust_tree(&source, ra_ap_syntax::Edition::Edition2024)
+        else {
+            panic!(
+                "{} did not parse: an unread file is could-not-look, never no caller",
+                path.display()
+            );
         };
-        // The call, not the word: `lib.rs` declares the module and `mem:core`'s
-        // map names it, and neither is a caller.
-        if source.contains("fetch::get(") || source.contains("fetch::spend(") {
+        let calls_adapter = file
+            .syntax()
+            .descendants()
+            .filter_map(ast::CallExpr::cast)
+            .filter_map(|call| call.expr())
+            .any(|callee| {
+                let text = callee.syntax().text().to_string();
+                text.ends_with("fetch::get") || text.ends_with("fetch::spend")
+            });
+        if calls_adapter {
             callers.push(
                 path.file_name()
                     .and_then(|name| name.to_str())
