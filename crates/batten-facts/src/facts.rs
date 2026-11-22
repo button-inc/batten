@@ -2180,7 +2180,7 @@ impl Fact {
             }),
             Fact::Base => serde_json::json!({
                 "type": "object",
-                "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+                "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base; `uses` is Path -> that file's `use` edges exactly as Fact::Uses, resolved against the BASE root's re-export table. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
                 "properties": {
                     "units": {
                         "type": "object",
@@ -2189,6 +2189,10 @@ impl Fact {
                             "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
                             "required": ["nodes"],
                         },
+                    },
+                    "uses": {
+                        "type": "object",
+                        "additionalProperties": {"type": "array", "items": {"type": "object"}},
                     },
                 },
             }),

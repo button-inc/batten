@@ -3451,6 +3451,9 @@ pub(crate) enum Wanted {
     /// A declared unit path read at the row's `base` rev (plan item 4). Keyed
     /// `<rev>:<path>`, git's own spelling, since two rows may name two bases.
     BaseUnits,
+    /// A declared `use` path read at the row's `base` rev, reduced to its edges
+    /// and resolved against the BASE root's table (plan step 3, 4b's input).
+    BaseUses,
     /// Parsed as Rust, reduced to `use` edges.
     Uses,
 }
@@ -3787,7 +3790,7 @@ pub(crate) fn want_for(path: &str, wanted: Wanted) -> Option<Want> {
         Wanted::Uses => Some(Want::Uses),
         Wanted::Units => Some(Want::Units),
         // Read from git objects by `acquire_declared`, never from the file.
-        Wanted::BaseUnits => None,
+        Wanted::BaseUnits | Wanted::BaseUses => None,
         Wanted::Document => crate::facts::Format::for_path(path).map(Want::Parsed),
     }
 }
@@ -4147,6 +4150,30 @@ pub(crate) fn acquire_declared(
                 };
                 cache.insert(key, acquired);
             }
+            // The `use` family at the base, by the same read: the ratchet over
+            // module edges (plan step 3) compares head and base graphs, and both
+            // must be resolved by one function, so the base keeps the head's
+            // shape (`Acquired::Uses`) and `project_uses` reads either.
+            for path in declared_uses(rule, files).unwrap_or_default() {
+                let key = (format!("{base}:{path}"), Wanted::BaseUses);
+                if cache.contains_key(&key) {
+                    continue;
+                }
+                refuse_over_budget(cache.len(), READ_BUDGET)?;
+                let acquired = match crate::git::read_at(root, base, &path) {
+                    Ok(crate::git::BaseBlob::Found { text, .. }) => {
+                        match crate::uses::use_facts(&text) {
+                            crate::facts::Look::Is(facts) => Acquired::Uses(facts),
+                            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                                Acquired::No(NotAcquired::Unparsed)
+                            }
+                        }
+                    }
+                    Ok(_) => Acquired::No(NotAcquired::Absent),
+                    Err(_) => Acquired::No(NotAcquired::Unreadable),
+                };
+                cache.insert(key, acquired);
+            }
         }
     }
     Ok(cache)
@@ -4495,6 +4522,7 @@ pub(crate) struct Resolved<'a> {
 fn project_uses(
     cache: &BTreeMap<(String, Wanted), Acquired>,
     uses: &[String],
+    key: &dyn Fn(&str) -> (String, Wanted),
     out: &mut serde_json::Map<String, serde_json::Value>,
     missing: &mut Vec<String>,
     causes: &mut Vec<(String, NotAcquired)>,
@@ -4523,14 +4551,14 @@ fn project_uses(
         std::path::Path::new(path.as_str()).file_name() == Some(std::ffi::OsStr::new("lib.rs"))
     });
     let root_table = match (roots.next(), roots.next()) {
-        (Some(path), None) => match cache.get(&(path.clone(), Wanted::Uses)) {
+        (Some(path), None) => match cache.get(&key(path)) {
             Some(Acquired::Uses(facts)) => facts.exports.clone(),
             _ => crate::uses::RootExports::default(),
         },
         _ => crate::uses::RootExports::default(),
     };
     for path in uses {
-        match cache.get(&(path.clone(), Wanted::Uses)) {
+        match cache.get(&key(path)) {
             Some(Acquired::Uses(facts)) => {
                 let mut edges = facts.edges.clone();
                 crate::uses::resolve(&mut edges, &root_table);
@@ -4650,6 +4678,10 @@ pub(crate) struct Projected {
     /// refused, is absent, and is NOT a missing path of the row: a file new on
     /// this branch is the ordinary case.
     pub base_units: serde_json::Map<String, serde_json::Value>,
+    /// The base side of the `use` family: path -> its edges at the row's
+    /// `base` rev, resolved against the base root's table. Absent like
+    /// [`Self::base_units`] for a path the base does not hold.
+    pub base_uses: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Uses`] — path -> its resolved `use` edges.
     pub use_edges: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::External`] — declared id -> parsed node.
@@ -4695,6 +4727,7 @@ fn project_paths(
         call_sites: serde_json::Map::new(),
         units: serde_json::Map::new(),
         base_units: serde_json::Map::new(),
+        base_uses: serde_json::Map::new(),
         use_edges: serde_json::Map::new(),
         external_files: serde_json::Map::new(),
         staged_nodes: serde_json::Map::new(),
@@ -4761,10 +4794,26 @@ fn project_paths(
     project_uses(
         cache,
         declared.uses,
+        &|path| (path.to_owned(), Wanted::Uses),
         &mut out.use_edges,
         &mut out.missing,
         &mut out.causes,
     );
+    // The base side, by the SAME function over the base's own blobs, so head
+    // and base edges are resolved identically (each against its own root
+    // table). A path the base lacks is a new file, not a missing input of the
+    // row, so its could-not-look is dropped rather than reported.
+    if let Some(base) = declared.base {
+        let (mut absent, mut why) = (Vec::new(), Vec::new());
+        project_uses(
+            cache,
+            declared.uses,
+            &|path| (format!("{base}:{path}"), Wanted::BaseUses),
+            &mut out.base_uses,
+            &mut absent,
+            &mut why,
+        );
+    }
     // The out-of-root family, keyed by a declared ID rather than by a path — see
     // `project_external` (CLOUD-1167).
     project_external(
@@ -5333,7 +5382,10 @@ pub(crate) fn tree_document(
             crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
             crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
             crate::facts::Fact::Base => {
-                serde_json::json!({"units": std::mem::take(&mut projected.base_units)})
+                serde_json::json!({
+                    "units": std::mem::take(&mut projected.base_units),
+                    "uses": std::mem::take(&mut projected.base_uses),
+                })
             }
             // CLOUD-1167. Keyed by the row's declared id, so an id this row did
             // not name is simply not here — the negative half that makes this a
@@ -11214,7 +11266,14 @@ mod tests {
         ];
         let mut out = serde_json::Map::new();
         let (mut missing, mut causes) = (Vec::new(), Vec::new());
-        project_uses(&cache, &both, &mut out, &mut missing, &mut causes);
+        project_uses(
+            &cache,
+            &both,
+            &|path| (path.to_owned(), Wanted::Uses),
+            &mut out,
+            &mut missing,
+            &mut causes,
+        );
         let edges = out
             .get("a/consumer.rs")
             .and_then(|value| value.as_array())
@@ -11232,7 +11291,14 @@ mod tests {
         let one = ["a/lib.rs".to_owned(), "a/consumer.rs".to_owned()];
         let mut out = serde_json::Map::new();
         let (mut missing, mut causes) = (Vec::new(), Vec::new());
-        project_uses(&cache, &one, &mut out, &mut missing, &mut causes);
+        project_uses(
+            &cache,
+            &one,
+            &|path| (path.to_owned(), Wanted::Uses),
+            &mut out,
+            &mut missing,
+            &mut causes,
+        );
         let edges = out
             .get("a/consumer.rs")
             .and_then(|value| value.as_array())
