@@ -228,8 +228,7 @@ fn shape(tree: &ast::UseTree) -> Option<Shape> {
         End::Rename(
             rename
                 .name()
-                .map(|name| name.text().to_string())
-                .unwrap_or_else(|| "_".to_owned()),
+                .map_or_else(|| "_".to_owned(), |name| name.text().to_string()),
         )
     } else {
         if segments.is_empty() {
