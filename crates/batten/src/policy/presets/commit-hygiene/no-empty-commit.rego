@@ -36,6 +36,7 @@ violation contains {
 	# No `split` belongs here: a second tokenizer is a second authority.
 	some program in input.call.programs
 	program.name == "git"
+
 	# THE SUBCOMMAND, not membership (CLOUD-2813), `linear-history`'s rule: the
 	# engine projects it past git's own options (CLOUD-2354). `"commit" in
 	# arguments` read a `commit` word anywhere in git's argv as the subcommand.

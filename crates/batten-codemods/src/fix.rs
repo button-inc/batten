@@ -175,12 +175,11 @@ pub fn plan(streams: Streams<'_>, read: &dyn Fn(&str) -> Option<String>) -> Plan
             }
             if unused && stream == Stream::NonTest && !in_tests.contains(&key) {
                 // Unused only where tests are not compiled: tests use it.
-                match gate(&mut suggestion, read) {
-                    Some(()) => plan.gated += 1,
-                    None => {
-                        plan.left += 1;
-                        continue;
-                    }
+                if let Some(()) = gate(&mut suggestion, read) {
+                    plan.gated += 1
+                } else {
+                    plan.left += 1;
+                    continue;
                 }
             }
             let replacement = suggestion.solutions[0].replacements[0].replacement.clone();

@@ -9577,7 +9577,7 @@ impl PathSet {
     pub fn include_patterns(&self) -> Vec<&str> {
         self.includes
             .iter()
-            .map(|selector| selector.pattern())
+            .map(batten_core::selector::Selector::pattern)
             .collect()
     }
 
