@@ -76,7 +76,9 @@ row here, so a new module lands with its line.
 - `fetch.rs` (crate `batten-base`) — one HTTPS request, in process (CLOUD-745).
 - `graph.rs` (crate `batten-base`) — the bounded, call-by-need walk (CLOUD-1866).
 - `module_graph.rs` (crate `batten-base`) — the crate's own module graph read off the syntax tree, and its measures (largest component, propagation cost, impl and shim censuses), which `modules metrics` prints and `modules ratchet` holds to `modules.lock` until the `rust-quality` preset's Decoupling Level gate replaces it (CLOUD-2789, CLOUD-2821).
+- `crate_cut.rs` (crate `batten-base`) — `batten modules cut`: moves a closed set of crate-root modules into a new sibling package, respelling every path on the lossless token stream and leaving no re-export shim; an open set is refused site by site. The `rust` preset's remedy (CLOUD-2812).
 - `traversal.rs` (crate `batten-base`) — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
+- `coupling.rs` (crate `batten-facts`) — the `coupling` fact: M-score, Decoupling Level, propagation cost and largest cycle over a file-level `uses` graph, head and base, which the `rust-quality` preset gates (M-score and cycle only; CLOUD-2821).
 - `register.rs` (crate `batten-facts`) — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
 - `propose.rs` (crate `batten-base`) — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
 - `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
@@ -145,6 +147,8 @@ row here, so a new module lands with its line.
 - `secret.rs` (crate `batten-base`) — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
 - `selector.rs` (crate `batten-core`) — one compiled glob over repo-relative paths, the selector every rule and the tree walk match through: a leaf (CLOUD-2789).
+- `path_set.rs` (crate `batten-core`) — an ordered include/exclude list of selectors where an exclude beats an include, the set `scope`, `protected` and a rule's `glob` resolve to; moved below `rules` so `mutate` can build one without reaching the module that adjudicates (CLOUD-2789).
+- `shell_logic.rs` (crate `batten-core`) — the one shell detector on the `rable` AST: whether a file, argv or carried string is shell, the interpreter and carrier tables, cmd/PowerShell switches, and `spawns_shell` for the engine-spawn census (CLOUD-2625, CLOUD-2770; the #1278 port).
 - `sink.rs` (crate `batten-core`) — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
 - `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off `mise-tasks/semver.sh`.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760).
