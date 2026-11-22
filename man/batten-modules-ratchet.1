@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-modules-ratchet 1  batten 
+.SH NAME
+batten\-modules\-ratchet \- Refuse any module\-graph metric worse than the committed record, and tighten the record on improvement
+.SH SYNOPSIS
+\fBbatten modules ratchet\fR [\fB\-\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-record\fR> 
+.SH DESCRIPTION
+Refuse any module\-graph metric worse than the committed record, and tighten the record on improvement
+.SH OPTIONS
+.TP
+\fB\-\-record\fR \fI<record>\fR
+The record file, one `<root> cycle=<n> propagation=<bp> impls=<n> shims=<n>` line per root
+.TP
+\fB\-\-check\fR
+Never write the record: one looser than the tree is refused too
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
