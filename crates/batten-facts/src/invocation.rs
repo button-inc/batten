@@ -93,7 +93,7 @@ fn literals(expr: &ast::Expr, out: &mut Vec<String>) {
 /// Every string literal `list` passes, in order.
 fn arguments_of(list: Option<&ast::ArgList>) -> Vec<String> {
     let mut arguments = Vec::new();
-    for argument in list.iter().flat_map(ast::ArgList::args) {
+    for argument in list.into_iter().flat_map(ast::ArgList::args) {
         literals(&argument, &mut arguments);
     }
     arguments
