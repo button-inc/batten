@@ -8,7 +8,7 @@
       "description": "The tree surface. `additionalProperties: false` is the load-bearing line: it is what turns a misspelled key, and CLOUD-845's documented-but-never-built one, into a build-time error instead of a silent undefined.",
       "properties": {
         "base": {
-          "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+          "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base; `uses` is Path -> that file's `use` edges exactly as Fact::Uses, resolved against the BASE root's re-export table. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
           "properties": {
             "units": {
               "additionalProperties": {
@@ -24,6 +24,15 @@
                   "nodes"
                 ],
                 "type": "object"
+              },
+              "type": "object"
+            },
+            "uses": {
+              "additionalProperties": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
               },
               "type": "object"
             }

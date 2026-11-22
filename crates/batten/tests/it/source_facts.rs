@@ -195,6 +195,78 @@ fn a_module_compares_a_functions_counts_against_its_base() {
     );
 }
 
+/// Refuses a module edge the head has and the row's base did not: the shape
+/// plan step 3's ratchet over `uses` takes, head against base, in Rego.
+const NO_NEW_EDGE: &str = r#"
+package batten
+
+import rego.v1
+
+rules contains "edge reach grown"
+
+violation contains {"rule": "edge reach grown", "verdict": "edge reach grown"} if {
+  some path, edges in input.tree.uses
+  some edge in edges
+  edge.origin == "internal"
+  not base_reaches(path, edge.to)
+}
+
+base_reaches(path, to) if {
+  some was in input.tree.base.uses[path]
+  was.origin == "internal"
+  was.to == to
+}
+"#;
+
+fn based_uses_row(globs: &[&str], base: &str) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": "uses-row",
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": "policy/",
+        "use_sources": globs,
+        "base": base,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row declaring `use_sources` and `base`")
+}
+
+/// Fails by: `input.tree.base.uses` absent (the module could not tell a new
+/// edge from an old one, so it would refuse both or neither), the base read
+/// from the working tree, or a qualified-path edge not counted on either side.
+#[test]
+fn a_module_compares_module_edges_against_its_base() {
+    let root = scratch("base-uses");
+    fs::write(root.join("policy/gate.rego"), NO_NEW_EDGE).expect("module");
+    fs::write(root.join("lib.rs"), "mod a;\nmod b;\nmod c;\n").expect("root");
+    fs::write(root.join("b.rs"), "pub fn g() {}\n").expect("b");
+    fs::write(root.join("c.rs"), "pub fn h() {}\n").expect("c");
+    fs::write(root.join("a.rs"), "pub fn f() { crate::c::h() }\n").expect("a");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    let base = common::git_in(&root, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+
+    // A new edge, written as a qualified path: refused.
+    fs::write(
+        root.join("a.rs"),
+        "pub fn f() { crate::c::h(); crate::b::g() }\n",
+    )
+    .expect("a");
+    let grown = scan(&root, &[based_uses_row(&["*.rs"], base)]);
+    assert_eq!(grown.findings.len(), 1, "{:?}", grown.findings);
+    assert_eq!(grown.findings[0].rule, "edge reach grown");
+
+    // The base's own edge, respelled as a `use`: the same edge, not refused.
+    fs::write(root.join("a.rs"), "use crate::c::h;\npub fn f() { h() }\n").expect("a");
+    let same = scan(&root, &[based_uses_row(&["*.rs"], base)]);
+    assert!(same.findings.is_empty(), "{:?}", same.findings);
+    assert!(
+        !same.not_evaluated.contains_key("uses-row"),
+        "and it evaluated, over a real base side"
+    );
+}
+
 /// Fails by: the Rego arm missing a partial helper bound with `:=`, or
 /// reading a defaulted helper as partial (CLOUD-2777's shape).
 #[test]
