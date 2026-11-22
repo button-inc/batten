@@ -219,7 +219,7 @@ fn blob_id(dir: &Path, text: &str) -> String {
 }
 
 /// A body that passes the readiness rule, so the sequence rules are what decide.
-fn refined_body() -> String {
+pub(crate) fn refined_body() -> String {
     "**Refinement — Ready (a summary)**\n\n\
      * **Source of truth (§1).** One authoritative artifact.\n\
      * **Commit / bump (§6).** `ci` → **no bump**.\n"
@@ -236,7 +236,7 @@ fn issue(id: &str, status: &str) -> serde_json::Value {
     })
 }
 
-fn check(dir: &Path, payload: &serde_json::Value, flags: &[&str]) -> Output {
+pub(crate) fn check(dir: &Path, payload: &serde_json::Value, flags: &[&str]) -> Output {
     let mut args = vec!["claim", "check"];
     args.extend_from_slice(flags);
     run_with_stdin(dir, &args, &payload.to_string())
@@ -257,10 +257,18 @@ fn claim_receipt(dir: &Path) -> Option<String> {
 /// A repository whose session stamp and read baseline both agree with the body —
 /// the legitimate path, where only the competitor rules can have anything to say.
 fn ready_to_pull(name: &str) -> (PathBuf, serde_json::Value) {
+    ready_to_pull_with(name, &refined_body())
+}
+
+/// [`ready_to_pull`] with the row's body under the caller's control: the read
+/// receipt records the same body, so the sequence rules still pass and only the
+/// body's own content differs (CLOUD-2810's decided-mechanism bullets).
+pub(crate) fn ready_to_pull_with(name: &str, body: &str) -> (PathBuf, serde_json::Value) {
     let dir = repo(name);
-    let payload = issue("CLOUD-1", "Todo");
+    let mut payload = issue("CLOUD-1", "Todo");
+    payload["description"] = serde_json::Value::String(body.to_owned());
     stamp(&dir);
-    read_receipt(&dir, "CLOUD-1", &refined_body());
+    read_receipt(&dir, "CLOUD-1", body);
     (dir, payload)
 }
 
