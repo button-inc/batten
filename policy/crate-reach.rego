@@ -1,0 +1,87 @@
+#MUTANT-SUITE crates/batten/tests/it/crate_reach.rs
+#MUTANT unlisted-admitted|s@^\tnot regex.match(allow, other)$@\tfalse@|the_crate_reach_module_suite_passes
+# `crate reach unsafe`: a workspace package reaches a workspace package its
+# `crate-allow-<package>` pattern does not admit (CLOUD-2798).
+#
+# A crate boundary stops a module cycle, but nothing stops a `Cargo.toml` edit
+# from adding an edge that turns a wide crate graph back into a deep one. "The
+# most important property of a crate is which crates it doesn't (transitively)
+# depend on" (Kladov, *Fast Rust Builds*). So each package's allowed reach is
+# reviewable data, one `[[pattern]]` row per package, and this module refuses a
+# reached name the row does not match, naming both. A package with NO row is
+# refused too: a new crate cannot dodge the gate by being undeclared.
+#
+# The reached sets are the `crate-reach` record, written by
+# `mise run crate-reach-record` from the activated `cargo metadata` graph
+# (`cargo_graph`'s activation rule). No crate name is spelled here (rule 1).
+
+package batten.crate_reach
+
+import rego.v1
+
+rules contains "crate reach unsafe"
+
+lines := input.tree.records["crate-reach"]
+
+# `reach <package> <a,b,…>`; a package reaching no member has no third field.
+reach[name] := reached if {
+	some line in lines
+	startswith(line, "reach ")
+	fields := split(trim_space(substring(line, count("reach "), -1)), " ")
+	name := fields[0]
+	reached := reached_of(fields)
+}
+
+reached_of(fields) := split(fields[1], ",") if count(fields) > 1
+
+reached_of(fields) := [] if count(fields) == 1
+
+allow_of(name) := data.batten.patterns[concat("", ["crate-allow-", name])]
+
+violation contains {
+	"rule": "crate reach unsafe",
+	"verdict": "crate reach unsafe",
+	"subjects": [{"artifact": name}, {"artifact": other}],
+} if {
+	some name, reached in reach
+	allow := allow_of(name)
+	some other in reached
+	not regex.match(allow, other)
+}
+
+violation contains {
+	"rule": "crate reach unsafe",
+	"verdict": "crate declare absent",
+	"subjects": [{"artifact": name}],
+} if {
+	some name, _ in reach
+	not allow_of(name)
+}
+
+patterns := {
+	"crate-allow-low": "^$",
+	"crate-allow-top": "^(low|mid)$",
+	"crate-allow-mid": "^low$",
+}
+
+test_a_package_reaching_an_unlisted_package_is_refused if {
+	found := violation with input as {"tree": {"records": {"crate-reach": ["reach mid low,top"]}}}
+		with data.batten.patterns as patterns
+	count(found) == 1
+}
+
+test_a_package_reaching_only_listed_packages_passes if {
+	found := violation with input as {"tree": {"records": {"crate-reach": [
+		"reach low",
+		"reach mid low",
+		"reach top low,mid",
+	]}}}
+		with data.batten.patterns as patterns
+	count(found) == 0
+}
+
+test_an_undeclared_package_is_refused if {
+	found := violation with input as {"tree": {"records": {"crate-reach": ["reach new low"]}}}
+		with data.batten.patterns as patterns
+	count(found) == 1
+}
