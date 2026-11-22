@@ -530,6 +530,19 @@ model = "some-model-id"
 # scope = "mediated_call"
 # preset = "trunk-based"
 # severity = "deny"
+#
+# `rust-quality` judges a Rust crate's module graph against a base: its
+# Decoupling Level (Mo et al., ICSE 2016) may not fall. Name the crate's
+# sources and the base, here each commit's parent:
+#
+# [[rule]]
+# id = "module decoupling dropped"
+# kind = "policy"
+# scope = "tree"
+# preset = "rust-quality"
+# use_sources = ["src/**/*.rs"]
+# base = "HEAD"
+# severity = "deny"
 
 # FORGE EVENT SOURCES (CLOUD-2693). Where forge events come from when nothing
 # pushes them: `batten forge poll` reads the FIRST AVAILABLE row each round, in
