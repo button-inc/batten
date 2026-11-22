@@ -78,7 +78,7 @@ declared_modules := {
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
-	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
+	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "trust_pin", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the
@@ -1077,6 +1077,12 @@ forbidden[from] contains to if {
 		"surface_table": {"surface", "cli", "lib", "config"},
 		"item_index": {"rules", "hook", "config", "replay"},
 		"resolve": {"trust", "lint", "epoch"},
+		# The base-ref read and its pin, split out of `trust` so `resolve` can load
+		# layer 1 from a ref without reaching the judgement above it. The `uses`
+		# fact never saw `resolve -> trust`: every reach was a qualified path,
+		# invisible until the fact gained `qualified`. It reads `git`, `config`
+		# and `state` and decides nothing, so it sits below `resolve`.
+		"trust_pin": {"resolve", "trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
 		"store": {"findings", "journal"},

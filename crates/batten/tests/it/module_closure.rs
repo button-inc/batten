@@ -60,10 +60,7 @@ use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
 
-use batten::facts::Look;
-use batten::uses::{Origin, resolve, root_exports, use_facts};
 use common::at_root;
 
 /// The largest closure that still counts as plumbing.
@@ -84,6 +81,18 @@ const CORE_FLOOR: usize = 24;
 
 /// Every module that is plumbing today. None of them may stop being plumbing.
 ///
+/// # Re-recorded on the corrected graph (2026-11-22)
+///
+/// Every list and number in this file was first recorded on a graph built from
+/// the `uses` fact, which read `use` items alone. A module reached only by a
+/// qualified path (`crate::trust::load(..)`) or inside a macro's arguments was
+/// no edge, so `lib`, `mutate`, `land` and `startup` sat in this list at a
+/// closure of nine or under while the real graph had each reaching eighty. The
+/// graph is now `module_graph::read`'s, the one `modules.lock` already held, and
+/// each value below is that graph's, from [`print_the_distribution`]. A
+/// re-record forced by a corrected instrument is not a loosened gate: the old
+/// values described a graph that did not exist.
+///
 /// # Why a set, and why a subset rather than an equality
 ///
 /// This replaced a pair of population COUNTS — a plumbing floor and a core
@@ -103,78 +112,32 @@ const CORE_FLOOR: usize = 24;
 /// crate (CLOUD-2789): they are `batten-facts` now, with nothing above them, so
 /// a closure can no longer be drawn over them here — which is the split working.
 const PLUMBING: &[&str] = &[
-    "admission",
-    "advisory",
-    "arm",
-    "attestation",
-    "board",
-    "bot",
-    "brief",
-    "capture",
-    "cargo_graph",
-    "carry",
-    "checks_green",
-    "ci",
-    "claim",
-    "commit",
-    "deferral",
-    "dist",
-    "effect",
-    "environment",
+    "asked",
+    "budget",
+    "census",
+    "config_model",
+    "design",
+    "emission",
     "error",
-    "exec",
-    "exit",
-    "fast_forward",
-    "fetch",
-    "forge",
-    "git",
-    "gitwrite",
-    "graph",
-    "install",
-    "land",
-    "landed",
-    "lease",
-    "lib",
-    "main",
-    "main_watch",
-    "mint",
-    "mutate",
-    "outcome",
+    "findings",
+    "history",
+    "init",
+    "item_index",
+    "journal",
+    "mutation_markers",
+    "o200k",
     "output",
-    "outputs",
-    "patch",
-    "pattern",
-    "pipeline",
-    "pr_watch",
-    "probe",
-    "probe_verdict",
-    "provision",
+    "preset_catalog",
     "prune",
-    "race",
-    "ready",
-    "recorder",
-    "refusal",
+    "redirect",
+    "rego_units",
     "render",
-    "repair",
-    "rest",
-    "ripcord",
-    "secret",
-    "semver",
-    "severity",
-    "signer_posture",
+    "session",
     "spec",
-    "speculation",
-    "startup",
-    "state",
     "store",
-    "suites",
     "surface",
-    "task",
-    "tokens",
-    "traversal",
-    "verbs",
-    "verdict",
-    "worktree",
+    "surface_table",
+    "waiver",
 ];
 
 /// No module's closure may exceed this.
@@ -192,7 +155,12 @@ const PLUMBING: &[&str] = &[
 /// rule engine. One genuinely new module, not an edge between old ones —
 /// `register` itself is plumbing, and `traversal` was kept plumbing by
 /// injecting its reads rather than letting it reach the fact model.
-const DEEPEST_CLOSURE: usize = 29;
+///
+/// Eighty-nine on the corrected graph (see [`PLUMBING`]'s re-record note), and
+/// `lib` is not judged by it: the crate root dispatches every verb, so its
+/// closure is the whole crate by construction and no cut can lower it. The
+/// deepest library module, `disk_watch`, is the number that can move.
+const DEEPEST_CLOSURE: usize = 89;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
@@ -200,75 +168,17 @@ const DEEPEST_CLOSURE: usize = 29;
 /// spells them — a file's stem, a directory's own name, and `lib`/`main` for the
 /// two entry points, which are files in the judged set like any other.
 fn module_graph() -> BTreeMap<String, BTreeSet<String>> {
-    let src = at_root("crates/batten/src");
-    let root_source = fs::read_to_string(src.join("lib.rs")).unwrap();
-    let Look::Is(exports) = root_exports(&root_source) else {
-        panic!("the crate root did not parse, so no edge below can be resolved");
-    };
-
-    let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (module, path) in module_files(&src) {
-        let source = fs::read_to_string(&path).unwrap();
-        let Look::Is(mut file) = use_facts(&source) else {
-            panic!("{} did not parse", path.display());
-        };
-        resolve(&mut file.edges, &exports);
-
-        let reached = graph.entry(module.clone()).or_default();
-        for edge in &file.edges {
-            // `Internal` AFTER resolution is the only class crossing a module
-            // boundary inside this crate. A `RootItem` left unresolved is
-            // could-not-look at the edge level, never an edge onto nothing, so
-            // it is skipped rather than counted as a reach.
-            // A root re-export of ANOTHER crate (`pub use batten_fsio as fsio`)
-            // is spelled `crate::fsio` but is no module of this one: the split
-            // crates are exactly what a closure exists to measure leaving.
-            let external = matches!(exports.get(&edge.to), Some(None));
-            if edge.origin == Origin::Internal
-                && !external
-                && edge.to != module
-                && !edge.to.is_empty()
-            {
-                reached.insert(edge.to.clone());
-            }
-        }
-    }
-    graph
-}
-
-/// Every library source file, paired with the module name it belongs to.
-///
-/// A directory module contributes every file beneath it under the directory's
-/// own name: `policy/presets/foo.rs` is `policy`, because a crate boundary can
-/// only ever be drawn around the directory as a unit.
-fn module_files(src: &Path) -> Vec<(String, PathBuf)> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir(src).unwrap().flatten() {
-        let path = entry.path();
-        let name = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap()
-            .to_owned();
-        if path.is_dir() {
-            collect_under(&path, &name, &mut found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push((name, path));
-        }
-    }
-    found.sort();
-    found
-}
-
-fn collect_under(dir: &Path, module: &str, found: &mut Vec<(String, PathBuf)>) {
-    for entry in fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_under(&path, module, found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push((module.to_owned(), path));
-        }
-    }
+    // ONE GRAPH for this test and `modules.lock`: `module_graph::read` reads
+    // `use` items, qualified paths in code (`crate::m::f()`) and paths inside
+    // macro token trees, and skips `#[cfg(test)]` items. This test used to build
+    // its own graph from the `uses` fact, which read `use` items ALONE, so every
+    // module reached by a qualified path was invisible to it: [`MIDDLE`] and
+    // [`PLUMBING`] were recorded on that blind graph while the ratchet's own
+    // read held one 61-module cycle (`modules.lock`). Two readers of one graph
+    // disagreeing is the defect; this is the reader the lock already trusts.
+    batten::module_graph::read(&at_root("crates/batten/src"))
+        .expect("the library parses")
+        .edges
 }
 
 /// Whether a workspace crate other than `batten` carries `module`, as a file
@@ -283,6 +193,49 @@ fn in_another_crate(module: &str) -> bool {
             let src = krate.join("src");
             src.join(format!("{module}.rs")).is_file() || src.join(module).is_dir()
         })
+}
+
+/// The shortest path from `start` back to `start`, breadth first, or `None`
+/// when `start` is on no cycle.
+fn cycle_witness(graph: &BTreeMap<String, BTreeSet<String>>, start: &str) -> Option<Vec<String>> {
+    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+    let mut queue = std::collections::VecDeque::new();
+    for next in graph.get(start).into_iter().flatten() {
+        if next == start {
+            return Some(vec![start.to_owned(), start.to_owned()]);
+        }
+        if !parent.contains_key(next) {
+            parent.insert(next.clone(), start.to_owned());
+            queue.push_back(next.clone());
+        }
+    }
+    while let Some(module) = queue.pop_front() {
+        for next in graph.get(&module).into_iter().flatten() {
+            if next == start {
+                // Walk the parents back from `module` to `start`, then turn it
+                // around: start -> ... -> module -> start.
+                let mut back = vec![module.clone()];
+                let mut at = module.clone();
+                while let Some(up) = parent.get(&at) {
+                    if up == start {
+                        break;
+                    }
+                    back.push(up.clone());
+                    at = up.clone();
+                }
+                back.reverse();
+                let mut path = vec![start.to_owned()];
+                path.extend(back);
+                path.push(start.to_owned());
+                return Some(path);
+            }
+            if !parent.contains_key(next) && next != start {
+                parent.insert(next.clone(), module.clone());
+                queue.push_back(next.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Transitive closure of one module, including itself.
@@ -370,7 +323,11 @@ fn no_module_leaves_the_plumbing() {
 #[test]
 fn no_module_reaches_deeper_than_the_recorded_worst() {
     let sizes = distribution(&module_graph());
-    let deepest = sizes.last().expect("the crate has modules");
+    let deepest = sizes
+        .iter()
+        .filter(|(_, module)| module.as_str() != batten::module_graph::LIB)
+        .last()
+        .expect("the crate has modules");
 
     assert!(
         deepest.0 <= DEEPEST_CLOSURE,
@@ -390,12 +347,12 @@ fn no_module_reaches_deeper_than_the_recorded_worst() {
 /// under, which is what the split is for. Same discipline as [`PLUMBING`]: a
 /// subset, recorded by [`print_the_distribution`], and a module LEAVING it for
 /// the core is the regression, while a module arriving is progress.
-const MIDDLE: &[&str] = &[
-    "agent", "baseline", "budget", "census", "config", "contract", "decision", "defects", "design",
-    "drain", "emission", "epoch", "findings", "init", "journal", "judge", "lint", "markers",
-    "policy", "preset", "receipt", "record", "redirect", "replay", "resolve", "rules", "sbom",
-    "secrets", "session", "sink", "step", "stop", "trust", "waiver",
-];
+///
+/// EMPTY on the corrected graph: the 34 modules recorded here sat in the gap
+/// only on the `use`-only graph, and every one is in the core once qualified
+/// paths count. The gap is real (nothing lives between 9 and 80), so a module
+/// arriving in it is progress and reported, exactly as before.
+const MIDDLE: &[&str] = &[];
 
 #[test]
 fn the_gap_holds_only_the_recorded_middle() {
@@ -433,11 +390,20 @@ fn the_gap_holds_only_the_recorded_middle() {
             (*size, module.as_str(), into_core)
         })
         .collect();
+    // A CYCLE WITNESS per climbed module: the shortest path from it back to
+    // itself through the resolved graph. The edges into the core say where a
+    // module enters the cycle; the witness says which edge closes it, which is
+    // the one a fix has to cut.
+    let witnesses: Vec<String> = climbed
+        .iter()
+        .filter_map(|(_, module, _)| cycle_witness(&graph, module))
+        .map(|path| path.join(" -> "))
+        .collect();
     assert!(
         climbed.is_empty(),
         "these modules were below the core and reach it again, each with its edges \
-         into the core: {climbed:?}. Each grew an edge back into the largest cycle; \
-         re-read the split plan.",
+         into the core: {climbed:?}. Shortest cycle through each: {witnesses:#?}. Each \
+         grew an edge back into the largest cycle; re-read the split plan.",
     );
 
     let arrived: Vec<&(usize, String)> = sizes
