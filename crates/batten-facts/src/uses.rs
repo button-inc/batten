@@ -55,6 +55,9 @@
 
 use std::collections::BTreeMap;
 
+use ra_ap_syntax::ast::{HasModuleItem as _, HasName as _};
+use ra_ap_syntax::{AstNode, Edition, ast};
+
 use crate::facts::Look;
 
 /// Where a `use` statement's first segment points, before resolution.
@@ -135,10 +138,16 @@ pub type RootExports = BTreeMap<String, Option<String>>;
 /// re-exports nothing.
 #[must_use]
 pub fn root_exports(source: &str) -> Look<RootExports> {
-    // THE ONE PARSE (CLOUD-1008); see `crate::source`.
-    let Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
+    // THE ONE PARSE (CLOUD-1008), lossless; a text with any parse error is
+    // could-not-look, never a partial table.
+    let Look::Is(file) = crate::source::rust_tree(source, Edition::Edition2024) else {
         return Look::CouldNotLook;
     };
+    Look::Is(exports_of(&file))
+}
+
+/// [`root_exports`] over an already-parsed file.
+fn exports_of(file: &ast::SourceFile) -> RootExports {
     // THE ROOT'S OWN `mod` DECLARATIONS, COLLECTED FIRST, and they are what makes
     // the rest correct. At a crate root `use error::UsageError` and
     // `use anyhow::Result` are the SAME SHAPE — a bare first segment is either a
@@ -146,10 +155,9 @@ pub fn root_exports(source: &str) -> Look<RootExports> {
     // The root declares its modules, so the answer is in the same file, and this
     // stays pure syntax rather than becoming name resolution.
     let modules: std::collections::BTreeSet<String> = file
-        .items
-        .iter()
+        .items()
         .filter_map(|item| match item {
-            syn::Item::Mod(module) => Some(module.ident.to_string()),
+            ast::Item::Module(module) => module.name().map(|name| name.text().to_string()),
             _ => None,
         })
         .collect();
@@ -163,13 +171,73 @@ pub fn root_exports(source: &str) -> Look<RootExports> {
         .iter()
         .map(|name| (name.clone(), Some(name.clone())))
         .collect();
-    for item in &file.items {
-        let syn::Item::Use(item_use) = item else {
+    for item in file.items() {
+        let ast::Item::Use(item_use) = item else {
             continue;
         };
-        collect_root_tree(&item_use.tree, None, &modules, &mut table);
+        if let Some(tree) = item_use.use_tree() {
+            collect_root_tree(&tree, None, &modules, &mut table);
+        }
     }
-    Look::Is(table)
+    table
+}
+
+/// One `use` tree read as `syn`'s nested shape: the path's segments, then
+/// what ends it.
+struct Shape {
+    /// Every segment the tree's own path names, in order.
+    segments: Vec<String>,
+    /// What follows the segments.
+    end: End,
+}
+
+/// How a `use` tree ends after its path.
+enum End {
+    /// The last segment is the imported name.
+    Name,
+    /// `… as alias`: the last segment is the original, the alias the local name.
+    Rename(String),
+    /// `…::*`.
+    Glob,
+    /// `…::{a, b}`.
+    Group(Vec<ast::UseTree>),
+}
+
+/// The text of each segment of `path`, outermost first.
+fn segments(path: &ast::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = Some(path.clone());
+    while let Some(path) = at {
+        if let Some(segment) = path.segment() {
+            out.push(segment.syntax().text().to_string().trim().to_owned());
+        }
+        at = path.qualifier();
+    }
+    out.reverse();
+    out
+}
+
+/// A `use` tree's [`Shape`], or `None` for one that names nothing.
+fn shape(tree: &ast::UseTree) -> Option<Shape> {
+    let segments = tree.path().map(|path| segments(&path)).unwrap_or_default();
+    let end = if let Some(list) = tree.use_tree_list() {
+        End::Group(list.use_trees().collect())
+    } else if tree.star_token().is_some() {
+        End::Glob
+    } else if let Some(rename) = tree.rename() {
+        End::Rename(
+            rename
+                .name()
+                .map(|name| name.text().to_string())
+                .unwrap_or_else(|| "_".to_owned()),
+        )
+    } else {
+        if segments.is_empty() {
+            return None;
+        }
+        End::Name
+    };
+    Some(Shape { segments, end })
 }
 
 /// Walk one `use` tree in the crate root, recording what each leaf name resolves
@@ -178,35 +246,42 @@ pub fn root_exports(source: &str) -> Look<RootExports> {
 /// `first` carries the path's first segment once it is known, which is what
 /// decides internal-versus-external for every leaf underneath it.
 fn collect_root_tree(
-    tree: &syn::UseTree,
+    tree: &ast::UseTree,
     first: Option<&str>,
     modules: &std::collections::BTreeSet<String>,
     table: &mut RootExports,
 ) {
-    match tree {
-        syn::UseTree::Path(path) => {
-            let segment = path.ident.to_string();
-            collect_root_tree(&path.tree, first.or(Some(&segment)), modules, table);
-        }
-        syn::UseTree::Group(group) => {
-            for item in &group.items {
-                collect_root_tree(item, first, modules, table);
+    let Some(Shape { segments, end }) = shape(tree) else {
+        return;
+    };
+    let steps = match end {
+        End::Name | End::Rename(_) => segments.len().saturating_sub(1),
+        End::Glob | End::Group(_) => segments.len(),
+    };
+    let first = first
+        .map(str::to_owned)
+        .or_else(|| segments.first().filter(|_| steps > 0).cloned());
+    let first = first.as_deref();
+    match end {
+        End::Name => {
+            if let Some(name) = segments.last() {
+                insert_root_name(name, first, modules, table);
             }
-        }
-        syn::UseTree::Name(name) => {
-            insert_root_name(&name.ident.to_string(), first, modules, table);
         }
         // The ALIAS is the name other modules can reach, so it is the key. The
         // original is unreachable through the root and recording it would invent
         // an edge nobody can write.
-        syn::UseTree::Rename(rename) => {
-            insert_root_name(&rename.rename.to_string(), first, modules, table);
-        }
+        End::Rename(alias) => insert_root_name(&alias, first, modules, table),
         // A glob at the root re-exports names this pass cannot enumerate without
         // resolving the target module. Deliberately not recorded: a guess here
         // would be a wrong edge, and an absent entry leaves the consumer's edge
         // unresolved and visibly so, which is the honest failure direction.
-        syn::UseTree::Glob(_) => {}
+        End::Glob => {}
+        End::Group(items) => {
+            for item in &items {
+                collect_root_tree(item, first, modules, table);
+            }
+        }
     }
 }
 
@@ -232,69 +307,11 @@ fn insert_root_name(
     table.insert(name.to_owned(), module);
 }
 
-/// The visitor's accumulator, at module scope for the same reason
-/// `invocation.rs`'s is: it borrows nothing from the function that drives it, and an item
-/// declared after a statement reads as if it were scoped to what precedes it
-/// when it is not (`clippy::items_after_statements`).
-#[derive(Default)]
-struct Edges {
-    found: Vec<UseEdge>,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for Edges {
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        let line = item.use_token.span.start().line;
-        collect_edges(&item.tree, None, line, &mut self.found);
-        syn::visit::visit_item_use(self, item);
-    }
-
-    // A qualified path anywhere outside a `use` item: an expression callee, a
-    // type, a trait bound, a pattern. `visit_item_use` above never reaches this,
-    // because a `use` tree is a `UseTree`, not a `syn::Path`, so no edge is
-    // counted twice. Paths inside a macro's token stream are NOT seen: syn keeps
-    // them as tokens, which is the same blind spot every syntactic reader here
-    // states.
-    fn visit_path(&mut self, path: &'ast syn::Path) {
-        if path.leading_colon.is_none()
-            && let Some(first) = path.segments.first()
-            && first.ident == "crate"
-            && path.segments.len() >= 2
-        {
-            let line = first.ident.span().start().line;
-            let second = path.segments[1].ident.to_string();
-            let edge = if path.segments.len() == 2 {
-                // `crate::Item`: through the root's table, exactly as a `use`.
-                UseEdge {
-                    to: String::new(),
-                    item: second,
-                    origin: Origin::RootItem,
-                    via_root: false,
-                    qualified: true,
-                    line,
-                }
-            } else {
-                UseEdge {
-                    item: path
-                        .segments
-                        .last()
-                        .map_or_else(|| second.clone(), |s| s.ident.to_string()),
-                    to: second,
-                    origin: Origin::Internal,
-                    via_root: false,
-                    qualified: true,
-                    line,
-                }
-            };
-            if !self
-                .found
-                .iter()
-                .any(|seen| seen.qualified && seen.to == edge.to && seen.item == edge.item)
-            {
-                self.found.push(edge);
-            }
-        }
-        syn::visit::visit_path(self, path);
-    }
+/// The 1-based line `offset` falls on in `source`.
+fn line_of(source: &str, offset: usize) -> usize {
+    source.get(..offset).map_or(1, |head| {
+        head.bytes().filter(|byte| *byte == b'\n').count() + 1
+    })
 }
 
 /// Every `use` edge in a Rust source text, or the reason there are none.
@@ -310,15 +327,70 @@ impl<'ast> syn::visit::Visit<'ast> for Edges {
 /// blank destination instead of a plausible wrong one.
 #[must_use]
 pub fn use_edges(source: &str) -> Look<Vec<UseEdge>> {
-    use syn::visit::Visit;
-
-    // THE ONE PARSE (CLOUD-1008); see `crate::source`.
-    let Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
+    let Look::Is(file) = crate::source::rust_tree(source, Edition::Edition2024) else {
         return Look::CouldNotLook;
     };
-    let mut edges = Edges::default();
-    edges.visit_file(&file);
-    Look::Is(edges.found)
+    Look::Is(edges_of(source, &file))
+}
+
+/// [`use_edges`] over an already-parsed file.
+fn edges_of(source: &str, file: &ast::SourceFile) -> Vec<UseEdge> {
+    let mut found = Vec::new();
+    for item_use in file.syntax().descendants().filter_map(ast::Use::cast) {
+        let line = line_of(source, usize::from(item_use.syntax().text_range().start()));
+        if let Some(tree) = item_use.use_tree() {
+            collect_edges(&tree, None, line, &mut found);
+        }
+    }
+    // A qualified path anywhere outside a `use` item: an expression callee, a
+    // type, a trait bound, a pattern. Only the OUTERMOST path node is read (a
+    // qualifier is a nested path), and paths under a `use` are its tree's, so
+    // no edge is counted twice. Paths inside a macro's token tree are NOT seen:
+    // the parser keeps them as tokens, the blind spot every syntactic reader here
+    // states.
+    for path in file.syntax().descendants().filter_map(ast::Path::cast) {
+        if path.syntax().parent().and_then(ast::Path::cast).is_some()
+            || path
+                .syntax()
+                .ancestors()
+                .any(|node| ast::Use::can_cast(node.kind()))
+        {
+            continue;
+        }
+        let names = segments(&path);
+        if names.len() < 2 || names[0] != "crate" {
+            continue;
+        }
+        let line = line_of(source, usize::from(path.syntax().text_range().start()));
+        let second = names[1].clone();
+        let edge = if names.len() == 2 {
+            // `crate::Item`: through the root's table, exactly as a `use`.
+            UseEdge {
+                to: String::new(),
+                item: second,
+                origin: Origin::RootItem,
+                via_root: false,
+                qualified: true,
+                line,
+            }
+        } else {
+            UseEdge {
+                item: names.last().cloned().unwrap_or_else(|| second.clone()),
+                to: second,
+                origin: Origin::Internal,
+                via_root: false,
+                qualified: true,
+                line,
+            }
+        };
+        if !found
+            .iter()
+            .any(|seen: &UseEdge| seen.qualified && seen.to == edge.to && seen.item == edge.item)
+        {
+            found.push(edge);
+        }
+    }
+    found
 }
 
 /// Walk one `use` tree, emitting an edge per leaf.
@@ -326,56 +398,68 @@ pub fn use_edges(source: &str) -> Look<Vec<UseEdge>> {
 /// Per LEAF rather than per statement, because `use crate::{a::A, b::B}` is two
 /// edges and reporting it as one would undercount exactly the grouped imports
 /// this tree favours.
-fn collect_edges(tree: &syn::UseTree, first: Option<&str>, line: usize, out: &mut Vec<UseEdge>) {
-    match tree {
-        syn::UseTree::Path(path) => {
-            let segment = path.ident.to_string();
-            match first {
-                // Already inside a path whose first segment is known. If that
-                // segment was `crate`, THIS one is the module — the ordinary
-                // internal edge, and the only place `to` is filled in directly.
-                Some("crate") => out.push(UseEdge {
+fn collect_edges(tree: &ast::UseTree, first: Option<&str>, line: usize, out: &mut Vec<UseEdge>) {
+    let Some(Shape { segments, end }) = shape(tree) else {
+        return;
+    };
+    let steps = match end {
+        End::Name | End::Rename(_) => segments.len().saturating_sub(1),
+        End::Glob | End::Group(_) => segments.len(),
+    };
+    let mut first = first.map(str::to_owned);
+    for (at, segment) in segments.iter().take(steps).enumerate() {
+        match first.as_deref() {
+            // Already inside a path whose first segment is `crate`: THIS one is
+            // the module — the ordinary internal edge, and the only place `to`
+            // is filled in directly.
+            Some("crate") => {
+                let leaf = match &end {
+                    End::Name | End::Rename(_) => segments.last().cloned(),
+                    End::Glob | End::Group(_) => None,
+                };
+                // A leaf that IS this segment (`crate::a` ends at `a`) is not a
+                // step; only a deeper leaf names the item.
+                let item = leaf
+                    .filter(|_| at + 1 < segments.len())
+                    .unwrap_or_else(|| segment.clone());
+                out.push(UseEdge {
                     to: segment.clone(),
-                    item: leaf_name(&path.tree).unwrap_or_else(|| segment.clone()),
+                    item,
                     origin: Origin::Internal,
                     via_root: false,
                     qualified: false,
                     line,
-                }),
-                Some(_) => collect_edges(&path.tree, first, line, out),
-                None => collect_edges(&path.tree, Some(&segment), line, out),
+                });
+                return;
+            }
+            Some(_) => {}
+            None => first = Some(segment.clone()),
+        }
+    }
+    let first = first.as_deref();
+    match end {
+        End::Name => {
+            if let Some(name) = segments.last() {
+                push_leaf(name, first, line, out);
             }
         }
-        syn::UseTree::Group(group) => {
-            for item in &group.items {
-                collect_edges(item, first, line, out);
+        // Keyed by the ORIGINAL, because that is the name the root's table is
+        // keyed on; the local alias is this file's business alone.
+        End::Rename(_) => {
+            if let Some(name) = segments.last() {
+                push_leaf(name, first, line, out);
             }
         }
-        syn::UseTree::Name(name) => {
-            push_leaf(&name.ident.to_string(), first, line, out);
-        }
-        syn::UseTree::Rename(rename) => {
-            // Keyed by the ORIGINAL, because that is the name the root's table
-            // is keyed on; the local alias is this file's business alone.
-            push_leaf(&rename.ident.to_string(), first, line, out);
-        }
-        syn::UseTree::Glob(_) => {
+        End::Glob => {
             if let Some(first) = first {
                 push_leaf("*", Some(first), line, out);
             }
         }
-    }
-}
-
-/// The leaf name at the end of a `use` path, for the item a resolver looks up.
-fn leaf_name(tree: &syn::UseTree) -> Option<String> {
-    match tree {
-        syn::UseTree::Name(name) => Some(name.ident.to_string()),
-        syn::UseTree::Rename(rename) => Some(rename.ident.to_string()),
-        syn::UseTree::Path(path) => leaf_name(&path.tree),
-        // A group or a glob has no single leaf, and inventing one would key a
-        // lookup on a name nobody wrote.
-        syn::UseTree::Group(_) | syn::UseTree::Glob(_) => None,
+        End::Group(items) => {
+            for item in &items {
+                collect_edges(item, first, line, out);
+            }
+        }
     }
 }
 
@@ -462,11 +546,12 @@ pub struct UseFile {
 /// [`UseFile`] — the same contract [`use_edges`] holds and for the same reason.
 #[must_use]
 pub fn use_facts(source: &str) -> Look<UseFile> {
-    match (use_edges(source), root_exports(source)) {
-        (Look::Is(edges), Look::Is(exports)) => Look::Is(UseFile { edges, exports }),
-        // One half refusing means the text did not parse, so both refuse. Stated
-        // as an arm rather than assumed: a `UseFile` half-built from a file the
-        // parser rejected is exactly the empty-set answer this fact refuses.
-        _ => Look::CouldNotLook,
-    }
+    // ONE PARSE for both halves, as the struct's doc says.
+    let Look::Is(file) = crate::source::rust_tree(source, Edition::Edition2024) else {
+        return Look::CouldNotLook;
+    };
+    Look::Is(UseFile {
+        edges: edges_of(source, &file),
+        exports: exports_of(&file),
+    })
 }
