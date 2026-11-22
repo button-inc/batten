@@ -160,7 +160,7 @@ fn the_verify_sequence_was_found_at_all() {
 
 /// NO SHELL GROWS BACK. Each step is judged by the one shell detector the
 /// census and the `shell-hygiene` preset's `no-new-shell` module both read
-/// (`batten::shell::logic`, CLOUD-2625), so a step that needed a shell to run
+/// (`batten::shell_logic::logic`, CLOUD-2625), so a step that needed a shell to run
 /// would be counted, and this reds before the census does.
 #[test]
 fn every_step_is_argv() {
@@ -177,9 +177,9 @@ fn every_step_is_argv() {
         "test:filter",
     ] {
         for step in steps(name) {
-            let verdict = batten::shell::logic(&step);
+            let verdict = batten::shell_logic::logic(&step);
             assert!(
-                matches!(verdict, batten::shell::Verdict::Argv(_)),
+                matches!(verdict, batten::shell_logic::Verdict::Argv(_)),
                 "[tasks.{name}] runs a step that needs a shell ({verdict:?}): {step}"
             );
         }
