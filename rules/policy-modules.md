@@ -408,6 +408,9 @@ receipt store could not be located.
 `input.facts["red-head"]` is the current branch's red-head record a red landing
 stop wrote — each failed run with whether its log was read, and each check still
 running — or `null` when the branch has none (CLOUD-2270).
+`input.facts["shell-introduced"]` is `{look, reason}` for a write: whether it
+authors shell (`is`, `is-not`, `could-not-look`) and, when `is`, by `shell-path`
+or `shebang` — decided in Rust by `shell.rs`, never the content (CLOUD-2335).
 `input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
 the task runner's own argv, read from a receipt minted at session start so the
 mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a

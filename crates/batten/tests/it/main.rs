@@ -438,6 +438,7 @@ mod secrets_kind;
 mod semver_gate;
 mod session_drain;
 mod session_provisioning;
+mod shell_authored;
 mod shell_banned;
 mod shell_retirement;
 mod shell_retirement_cost;
