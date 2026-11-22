@@ -7464,6 +7464,8 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[],
     },
+    // unreached: "modules metrics" CLOUD-2821 an operator runs it to read a crate's
+    // module-graph record line; the ratchet calls the library, not the verb.
     CommandDecl {
         path: "modules metrics",
         id: "modules.metrics",
@@ -7486,7 +7488,9 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // `write`: it moves files and rewrites paths and manifests in the working
     // tree. A cut that is not closed downward writes nothing and exits 2.
-    // The `rust` preset's `crate reach unsafe` remedy (CLOUD-2812).
+    // The `rust` preset's `crate reach unknown` remedy (CLOUD-2812).
+    // unreached: "modules cut" CLOUD-2812 an operator runs it from the `rust`
+    // preset's remedy route and the crate-split skill; nothing in-tree cuts a crate.
     CommandDecl {
         path: "modules cut",
         id: "modules.cut",
