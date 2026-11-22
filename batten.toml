@@ -7716,6 +7716,11 @@ line_sources = [
   "crates/batten-facts/src/**/*.rs",
   "crates/batten-base/src/**/*.rs",
   "crates/batten-core/src/**/*.rs",
+  # The crate split's other homes (#1276): `batten-codemods` holds suites the
+  # crate-split rows name (`tests/cut_crate.rs`), and `tools/*` its own. Outside
+  # these globs an obligation naming one could never bind.
+  "crates/batten-codemods/**/*.rs",
+  "tools/*/src/**/*.rs",
 ]
 module = "policy/obligations-bound.rego"
 severity = "deny"
