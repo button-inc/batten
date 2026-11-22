@@ -299,6 +299,10 @@ pub(crate) struct Declared<'a> {
     pub uses: &'a [String],
     /// The source files to acquire as unit nodes (CLOUD-1008).
     pub units: &'a [String],
+    /// The rev this row's per-file facts are ALSO acquired at, as
+    /// `input.tree.base.<family>` (plan item 4), or `None` for a row with no
+    /// `base`.
+    pub base: Option<&'a str>,
     /// The paths this row declared a STAGED read of (CLOUD-1203).
     ///
     /// The ROW's own list rather than the run's, which is what scopes the read to
@@ -2572,9 +2576,15 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         field: "direction",
         declares: Declares::NotFactBearing("which way a ratchet turns"),
     },
+    // ONE COLUMN, ONE QUESTION — *since where* (`Rule::base`'s own doc). On a
+    // ratchet or a shape row it names the rev a count or a subject list is
+    // read since; on a tree `policy` row it is where the row's per-file facts
+    // are ALSO acquired, as `input.tree.base.<family>` (plan item 4).
     ColumnCensus {
         field: "base",
-        declares: Declares::NotFactBearing("names the ref a ratchet compares against"),
+        declares: Declares::Fact(crate::facts::Fact::Base, |rule| {
+            rule.base.is_some() && rule.kind == crate::config_model::RuleKind::Policy
+        }),
     },
     ColumnCensus {
         field: "retires_with",
