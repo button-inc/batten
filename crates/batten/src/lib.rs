@@ -61,6 +61,7 @@ pub mod claim;
 pub mod cli;
 pub use batten_base::clock;
 pub use batten_base::codemod;
+pub use batten_base::crate_cut;
 pub use batten_fsio as fsio;
 pub use batten_stream as stream;
 pub mod collect;
@@ -666,6 +667,23 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Modules {
             command: cli::ModulesCommand::Metrics { root },
         }) => crate::module_graph::run_metrics(Path::new(&root), out, err),
+        Some(Command::Modules {
+            command:
+                cli::ModulesCommand::Cut {
+                    from,
+                    name,
+                    modules,
+                    dry_run,
+                },
+        }) => {
+            let modules: Vec<&str> = modules.iter().map(String::as_str).collect();
+            let cut = crate::crate_cut::Cut {
+                from: &from,
+                name: &name,
+                modules: &modules,
+            };
+            crate::crate_cut::run_cut(Path::new("."), &cut, dry_run, out)
+        }
         Some(Command::Modules {
             command: cli::ModulesCommand::Ratchet { record, check },
         }) => crate::module_graph::run_ratchet(Path::new(&record), check, out, err),

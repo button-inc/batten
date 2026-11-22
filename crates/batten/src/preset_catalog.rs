@@ -2160,8 +2160,8 @@ design, in the same change that adds it",
                     ),
                     run(
                         "crate cut other",
-                        "cargo run -q -p batten-codemods --example codemod -- cut-crate \
-<from> <name> <module>...",
+                        "batten modules cut --dry-run <from> <name> <module>..., then again \
+without --dry-run",
                     ),
                 ],
                 applicability: Applicability::Advice,

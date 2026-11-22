@@ -541,6 +541,18 @@ pub enum ModulesCommand {
         /// The source root, the directory holding `lib.rs`.
         root: String,
     },
+    /// Move a closed set of crate-root modules into a new sibling package
+    /// (CLOUD-2812).
+    Cut {
+        /// The package directory cut from.
+        from: String,
+        /// The new package's name.
+        name: String,
+        /// The crate-root modules that move.
+        modules: Vec<String>,
+        /// Print the plan and write nothing.
+        dry_run: bool,
+    },
     /// Hold every root the record names to its recorded metrics, tightening
     /// the record on improvement (CLOUD-2821).
     Ratchet {
@@ -4105,6 +4117,12 @@ fn modules_of(matches: &ArgMatches) -> Option<ModulesCommand> {
     match matches.subcommand()? {
         ("metrics", matches) => Some(ModulesCommand::Metrics {
             root: matches.get_one::<String>("root").cloned()?,
+        }),
+        ("cut", matches) => Some(ModulesCommand::Cut {
+            from: matches.get_one::<String>("from").cloned()?,
+            name: matches.get_one::<String>("name").cloned()?,
+            modules: matches.get_many::<String>("modules")?.cloned().collect(),
+            dry_run: matches.get_flag("dry_run"),
         }),
         ("ratchet", matches) => Some(ModulesCommand::Ratchet {
             record: matches.get_one::<String>("record").cloned()?,

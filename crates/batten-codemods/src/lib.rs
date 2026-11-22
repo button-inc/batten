@@ -11,7 +11,6 @@
 //!
 //! `cargo run -p batten-codemods --example codemod -- <recipe>` runs one by name.
 
-pub mod cut;
 pub mod fix;
 
 use std::collections::BTreeMap;
