@@ -88,7 +88,7 @@ fn stream(fixture: &str) -> transcript::Stream {
         Some("transcript.jsonl"),
         Some(batten::config_model::Harness::ClaudeCode),
     ) {
-        Capability::Present(stream) => stream,
+        Capability::Present(stream) => *stream,
         other => panic!("fixture did not parse: {}", other.as_str()),
     }
 }

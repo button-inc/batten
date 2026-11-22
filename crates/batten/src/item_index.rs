@@ -388,6 +388,9 @@ impl Index {
     }
 }
 
+/// One item's declaration site: its module and its name there.
+type Site = (String, String);
+
 /// Items that moved between files from `before` to `after`.
 ///
 /// TWO CONDITIONS, AND THE SECOND IS WHAT MAKES IT SAFE. The name is declared
@@ -410,7 +413,7 @@ pub fn moved_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
         .values()
         .flat_map(|module| module.declared.keys())
         .collect();
-    let mut candidates: Vec<(String, (String, String), (String, String))> = names
+    let mut candidates: Vec<(String, Site, Site)> = names
         .into_iter()
         .filter_map(|name| {
             let (base, head) = (before.sites(name), after.sites(name));
