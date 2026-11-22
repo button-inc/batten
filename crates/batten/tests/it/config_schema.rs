@@ -753,8 +753,12 @@ fn schema_check_globbed_modules() -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let entry = line.trim().trim_end_matches(',').trim_matches('"');
-            (entry.starts_with("crates/") && entry.contains("/src/") && entry.ends_with(".rs"))
-                .then(|| entry.to_owned())
+            (entry.starts_with("crates/")
+                && entry.contains("/src/")
+                && std::path::Path::new(entry)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("rs")))
+            .then(|| entry.to_owned())
         })
         .collect();
     modules.sort();

@@ -1647,6 +1647,11 @@ pub struct Defects {
 }
 
 impl Defects {
+    /// Refuse a `[defects]` table naming no path.
+    ///
+    /// # Errors
+    ///
+    /// A usage error when `path` is empty or whitespace.
     pub fn validate(&self) -> Result<()> {
         if self.path.trim().is_empty() {
             return Err(UsageError::raise(
@@ -2433,6 +2438,11 @@ pub struct Wiring {
 }
 
 impl Wiring {
+    /// Refuse a malformed `[wiring]` table.
+    ///
+    /// # Errors
+    ///
+    /// The reason, when a `disarm` row is malformed.
     pub fn validate(&self) -> Result<(), String> {
         for row in &self.disarm {
             if row.path.is_empty() {

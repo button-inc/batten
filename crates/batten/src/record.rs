@@ -56,6 +56,7 @@
 //! in this family for a secret to appear.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Read as _, Write};
 use std::path::{Path, PathBuf};
 
@@ -1008,8 +1009,10 @@ fn plan_merged(held: &str, incoming: &str) -> PlanMerge {
     let kept = entries.len() - added - changed;
     let body = entries
         .iter()
-        .map(|(id, status)| format!("{id} {status}\n"))
-        .collect();
+        .fold(String::new(), |mut text, (id, status)| {
+            let _ = writeln!(text, "{id} {status}");
+            text
+        });
     PlanMerge {
         body,
         added,
@@ -1086,8 +1089,11 @@ pub fn plan_mechanisms(git_dir: &Path, branch: &str, rows: &[(&str, &str)]) -> R
                 .next()
                 .is_some_and(|id| !held_ids.contains(id))
         })
-        .map(|line| format!("{line}\n"))
-        .collect();
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
     let merged = plan_merged(&held, &fresh);
     store(&path, &merged.body)?;
     Ok(merged.added)

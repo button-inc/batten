@@ -1553,6 +1553,10 @@ pub fn judge(recorded: &Metrics, measured: &Metrics) -> Judged {
 /// # Errors
 ///
 /// `out` or `err` cannot be written.
+// DELETED, not split: `modules ratchet` and `modules.lock` retire into the
+// `rust-quality` preset at plan step 14 (CLOUD-2821), the commit that bumps
+// the engine pin. Two lines over the limit do not warrant reshaping dead code.
+#[allow(clippy::too_many_lines)]
 pub fn run_ratchet(
     record: &Path,
     check: bool,

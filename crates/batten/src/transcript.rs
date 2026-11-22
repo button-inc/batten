@@ -2238,7 +2238,6 @@ pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    #[cfg(test)]
     // --- the independent-session census (CLOUD-1717) -----------------------
 
     /// One authored user turn, in the host's real shape.

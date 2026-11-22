@@ -855,16 +855,13 @@ pub fn any(store_dir: &Path) -> bool {
     })
 }
 
+/// Each store directory's records, with the directory mtime they were read at.
+type Memo = std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>;
+
 /// [`load_all`]'s per-process memo: each store directory's records, with the
 /// directory mtime they were read at.
-fn memo() -> &'static std::sync::Mutex<
-    std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>,
-> {
-    static MEMO: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>,
-        >,
-    > = std::sync::OnceLock::new();
+fn memo() -> &'static std::sync::Mutex<Memo> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
     MEMO.get_or_init(Default::default)
 }
 
