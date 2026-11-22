@@ -1064,11 +1064,44 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     },
     VendoredDoc {
         id: "shell place refused",
-        why: Some(
-            "Only files that must run where nothing else can are shell, and the census declaration names them",
-        ),
+        why: Some("A migrating repository's shell may shrink, and no new shell file may arrive"),
         act: &["write it as a verb, module or recorder"],
-        dont: &["add a `.sh`, `.bash` or `.bats` file outside the declared set"],
+        dont: &["add a `.sh`, `.bash` or `.bats` file the census does not admit"],
+    },
+    VendoredDoc {
+        id: "shell write refused",
+        why: Some(
+            "This repository stopped writing shell, and the write is the cheapest place to hear it",
+        ),
+        act: &["write it as Rust, a `batten` verb, or an argv task"],
+        dont: &["give the file a name that hides its language"],
+    },
+    VendoredDoc {
+        id: "shell present refused",
+        why: Some("The ban refuses shell wherever it is, unless a generated entry admits it"),
+        act: &[
+            "port it to a verb, module or argv task",
+            "or declare `mode = \"migrate\"` in `[census.shell]` while it is ported",
+        ],
+        dont: &["rename the file to hide its language"],
+    },
+    VendoredDoc {
+        id: "file write refused",
+        why: Some("A migrating repository's existing shell files may only lose code lines"),
+        act: &["put the new logic in a verb, module or argv task"],
+        dont: &["move the lines into another shell file"],
+    },
+    VendoredDoc {
+        id: "shell path missing",
+        why: Some("A generated entry covering no tracked file admits shell nobody reviewed"),
+        act: &["delete the entry, or correct its glob"],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "shell test missing",
+        why: Some("A generated entry stands on a test that holds the generator's bytes"),
+        act: &["point `check` at the test that pins the generated file"],
+        dont: &[],
     },
     VendoredDoc {
         id: "diff key missing",
