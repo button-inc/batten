@@ -28512,7 +28512,7 @@ fn register_transcript_detectors(
             report_transcript_capability(&capability, mode, err)?;
             return Ok(());
         }
-        transcript::Capability::Present(stream) => stream,
+        transcript::Capability::Present(stream) => &**stream,
     };
     register_completion(repo, recording, config, declared, stream, mode, err)?;
     register_bypass(recording, declared, stream, mode, err)
