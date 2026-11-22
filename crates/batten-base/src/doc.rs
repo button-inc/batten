@@ -1267,6 +1267,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["use a bare `--force-with-lease`, which compares a stale tracking ref"],
     },
     VendoredDoc {
+        id: "branch write unnamed",
+        why: Some("A lease naming no expected value is defeated by any background fetch"),
+        act: &[
+            "`git push --force-with-lease=<ref>:<sha>`",
+            "`git push --force-with-lease --force-if-includes`",
+        ],
+        dont: &["fetch, then push a bare `--force-with-lease`: it compares EQUAL"],
+    },
+    VendoredDoc {
         id: "commit write loose",
         why: Some("A linear trunk refuses a merge commit at the fast-forward, after CI"),
         act: &["`batten land replay <base>`", "`git pull --rebase`"],

@@ -8,11 +8,14 @@
 #MUTANT push-option-value-unread|s@^\tnot push_option_value(program.arguments, i)$@\ttrue@|a_push_option_value_is_not_a_force
 # Trunk-based development: a shared branch is not rewritten under its readers.
 #
-# `--force-with-lease` is deliberately NOT matched. It is the sanctioned form —
-# it refuses when the remote moved, which is the whole difference between
-# "I know what I am replacing" and "replace whatever is there". A preset that
-# banned both would push its consumers toward the bypass rather than toward the
-# safer flag.
+# `--force-with-lease` is NOT matched here, and is not therefore sanctioned: a
+# lease naming no expected value is refused by the `lease-asserted` preset,
+# because git-push(1) itself says such a lease "is
+# trivially defeated" by a background fetch. The sanctioned forms are the
+# asserted ones, `--force-with-lease=<ref>:<sha>` and a lease with
+# `--force-if-includes`: each refuses when the remote moved past what this
+# clone integrated, which is the whole difference between "I know what I am
+# replacing" and "replace whatever is there".
 #
 # Names no repository, no ref and no task: this is true of the practice, which is
 # what a vendored preset may contain (non-negotiable rule 1).
