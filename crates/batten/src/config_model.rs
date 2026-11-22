@@ -4529,6 +4529,16 @@ pub struct Rule {
     /// the spelling that matters and it ships with its literal column.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub use_sources: Vec<String>,
+    /// The source files this policy row reads as **units**, glob-selected
+    /// (CLOUD-1008): every function, comment and string in a Rust file, and every
+    /// function and `:=` binding in a Rego module, as D4 nodes with counts.
+    ///
+    /// Glob-only, without a literal sibling column, deliberately: a gate over
+    /// code units is a gate over every file of a language by construction, and
+    /// house style §8 keeps configuration narrow. Only a row declaring it pays a
+    /// parse; nothing is acquired for a row that does not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unit_sources: Vec<String>,
     /// The git facts this policy row reads, **declared** (CLOUD-907).
     ///
     /// [`Rule::documents`]'s sibling for the family that is not a file, and the

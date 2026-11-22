@@ -535,6 +535,7 @@ fn copy_row(row: &Rule, id: &str, folder: &str) -> Vec<(String, crate::config_ed
         ("line_sources", &row.line_sources),
         ("invocation_sources", &row.invocation_sources),
         ("use_sources", &row.use_sources),
+        ("unit_sources", &row.unit_sources),
         ("delta_sources", &row.delta_sources),
     ];
     for (key, values) in selectors {

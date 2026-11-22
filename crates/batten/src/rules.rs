@@ -890,6 +890,7 @@ impl RuleKindExt for RuleKind {
                 "invocation_sources",
                 "uses",
                 "use_sources",
+                "unit_sources",
                 // CLOUD-1167. A declared READ like the four above, and the only
                 // one whose subject lives outside the repository — which is why
                 // it is permitted on this kind alone: `check` is bounded by the
@@ -3416,6 +3417,9 @@ pub(crate) enum Want {
     Lines,
     /// Parsed as Rust, and reduced to its call sites (CLOUD-914).
     Invocations,
+    /// Parsed by its language's backend and reduced to D4 unit nodes
+    /// (CLOUD-1008).
+    Units,
     /// Parsed as Rust, and reduced to its `use` edges (CLOUD-762).
     Uses,
 }
@@ -3442,6 +3446,8 @@ pub(crate) enum Wanted {
     Lines,
     /// Parsed as Rust, reduced to call sites.
     Invocations,
+    /// Parsed by its language's backend, reduced to unit nodes.
+    Units,
     /// Parsed as Rust, reduced to `use` edges.
     Uses,
 }
@@ -3457,6 +3463,10 @@ pub(crate) enum Acquired {
     /// parsed and calls nothing — a real answer. A file the parser refused is
     /// [`NotAcquired::Unparsed`], never this.
     Invocations(Vec<crate::invocation::Invocation>),
+    /// The file's unit nodes (CLOUD-1008), already in their projected shape.
+    /// An EMPTY vector is a file that parsed and holds no unit; a file its
+    /// backend refused is [`NotAcquired::Unparsed`], never this.
+    Units(Vec<serde_json::Value>),
     /// The file's `use` edges and its own export table (CLOUD-762). Both halves,
     /// because resolution is a post-pass across the declared set and the crate
     /// root's table is what it reads.
@@ -3677,6 +3687,13 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
                 Acquired::No(NotAcquired::Unparsed)
             }
         },
+        // The backend seam (CLOUD-1578): the extension routes to the one parser
+        // that answers for that language, and a refusal from any of them is
+        // `Unparsed`, never an empty node list.
+        Want::Units => match unit_nodes(rel_path, &text) {
+            Some(nodes) => Acquired::Units(nodes),
+            None => Acquired::No(NotAcquired::Unparsed),
+        },
         Want::Parsed(format) => match parse_node(format, &text) {
             Ok(node) => Acquired::Parsed(node),
             Err(why) => Acquired::No(why),
@@ -3765,6 +3782,7 @@ pub(crate) fn want_for(path: &str, wanted: Wanted) -> Option<Want> {
         Wanted::Lines => Some(Want::Lines),
         Wanted::Invocations => Some(Want::Invocations),
         Wanted::Uses => Some(Want::Uses),
+        Wanted::Units => Some(Want::Units),
         Wanted::Document => crate::facts::Format::for_path(path).map(Want::Parsed),
     }
 }
@@ -3842,6 +3860,51 @@ pub(crate) fn declared_lines(rule: &Rule, files: &[String]) -> anyhow::Result<Ve
 /// its two siblings rather than selecting nothing.
 pub(crate) fn declared_invocations(rule: &Rule, files: &[String]) -> anyhow::Result<Vec<String>> {
     select_declared(&rule.invocations, &rule.invocation_sources, files)
+}
+
+/// Everything a row's [`Rule::unit_sources`] globs select (CLOUD-1008).
+///
+/// # Errors
+///
+/// A [`UsageError`] for a pattern `globset` cannot parse, as its siblings.
+pub(crate) fn declared_units(rule: &Rule, files: &[String]) -> anyhow::Result<Vec<String>> {
+    select_declared(&[], &rule.unit_sources, files)
+}
+
+/// One file's unit nodes, through the backend its extension routes to
+/// (CLOUD-1578's seam): Rust through the one lossless parse, Rego through
+/// regorus. `None` when the backend refused the text or no backend owns the
+/// extension, which the caller reads as could-not-look.
+///
+/// A Rust `fn` node's counts gain `tokens`: `o200k_base` over exactly the slice
+/// the capture-view reader would serve, so a fact about a unit agrees with what
+/// a reader of that unit is handed. Comments and strings are not tokenized.
+fn unit_nodes(rel_path: &str, text: &str) -> Option<Vec<serde_json::Value>> {
+    match rel_path.rsplit_once('.')?.1 {
+        "rs" => {
+            let crate::facts::Look::Is(units) = crate::units::units(text) else {
+                return None;
+            };
+            Some(
+                units
+                    .into_iter()
+                    .map(|unit| {
+                        let slice = (unit.kind == "fn")
+                            .then(|| text.get(unit.offset..unit.offset + unit.bytes))
+                            .flatten();
+                        let mut node = serde_json::json!(unit);
+                        if let Some(slice) = slice {
+                            node["counts"]["tokens"] =
+                                serde_json::json!(crate::o200k::tokens(slice));
+                        }
+                        node
+                    })
+                    .collect(),
+            )
+        }
+        "rego" => crate::rego_units::units(rel_path, text),
+        _ => None,
+    }
 }
 
 /// Every path a row hands its bundle as a **`use` graph** (CLOUD-762).
@@ -3969,7 +4032,7 @@ pub(crate) fn acquire_declared(
         // A path a row wants as lines and another row wants as call sites is two
         // entries, and both rows get their own fact — which is the whole of the
         // defect this shape fixes.
-        let wanted: [(Wanted, Vec<String>); 4] = [
+        let wanted: [(Wanted, Vec<String>); 5] = [
             (Wanted::Document, declared),
             (
                 Wanted::Lines,
@@ -3980,6 +4043,10 @@ pub(crate) fn acquire_declared(
                 declared_invocations(rule, files).unwrap_or_default(),
             ),
             (Wanted::Uses, declared_uses(rule, files).unwrap_or_default()),
+            (
+                Wanted::Units,
+                declared_units(rule, files).unwrap_or_default(),
+            ),
         ];
         for (form, paths) in wanted {
             for path in paths {
@@ -4265,6 +4332,11 @@ fn project_declared(
         Some(Acquired::Invocations(sites)) if wanted == Wanted::Invocations => {
             Ok(serde_json::json!(sites))
         }
+        // The same contract for units (CLOUD-1008): a refused parse arrived
+        // as `Acquired::No(Unparsed)`, so a present path is always a real answer.
+        Some(Acquired::Units(nodes)) if wanted == Wanted::Units => {
+            Ok(serde_json::json!({"nodes": nodes}))
+        }
         // The `use` family is handled by its caller rather than here, because an
         // edge set is completed against the crate root's re-export table and that
         // table is one value for the whole declared set — a per-path projection
@@ -4395,7 +4467,13 @@ fn project_uses(
                 missing.push(path.clone());
                 causes.push((path.clone(), *why));
             }
-            Some(Acquired::Parsed(_) | Acquired::Lines(_) | Acquired::Invocations(_)) | None => {
+            Some(
+                Acquired::Parsed(_)
+                | Acquired::Lines(_)
+                | Acquired::Invocations(_)
+                | Acquired::Units(_),
+            )
+            | None => {
                 missing.push(path.clone());
                 causes.push((path.clone(), NotAcquired::Absent));
             }
@@ -4489,6 +4567,8 @@ pub(crate) struct Projected {
     pub read_lines: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Invocations`] — path -> its call sites.
     pub call_sites: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Units`] — path -> its D4 unit nodes (CLOUD-1008).
+    pub units: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Uses`] — path -> its resolved `use` edges.
     pub use_edges: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::External`] — declared id -> parsed node.
@@ -4532,6 +4612,7 @@ fn project_paths(
         parsed: serde_json::Map::new(),
         read_lines: serde_json::Map::new(),
         call_sites: serde_json::Map::new(),
+        units: serde_json::Map::new(),
         use_edges: serde_json::Map::new(),
         external_files: serde_json::Map::new(),
         staged_nodes: serde_json::Map::new(),
@@ -4569,6 +4650,7 @@ fn project_paths(
             Wanted::Invocations,
             &mut out.call_sites,
         ),
+        (declared.units, Wanted::Units, &mut out.units),
     ] {
         for path in paths {
             match project_declared(cache, path, wanted) {
@@ -4686,7 +4768,13 @@ fn project_external(
             // Acquired under another projection, or never reached because the
             // run's read budget was already spent. Neither is this family's
             // answer and neither is an empty one.
-            Some(Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Uses(_)) | None => {
+            Some(
+                Acquired::Lines(_)
+                | Acquired::Invocations(_)
+                | Acquired::Units(_)
+                | Acquired::Uses(_),
+            )
+            | None => {
                 missing.push(row.id.clone());
                 causes.push((row.id.clone(), NotAcquired::Absent));
             }
@@ -5151,6 +5239,7 @@ pub(crate) fn tree_document(
                 serde_json::Value::Object(std::mem::take(&mut projected.call_sites))
             }
             crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
+            crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
             // CLOUD-1167. Keyed by the row's declared id, so an id this row did
             // not name is simply not here — the negative half that makes this a
             // projection of a declared set rather than a filesystem scan.
@@ -5499,6 +5588,7 @@ fn policy_rule(
     let declared_line_paths = declared_lines(rule, tracked).ok()?;
     let declared_invocation_paths = declared_invocations(rule, tracked).ok()?;
     let declared_use_paths = declared_uses(rule, tracked).ok()?;
+    let declared_unit_paths = declared_units(rule, tracked).ok()?;
     // A row that declared a selector and matched nothing has not established
     // anything, and saying so is the point: a selector selecting nothing and a
     // tree satisfying the predicate are otherwise the same green.
@@ -5529,6 +5619,7 @@ fn policy_rule(
         || !rule.line_sources.is_empty()
         || !rule.invocation_sources.is_empty()
         || !rule.use_sources.is_empty()
+        || !rule.unit_sources.is_empty()
         || !rule.delta_sources.is_empty();
     let delta_resolved = !rule.delta_sources.is_empty() && git.base_delta.is_some();
     // An `[[rule.external]]` row is a declaration like the rest, so a row whose
@@ -5541,6 +5632,7 @@ fn policy_rule(
         && declared_line_paths.is_empty()
         && declared_invocation_paths.is_empty()
         && declared_use_paths.is_empty()
+        && declared_unit_paths.is_empty()
         && !delta_resolved
         && !external_declared;
     if selected_nothing && selectors_declared {
@@ -5553,6 +5645,7 @@ fn policy_rule(
             lines: &declared_line_paths,
             invocations: &declared_invocation_paths,
             uses: &declared_use_paths,
+            units: &declared_unit_paths,
             staged: &rule.staged,
             staged_format: rule.format,
             external: &rule.external,
@@ -8925,7 +9018,7 @@ fn document_in_file(
         // Unreachable: this site always asks for `Want::Parsed`. Arms rather
         // than a wildcard so a caller that ever asks for lines or call sites
         // here has to decide what a node path means over them.
-        Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Uses(_) => {
+        Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Units(_) | Acquired::Uses(_) => {
             Some(DOCUMENT_UNREADABLE)
         }
         Acquired::Parsed(document) => match document.at(node_path) {
@@ -9490,9 +9583,11 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
         // Unreachable: this site always asks for `Want::Parsed`. An arm rather
         // than a wildcard, so a caller that ever asks for lines here has to
         // decide what a node path means over them.
-        Acquired::No(_) | Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Uses(_) => {
-            Look::CouldNotLook
-        }
+        Acquired::No(_)
+        | Acquired::Lines(_)
+        | Acquired::Invocations(_)
+        | Acquired::Units(_)
+        | Acquired::Uses(_) => Look::CouldNotLook,
         Acquired::Parsed(document) => match document.at(node_path) {
             Look::Is(node) => match node.scalar() {
                 Some(value) => Look::Is(value),
@@ -10296,6 +10391,7 @@ mod tests {
                 lines: &[],
                 invocations: &[],
                 uses: &[],
+                units: &[],
                 staged: &[],
                 staged_format: None,
                 external: &[],
@@ -10917,6 +11013,7 @@ mod tests {
                 lines: &["subject.rs".to_owned()],
                 invocations: &["subject.rs".to_owned()],
                 uses: &[],
+                units: &[],
                 staged: &[],
                 staged_format: None,
                 external: &[],
@@ -17713,6 +17810,7 @@ mod half_tests {
                 Fact::GitIndex,
                 Fact::Staged,
                 Fact::Invocations,
+                Fact::Units,
                 Fact::Uses,
             ],
             "a fact joins the tree half only by an edit here, never by default"

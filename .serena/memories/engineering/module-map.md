@@ -58,7 +58,9 @@ row here, so a new module lands with its line.
 - `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the `[contract] tracked` surface, compare against this session's snapshot, and report the change-set once on the advisory channel.
 - `defects.rs` — the in-tree append-only defect ledger (CLOUD-52): `[defects]`, one `deny_unknown_fields` `Record`, `defects add [-n]` / `defects query`, and the built-in gate `check` runs.
 - `deferral.rs` (crate `batten-base`) — a deferred decision's REVERSAL CONDITION as data (CLOUD-759): `[[deferral]]` carries the owning `issue`, the `fact` the condition compares, the value it `reaches`, and a `reason` the gate does not compare.
-- `source.rs` (crate `batten-facts`) — the ONE `syn::parse_file` in the crate (CLOUD-1008).
+- `source.rs` (crate `batten-facts`) — the ONE call site of each Rust parser (CLOUD-1008): `syn::parse_file` until its consumers move, and the lossless `rust_parse` / `rust_tree` on `ra_ap_syntax` (could-not-look on any parse error).
+- `units.rs` (crate `batten-facts`) — the `units` fact's Rust arm (CLOUD-1008 D4, as amended): one node per function, comment, doc comment and string, each `{kind, position, line, counts}` off the one lossless tree; numbers only, no judgement.
+- `rego_units.rs` — the `units` fact's Rego arm: function and `:=`-binding nodes read off the regorus AST, so a preset can refuse a partial helper bound with `:=` (CLOUD-2777).
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_ config can still carry.
 - `brief.rs` (crate `batten-base`) — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
 - `surface_table.rs` — the command surface as data (house style §11, CLOUD-2789): `SURFACE`, the declaration types and their constructors, the value parsers and the value enums they parse into; `surface` interprets it, and a config check that a row names a real command reads it without naming the command layer.
