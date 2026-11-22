@@ -19,7 +19,7 @@ package batten.crate_reach
 
 import rego.v1
 
-rules contains "crate reach unsafe"
+rules contains "crate reach wrong"
 
 lines := input.tree.records["crate-reach"]
 
@@ -39,7 +39,7 @@ reached_of(fields) := [] if count(fields) == 1
 allow_of(name) := data.batten.patterns[concat("", ["crate-allow-", name])]
 
 violation contains {
-	"rule": "crate reach unsafe",
+	"rule": "crate reach wrong",
 	"verdict": "crate reach unsafe",
 	"subjects": [{"artifact": name}, {"artifact": other}],
 } if {
@@ -50,7 +50,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "crate reach unsafe",
+	"rule": "crate reach wrong",
 	"verdict": "crate declare absent",
 	"subjects": [{"artifact": name}],
 } if {
