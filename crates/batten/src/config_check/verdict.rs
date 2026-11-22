@@ -1129,6 +1129,18 @@ means what this session runs may differ from what the tree declares.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "directive read missing",
+        gloss: "the context was compacted and the operator's directives on this branch are journaled",
+        class: "Every operator message on a branch is journaled verbatim as it is given. A \
+compaction replaces the window with a summary, which drops what it judges minor, and a dropped \
+standing directive is work the session repeats. The count subject is how many messages the \
+journal holds; the path subject is the journal to read.",
+        // The journal is per branch, so its exact path is the subject; the route
+        // names the store that holds every branch's.
+        routes: &[read("directive read first", ".git/batten-receipts")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "hook run missing",
         gloss: "the engine did not run at this session's start, so earlier calls went unmediated",
         class: "Hosts register the engine by bare name, so a session whose start event found no \

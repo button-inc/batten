@@ -473,6 +473,9 @@ pub enum Native by id {
     LaneCountSpent => "lane run spent",
     /// A declared contract file moved under a running session.
     ContractReadStale => "contract read stale",
+    /// A compaction dropped the operator's directives from the window, and the
+    /// branch's journal still holds them (CLOUD-2811).
+    DirectiveReadMissing => "directive read missing",
     /// The engine did not run at this session's start.
     HookRunMissing => "hook run missing",
     /// A drain's delta did not fit its token budget, so the relief valve cut
