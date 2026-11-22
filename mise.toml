@@ -2814,6 +2814,14 @@ run = "{{vars.batten}} perf measure"
 description = "Diagnose: sample one perf arm (noop, check, hook, passthrough, posttool, stop) and print where its time goes"
 run = "mise exec -- cargo run --release -q --manifest-path tools/batten-profile/Cargo.toml --target-dir target/profile-tool -- record"
 
+[tasks."semantic"]
+description = "Diagnose: run a rust-analyzer semantic pass over the crate (probe, traits) or its `demote` codemod"
+# The entry its manifest names (CLOUD-2803): a nested workspace, built into the
+# root `target/semantic` so `batten target prune` collects it. Kept, not
+# deleted, as the semantic move tool plan step 8's crate-split recipe builds
+# on (Lakos Vol. I 3.5: move an item down, or inject it).
+run = "mise exec -- cargo run --release -q --manifest-path tools/batten-semantic/Cargo.toml --target-dir target/semantic --"
+
 [tasks."perf-record"]
 description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
 run = "{{vars.batten}} perf record"
