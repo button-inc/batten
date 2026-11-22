@@ -176,7 +176,7 @@ pub fn plan(streams: Streams<'_>, read: &dyn Fn(&str) -> Option<String>) -> Plan
             if unused && stream == Stream::NonTest && !in_tests.contains(&key) {
                 // Unused only where tests are not compiled: tests use it.
                 if let Some(()) = gate(&mut suggestion, read) {
-                    plan.gated += 1
+                    plan.gated += 1;
                 } else {
                     plan.left += 1;
                     continue;
