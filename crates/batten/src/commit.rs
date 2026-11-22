@@ -294,6 +294,10 @@ pub trait CommitExt: Sized {
     fn validate(&self) -> Result<()>;
 
     /// The compiled pattern.
+    ///
+    /// # Errors
+    ///
+    /// When the pattern does not compile as a regex.
     fn matcher(&self) -> Result<Regex>;
 
     /// Judge subjects, returning every refusal as a pointer.

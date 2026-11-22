@@ -1863,7 +1863,7 @@ mod tests {
             landed
         };
         assert_eq!(
-            land("fold-once", &[0..12]),
+            land("fold-once", std::slice::from_ref(&(0..12))),
             land("fold-twice", &[0..5, 5..12])
         );
     }

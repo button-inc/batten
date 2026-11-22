@@ -79,7 +79,7 @@ pub trait WatchedExt: Sized {
 
     /// The stable token this value is written as.
     #[must_use]
-    fn as_str(self) -> &'static str;
+    fn as_str(&self) -> &'static str;
 
     /// Whether this selection covers `stream`.
     #[must_use]
@@ -89,7 +89,7 @@ pub trait WatchedExt: Sized {
 impl WatchedExt for Watched {
     const ALL: &'static [Watched] = &[Watched::Stdout, Watched::Stderr, Watched::Both];
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Watched::Stdout => "stdout",
             Watched::Stderr => "stderr",

@@ -22,6 +22,7 @@
 //! before, which is the direction that can only report more, never less.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use ra_ap_syntax::ast::{
     self, HasAttrs as _, HasModuleItem as _, HasName as _, HasVisibility as _,
@@ -1142,8 +1143,10 @@ fn downgrade_shims(
         }
         let attributes: String = declaration
             .attrs()
-            .map(|attribute| format!("{attribute}\n"))
-            .collect();
+            .fold(String::new(), |mut text, attribute| {
+                let _ = writeln!(text, "{attribute}");
+                text
+            });
         let lines: Vec<String> = staying
             .iter()
             .map(|leaf| format!("{attributes}{}", line(leaf)))
