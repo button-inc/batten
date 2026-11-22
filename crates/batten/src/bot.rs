@@ -552,12 +552,27 @@ pub mod forge {
     ///
     /// As [`get`].
     pub fn commit_messages(repo: &str, number: &str) -> Result<String> {
+        Ok(commits(repo, number)?
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    /// Each commit of pull request `number` as `(sha, message)`, so a caller
+    /// can subtract the commits it shares with another branch by identity
+    /// rather than by matching prose: a stacked pull request carries the
+    /// identical commits of the one it is built on.
+    ///
+    /// # Errors
+    ///
+    /// When the listing cannot be read.
+    pub fn commits(repo: &str, number: &str) -> Result<Vec<(String, String)>> {
         let listing = get(&format!("repos/{repo}/pulls/{number}/commits?per_page=100"))?;
         Ok(items(&listing)
             .iter()
-            .map(|commit| text(&commit["commit"]["message"]))
-            .collect::<Vec<_>>()
-            .join("\n"))
+            .map(|commit| (text(&commit["sha"]), text(&commit["commit"]["message"])))
+            .collect())
     }
 
     #[cfg(test)]
