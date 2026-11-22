@@ -2726,6 +2726,102 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "modules impls",
+          "id": "modules.impls",
+          "about": "Print how many inherent impls sit away from their type's module, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "modules metrics",
+          "id": "modules.metrics",
+          "about": "Print every module-graph metric of a source root as one record line",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "modules ratchet",
+          "id": "modules.ratchet",
+          "about": "Refuse any module-graph metric worse than the committed record, and tighten the record on improvement",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Never write the record: one looser than the tree is refused too"
+            },
+            {
+              "name": "record",
+              "short": null,
+              "long": "record",
+              "takes_value": true,
+              "positional": false,
+              "help": "The record file, one `<root> cycle=<n> propagation=<bp> impls=<n> shims=<n>` line per root"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "modules shims",
+          "id": "modules.shims",
+          "about": "Print how many re-exports of the crate's own items sit outside its root, refusing more than --max",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max",
+              "short": null,
+              "long": "max",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "positional": false,
+              "help": "The crate's source root, the directory holding lib.rs"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -3985,7 +4081,16 @@ expression: stdout_of(&output)
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
           "effect": "write",
           "data_channel": false,
-          "flags": [],
+          "flags": [
+            {
+              "name": "replace",
+              "short": null,
+              "long": "replace",
+              "takes_value": false,
+              "positional": false,
+              "help": "Replace the whole plan instead of merging these entries into it by id"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -5410,6 +5515,14 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "structural",
+              "short": null,
+              "long": "structural",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge only removed tests, without building: the seconds half the lap runs first"
             }
           ],
           "subcommands": []
@@ -5783,6 +5896,18 @@ expression: stdout_of(&output)
     {
       "id": "modules.cycle",
       "path": "modules cycle"
+    },
+    {
+      "id": "modules.impls",
+      "path": "modules impls"
+    },
+    {
+      "id": "modules.metrics",
+      "path": "modules metrics"
+    },
+    {
+      "id": "modules.shims",
+      "path": "modules shims"
     },
     {
       "id": "mutate.census",
