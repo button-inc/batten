@@ -510,7 +510,7 @@ model = "some-model-id"
 # lists what this binary carries; today that is `check-verdict`, `ci-hygiene`,
 # `ci-signal`, `claude-code-cloud`, `claude-code-plan`, `commit-hygiene`, `engine-hygiene`,
 # `landing-loop`, `lease-asserted`, `linear-history`, `mise`, `pinned-toolchain`, `red-head`,
-# `release-hygiene`, `shell-hygiene`, `supply-chain`, `tracker-hygiene` and
+# `release-hygiene`, `rust`, `shell-hygiene`, `supply-chain`, `tracker-hygiene` and
 # `trunk-based`.
 #
 # SCOPE IS THE FIELD TO GET RIGHT. A preset's modules read one surface's facts:
