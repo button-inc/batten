@@ -429,12 +429,14 @@ fn relative_to(manifest: &str, home: &str) -> String {
         .strip_suffix("Cargo.toml")
         .unwrap_or_default()
         .trim_end_matches('/');
-    let ups = if dir.is_empty() {
-        0
-    } else {
-        dir.split('/').count()
-    };
-    format!("{}{home}", "../".repeat(ups))
+    let from: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    let to: Vec<&str> = home.split('/').collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    format!(
+        "{}{}",
+        "../".repeat(from.len() - shared),
+        to[shared..].join("/")
+    )
 }
 
 /// Add `name` to `[dependencies]` (or `[dev-dependencies]` when only tests
