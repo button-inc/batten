@@ -1103,13 +1103,18 @@ hooks {
       // in the 15-minute lap while each commit ran a filtered test set. Each
       // takes seconds over the source tree. The record is `modules.lock`, held
       // by one ratchet (CLOUD-2821): a worse metric or a record looser than the
-      // tree is refused, and `mise run modules-ratchet` tightens it. `BATTEN_BIN`
-      // points `vars.batten` at the PATH engine so the commit pays no compile;
-      // `modules ratchet` first ships in the release this branch cuts, so until
-      // then that engine is `mise run install:local`'s.
+      // tree is refused, and `mise run modules-ratchet` tightens it.
+      //
+      // THE BRANCH ENGINE, NOT THE PATH ONE, until the pin names a release that
+      // carries `modules ratchet` (plan step 14). The PATH engine is the latest
+      // RELEASE wherever this runs — CI, main, a fresh container — and v0.0.220
+      // has no such verb, so forcing `BATTEN_BIN=batten` refused every commit
+      // touching Rust source everywhere but a machine that had run
+      // `mise run install:local`, which only hid the defect. `vars.batten`'s
+      // default compiles the tree's own engine; step 14 restores the override.
       ["module-census-pinned"] {
         glob = List("crates/**/src/**/*.rs", "modules.lock")
-        check = "env BATTEN_BIN=batten MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
+        check = "env MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
       }
       // A conflict marker is refused at the commit, not first in the slow lap
       // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`
