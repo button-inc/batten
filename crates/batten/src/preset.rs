@@ -595,6 +595,7 @@ mod tests {
     const FIXTURE: Manifest = Manifest {
         name: "fixture",
         version: 3,
+        suggested: true,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
