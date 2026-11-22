@@ -1379,7 +1379,6 @@ fn sentence(text: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// AN ENGINE FINDING NAMES ITS CLASS, NEVER A RULE NOTHING RESOLVES
     /// (CLOUD-2078), and its first sighting names no raising row: it has none.
     #[test]

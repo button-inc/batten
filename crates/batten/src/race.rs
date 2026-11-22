@@ -839,7 +839,6 @@ pub fn repo_slug(root: &std::path::Path) -> Option<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// Fails by: the committed grammar's keys dropped or replaced on their way
     /// through the trait this module asks.
     #[test]

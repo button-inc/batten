@@ -1462,7 +1462,6 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A REFUSAL NAMES ITS CAUSE, AND A REPAIR IS SAID ONCE (CLOUD-2505).
     #[test]
     fn a_refused_row_names_its_cause_and_a_repair_is_said_once() {

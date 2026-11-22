@@ -664,7 +664,6 @@ pub fn programs_in(script: &str) -> BTreeSet<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A `SHA256SUMS` body naming `digest` for every bootstrap target at v1.2.3.
     fn sums_of(digest: &str) -> String {
         TARGETS.iter().fold(String::new(), |mut sums, target| {

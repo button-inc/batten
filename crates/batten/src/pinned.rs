@@ -733,7 +733,6 @@ fn executable(path: &Path) -> bool {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// CLOUD-2315: an absent member and a present member holding the absence
     /// token's bytes are two different keys. Unframed, both concatenated to the
     /// same material, so a record keyed over one answered for the other.
