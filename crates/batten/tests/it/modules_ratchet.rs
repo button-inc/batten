@@ -101,6 +101,58 @@ fn a_worse_cycle_is_refused() {
     );
 }
 
+/// Fails by: an inherent impl split from its type, or a re-export of the
+/// crate's own item outside its root, passing a record taken at
+/// `impls=0 shims=0` (CLOUD-2792), or the refusal not naming the count. Each
+/// addition reuses an edge the cycle already has (`b → a` through `c`, and
+/// `c → a`), so the graph's cycle and propagation do not move and only the
+/// impl or shim count can refuse.
+#[test]
+fn a_new_split_impl_or_shim_is_refused() {
+    let dir = fixture("split");
+    common::write(&dir, "modules.lock", &format!("{MEASURED}\n"));
+    common::write(
+        &dir,
+        "src/a.rs",
+        "pub struct S;\npub fn f() { crate::b::f(); }\n",
+    );
+    assert_eq!(ratchet(&dir, &[]).status.code(), Some(0));
+
+    // `S` is declared in `a`; its inherent impl lands in `b`.
+    common::write(
+        &dir,
+        "src/b.rs",
+        "pub fn f() { crate::c::f(); }\nimpl crate::a::S { pub fn g(&self) {} }\n",
+    );
+    let out = ratchet(&dir, &[]);
+    assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+    assert!(
+        common::stderr(&out).contains("src impls 1 is worse than the recorded 0"),
+        "{}",
+        common::stderr(&out)
+    );
+
+    // Back home; now `c` re-exports `a`'s item outside the crate root.
+    common::write(&dir, "src/b.rs", "pub fn f() { crate::c::f(); }\n");
+    common::write(
+        &dir,
+        "src/c.rs",
+        "pub use crate::a::f as g;\npub fn f() { crate::a::f(); }\n",
+    );
+    let out = ratchet(&dir, &[]);
+    assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+    assert!(
+        common::stderr(&out).contains("src shims 1 is worse than the recorded 0"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(
+        record(&dir),
+        format!("{MEASURED}\n"),
+        "a refusal writes nothing"
+    );
+}
+
 /// Fails by: an improvement left unrecorded (so the next commit could spend
 /// it), `--check` writing, or `--check` passing a stale record.
 #[test]
