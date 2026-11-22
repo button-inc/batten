@@ -230,13 +230,6 @@ fn program_name(path: &str) -> String {
 ///
 /// Only each platform's read is under `cfg`; the layouts are [`darwin`]'s and
 /// [`windows_table`]'s pure parsers, which every leg tests (CLOUD-2509).
-#[cfg_attr(
-    windows,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "the other platforms' tables can fail to read; Windows' cannot"
-    )
-)]
 fn processes() -> Option<Vec<Process>> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -274,13 +267,14 @@ fn processes() -> Option<Vec<Process>> {
             true,
             ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
         );
-        Some(
-            system
-                .processes()
-                .values()
-                .filter_map(|process| windows_table::process(process.exe()?, process.start_time()))
-                .collect(),
-        )
+        let table: Vec<Process> = system
+            .processes()
+            .values()
+            .filter_map(|process| windows_table::process(process.exe()?, process.start_time()))
+            .collect();
+        // A TABLE WITH NO PROCESS WAS NOT READ: this process is always in it,
+        // so an empty listing is could-not-look, the other legs' `None`.
+        (!table.is_empty()).then_some(table)
     }
     #[cfg(not(any(
         target_os = "linux",
