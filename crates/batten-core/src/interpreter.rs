@@ -48,6 +48,7 @@ pub struct Grammar {
 impl Grammar {
     /// The short options one argv word carries: every letter of a bundle, or
     /// the one letter of a lone `-x`, or none for a long option or an operand.
+    #[must_use]
     pub fn shorts<'w>(&self, word: &'w str) -> Option<&'w str> {
         let rest = word.strip_prefix('-')?;
         if rest.is_empty() || rest.starts_with('-') {
@@ -64,6 +65,7 @@ impl Grammar {
     /// Only the bundle's leading LETTERS are options: `-W:no-deprecated` and
     /// `-d:Trace` attach a value after punctuation, and a letter inside that
     /// value is not a flag.
+    #[must_use]
     pub fn decisive(&self, bundle: &str) -> Option<(usize, char)> {
         bundle
             .char_indices()
@@ -88,6 +90,7 @@ const PLAIN: Grammar = Grammar {
 
 /// The grammar `program` is read through: its family's, or a conservative one
 /// for an interpreter a consumer declared that no family describes.
+#[must_use]
 pub fn grammar(program: &str) -> Grammar {
     match family(program) {
         // THE SHELLS (step 14). `-c` takes the script, bundled or alone
@@ -271,6 +274,7 @@ pub fn carried(program: &str, arguments: &[&str]) -> Carried {
     stop(file, false)
 }
 
+#[must_use]
 pub fn long_option(word: &str) -> (&str, Option<&str>) {
     match word.split_once('=') {
         Some((name, value)) if name.starts_with("--") => (name, Some(value)),
@@ -281,6 +285,7 @@ pub fn long_option(word: &str) -> (&str, Option<&str>) {
 /// Whether the declared `entry` names `program`: exactly, or as a versioned
 /// spelling of it (`python3` declares `python3.12`), since a row lists the
 /// interpreter and not every minor version the host installs.
+#[must_use]
 pub fn declares(entry: &str, program: &str) -> bool {
     program
         .strip_prefix(entry)
@@ -288,6 +293,7 @@ pub fn declares(entry: &str, program: &str) -> bool {
 }
 
 /// A character of a version suffix: `3.12`, `5.36`, `-22`.
+#[must_use]
 pub fn is_version_char(c: char) -> bool {
     c.is_ascii_digit() || matches!(c, '.' | '-')
 }
@@ -342,6 +348,7 @@ pub fn inline_values(grammar: &Grammar, arguments: &[&str]) -> Vec<String> {
 /// `None` when it runs an inline program, a module or stdin, or names nothing
 /// this can place. Each word is NORMALISED as the program is: a grouped
 /// command's closing paren rides on its last word.
+#[must_use]
 pub fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'a str> {
     let mut words = arguments.iter().map(|word| program_token(word));
     while let Some(word) = words.next() {
@@ -382,6 +389,7 @@ pub fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'
 }
 
 /// A word a static reading can resolve: no expansion, no home, no redirection.
+#[must_use]
 pub fn placeable(word: &str) -> bool {
     !word.is_empty()
         && !word.contains('$')
@@ -424,6 +432,7 @@ pub fn placeable(word: &str) -> bool {
 /// its `)` closes the `$(` inside it rather than a group around it — while
 /// reaching every case above. It is a rule about two characters, not a parser,
 /// and CLOUD-1381 is still what replaces it.
+#[must_use]
 pub fn program_token(token: &str) -> &str {
     let opened = token.trim_start_matches(['(', '{']);
     if opened.contains(['(', '{']) {

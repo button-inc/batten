@@ -326,7 +326,7 @@ fn no_module_reaches_deeper_than_the_recorded_worst() {
     let deepest = sizes
         .iter()
         .filter(|(_, module)| module.as_str() != batten::module_graph::LIB)
-        .last()
+        .next_back()
         .expect("the crate has modules");
 
     assert!(

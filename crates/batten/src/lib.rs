@@ -25186,9 +25186,9 @@ fn report_directives(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advic
     // the branch, kept by `record named corrections`. Each present one is a
     // count subject and a path subject; neither's text is emitted.
     let lines = |path: &Path| {
-        std::fs::read_to_string(path)
-            .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
-            .unwrap_or(0)
+        std::fs::read_to_string(path).map_or(0, |text| {
+            text.lines().filter(|line| !line.trim().is_empty()).count()
+        })
     };
     let journal = recorder::record_path(&git_dir, DIRECTIVES, &branch, None);
     let corrections = record::family_path(&git_dir, &branch, CORRECTIONS);
