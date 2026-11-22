@@ -444,7 +444,6 @@ impl<'a> Assembler<'a> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     const CONFIG: &str = "\
 version = 1
 

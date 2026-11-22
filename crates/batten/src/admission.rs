@@ -1179,7 +1179,6 @@ pub fn unanswered<'a>(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn binding() -> Binding {
         Binding {
             rule: "prose-only".to_owned(),
