@@ -65,7 +65,7 @@ pub trait VerbosityExt: Sized {
 
     /// The rung's token, as `--log-level` and `BATTEN_LOG_LEVEL` spell it.
     #[must_use]
-    fn as_str(self) -> &'static str;
+    fn as_str(&self) -> &'static str;
 
     /// The rung named by `token`, or `None` if it names none.
     ///
@@ -102,7 +102,7 @@ impl VerbosityExt for Verbosity {
 
     const DEFAULT: Verbosity = Verbosity::Normal;
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Verbosity::Silent => "silent",
             Verbosity::Quiet => "quiet",

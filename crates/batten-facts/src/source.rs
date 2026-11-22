@@ -244,13 +244,13 @@ mod tests {
     /// file read as could-not-look.
     #[test]
     fn the_lossless_parse_is_could_not_look_on_any_error_and_keeps_comments() {
+        use ra_ap_syntax::AstNode as _;
         let edition = ra_ap_syntax::Edition::Edition2024;
         assert!(matches!(rust_tree("", edition), crate::facts::Look::Is(_)));
         assert!(matches!(
             rust_tree("fn (", edition),
             crate::facts::Look::CouldNotLook
         ));
-        use ra_ap_syntax::AstNode as _;
         // LOSSLESS: the ordinary comment `syn` drops is a token here, which is
         // the comment span CLOUD-1008 asks for.
         let crate::facts::Look::Is(tree) = rust_tree("// ordinary\nfn f() {}\n", edition) else {
