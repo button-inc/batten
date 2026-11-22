@@ -2005,6 +2005,37 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
         }],
         patterns: &[],
     },
+    // Plan step 3 / CLOUD-2821: Rust code quality judged against a base, from
+    // facts the engine measures. First module: Decoupling Level never falls,
+    // which retires the `modules.lock` ratchet's propagation-cost line (PC
+    // falls as unconnected files are added; Mo et al., ICSE 2016).
+    Manifest {
+        name: "rust-quality",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            provider: None,
+            pointer: "<preset:rust-quality>/decoupling-level.rego",
+            source: include_str!("policy/presets/rust-quality/decoupling-level.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "module decoupling dropped",
+            gloss: "the change lowers the module graph's Decoupling Level against its base",
+            class: "Decoupling Level (Mo et al., ICSE 2016) scores how well a module graph \
+splits into small modules that few other files depend on, from 0 to 1. A new dependency on \
+a module, or files joined into one cycle past five, lowers it. Propagation cost is not \
+gated: it falls whenever an unconnected file is added, so it can be satisfied without \
+decoupling anything. Cut the new edge, or move the depended-upon code down so its \
+dependents need less of it.",
+            routes: &[run(
+                "edge cut first",
+                "remove the new `use`/qualified path the change added, or move the item it \
+names into a module below both",
+            )],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // CLOUD-2270: a push replacing a head whose wait stopped red erases the
     // failed checks' verdicts, so each one's log is read before the push. The
     // record is the `red-head` fact `land` writes; its own bundle, so the row
