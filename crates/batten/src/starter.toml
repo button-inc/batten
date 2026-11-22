@@ -195,11 +195,11 @@ tracked = ["batten.toml"]
 # severity = "deny"
 #
 # `rust-quality` judges a Rust crate's module graph against a base: its
-# Decoupling Level (Mo et al., ICSE 2016) may not fall. Name the crate's
-# sources and the base, here each commit's parent:
+# M-score may not fall and its largest cycle of files may not grow. Name the
+# crate's sources and the base, here each commit's parent:
 #
 # [[rule]]
-# id = "module decoupling dropped"
+# id = "module graph worse"
 # kind = "policy"
 # scope = "tree"
 # preset = "rust-quality"

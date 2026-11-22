@@ -5461,6 +5461,7 @@
             "supply-chain",
             "trunk-based",
             "linear-history",
+            "rust-quality",
             "red-head",
             "git",
             "claude-code-plan"
