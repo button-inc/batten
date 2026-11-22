@@ -122,6 +122,79 @@ fn a_file_its_backend_refuses_is_could_not_look() {
     );
 }
 
+/// A row declaring `base` with `unit_sources`.
+fn based_units_row(globs: &[&str], base: &str) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": "units-row",
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": "policy/",
+        "unit_sources": globs,
+        "base": base,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row declaring `unit_sources` and `base`")
+}
+
+/// Refuses a function whose panic count rose against the same function at the
+/// row's base: head against base, the comparison a ratchet makes in Rego.
+const NO_NEW_PANIC: &str = r#"
+package batten
+
+import rego.v1
+
+rules contains "unit panic grown"
+
+violation contains {"rule": "unit panic grown", "verdict": "unit panic grown"} if {
+  some path, file in input.tree.units
+  some node in file.nodes
+  node.kind == "fn"
+  some was in input.tree.base.units[path].nodes
+  was.kind == "fn"
+  was.name == node.name
+  node.counts.panics > was.counts.panics
+}
+"#;
+
+/// Fails by: the base side absent (no comparison can be made), read from the
+/// working tree instead of the base commit (the two would always agree), or the
+/// module deciding the same way when the count did not grow.
+#[test]
+fn a_module_compares_a_functions_counts_against_its_base() {
+    let root = scratch("base");
+    fs::write(root.join("policy/gate.rego"), NO_NEW_PANIC).expect("module");
+    fs::write(
+        root.join("a.rs"),
+        "pub fn f(x: Option<u8>) -> u8 { x.unwrap_or(0) }\n",
+    )
+    .expect("source");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    let base = common::git_in(&root, &["rev-parse", "HEAD"]);
+    let base = base.trim();
+
+    fs::write(
+        root.join("a.rs"),
+        "pub fn f(x: Option<u8>) -> u8 { x.unwrap() }\n",
+    )
+    .expect("source");
+    let grown = scan(&root, &[based_units_row(&["*.rs"], base)]);
+    assert_eq!(grown.findings.len(), 1, "{:?}", grown.findings);
+    assert_eq!(grown.findings[0].rule, "unit panic grown");
+
+    fs::write(
+        root.join("a.rs"),
+        "pub fn f(x: Option<u8>) -> u8 { x.unwrap_or(1) }\n",
+    )
+    .expect("source");
+    let same = scan(&root, &[based_units_row(&["*.rs"], base)]);
+    assert!(same.findings.is_empty(), "{:?}", same.findings);
+    assert!(
+        !same.not_evaluated.contains_key("units-row"),
+        "and it evaluated, over a real base side"
+    );
+}
+
 /// Fails by: the Rego arm missing a partial helper bound with `:=`, or
 /// reading a defaulted helper as partial (CLOUD-2777's shape).
 #[test]

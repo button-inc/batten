@@ -34,12 +34,12 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 }
 
 use batten::facts::{
-    AGENT_SOURCED, BASE_DELTA, BUDGETED, CAPTURED, COMMIT_META, Class, Cost, DISPATCH_CLEARED,
-    DOCUMENT, EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY, GIT_INDEX,
-    GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES, INSTANT, INVOCATIONS,
-    KEYS, LAND_LIVE, LANDING, LINES, Look, MINTED, PATHSPEC_STATUS, PINNED, PLAN, PRODUCED,
-    PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, RED_HEAD, REVIEW, STAGED, STATE, STOP,
-    SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
+    AGENT_SOURCED, BASE, BASE_DELTA, BUDGETED, CAPTURED, COMMIT_META, Class, Cost,
+    DISPATCH_CLEARED, DOCUMENT, EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD,
+    GIT_HISTORY, GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES,
+    INSTANT, INVOCATIONS, KEYS, LAND_LIVE, LANDING, LINES, Look, MINTED, PATHSPEC_STATUS, PINNED,
+    PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, RED_HEAD, REVIEW, STAGED,
+    STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, TRAVERSALS, UNITS, USES, WAIVED,
 };
 
 #[test]
@@ -150,6 +150,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Extracted => EXTRACTED,
             Fact::Invocations => INVOCATIONS,
             Fact::Units => UNITS,
+            Fact::Base => BASE,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
@@ -179,7 +180,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        48,
+        49,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

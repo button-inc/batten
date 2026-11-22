@@ -7,6 +7,29 @@
       "additionalProperties": false,
       "description": "The tree surface. `additionalProperties: false` is the load-bearing line: it is what turns a misspelled key, and CLOUD-845's documented-but-never-built one, into a build-time error instead of a silent undefined.",
       "properties": {
+        "base": {
+          "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+          "properties": {
+            "units": {
+              "additionalProperties": {
+                "properties": {
+                  "nodes": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "nodes"
+                ],
+                "type": "object"
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "base-delta": {
           "additionalProperties": false,
           "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
