@@ -499,7 +499,7 @@ fn token_paths(body: &str) -> Vec<(usize, Vec<String>, usize)> {
         .tree()
         .syntax()
         .descendants_with_tokens()
-        .filter_map(|element| element.into_token())
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
         .map(|token| {
             let range = token.text_range();
             (
@@ -946,7 +946,7 @@ fn comment_spans(body: &str) -> Vec<(usize, usize)> {
         .tree()
         .syntax()
         .descendants_with_tokens()
-        .filter_map(|element| element.into_token())
+        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
         // A doc comment is its own kind (`///`, `//!`), and its paths are the
         // links a respelling must follow too.
         .filter(|token| {

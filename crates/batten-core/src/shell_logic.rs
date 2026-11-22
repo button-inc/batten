@@ -121,7 +121,7 @@ struct Interpreter {
     takes: Takes,
 }
 
-/// POSIX `sh`: `-c` reads commands from the command_string operand; otherwise
+/// POSIX `sh`: `-c` reads commands from the `command_string` operand; otherwise
 /// the first operand is a file of commands.
 /// <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sh.html>
 const SH: Interpreter = Interpreter {
