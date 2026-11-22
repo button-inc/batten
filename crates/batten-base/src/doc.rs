@@ -1452,6 +1452,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["treat an added path as a changed rule"],
     },
     VendoredDoc {
+        id: "module decoupling dropped",
+        why: Some("A new dependency on a module costs every later change to it"),
+        act: &[
+            "cut the edge the change added",
+            "move the item it needs into a module below both",
+        ],
+        dont: &["add unconnected files to lift the number; DL does not reward it"],
+    },
+    VendoredDoc {
         id: "directive read missing",
         why: Some("A summary is lossy by construction, and a directive it drops is work repeated"),
         act: &[
