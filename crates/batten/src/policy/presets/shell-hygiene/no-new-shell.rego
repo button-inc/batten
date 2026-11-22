@@ -4,9 +4,37 @@
 #MUTANT workflow-growth-unchecked|s@^\tcount(shell_lines(head_entry(path))) > count(shell_lines(base_entry(path)))$@\tfalse@|a_workflow_run_block_grown_is_refused
 #MUTANT exempt-unread|s@^\tsome glob in exempt_globs$@\tsome glob in set()@|an_exempt_file_is_admitted
 #MUTANT declaration-unread|s@^\tshell := doc.census.shell$@\tshell := doc.census.absent@|a_task_body_grown_by_one_line_is_refused
+#MUTANT presence-arm-unread|s@^presence if not migrating$@presence if false@|a_base_tree_shell_file_is_refused_by_default_and_admitted_under_migrate
+#MUTANT legacy-exempt-read-as-presence|s@^migrating if count(exempt_globs) > 0$@migrating if false@|a_config_that_still_carries_exempt_keeps_its_growth_meaning
+#MUTANT generated-entry-for-absent-file-admitted|s@^\tmeasured.matches == 0$@\tfalse@|a_generated_entry_covering_no_file_is_a_finding
+#MUTANT generated-check-not-found-admitted|s@^\tnot measured.check_found$@\tfalse@|a_generated_entry_whose_check_is_not_found_is_a_finding
+#MUTANT file-growth-unchecked|s@^\tgrown > 0$@\tfalse@|an_existing_shell_file_that_grows_under_migrate_is_refused
 
-# No NEW shell, measured in lines: a repository that has decided to stop writing
-# shell can declare it, and this refuses the change that writes more.
+# No shell, and while migrating, no NEW shell, measured in lines.
+#
+# ─── PRESENCE BY DEFAULT, GROWTH WHILE MIGRATING (CLOUD-2628) ────────────────
+#
+# A consumer enabling this preset is refused any authored shell: every path the
+# fact's head side carries as shell — a shell file anywhere in the tracked tree,
+# a declared manifest's shell command lines, a declared workflow's shell steps —
+# is `shell present refused` unless a `[[census.shell.generated]]` entry covers
+# it. A consumer declaring no `[census.shell]` at all is judged the same way:
+# the census table is the only channel for consumer facts, so no declaration
+# is not migrating, and that is the presence path, never an exemption.
+#
+# `[census.shell] mode = "migrate"` is the one knob. Under it presence is not
+# judged and the growth arms below run instead, so the existing surface may
+# only shrink. A LEGACY `exempt` list that is non-empty, with no `mode`, reads
+# as migrate with those files exempt, exactly as before; `exempt = []` is the
+# same as absent and is presence.
+#
+# The generated table is held in BOTH directions: shell outside it is refused,
+# and an entry with nothing behind it — a glob matching no tracked path
+# (`shell path missing`), or a check whose test name no line of its file holds
+# (`shell test missing`) — is refused too. Both are the engine's measurements,
+# on `input.tree.shell.generated`; this module only reads them.
+#
+# ─── MIGRATING: NO NEW SHELL, MEASURED IN LINES ──────────────────────────────
 #
 # ─── WHY LINES, AND NOT BODIES ───────────────────────────────────────────────
 #
@@ -38,7 +66,11 @@
 #   now. Relocation cannot offset this arm: moving a body into a new unit while
 #   deleting a bigger one elsewhere keeps the total level and still adds a unit.
 # * `step write refused`  — a workflow's shell line count rose.
-# * `shell place refused` — a shell file was added outside the exempt set.
+# * `shell place refused` — a shell file was added outside the legacy exempt
+#   set and the generated table.
+# * `file write refused`  — an existing shell file's code lines rose against the
+#   base, or it became shell by gaining a shebang. Head and base are both read
+#   at check time, so no count is stored.
 #
 # Deleting shell is always free.
 #
@@ -49,14 +81,14 @@
 # same declaration the census reads. The row hands it over by declaring the
 # config document in `documents`; this module finds it by SHAPE, as the document
 # carrying `census.shell`, and names no file. A row that declares no such table
-# makes this module abstain entirely: a consumer that has not said where its
-# shell lives has not asked for a ban on it.
+# is judged for presence over every tracked file (above): enabling the ban is
+# the request for it.
 #
-# The declaration must also reach the row's `line_sources`: a manifest or
-# workflow the row does not read as lines is a file the fact cannot judge, and
-# this module decides nothing about it. Unit headers are still read off
-# `input.tree.lines`, since a header is where a unit starts and not a judgement
-# about shell.
+# The fact reads past the row's `line_sources` (CLOUD-2628): every tracked file
+# that can be shell, every declared manifest and every path a workflow glob
+# selects. Unit headers are still read off `input.tree.lines`, since a header is
+# where a unit starts and not a judgement about shell, so the `task add` arm
+# needs the manifests in `line_sources`.
 #
 # Globs are read as the census reads them, with `*` and `?` stopping at `/` and
 # `**` crossing it. Those three are the whole glob language here: a declaration
@@ -109,8 +141,6 @@ declarations contains shell if {
 	is_object(shell)
 }
 
-governed if count(declarations) > 0
-
 manifests contains row if {
 	some shell in declarations
 	some row in object.get(shell, "manifest", [])
@@ -128,6 +158,29 @@ exempt_globs contains pattern if {
 	some pattern in object.get(shell, "exempt", [])
 	is_string(pattern)
 }
+
+generated_globs contains pattern if {
+	some shell in declarations
+	some row in object.get(shell, "generated", [])
+	pattern := row.path
+	is_string(pattern)
+}
+
+# ---------------------------------------------------------------------------
+# The mode: presence unless the consumer declares it is migrating.
+# ---------------------------------------------------------------------------
+
+migrating if {
+	some shell in declarations
+	object.get(shell, "mode", null) == "migrate"
+}
+
+# LEGACY: a non-empty `exempt` with no `mode` is migrate, as before CLOUD-2628.
+# An empty list never reaches here, so `exempt = []` stays presence.
+migrating if count(exempt_globs) > 0
+
+# No declaration at all is not migrating, so it is presence too.
+presence if not migrating
 
 # Every declared manifest path.
 manifest_paths contains row.path if some row in manifests
@@ -164,6 +217,11 @@ is_workflow(path) if {
 	matches_glob(path, pattern)
 }
 
+generated(path) if {
+	some glob in generated_globs
+	matches_glob(path, glob)
+}
+
 # ---------------------------------------------------------------------------
 # What is shell: the fact, read and never re-derived.
 # ---------------------------------------------------------------------------
@@ -186,6 +244,12 @@ shell_lines(entry) := {j |
 }
 
 shell_file(path) if head_entry(path).kind == "file"
+
+# An entry carries shell: any shell FILE, whatever its lines, and a manifest or
+# workflow with at least one shell line.
+carries_shell(entry) if entry.kind == "file"
+
+carries_shell(entry) if count(object.get(entry, "lines", [])) > 0
 
 # ---------------------------------------------------------------------------
 # A manifest's units: which unit each shell line belongs to.
@@ -236,6 +300,7 @@ violation contains {
 	"verdict": "task write refused",
 	"subjects": [{"path": path}, {"count": head - base_count[path]}],
 } if {
+	migrating
 	some path, head in head_count
 	head > base_count[path]
 }
@@ -245,6 +310,7 @@ violation contains {
 	"verdict": "task add refused",
 	"subjects": [{"path": path, "line": h + 1}],
 } if {
+	migrating
 	some pair in units
 	path := pair[0]
 	unit := pair[1]
@@ -266,6 +332,7 @@ violation contains {
 	"verdict": "step write refused",
 	"subjects": [{"path": path}, {"count": count(shell_lines(head_entry(path))) - count(shell_lines(base_entry(path)))}],
 } if {
+	migrating
 	some path in delta.edited
 	is_workflow(path)
 	count(shell_lines(head_entry(path))) > count(shell_lines(base_entry(path)))
@@ -276,10 +343,65 @@ violation contains {
 	"verdict": "shell place refused",
 	"subjects": [{"path": path}],
 } if {
-	governed
+	migrating
 	some path in delta.added
 	shell_file(path)
 	not exempt(path)
+	not generated(path)
+}
+
+# An existing shell file may not gain shell lines while migrating. Both sides
+# are the fact's, computed at check time: the base side from `base-lines`, so
+# an unread base is no shell there and every line the head carries is growth.
+violation contains {
+	"rule": "shell write other",
+	"verdict": "file write refused",
+	"subjects": [{"path": path}, {"count": grown}],
+} if {
+	migrating
+	some path in delta.edited
+	shell_file(path)
+	not exempt(path)
+	not generated(path)
+	grown := count(shell_lines(head_entry(path))) - count(shell_lines(base_entry(path)))
+	grown > 0
+}
+
+# ---------------------------------------------------------------------------
+# Presence (CLOUD-2628): any shell the head carries that no generated entry
+# covers. The head side reads every tracked file that can be shell, so this is
+# the whole tree, not the row's line sources.
+# ---------------------------------------------------------------------------
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell present refused",
+	"subjects": [{"path": path}],
+} if {
+	presence
+	some path, side in object.get(shell_fact, "head", {})
+	carries_shell(side)
+	not generated(path)
+}
+
+# The table held in the other direction: an entry with nothing behind it.
+# `matches` and `check_found` are the engine's, measured over the tracked tree.
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell path missing",
+	"subjects": [{"path": measured.path}],
+} if {
+	some measured in object.get(shell_fact, "generated", [])
+	measured.matches == 0
+}
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell test missing",
+	"subjects": [{"path": measured.path}],
+} if {
+	some measured in object.get(shell_fact, "generated", [])
+	not measured.check_found
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -418,15 +540,108 @@ test_a_glob_dot_is_literal if {
 	"shell place refused" in verdicts(added("bootstrapXsh", ["#!/bin/sh"], shell_file_fact("bootstrapXsh")))
 }
 
-# NO DECLARATION, NO BAN. A consumer enabling the preset for its other modules
-# has not said where its shell lives, so the file arm abstains too.
-test_a_consumer_declaring_no_census_is_not_banned if {
-	count(violation) == 0 with input as {"tree": {
+# NO DECLARATION IS PRESENCE (CLOUD-2628, absorbing CLOUD-1809). A consumer
+# enabling the preset has asked for the ban; the census table is only where it
+# says what it admits, so its absence admits nothing.
+test_a_consumer_declaring_no_census_is_judged_for_presence if {
+	found := {[v.verdict, v.subjects] | some v in violation} with input as {"tree": {
 		"documents": {"config.toml": {"version": 1}},
-		"base-delta": {"added": ["scripts/x.sh"], "edited": [], "deleted": [], "base-lines": {}},
-		"lines": {"scripts/x.sh": ["echo"]},
+		"base-delta": {"added": [], "edited": [], "deleted": [], "base-lines": {}},
+		"lines": {},
 		"shell": {"head": shell_file_fact("scripts/x.sh"), "base": {}},
 	}}
+	found == {["shell present refused", [{"path": "scripts/x.sh"}]]}
+}
+
+# --- presence and the generated table (CLOUD-2628) ---------------------------
+
+# A declaration with no `mode` and no `exempt`, carrying `generated` rows.
+presence_declared(generated) := {"census": {"shell": {
+	"workflows": ["ci/*.yml"],
+	"manifest": [{"path": "tasks.toml", "keys": ["cmd"], "unit": "[task."}],
+	"generated": generated,
+}}}
+
+# A tree whose head carries `head` as shell, under `declaration`, with the
+# engine's `generated` measurements; nothing changed against the base.
+standing(declaration, head, generated) := {"tree": {
+	"documents": {"config.toml": declaration},
+	"base-delta": {"added": [], "edited": [], "deleted": [], "base-lines": {}},
+	"lines": {},
+	"shell": {"head": head, "base": {}, "generated": generated},
+}}
+
+gen_row := {"path": "gen/*.sh", "generator": "batten completions", "check": "t.rs::pins_it"}
+
+test_a_shell_file_standing_at_the_base_is_refused_by_default if {
+	found := verdicts(standing(presence_declared([]), shell_file_fact("tools/x.sh"), []))
+	found == {"shell present refused"}
+}
+
+test_a_manifest_carrying_shell_lines_is_refused_by_default if {
+	head := {"tasks.toml": entry("manifest", [3])}
+	"shell present refused" in verdicts(standing(presence_declared([]), head, []))
+}
+
+test_a_manifest_carrying_no_shell_is_not_present if {
+	head := {"tasks.toml": entry("manifest", [])}
+	count(verdicts(standing(presence_declared([]), head, []))) == 0
+}
+
+test_migrate_judges_growth_and_not_presence if {
+	declaration := {"census": {"shell": {"mode": "migrate"}}}
+	count(verdicts(standing(declaration, shell_file_fact("tools/x.sh"), []))) == 0
+}
+
+# `exempt = []` is the same as absent: presence.
+test_an_empty_exempt_list_is_presence if {
+	declaration := {"census": {"shell": {"exempt": []}}}
+	"shell present refused" in verdicts(standing(declaration, shell_file_fact("tools/x.sh"), []))
+}
+
+test_a_generated_file_is_admitted if {
+	measured := [{"path": "gen/*.sh", "matches": 1, "check_found": true}]
+	found := verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
+	count(found) == 0
+}
+
+test_a_generated_entry_covering_no_file_is_refused if {
+	measured := [{"path": "gen/*.sh", "matches": 0, "check_found": true}]
+	found := verdicts(standing(presence_declared([gen_row]), {}, measured))
+	found == {"shell path missing"}
+}
+
+test_a_generated_entry_whose_check_is_not_found_is_refused if {
+	measured := [{"path": "gen/*.sh", "matches": 1, "check_found": false}]
+	found := verdicts(standing(presence_declared([gen_row]), shell_file_fact("gen/a.sh"), measured))
+	found == {"shell test missing"}
+}
+
+test_an_existing_shell_file_that_grows_while_migrating_is_refused if {
+	document := {"tree": {
+		"documents": {"config.toml": declared},
+		"base-delta": {"added": [], "edited": ["tools/x.sh"], "deleted": [], "base-lines": {"tools/x.sh": ["echo one"]}},
+		"lines": {},
+		"shell": {
+			"head": {"tools/x.sh": entry("file", [1, 2])},
+			"base": {"tools/x.sh": entry("file", [1])},
+		},
+	}}
+	found := {[v.verdict, v.subjects] | some v in violation with input as document}
+	found == {["file write refused", [{"path": "tools/x.sh"}, {"count": 1}]]}
+}
+
+test_an_existing_shell_file_that_does_not_grow_is_admitted if {
+	document := {"tree": {
+		"documents": {"config.toml": declared},
+		"base-delta": {"added": [], "edited": ["tools/x.sh"], "deleted": [], "base-lines": {"tools/x.sh": ["echo one"]}},
+		"lines": {},
+		"shell": {
+			"head": {"tools/x.sh": entry("file", [1])},
+			"base": {"tools/x.sh": entry("file", [1, 2])},
+		},
+	}}
+	count(violation) == 0 with input as document
 }
 
 # COULD-NOT-LOOK IS NOT CLEAN: an edited manifest whose base could not be read

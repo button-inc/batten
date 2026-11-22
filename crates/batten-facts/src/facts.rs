@@ -2390,8 +2390,23 @@ impl Fact {
         });
         serde_json::json!({
             "type": "object",
-            "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`batten_core::shell_logic::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading.",
-            "properties": {"head": side.clone(), "base": side},
+            "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`batten_core::shell_logic::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading. For a row enabling `shell-hygiene` or handing over a `[census.shell]` table, `head` also reads every tracked file that can be shell, every declared manifest and every path a workflow glob selects (CLOUD-2628). `generated` is one {path, matches, check_found} per `[[census.shell.generated]]` entry: how many tracked paths its glob matches, and whether a line of its `check` file holds the test name (an unreadable file is false).",
+            "properties": {
+                "head": side.clone(),
+                "base": side,
+                "generated": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "matches": {"type": "integer"},
+                            "check_found": {"type": "boolean"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
             "additionalProperties": false,
         })
     }
