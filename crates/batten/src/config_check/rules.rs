@@ -324,6 +324,9 @@ pub(crate) struct Declared<'a> {
 
 /// `Rule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub trait RuleExt: Sized {
+    /// # Errors
+    ///
+    /// When the row is refused because any of its columns does not hold, naming the row.
     fn validate(&self) -> anyhow::Result<()>;
 
     /// The obligation [`RuleKind::permits`] cannot express (CLOUD-758).
@@ -343,6 +346,10 @@ pub trait RuleExt: Sized {
     ///
     /// # Errors
     ///
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its shape columns does not hold, naming the row.
     fn validate_shape_columns(&self) -> anyhow::Result<()>;
 
     /// The three ceiling columns travel together, or none of them does
@@ -372,6 +379,10 @@ pub trait RuleExt: Sized {
     /// # Errors
     ///
     /// A [`UsageError`] (→ exit `1`) naming the projection asked for twice.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its polarity does not hold, naming the row.
     fn validate_polarity(&self) -> anyhow::Result<()>;
 
     /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
@@ -416,6 +427,10 @@ pub trait RuleExt: Sized {
     /// A program-only pattern is **valid**, and that is the point: it is the
     /// reading `Rule::pattern`'s doc comment already invites, and the one this
     /// validator must not take back.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its command pattern does not hold, naming the row.
     fn validate_command_pattern(&self) -> anyhow::Result<()>;
 
     /// The value-dependent obligations on the two ratchet admission columns,
@@ -449,6 +464,10 @@ pub trait RuleExt: Sized {
     ///   that ROSE, so on a `non_decreasing` row every decrease is admitted in
     ///   silence. Found by review of #694 on `admits_with`; the sibling had
     ///   carried it latent since CLOUD-807.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its admission columns does not hold, naming the row.
     fn validate_admission_columns(&self) -> anyhow::Result<()>;
 
     /// Every token in a [`Conserves`] decides something, so a blank one is a
@@ -469,15 +488,29 @@ pub trait RuleExt: Sized {
     ///   for a double claim would fire on every correct mapping instead.
     /// * **`declared_in` must compile.** A glob `globset` cannot parse selects
     ///   nothing, and a mapping read over nothing admits every deletion.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its conserves does not hold, naming the row.
     fn validate_conserves(&self) -> anyhow::Result<()>;
 
+    /// # Errors
+    ///
+    /// When the row is refused because its remediation does not hold, naming the row.
     fn validate_remediation(&self) -> anyhow::Result<()>;
 
+    /// # Errors
+    ///
+    /// When the row is refused because its ceiling does not hold, naming the row.
     fn validate_ceiling(&self) -> anyhow::Result<()>;
 
     /// The modifiers that read the command's ARGV (CLOUD-2662): refused on a
     /// row keyed by anything that names none, which an `on` row does not either,
     /// since its routes include structured calls.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because it is keyed on an argv and carries a modifier that argv cannot express, naming the row.
     fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()>;
 
     fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error;
@@ -487,6 +520,10 @@ pub trait RuleExt: Sized {
     /// absent on every shell call) and so would silently drop whole routes.
     /// `requires_key`, `base` and the branch modifiers read the branch, which
     /// every route has, and stay.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its on columns does not hold, naming the row.
     fn validate_on_columns(&self) -> anyhow::Result<()>;
 
     /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
@@ -525,14 +562,25 @@ pub trait RuleExt: Sized {
     ///
     /// A [`UsageError`] (→ exit `1`) for `key = "delta"` with no `key_base`, and
     /// for a `key_base` on any other keying.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its delta base does not hold, naming the row.
     fn validate_delta_base(&self) -> anyhow::Result<()>;
 
     /// A receipt row's selectors (CLOUD-2662): exactly one of `pattern`, `tool`
     /// and `on` on a command-triggered row, and no command selector on a
     /// write-triggered one. Split from [`Rule::validate_receipt_columns`], whose
     /// line budget the third selector spent.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its receipt selectors does not hold, naming the row.
     fn validate_receipt_selectors(&self) -> anyhow::Result<()>;
 
+    /// # Errors
+    ///
+    /// When the row is refused because its receipt columns does not hold, naming the row.
     fn validate_receipt_columns(&self) -> anyhow::Result<()>;
 
     /// A `while_marker` must name a family that landing sweeps (CLOUD-1390).
@@ -555,6 +603,10 @@ pub trait RuleExt: Sized {
     ///
     /// A [`UsageError`] (→ exit `1`) naming the row and the marker. Pointer-only:
     /// the two ids and the permitted list, never a path from the receipt store.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its marker does not hold, naming the row.
     fn validate_marker(&self) -> anyhow::Result<()>;
 
     /// The three refusals over a receipt row's two name columns (CLOUD-1297).
@@ -569,6 +621,10 @@ pub trait RuleExt: Sized {
     ///
     /// A [`UsageError`] (→ exit `1`) for an empty `checks` list, an empty
     /// `checks_any` list, or a row naming neither column.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its receipt names does not hold, naming the row.
     fn validate_receipt_names(&self) -> anyhow::Result<()>;
 
     /// `ask` is a MEDIATED-CALL disposition, and both refusals below are config
@@ -582,6 +638,10 @@ pub trait RuleExt: Sized {
     ///
     /// A [`UsageError`] (→ exit `1`) when a non-`mediated_call` row declares
     /// `ask`, or when an `ask` row carries no `reason`.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its ask disposition does not hold, naming the row.
     fn validate_ask_disposition(&self) -> anyhow::Result<()>;
 
     /// The load-time refusals the three repository-state columns owe
@@ -597,6 +657,10 @@ pub trait RuleExt: Sized {
     /// # Errors
     ///
     /// A [`UsageError`] (→ exit `1`) naming the first offending entry.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its repository state does not hold, naming the row.
     fn validate_repository_state(&self) -> anyhow::Result<()>;
 
     /// The three obligations a policy row carries that [`RuleKind::permits`]
@@ -612,6 +676,10 @@ pub trait RuleExt: Sized {
     /// A [`UsageError`] (→ exit `1`) when the row names no source or more than
     /// one, when a mediated-call row declares `documents`, or when a tree-scoped
     /// row declares none.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its policy source does not hold, naming the row.
     fn validate_policy_source(&self) -> anyhow::Result<()>;
 
     /// Refuse a `document` row whose declared `format` contradicts the extension
@@ -642,6 +710,10 @@ pub trait RuleExt: Sized {
     /// `notes/*.md`), and it is exactly the case above. A computed or
     /// extensionless glob is not caught here and the message says so rather than
     /// implying a totality this does not have.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its declared format matches glob does not hold, naming the row.
     fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()>;
 
     /// Validate that the per-kind fields present match the declared `kind`.
@@ -678,6 +750,10 @@ pub trait RuleExt: Sized {
     /// clean and decides nothing. Extracted rather than inlined so `validate`
     /// stays under the line limit as columns accumulate — the census below it
     /// is the part that must stay whole.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its pipeline tables does not hold, naming the row.
     fn validate_pipeline_tables(&self) -> anyhow::Result<()>;
 
     /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
@@ -707,6 +783,10 @@ pub trait RuleExt: Sized {
     /// Returns a [`UsageError`] (→ exit `1`) for a row missing an `id` or a
     /// `root`, one whose `path` can leave the root it named, or one id declared
     /// twice over different files.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its external rows does not hold, naming the row.
     fn validate_external_rows(&self) -> anyhow::Result<()>;
 
     /// The tool-verdict key's own obligations, refused at LOAD (CLOUD-1171).
@@ -725,6 +805,10 @@ pub trait RuleExt: Sized {
     ///
     /// Returns a [`UsageError`] (→ exit `1`) for a row whose key cannot be
     /// composed unambiguously, or for one id declared twice over different keys.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its tool rows does not hold, naming the row.
     fn validate_tool_rows(&self) -> anyhow::Result<()>;
 
     /// Refuse a `[[rule.minted]]` row that cannot address a receipt, or an id
@@ -742,6 +826,10 @@ pub trait RuleExt: Sized {
     /// Returns a [`UsageError`] (→ exit `1`) for a row naming an unusable mint or
     /// id, for a row whose two column indices are the same, and for one id
     /// declared twice over different questions.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its minted rows does not hold, naming the row.
     fn validate_minted_rows(&self) -> anyhow::Result<()>;
 
     /// A declared sink must be on a kind that can actually request one
@@ -758,6 +846,10 @@ pub trait RuleExt: Sized {
     /// Refused at LOAD rather than skipped at run time, because a skip is
     /// invisible: the run reports its findings and the record simply is not
     /// there, which looks exactly like a run that had nothing to produce.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its sink does not hold, naming the row.
     fn validate_sink(&self) -> anyhow::Result<()>;
 
     /// `exclude_paths` has to be honoured by everything that reads the rule's
@@ -776,6 +868,10 @@ pub trait RuleExt: Sized {
     /// so no addition could ever push it over and **the gate cannot fail**.
     /// Refused rather than half-implemented, because a ratchet that cannot fail
     /// reads exactly like one that is passing.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its exclude paths does not hold, naming the row.
     fn validate_exclude_paths(&self) -> anyhow::Result<()>;
 
     /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
@@ -793,11 +889,22 @@ pub trait RuleExt: Sized {
     /// a flat column list cannot express it, so it lives here where the pair is
     /// in scope. A row with neither loads, matches a document, and asks nothing
     /// of it; a row with both declares two answers to one comparison.
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its document predicate does not hold, naming the row.
     fn validate_document_predicate(&self) -> anyhow::Result<()>;
 
     /// A ratchet's `counts` and `per_file` columns (CLOUD-2663).
+    ///
+    /// # Errors
+    ///
+    /// When the row is refused because its ratchet measure does not hold, naming the row.
     fn validate_ratchet_measure(&self) -> anyhow::Result<()>;
 
+    /// # Errors
+    ///
+    /// When the row is refused because its forbid predicate does not hold, naming the row.
     fn validate_forbid_predicate(&self) -> anyhow::Result<()>;
 
     /// The first column this row declares whose fact the mediated call cannot
