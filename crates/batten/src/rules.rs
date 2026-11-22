@@ -3880,7 +3880,58 @@ pub(crate) fn declared_units(rule: &Rule, files: &[String]) -> anyhow::Result<Ve
 /// the capture-view reader would serve, so a fact about a unit agrees with what
 /// a reader of that unit is handed. Comments and strings are not tokenized.
 fn unit_nodes(rel_path: &str, text: &str) -> Option<Vec<serde_json::Value>> {
-    match rel_path.rsplit_once('.')?.1 {
+    let extension = rel_path.rsplit_once('.')?.1;
+    // MEMOISED PER BLOB, across calls (plan item 4, CLOUD-1008's lazy half): a
+    // node list is a pure function of the language and the text, so an unchanged
+    // file is one cache read. Keyed by content and the running binary
+    // (`cache::key`), so an edit or a new engine is a miss, never a stale answer;
+    // a refusal (`None`) is not cached, so a file is never wrongly settled as
+    // could-not-look.
+    let entry = units_cache().map(|dir| {
+        let at = dir.join(
+            blake3::hash(&[extension.as_bytes(), b"\0", text.as_bytes()].concat())
+                .to_hex()
+                .as_str(),
+        );
+        let key = crate::cache::key(UNITS_FORMAT, &[extension.as_bytes(), text.as_bytes()]);
+        (at, key)
+    });
+    if let Some(nodes) = entry
+        .as_ref()
+        .and_then(|(at, key)| crate::cache::read(at, key))
+        .and_then(|body| serde_json::from_slice(&body).ok())
+    {
+        return Some(nodes);
+    }
+    let nodes = unit_nodes_uncached(extension, rel_path, text)?;
+    if let (Some((at, key)), Ok(body)) = (&entry, serde_json::to_vec(&nodes)) {
+        crate::cache::write(at, key, &body);
+    }
+    Some(nodes)
+}
+
+/// The `units` memo's entry format: bumped when the node shape changes, so an
+/// entry written by an older shape is a miss.
+const UNITS_FORMAT: &str = "units-v1";
+
+/// The directory the `units` memo writes under, resolved once per process.
+fn units_cache() -> Option<&'static Path> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let state = crate::state::state_root().ok()?;
+        let dir = crate::cache::root_under(&state)?.join("units");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    })
+    .as_deref()
+}
+
+fn unit_nodes_uncached(
+    extension: &str,
+    rel_path: &str,
+    text: &str,
+) -> Option<Vec<serde_json::Value>> {
+    match extension {
         "rs" => {
             let crate::facts::Look::Is(units) = crate::units::units(text) else {
                 return None;
@@ -9897,6 +9948,31 @@ mod tests {
     use crate::rules::RuleExt as _;
     #[cfg(test)]
     use crate::rules::RuleKindExt as _;
+
+    /// The `units` memo round-trips: after one acquisition the entry exists at
+    /// its content address and reads back as the same node list, and a second
+    /// acquisition returns it. Fails by: the memo never written, written under a
+    /// key the read does not use, or the read returning another shape.
+    #[test]
+    fn a_unit_list_is_read_back_from_its_memo() {
+        let text = "pub fn memo_probe(x: u8) -> u8 { x.saturating_add(1) }\n";
+        let first = super::unit_nodes("memo_probe.rs", text).expect("a parsed file");
+        // FAILS rather than skips without a state root: a suite host always has
+        // one, and a case that could pass without asserting proves nothing
+        // (`silent_skip.rs`).
+        let dir = super::units_cache().expect("the suite resolves a state root");
+        let at = dir.join(
+            blake3::hash(&[b"rs".as_slice(), b"\0", text.as_bytes()].concat())
+                .to_hex()
+                .as_str(),
+        );
+        let key = crate::cache::key(super::UNITS_FORMAT, &[b"rs", text.as_bytes()]);
+        let held: Vec<serde_json::Value> =
+            serde_json::from_slice(&crate::cache::read(&at, &key).expect("the entry was written"))
+                .expect("the entry is the node list");
+        assert_eq!(held, first);
+        assert_eq!(super::unit_nodes("memo_probe.rs", text), Some(first));
+    }
 
     /// CLOUD-2075 §7 case 21: a `check` finding labels its rule.
     #[test]
