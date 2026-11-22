@@ -132,7 +132,7 @@ fn collect_bindings(node: &Value, out: &mut Vec<(String, usize)>) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -194,7 +194,8 @@ violation contains \"x\" if {
     fn an_else_body_makes_a_helper_total() {
         let module = "package p\n\nimport rego.v1\n\nf(x) := 1 if { x == 1 } else := 0\n";
         let nodes = units("p.rego", module).expect("parses");
-        assert_eq!(nodes[0]["counts"]["total"], true);
+        let first = nodes.first().expect("one node");
+        assert_eq!(first["counts"]["total"], true);
     }
 
     /// Fails by: a module regorus refuses read as empty and clean.
