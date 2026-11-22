@@ -1113,11 +1113,12 @@ hooks {
       }
       // A conflict marker is refused at the commit, not first in the slow lap
       // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`
-      // and was pushed before `source carry broken` ever ran. `--assume-in-merge`
-      // because a merge commit is exactly when markers are staged.
+      // and was pushed before `source carry broken` ever ran. The step runs that
+      // row rather than restating its command, so the marker check has one
+      // definition (plan item 4c; the row keeps `--assume-in-merge`).
       ["merge-conflict-markers"] {
         glob = List("**")
-        check = "hk util check-merge-conflict --assume-in-merge {{files}}"
+        check = "batten enforce --rule 'source carry broken'"
       }
     }
   }
