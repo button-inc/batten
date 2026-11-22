@@ -7043,7 +7043,7 @@ writer = "mise run evaluator-closure-record"
 # encode the target layering (plan step 10, CLOUD-2799–2801): the leaves reach
 # nothing, `batten-facts` only `batten-fsio`, upward to `batten`.
 [[rule]]
-id = "crate reach unsafe"
+id = "crate reach wrong"
 kind = "policy"
 scope = "tree"
 module = "policy/crate-reach.rego"
