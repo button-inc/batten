@@ -97,3 +97,12 @@ fn a_line_addressed_in_place_edit_is_refused() {
     let pattern = said(&repo, "sed -i /fn x/s/a/b/ src/x.rs");
     assert!(!pattern.contains("path edit unsafe"), "{pattern}");
 }
+
+#[test]
+fn an_in_place_edit_under_an_unread_script_is_refused() {
+    let repo = repo("edit-unread");
+    let later = said(&repo, "sed -i -e 's/a/b/;52d' src/x.rs");
+    assert!(later.contains("path edit unsafe"), "{later}");
+    let file = said(&repo, "sed -i -f x.sed src/x.rs");
+    assert!(file.contains("path edit unsafe"), "{file}");
+}
