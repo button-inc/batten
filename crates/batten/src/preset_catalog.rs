@@ -2123,6 +2123,65 @@ and remove it, move the item down, or inject it",
         ],
         patterns: &[],
     },
+    // CLOUD-2812 / CLOUD-2798: a Rust workspace's crate graph is reviewable
+    // data. Each package's allowed reach is a consumer `[[pattern]]` row
+    // `crate-allow-<package>`; the module reads the `crate-reach` record and
+    // refuses a reached member the row does not admit, or a package with no
+    // row. No crate name is compiled here (rule 1).
+    Manifest {
+        name: "rust",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            provider: None,
+            pointer: "<preset:rust>/crate-reach.rego",
+            source: include_str!("policy/presets/rust/crate-reach.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "crate reach unsafe",
+                gloss: "a workspace crate reaches one its crate-allow pattern does not admit",
+                class: "A crate boundary is the one dependency rule the compiler enforces, \
+so a `Cargo.toml` edit that adds an edge can turn a wide crate graph back into a deep one \
+with nothing saying so; \"the most important property of a crate is which crates it doesn't \
+(transitively) depend on\" (Kladov, Fast Rust Builds). The package's `crate-allow-<package>` \
+pattern is the reviewed record of what it may reach, and the record shows it reaching a \
+workspace package the pattern does not match. Both packages are named.",
+                routes: &[
+                    run(
+                        "edge cut first",
+                        "remove the dependency from the package's `Cargo.toml`, or move what \
+uses it into a package its pattern admits",
+                    ),
+                    run(
+                        "pattern add other",
+                        "widen `crate-allow-<package>` in `batten.toml` when the edge is the \
+design, in the same change that adds it",
+                    ),
+                    run(
+                        "crate cut other",
+                        "cargo run -q -p batten-codemods --example codemod -- cut-crate \
+<from> <name> <module>...",
+                    ),
+                ],
+                applicability: Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "crate declare absent",
+                gloss: "a workspace crate has no crate-allow pattern",
+                class: "Every workspace package declares what it may reach, so a new crate \
+cannot dodge the reach gate by being undeclared. The record shows a package with no \
+`crate-allow-<package>` pattern in `batten.toml`.",
+                routes: &[run(
+                    "pattern add first",
+                    "add a `[[pattern]]` row `crate-allow-<package>` whose regex matches the \
+workspace packages it may reach, `^$` for none",
+                )],
+                applicability: Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     // CLOUD-2270: a push replacing a head whose wait stopped red erases the
     // failed checks' verdicts, so each one's log is read before the push. The
     // record is the `red-head` fact `land` writes; its own bundle, so the row
