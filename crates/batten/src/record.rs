@@ -1018,6 +1018,15 @@ fn plan_merged(held: &str, incoming: &str) -> PlanMerge {
     }
 }
 
+/// Where `record named <family>` keeps `family` for `branch`: the same
+/// claim-partitioned path its writer derives, so a reader cannot point at a
+/// different file than the verb wrote.
+#[must_use]
+pub fn family_path(git_dir: &Path, branch: &str, family: &str) -> PathBuf {
+    let claim = claim_of(git_dir, branch);
+    crate::recorder::record_path(git_dir, family, branch, claim.as_deref())
+}
+
 /// The bullets under a row body's "Mechanism (decided)" heading (CLOUD-2810).
 ///
 /// The heading is matched by its words at any markdown level or in bold

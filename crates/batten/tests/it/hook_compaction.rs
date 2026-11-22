@@ -130,3 +130,26 @@ fn only_the_operator_is_journaled() {
         "nothing the operator said, so nothing to point at: {compacted}"
     );
 }
+
+/// Fails by: the branch's design corrections, recorded through the verb, left
+/// out of the compacted window's pointer, or their text emitted as payload.
+#[test]
+fn design_corrections_survive_a_compaction() {
+    let repo = fixture("corrections-compaction");
+    let recorded = run_with_stdin(
+        &repo,
+        &["record", "named", "corrections"],
+        "a rename is a codemod, never a text replace\njudgement lives in Rego presets\n",
+    );
+    assert!(recorded.status.success(), "{}", stderr(&recorded));
+    let compacted = start(&repo, "compact");
+    assert!(compacted.contains("directive read missing"), "{compacted}");
+    assert!(
+        compacted.contains("2 design correction line(s)"),
+        "{compacted}"
+    );
+    assert!(
+        !compacted.contains("codemod"),
+        "a pointer, never the payload: {compacted}"
+    );
+}
