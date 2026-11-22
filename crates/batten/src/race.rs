@@ -812,6 +812,7 @@ static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 /// `pub(crate)` since CLOUD-843: `forge_query` binds a `[[forge.query]]` row's
 /// `{owner}`/`{repo}` from it, and a second derivation of the slug would be a
 /// second answer to which repository a forge read is about.
+#[must_use]
 pub fn repo_slug(root: &std::path::Path) -> Option<String> {
     if let Ok(declared) = std::env::var("GH_REPO")
         && !declared.trim().is_empty()
