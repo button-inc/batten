@@ -2958,6 +2958,29 @@ pub(crate) const MODULES_CHECK: FlagDecl = FlagDecl::switch(
     "Never write the record: one looser than the tree is refused too",
 );
 
+/// `modules cut`'s source package directory (CLOUD-2812).
+pub(crate) const MODULES_CUT_FROM: FlagDecl = FlagDecl::positional(
+    "from",
+    "The package directory to cut from, relative to the workspace root (crates/batten)",
+);
+
+/// `modules cut`'s new package name (CLOUD-2812).
+pub(crate) const MODULES_CUT_NAME: FlagDecl = FlagDecl::positional(
+    "name",
+    "The new package's name; it lands beside the one cut from",
+);
+
+/// `modules cut`'s module set (CLOUD-2812).
+pub(crate) const MODULES_CUT_SET: FlagDecl =
+    FlagDecl::trailing("modules", "The crate-root modules that move, by name");
+
+/// `--dry-run` on `modules cut`: print the plan, write nothing (CLOUD-2812).
+pub(crate) const MODULES_DRY_RUN: FlagDecl = FlagDecl::switch(
+    "dry_run",
+    "dry-run",
+    "Print each path the cut would write or remove, and write nothing",
+);
+
 pub(crate) const STEP_JOBS: FlagDecl = FlagDecl::valued(
     "jobs",
     "jobs",
@@ -7460,6 +7483,23 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[MODULES_RECORD, MODULES_CHECK],
+    },
+    // `write`: it moves files and rewrites paths and manifests in the working
+    // tree. A cut that is not closed downward writes nothing and exits 2.
+    // The `rust` preset's `crate reach unsafe` remedy (CLOUD-2812).
+    CommandDecl {
+        path: "modules cut",
+        id: "modules.cut",
+        about: "Move a closed set of crate-root modules into a new sibling package, respelling every path, no shim",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            MODULES_DRY_RUN,
+            MODULES_CUT_FROM,
+            MODULES_CUT_NAME,
+            MODULES_CUT_SET,
+        ],
     },
     // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
     // `sbom-binary-record`). `write`: it writes the documents and runs the

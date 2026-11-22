@@ -265,10 +265,8 @@ name = "batten-codemods"
 version = "0.0.220"
 dependencies = [
  "batten",
- "ra_ap_syntax",
  "rustfix",
  "serde_json",
- "toml_edit",
 ]
 
 [[package]]

@@ -39,21 +39,23 @@ crate per concept, types and the functions over them together) over a set that
 is "everything below some line". A crate of bare types with the behaviour left
 above it moves the coupling, it does not cut it (CLOUD-2799 rev 2).
 
-### 2. Run `cut-crate`; the refusal is the closure
+### 2. Run `batten modules cut`; the refusal is the closure
 
 ```
-mise exec -- cargo run --release -q -p batten-codemods --example codemod -- \
-  cut-crate crates/<package> <name> <module> [<module>…]
+mise exec -- batten modules cut --dry-run \
+  crates/<package> <name> <module> [<module>…]
 ```
 
 Run it backgrounded at the workspace root. It prints `refused <path>:<line>
 crate::<m>` for every site in a moved file that reaches an unmoved module `m`,
-and writes nothing. Each refusal is the set telling you what it needs:
+and writes nothing (exit 2). Each refusal is the set telling you what it
+needs:
 
 - add `m` to the set and run again, **if** `m` is itself below the cycle; or
 - drop the module that reaches it, and cut it in a later, higher crate.
 
-A set is closed when the run is not refused. Never break the edge with a
+A set is closed when the run is not refused; `--dry-run` then lists each path
+the cut writes or removes, and the same command without it applies the cut. Never break the edge with a
 `pub use` back into the old crate: that is the shim CLOUD-2793 retires, and a
 new crate depending on the crate it was cut from is the cycle the cut exists
 to prevent.
