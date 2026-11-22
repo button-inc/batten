@@ -1701,7 +1701,7 @@ fn record_agent_context(
             )?;
             return Ok(());
         }
-        crate::transcript::Capability::Present(stream) => stream,
+        crate::transcript::Capability::Present(stream) => *stream,
     };
 
     let statement = AgentStatement {

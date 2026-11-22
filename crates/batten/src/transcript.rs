@@ -1071,7 +1071,7 @@ pub enum Capability {
     /// variant exists to prevent.
     Unsurveyed(&'static str),
     /// Configured and parsed.
-    Present(Stream),
+    Present(Box<Stream>),
 }
 
 impl Capability {
@@ -1308,7 +1308,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         return Capability::Absent;
     };
     match parse(&body, relative, shape) {
-        Ok(stream) => Capability::Present(stream),
+        Ok(stream) => Capability::Present(Box::new(stream)),
         Err(error) => Capability::Unreadable(error.to_string()),
     }
 }
