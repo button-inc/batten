@@ -1030,6 +1030,50 @@ fn reached_shims(text: &str, reader: &Reader, index: &Index) -> Vec<Shim> {
     reached
 }
 
+/// A leaf as a `use` line.
+fn use_line(leaf: &crate::module_graph::UseLeaf) -> String {
+    let joined = leaf.path.join("::");
+    if leaf.path.last() == Some(&leaf.name) {
+        format!("use {joined};")
+    } else {
+        format!("use {joined} as {};", leaf.name)
+    }
+}
+
+/// Whether a `use` is a shim [`downgrade_shims`] privatises: `Some(false)` for
+/// a private `use`, `Some(true)` for a `pub`/`pub(crate)` re-export rooted at
+/// `crate`/`self` that nothing reaches through, and `None` for any other
+/// visible `use`, which is left alone.
+fn shim_decision(
+    declaration: &ast::Use,
+    tree: &ast::UseTree,
+    reader: &Reader,
+    reached: &std::collections::BTreeSet<Shim>,
+    shims: bool,
+) -> Option<bool> {
+    let Some(visibility) = declaration.visibility() else {
+        return Some(false);
+    };
+    let spelled: String = visibility
+        .syntax()
+        .text()
+        .to_string()
+        .split_whitespace()
+        .collect();
+    let rooted = tree.path().is_some_and(|path| {
+        let text = path.syntax().text().to_string();
+        text.starts_with("crate") || text.starts_with("self")
+    });
+    let kept = crate::module_graph::use_leaves(tree).iter().any(|leaf| {
+        reached.contains(&(
+            reader.krate.clone(),
+            reader.module.clone(),
+            leaf.name.clone(),
+        ))
+    });
+    (shims && matches!(spelled.as_str(), "pub" | "pub(crate)") && rooted && !kept).then_some(true)
+}
+
 /// Pass 3, over one library file's top-level `use` items: a `pub` or
 /// `pub(crate)` shim nothing reaches goes private (`shims`, false in a crate
 /// root, whose aliases are its surface), and each leaf of a private `use`
@@ -1077,15 +1121,6 @@ fn downgrade_shims(
         }
         seen
     };
-    // A leaf as a `use` line.
-    let line = |leaf: &crate::module_graph::UseLeaf| -> String {
-        let joined = leaf.path.join("::");
-        if leaf.path.last() == Some(&leaf.name) {
-            format!("use {joined};")
-        } else {
-            format!("use {joined} as {};", leaf.name)
-        }
-    };
     let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     for item in root.items() {
         let ast::Item::Use(declaration) = item else {
@@ -1097,31 +1132,8 @@ fn downgrade_shims(
         if binds_unnamed(&tree) || crate::module_graph::cfg_test(declaration.syntax()) {
             continue;
         }
-        let shim = match declaration.visibility() {
-            None => false,
-            Some(visibility) => {
-                let spelled: String = visibility
-                    .syntax()
-                    .text()
-                    .to_string()
-                    .split_whitespace()
-                    .collect();
-                let rooted = tree.path().is_some_and(|path| {
-                    let text = path.syntax().text().to_string();
-                    text.starts_with("crate") || text.starts_with("self")
-                });
-                let kept = crate::module_graph::use_leaves(&tree).iter().any(|leaf| {
-                    reached.contains(&(
-                        reader.krate.clone(),
-                        reader.module.clone(),
-                        leaf.name.clone(),
-                    ))
-                });
-                if !(shims && matches!(spelled.as_str(), "pub" | "pub(crate)") && rooted && !kept) {
-                    continue;
-                }
-                true
-            }
+        let Some(shim) = shim_decision(&declaration, &tree, reader, reached, shims) else {
+            continue;
         };
         let whole = declaration.syntax().text_range();
         let (gated, staying): (Vec<_>, Vec<_>) = crate::module_graph::use_leaves(&tree)
@@ -1149,11 +1161,11 @@ fn downgrade_shims(
             });
         let lines: Vec<String> = staying
             .iter()
-            .map(|leaf| format!("{attributes}{}", line(leaf)))
+            .map(|leaf| format!("{attributes}{}", use_line(leaf)))
             .chain(
                 gated
                     .iter()
-                    .map(|leaf| format!("{attributes}#[cfg(test)]\n{}", line(leaf))),
+                    .map(|leaf| format!("{attributes}#[cfg(test)]\n{}", use_line(leaf))),
             )
             .collect();
         edits.push((

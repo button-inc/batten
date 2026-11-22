@@ -269,7 +269,7 @@ pub fn resolve_with(
                 "{LOG_LEVEL_ENV}: {token:?} names no verbosity; expected one of {}",
                 Verbosity::ALL
                     .iter()
-                    .map(|rung| rung.as_str())
+                    .map(VerbosityExt::as_str)
                     .collect::<Vec<_>>()
                     .join(", ")
             ))

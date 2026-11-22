@@ -4765,6 +4765,53 @@ pub(crate) struct Projected {
     pub causes: Vec<(String, NotAcquired)>,
 }
 
+/// [`project_paths`]'s base side and the measures over both sides: each
+/// declared unit file's base nodes, the base's `use` edges by the SAME
+/// [`project_uses`] over the base's own blobs (so head and base resolve
+/// identically, each against its own root table), and the coupling measures of
+/// head and base, one graph per side.
+fn project_base_side(
+    cache: &BTreeMap<(String, Wanted), Acquired>,
+    declared: &Declared<'_>,
+    out: &mut Projected,
+) {
+    if let Some(base) = declared.base {
+        for path in declared.units {
+            if let Some(Acquired::Units(nodes)) =
+                cache.get(&(format!("{base}:{path}"), Wanted::BaseUnits))
+            {
+                out.base_units
+                    .insert(path.clone(), serde_json::json!({"nodes": nodes}));
+            }
+        }
+    }
+    // A path the base lacks is a new file, not a missing input of the
+    // row, so its could-not-look is dropped rather than reported.
+    if let Some(base) = declared.base {
+        let (mut absent, mut why) = (Vec::new(), Vec::new());
+        project_uses(
+            cache,
+            declared.uses,
+            &|path| (format!("{base}:{path}"), Wanted::BaseUses),
+            &mut out.base_uses,
+            &mut absent,
+            &mut why,
+        );
+    }
+    // The measures, from the two edge maps just projected: one graph per side,
+    // so head and base are measured by the same function over the same shape.
+    if !declared.uses.is_empty() {
+        let measure = |uses: &serde_json::Map<String, serde_json::Value>| {
+            serde_json::json!(crate::coupling::measure(&crate::coupling::file_graph(uses)))
+        };
+        let mut coupling = serde_json::json!({"head": measure(&out.use_edges)});
+        if declared.base.is_some() {
+            coupling["base"] = measure(&out.base_uses);
+        }
+        out.coupling = coupling;
+    }
+}
+
 /// Project every per-path family a row declared.
 ///
 /// Split out of [`tree_document`] so that function stays under its line ceiling
@@ -4834,16 +4881,6 @@ fn project_paths(
             }
         }
     }
-    if let Some(base) = declared.base {
-        for path in declared.units {
-            if let Some(Acquired::Units(nodes)) =
-                cache.get(&(format!("{base}:{path}"), Wanted::BaseUnits))
-            {
-                out.base_units
-                    .insert(path.clone(), serde_json::json!({"nodes": nodes}));
-            }
-        }
-    }
     // The `use` family, whose edges are completed against one table for the
     // whole declared set — see `project_uses`.
     project_uses(
@@ -4854,33 +4891,7 @@ fn project_paths(
         &mut out.missing,
         &mut out.causes,
     );
-    // The base side, by the SAME function over the base's own blobs, so head
-    // and base edges are resolved identically (each against its own root
-    // table). A path the base lacks is a new file, not a missing input of the
-    // row, so its could-not-look is dropped rather than reported.
-    if let Some(base) = declared.base {
-        let (mut absent, mut why) = (Vec::new(), Vec::new());
-        project_uses(
-            cache,
-            declared.uses,
-            &|path| (format!("{base}:{path}"), Wanted::BaseUses),
-            &mut out.base_uses,
-            &mut absent,
-            &mut why,
-        );
-    }
-    // The measures, from the two edge maps just projected: one graph per side,
-    // so head and base are measured by the same function over the same shape.
-    if !declared.uses.is_empty() {
-        let measure = |uses: &serde_json::Map<String, serde_json::Value>| {
-            serde_json::json!(crate::coupling::measure(&crate::coupling::file_graph(uses)))
-        };
-        let mut coupling = serde_json::json!({"head": measure(&out.use_edges)});
-        if declared.base.is_some() {
-            coupling["base"] = measure(&out.base_uses);
-        }
-        out.coupling = coupling;
-    }
+    project_base_side(cache, declared, &mut out);
     // The out-of-root family, keyed by a declared ID rather than by a path — see
     // `project_external` (CLOUD-1167).
     project_external(
@@ -5391,6 +5402,197 @@ fn symbols_value(symbols: &crate::facts::Look<crate::symbols::Resolved>) -> serd
     }
 }
 
+/// One tree-surface fact's value, moved out of the projection; `None` for a
+/// hook-surface fact the tree does not project. EXHAUSTIVE, NO
+/// WILDCARD ARM: a new `Surface::Check` fact fails to compile here rather than
+/// going silently unprojected.
+fn fact_value(
+    fact: crate::facts::Fact,
+    projected: &mut Projected,
+    shell: &mut serde_json::Value,
+    tracked: &[String],
+    resolved: &Resolved<'_>,
+) -> Option<serde_json::Value> {
+    Some(match fact {
+        crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut projected.parsed)),
+        crate::facts::Fact::Tracked => serde_json::json!(tracked),
+        crate::facts::Fact::Traversals => resolved.traversals.clone(),
+        crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut projected.read_lines)),
+        // A path the parser refused is in `missing` rather than here,
+        // carrying `unparsed` as its cause — so a module reads could-not-look
+        // exactly as it does for a document, and a path present with an
+        // empty array is a file that parsed and calls nothing. Those are the
+        // two answers CLOUD-310's parse-coverage obligation demands stay
+        // apart, and the projection is where they would have collapsed.
+        crate::facts::Fact::Invocations => {
+            serde_json::Value::Object(std::mem::take(&mut projected.call_sites))
+        }
+        crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
+        crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
+        crate::facts::Fact::Coupling => std::mem::take(&mut projected.coupling),
+        crate::facts::Fact::Base => {
+            serde_json::json!({
+                "units": std::mem::take(&mut projected.base_units),
+                "uses": std::mem::take(&mut projected.base_uses),
+            })
+        }
+        // CLOUD-1167. Keyed by the row's declared id, so an id this row did
+        // not name is simply not here — the negative half that makes this a
+        // projection of a declared set rather than a filesystem scan.
+        crate::facts::Fact::External => {
+            serde_json::Value::Object(std::mem::take(&mut projected.external_files))
+        }
+        // Hook-surface facts, filtered above. Stated as an arm so a
+        // reclassification has to come through here.
+        crate::facts::Fact::Produced => {
+            serde_json::Value::Object(std::mem::take(&mut projected.produced_records))
+        }
+        // CLOUD-1051. Handed in for `produced`'s reason: the projection is
+        // pure, and the read that fills this is the caller's.
+        crate::facts::Fact::Records => {
+            serde_json::Value::Object(std::mem::take(&mut projected.recorder_lines))
+        }
+        // CLOUD-1126. An EMPTY object is an answer here and means no declared
+        // row was blocked on this branch, which is why this is not `null` when
+        // the store is missing: the store is written only when something is
+        // blocked, so its absence and its emptiness are the same fact.
+        crate::facts::Fact::RecordsBlocked => {
+            serde_json::Value::Object(std::mem::take(&mut projected.recorder_blocked))
+        }
+        // The git family (CLOUD-907). `null` rather than a skip when a
+        // member is `None`, which is the same invariant the mediated
+        // document holds: a key that comes and goes cannot be written
+        // against at all, and `not input.tree["git-head"]` is indist-
+        // inguishable from a predicate that simply does not hold.
+        crate::facts::Fact::GitHead => serde_json::json!(resolved.git.head),
+        crate::facts::Fact::GitStatus => serde_json::json!(resolved.git.status),
+        crate::facts::Fact::GitRemote => serde_json::json!(resolved.git.remote),
+        // CLOUD-1424. `null` when nobody declared it AND when the registry
+        // could not be read; an empty `linked` list is the third answer and
+        // means the registry was read and holds nothing.
+        crate::facts::Fact::GitWorktrees => serde_json::json!(resolved.git.worktrees),
+        crate::facts::Fact::GitRef => serde_json::json!(resolved.git.refs),
+        crate::facts::Fact::GitRange => serde_json::json!(resolved.git.ranges),
+        // CLOUD-1187. Identity fields only — the type carries no body, so
+        // there is nothing here for rule 4 to have to exclude.
+        crate::facts::Fact::CommitMeta => serde_json::json!(resolved.git.metadata),
+        crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
+        // CLOUD-1200. `null` for both could-not-look conditions — nobody
+        // declared a pattern, and the clone is shallow.
+        crate::facts::Fact::GitHistory => serde_json::json!(resolved.git.history),
+        // CLOUD-843. `null` for both could-not-look conditions — nobody
+        // declared one, and the read failed. One level down each keeps its
+        // own ANSWER apart from that: a glob that matched no tag is an empty
+        // list, a key no scope sets has a null `effective`, a pathspec that
+        // selects nothing has three empty lists.
+        crate::facts::Fact::GitTags => serde_json::json!(resolved.git.tags),
+        crate::facts::Fact::GitConfig => serde_json::json!(resolved.git.config),
+        crate::facts::Fact::GitIndex => serde_json::json!(resolved.git.index),
+        // CLOUD-1203 unit A. The staged bytes, PARSED by each path's own
+        // format — so a module reads a node exactly as it does for
+        // `documents`, and the only difference is which side of the index
+        // the bytes came from. A path that could not be staged-read is in
+        // `missing` with its cause rather than here.
+        crate::facts::Fact::Staged => {
+            serde_json::Value::Object(std::mem::take(&mut projected.staged_nodes))
+        }
+        // CLOUD-1203 unit B. `null` for both could-not-look conditions —
+        // nobody declared a ref, and no store is bound — because an empty
+        // listing is a third answer and means the store was read and held
+        // nothing.
+        crate::facts::Fact::State => serde_json::json!(resolved.state),
+        // CLOUD-1154. `null` for both could-not-look conditions — nobody
+        // declared a SHA, and no record store is readable. A declared SHA
+        // with no record is ABSENT from the map, which is a third answer.
+        crate::facts::Fact::Forge => serde_json::json!(resolved.forge),
+        // CLOUD-1171. `null` for both could-not-look conditions — nobody
+        // declared a tool, and no record store is readable. A declared id
+        // whose KEY has no record is ABSENT from the map, which is the third
+        // answer and the one the whole keying exists to produce.
+        crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
+        crate::facts::Fact::Plan => serde_json::json!(resolved.plan),
+        crate::facts::Fact::Minted => serde_json::json!(resolved.minted),
+        // CLOUD-1188. `null` for both could-not-look conditions — nobody
+        // declared a reduction, and no store is readable. A declared id no
+        // capture answered is ABSENT from the map, which is the third answer
+        // and the one a board gate must not read as a negative.
+        crate::facts::Fact::Captured => serde_json::json!(resolved.captured),
+        // Hook-surface (CLOUD-856), filtered above by `tree_key`. Named as an
+        // arm rather than wildcarded so a reclassification has to come
+        // through here — the same discipline every hook-only fact in this
+        // match already keeps.
+        // Hook-surface, filtered above by `tree_key`, and named rather than
+        // wildcarded so a reclassification has to come through here. Two
+        // facts with one reason each: the task receipt exists so the
+        // MEDIATED call need not parse a manifest (CLOUD-856), and the
+        // extractor's subject is THIS session's transcript, which a tree run
+        // has no way to be inside of (CLOUD-1172).
+        // CLOUD-1170 joins them, and for a reason neither of those two has:
+        // the instant is CONSUMED AT THE BOUNDARY and reaches no module on
+        // any surface, so this arm is unreachable rather than merely filtered
+        // — `tree_key` answers `None`, and the loop above has already
+        // continued. Named anyway, because the whole value of this match
+        // having no wildcard is that a fact gaining a surface has to come
+        // through here rather than defaulting into a projection.
+        crate::facts::Fact::Tasks
+        | crate::facts::Fact::Extracted
+        | crate::facts::Fact::Instant => serde_json::Value::Null,
+        // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
+        // answers get three different projections, because collapsing any
+        // pair of them is CLOUD-251's vacuous pass:
+        //
+        // * `IsNot` — no row declared it, so nothing ran.
+        // * `CouldNotLook` — the analyser ran and its stream did not parse,
+        //   or it could not be run at all.
+        //
+        //   Both project `null`, and the KEY IS ALWAYS PRESENT. That is the
+        //   git family's invariant (CLOUD-907) and it decides here too: a key
+        //   that comes and goes cannot be written against at all, because
+        //   `not input.tree.symbols` is indistinguishable from a predicate
+        //   that simply does not hold. What must never happen is either of
+        //   them reaching a module as an empty `sites` list — clean is never
+        //   inferred from a stream that failed to parse, and never from an
+        //   analyser nobody asked to run.
+        //
+        // * `Is` — the census, WITH its provenance. Tool, version and the
+        //   pinned invocation travel beside the sites because §6 byte-
+        //   stability is a claim about a named producer; a bare site list
+        //   is not attributable to anything. An EMPTY `sites` here is the
+        //   third answer and a real one: the analyser ran and resolved no
+        //   site. `null` and `[]` are the pair this projection keeps apart.
+        crate::facts::Fact::Symbols => symbols_value(resolved.symbols),
+        crate::facts::Fact::Review => review_value(resolved.review),
+        // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
+        // the family already collapses: no row declared a delta, and a row
+        // declared one whose base did not resolve. A migration gate reads the
+        // second as "I could not read the base" rather than "this branch
+        // changed nothing", which is the distinction the whole fact exists
+        // to keep.
+        crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
+        // CLOUD-2625. Computed before this loop takes `documents` and
+        // `lines`, because it is derived from both.
+        crate::facts::Fact::Shell => std::mem::take(shell),
+        crate::facts::Fact::Receipts
+        | crate::facts::Fact::Keys
+        | crate::facts::Fact::Stop
+        | crate::facts::Fact::Waived
+        | crate::facts::Fact::AgentSourced
+        | crate::facts::Fact::Prospective
+        // CLOUD-1028: hook-surface, and its question is about a command the
+        // tree surface does not have.
+        | crate::facts::Fact::Pinned
+        // CLOUD-1978: hook-surface; its question is about a call's argument.
+        | crate::facts::Fact::DispatchCleared
+        // CLOUD-2270: hook-surface; its question is about a push.
+        | crate::facts::Fact::RedHead
+        | crate::facts::Fact::LandLive
+        | crate::facts::Fact::PathspecStatus
+        | crate::facts::Fact::Budgeted
+        // CLOUD-2335: hook-surface; its question is about a write.
+        | crate::facts::Fact::ShellIntroduced => return None,
+    })
+}
+
 pub(crate) fn tree_document(
     cache: &BTreeMap<(String, Wanted), Acquired>,
     declared: &Declared<'_>,
@@ -5439,183 +5641,8 @@ pub(crate) fn tree_document(
         };
         // EXHAUSTIVE, NO WILDCARD ARM. A new `Surface::Check` fact fails to
         // compile here rather than going silently unprojected.
-        let value = match *fact {
-            crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut projected.parsed)),
-            crate::facts::Fact::Tracked => serde_json::json!(tracked),
-            crate::facts::Fact::Traversals => resolved.traversals.clone(),
-            crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut projected.read_lines)),
-            // A path the parser refused is in `missing` rather than here,
-            // carrying `unparsed` as its cause — so a module reads could-not-look
-            // exactly as it does for a document, and a path present with an
-            // empty array is a file that parsed and calls nothing. Those are the
-            // two answers CLOUD-310's parse-coverage obligation demands stay
-            // apart, and the projection is where they would have collapsed.
-            crate::facts::Fact::Invocations => {
-                serde_json::Value::Object(std::mem::take(&mut projected.call_sites))
-            }
-            crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
-            crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
-            crate::facts::Fact::Coupling => std::mem::take(&mut projected.coupling),
-            crate::facts::Fact::Base => {
-                serde_json::json!({
-                    "units": std::mem::take(&mut projected.base_units),
-                    "uses": std::mem::take(&mut projected.base_uses),
-                })
-            }
-            // CLOUD-1167. Keyed by the row's declared id, so an id this row did
-            // not name is simply not here — the negative half that makes this a
-            // projection of a declared set rather than a filesystem scan.
-            crate::facts::Fact::External => {
-                serde_json::Value::Object(std::mem::take(&mut projected.external_files))
-            }
-            // Hook-surface facts, filtered above. Stated as an arm so a
-            // reclassification has to come through here.
-            crate::facts::Fact::Produced => {
-                serde_json::Value::Object(std::mem::take(&mut projected.produced_records))
-            }
-            // CLOUD-1051. Handed in for `produced`'s reason: the projection is
-            // pure, and the read that fills this is the caller's.
-            crate::facts::Fact::Records => {
-                serde_json::Value::Object(std::mem::take(&mut projected.recorder_lines))
-            }
-            // CLOUD-1126. An EMPTY object is an answer here and means no declared
-            // row was blocked on this branch, which is why this is not `null` when
-            // the store is missing: the store is written only when something is
-            // blocked, so its absence and its emptiness are the same fact.
-            crate::facts::Fact::RecordsBlocked => {
-                serde_json::Value::Object(std::mem::take(&mut projected.recorder_blocked))
-            }
-            // The git family (CLOUD-907). `null` rather than a skip when a
-            // member is `None`, which is the same invariant the mediated
-            // document holds: a key that comes and goes cannot be written
-            // against at all, and `not input.tree["git-head"]` is indist-
-            // inguishable from a predicate that simply does not hold.
-            crate::facts::Fact::GitHead => serde_json::json!(resolved.git.head),
-            crate::facts::Fact::GitStatus => serde_json::json!(resolved.git.status),
-            crate::facts::Fact::GitRemote => serde_json::json!(resolved.git.remote),
-            // CLOUD-1424. `null` when nobody declared it AND when the registry
-            // could not be read; an empty `linked` list is the third answer and
-            // means the registry was read and holds nothing.
-            crate::facts::Fact::GitWorktrees => serde_json::json!(resolved.git.worktrees),
-            crate::facts::Fact::GitRef => serde_json::json!(resolved.git.refs),
-            crate::facts::Fact::GitRange => serde_json::json!(resolved.git.ranges),
-            // CLOUD-1187. Identity fields only — the type carries no body, so
-            // there is nothing here for rule 4 to have to exclude.
-            crate::facts::Fact::CommitMeta => serde_json::json!(resolved.git.metadata),
-            crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
-            // CLOUD-1200. `null` for both could-not-look conditions — nobody
-            // declared a pattern, and the clone is shallow.
-            crate::facts::Fact::GitHistory => serde_json::json!(resolved.git.history),
-            // CLOUD-843. `null` for both could-not-look conditions — nobody
-            // declared one, and the read failed. One level down each keeps its
-            // own ANSWER apart from that: a glob that matched no tag is an empty
-            // list, a key no scope sets has a null `effective`, a pathspec that
-            // selects nothing has three empty lists.
-            crate::facts::Fact::GitTags => serde_json::json!(resolved.git.tags),
-            crate::facts::Fact::GitConfig => serde_json::json!(resolved.git.config),
-            crate::facts::Fact::GitIndex => serde_json::json!(resolved.git.index),
-            // CLOUD-1203 unit A. The staged bytes, PARSED by each path's own
-            // format — so a module reads a node exactly as it does for
-            // `documents`, and the only difference is which side of the index
-            // the bytes came from. A path that could not be staged-read is in
-            // `missing` with its cause rather than here.
-            crate::facts::Fact::Staged => {
-                serde_json::Value::Object(std::mem::take(&mut projected.staged_nodes))
-            }
-            // CLOUD-1203 unit B. `null` for both could-not-look conditions —
-            // nobody declared a ref, and no store is bound — because an empty
-            // listing is a third answer and means the store was read and held
-            // nothing.
-            crate::facts::Fact::State => serde_json::json!(resolved.state),
-            // CLOUD-1154. `null` for both could-not-look conditions — nobody
-            // declared a SHA, and no record store is readable. A declared SHA
-            // with no record is ABSENT from the map, which is a third answer.
-            crate::facts::Fact::Forge => serde_json::json!(resolved.forge),
-            // CLOUD-1171. `null` for both could-not-look conditions — nobody
-            // declared a tool, and no record store is readable. A declared id
-            // whose KEY has no record is ABSENT from the map, which is the third
-            // answer and the one the whole keying exists to produce.
-            crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
-            crate::facts::Fact::Plan => serde_json::json!(resolved.plan),
-            crate::facts::Fact::Minted => serde_json::json!(resolved.minted),
-            // CLOUD-1188. `null` for both could-not-look conditions — nobody
-            // declared a reduction, and no store is readable. A declared id no
-            // capture answered is ABSENT from the map, which is the third answer
-            // and the one a board gate must not read as a negative.
-            crate::facts::Fact::Captured => serde_json::json!(resolved.captured),
-            // Hook-surface (CLOUD-856), filtered above by `tree_key`. Named as an
-            // arm rather than wildcarded so a reclassification has to come
-            // through here — the same discipline every hook-only fact in this
-            // match already keeps.
-            // Hook-surface, filtered above by `tree_key`, and named rather than
-            // wildcarded so a reclassification has to come through here. Two
-            // facts with one reason each: the task receipt exists so the
-            // MEDIATED call need not parse a manifest (CLOUD-856), and the
-            // extractor's subject is THIS session's transcript, which a tree run
-            // has no way to be inside of (CLOUD-1172).
-            // CLOUD-1170 joins them, and for a reason neither of those two has:
-            // the instant is CONSUMED AT THE BOUNDARY and reaches no module on
-            // any surface, so this arm is unreachable rather than merely filtered
-            // — `tree_key` answers `None`, and the loop above has already
-            // continued. Named anyway, because the whole value of this match
-            // having no wildcard is that a fact gaining a surface has to come
-            // through here rather than defaulting into a projection.
-            crate::facts::Fact::Tasks
-            | crate::facts::Fact::Extracted
-            | crate::facts::Fact::Instant => serde_json::Value::Null,
-            // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
-            // answers get three different projections, because collapsing any
-            // pair of them is CLOUD-251's vacuous pass:
-            //
-            // * `IsNot` — no row declared it, so nothing ran.
-            // * `CouldNotLook` — the analyser ran and its stream did not parse,
-            //   or it could not be run at all.
-            //
-            //   Both project `null`, and the KEY IS ALWAYS PRESENT. That is the
-            //   git family's invariant (CLOUD-907) and it decides here too: a key
-            //   that comes and goes cannot be written against at all, because
-            //   `not input.tree.symbols` is indistinguishable from a predicate
-            //   that simply does not hold. What must never happen is either of
-            //   them reaching a module as an empty `sites` list — clean is never
-            //   inferred from a stream that failed to parse, and never from an
-            //   analyser nobody asked to run.
-            //
-            // * `Is` — the census, WITH its provenance. Tool, version and the
-            //   pinned invocation travel beside the sites because §6 byte-
-            //   stability is a claim about a named producer; a bare site list
-            //   is not attributable to anything. An EMPTY `sites` here is the
-            //   third answer and a real one: the analyser ran and resolved no
-            //   site. `null` and `[]` are the pair this projection keeps apart.
-            crate::facts::Fact::Symbols => symbols_value(resolved.symbols),
-            crate::facts::Fact::Review => review_value(resolved.review),
-            // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
-            // the family already collapses: no row declared a delta, and a row
-            // declared one whose base did not resolve. A migration gate reads the
-            // second as "I could not read the base" rather than "this branch
-            // changed nothing", which is the distinction the whole fact exists
-            // to keep.
-            crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
-            // CLOUD-2625. Computed before this loop takes `documents` and
-            // `lines`, because it is derived from both.
-            crate::facts::Fact::Shell => std::mem::take(&mut shell),
-            crate::facts::Fact::Receipts
-            | crate::facts::Fact::Keys
-            | crate::facts::Fact::Stop
-            | crate::facts::Fact::Waived
-            | crate::facts::Fact::AgentSourced
-            | crate::facts::Fact::Prospective
-            // CLOUD-1028: hook-surface, and its question is about a command the
-            // tree surface does not have.
-            | crate::facts::Fact::Pinned
-            // CLOUD-1978: hook-surface; its question is about a call's argument.
-            | crate::facts::Fact::DispatchCleared
-            // CLOUD-2270: hook-surface; its question is about a push.
-            | crate::facts::Fact::RedHead
-            | crate::facts::Fact::LandLive
-            | crate::facts::Fact::PathspecStatus
-            | crate::facts::Fact::Budgeted
-            // CLOUD-2335: hook-surface; its question is about a write.
-            | crate::facts::Fact::ShellIntroduced => continue,
+        let Some(value) = fact_value(*fact, &mut projected, &mut shell, tracked, resolved) else {
+            continue;
         };
         tree.insert(key.to_owned(), value);
     }

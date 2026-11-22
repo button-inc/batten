@@ -8707,6 +8707,42 @@ fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -
     request
 }
 
+/// A DECIDED MECHANISM IS PLAN ENTRIES, not prose nothing checks (CLOUD-2810):
+/// each bullet of a claimed row's "Mechanism (decided)" is a `pending`
+/// `<row>-<n>`, held by `plan declare held` until it is built. `say` reports
+/// the count added.
+fn record_decided_mechanisms(
+    repo: &Path,
+    branch: &str,
+    issues: &[claim::Issue],
+    say: bool,
+    mode: Mode,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let Ok(git_dir) = git::git_dir(repo) else {
+        return Ok(());
+    };
+    let rows: Vec<(&str, &str)> = issues
+        .iter()
+        .map(|issue| {
+            (
+                issue.id.as_str(),
+                issue.description.as_deref().unwrap_or(""),
+            )
+        })
+        .collect();
+    let added = record::plan_mechanisms(&git_dir, branch, &rows)?;
+    if say && added > 0 {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            out,
+            &format!("claim check: {added} decided-mechanism plan entr(ies) recorded"),
+        )?;
+    }
+    Ok(())
+}
+
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
@@ -8807,30 +8843,8 @@ fn run_claim_check(
             Some(base.as_str()),
             &crate::clock::rfc3339_utc(now_unix()),
         )?;
-        // A DECIDED MECHANISM IS PLAN ENTRIES, not prose nothing checks
-        // (CLOUD-2810): each bullet is a `pending` `<row>-<n>`, held by `plan
-        // declare held` until it is built. After the mint, so the entries key on
-        // the claim the receipt just recorded.
-        if let Ok(git_dir) = git::git_dir(repo) {
-            let rows: Vec<(&str, &str)> = issues
-                .iter()
-                .map(|issue| {
-                    (
-                        issue.id.as_str(),
-                        issue.description.as_deref().unwrap_or(""),
-                    )
-                })
-                .collect();
-            let added = record::plan_mechanisms(&git_dir, &branch, &rows)?;
-            if !json && added > 0 {
-                output::message(
-                    mode,
-                    Verbosity::Normal,
-                    out,
-                    &format!("claim check: {added} decided-mechanism plan entr(ies) recorded"),
-                )?;
-            }
-        }
+        // After the mint, so the entries key on the claim the receipt just recorded.
+        record_decided_mechanisms(repo, &branch, &issues, !json, mode, out)?;
     }
     if !json {
         // Not under `-J`, for the reason `ready lint` states: stdout is one
@@ -20008,6 +20022,25 @@ impl HookDispatch {
     }
 }
 
+/// [`dispatch_envelope`]'s cheap prologue: an event the host does not declare
+/// allows with a verbose note (CLOUD-45), and otherwise the two boundary side
+/// effects run, re-arming an unlanded claim and recording an operator
+/// directive (CLOUD-2811), before anything touches config.
+fn boundary_prologue(
+    harness: crate::config_model::Harness,
+    envelope: &hook::Envelope,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<HookDispatch>> {
+    if let Some(note) = undeclared_event_note(harness, &harness.capabilities(), envelope.event) {
+        output::message(mode, Verbosity::Verbose, err, &note)?;
+        return Ok(Some(HookDispatch::undenied(ExitCode::Success)));
+    }
+    rearm_unlanded(envelope);
+    record_directive(envelope);
+    Ok(None)
+}
+
 /// `run_hook`'s tail, extracted (CLOUD-2690): everything from settling the
 /// envelope to rendering the decision, so `forge intake` dispatches through
 /// exactly the Facts, config load, handlers, actions and `adjudicate` a
@@ -20036,12 +20069,9 @@ fn dispatch_envelope(
     //
     // The note rides the ladder above `normal`, because on the hosts where this
     // is reachable it is the ordinary state rather than news.
-    if let Some(note) = undeclared_event_note(harness, &harness.capabilities(), envelope.event) {
-        output::message(mode, Verbosity::Verbose, err, &note)?;
-        return Ok(HookDispatch::undenied(ExitCode::Success));
+    if let Some(done) = boundary_prologue(harness, &envelope, mode, err)? {
+        return Ok(done);
     }
-    rearm_unlanded(&envelope);
-    record_directive(&envelope);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
     // that is on this host is the capability table's answer rather than a literal
     // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits

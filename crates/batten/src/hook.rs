@@ -3545,14 +3545,11 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     })
 }
 
-/// [`decode_value`]'s field list, for an event already named.
-fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope {
-    let event = normalize_event(harness, &raw_event);
-
-    // Cursor's specialized events carry the operand at top level and no
-    // `tool_name`; every other shape nests it under `tool_input`.
-    let specialized = harness == Harness::Cursor && cursor_specialized_tool(&raw_event).is_some();
-    let input = if specialized {
+/// The call's operand as one JSON value: Cursor's specialized events carry it
+/// at top level, every other shape under `tool_input` (or Copilot's
+/// `toolArgs`), and a prompt event carries its text at top level.
+fn call_input(value: &Value, specialized: bool) -> Value {
+    if specialized {
         cursor_specialized_input(value)
     } else {
         // Copilot's `toolArgs` is typed `unknown` and its own docs show it
@@ -3579,7 +3576,17 @@ fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope
                 ),
             other => other,
         }
-    };
+    }
+}
+
+/// [`decode_value`]'s field list, for an event already named.
+fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope {
+    let event = normalize_event(harness, &raw_event);
+
+    // Cursor's specialized events carry the operand at top level and no
+    // `tool_name`; every other shape nests it under `tool_input`.
+    let specialized = harness == Harness::Cursor && cursor_specialized_tool(&raw_event).is_some();
+    let input = call_input(value, specialized);
 
     let tool = if specialized {
         cursor_specialized_tool(&raw_event)
@@ -15108,7 +15115,7 @@ mod tests {
         // Totality over the vocabulary: a variant added with no `as_str` arm
         // would not compile, but one added with a duplicate token would, and
         // that silently merges two events in any census keyed on the string.
-        let mut tokens: Vec<&str> = Event::ALL.iter().map(|event| event.as_str()).collect();
+        let mut tokens: Vec<&str> = Event::ALL.iter().map(super::EventExt::as_str).collect();
         tokens.sort_unstable();
         let unique = {
             let mut copy = tokens.clone();
@@ -19412,7 +19419,7 @@ deny contains "refused by themodule" if {
             // is a measured `No`: the census covered it, the encoder did not.
             let spellings: Vec<&str> = match harness.wiring() {
                 Some(wiring) => wiring.spellings.iter().map(|(_, name)| *name).collect(),
-                None => Event::ALL.iter().map(|event| event.as_str()).collect(),
+                None => Event::ALL.iter().map(super::EventExt::as_str).collect(),
             };
             for spelling in spellings {
                 assert_eq!(
