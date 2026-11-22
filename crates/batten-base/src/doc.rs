@@ -1104,6 +1104,21 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &[],
     },
     VendoredDoc {
+        id: "shell spawn refused",
+        why: Some("The engine runs programs, and a shell spawn stands only on a declared contract"),
+        act: &[
+            "spawn the program directly with its argv",
+            "or declare a `[[census.shell.spawn]]` row citing the format that forces a shell",
+        ],
+        dont: &["build the argv from a computed program name to hide it"],
+    },
+    VendoredDoc {
+        id: "shell spawn missing",
+        why: Some("A spawn row whose function spawns no shell admits a spawn nobody reviewed"),
+        act: &["delete the row, or correct its path or function"],
+        dont: &[],
+    },
+    VendoredDoc {
         id: "diff key missing",
         why: Some(
             "A tracker moves a row only for a closing reference, so a bare mention merges and moves nothing",

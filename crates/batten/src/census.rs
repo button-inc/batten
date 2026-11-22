@@ -77,8 +77,35 @@ pub trait ShellCensusExt: Sized {
     fn validate(&self) -> Result<()>;
 }
 
+/// Refuse a `[[census.shell.spawn]]` row that names no file or function, or
+/// whose `contract` carries no citation URL (CLOUD-2770).
+fn validate_spawns(census: &ShellCensus) -> Result<()> {
+    for spawn in &census.spawns {
+        let bare = |field: Option<&str>| field.is_none_or(|text| text.trim().is_empty());
+        if spawn.path.trim().is_empty() || bare(spawn.function.as_deref()) {
+            return Err(UsageError::raise(format!(
+                "census.shell.spawn {}: a row names the file and the function that spawns",
+                spawn.path
+            )));
+        }
+        if !spawn
+            .contract
+            .as_deref()
+            .is_some_and(|contract| !contract.trim().is_empty() && contract.contains("://"))
+        {
+            return Err(UsageError::raise(format!(
+                "census.shell.spawn {}: `contract` must name the external format that forces \
+                 a shell, with a citation URL",
+                spawn.path
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl ShellCensusExt for ShellCensus {
     fn validate(&self) -> Result<()> {
+        validate_spawns(self)?;
         for manifest in &self.manifests {
             if manifest.path.trim().is_empty() {
                 return Err(UsageError::raise(
@@ -553,6 +580,9 @@ pub struct Report {
     /// Each `[[census.shell.generated]]` entry, held to what is behind it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub generated: Vec<GeneratedEntry>,
+    /// Engine source spawning a shell (CLOUD-2770), declared or not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spawns: Vec<SpawnEntry>,
     /// The sums.
     pub totals: Totals,
 }
@@ -615,6 +645,322 @@ fn generated_entries<'g>(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Engine source that spawns a shell (CLOUD-2770). Whether an argv runs one is
+// `crate::shell::spawns_shell`'s; this walk only finds the argv.
+// ---------------------------------------------------------------------------
+
+/// One engine spawn site: a string-literal argv, outside test code, whose
+/// program [`crate::shell::spawns_shell`] reads as running a shell.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct SpawnEntry {
+    /// The source file.
+    pub path: String,
+    /// The 1-based line of the argv's program.
+    pub line: usize,
+    /// The function (or `const`/`static`) holding it. Absent for a file the
+    /// parser refused, which is one site no row can declare: could-not-look is
+    /// never clean.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+}
+
+/// How a site of a file the parser refused renders.
+const UNPARSED: &str = "<unparsed>";
+
+/// Whether a tracked path is engine source: a `.rs` file under a `src`
+/// directory. A crate's tests, benches and build script are not; a test module
+/// inside `src` is skipped by the walk.
+fn engine_source(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "rs")
+        && (path.starts_with("src/") || path.contains("/src/"))
+}
+
+/// Every engine spawn site in the tracked tree at `root`.
+fn spawns_on_disk(root: &Path, tracked: &BTreeSet<String>) -> Vec<SpawnEntry> {
+    tracked
+        .iter()
+        .filter(|path| engine_source(path))
+        .filter_map(|path| {
+            let bytes = std::fs::read(root.join(path)).ok()?;
+            Some(spawn_sites(path, &String::from_utf8_lossy(&bytes)))
+        })
+        .flatten()
+        .collect()
+}
+
+/// Every shell spawn site in one engine source file, in source order, read off
+/// the one lossless parse (`batten_facts::source::rust_tree`, CLOUD-1008). A
+/// file the parser refuses is one site no row can declare: could-not-look is
+/// never clean.
+fn spawn_sites(path: &str, text: &str) -> Vec<SpawnEntry> {
+    use ra_ap_syntax::AstNode as _;
+    let crate::facts::Look::Is(tree) =
+        crate::source::rust_tree(text, ra_ap_syntax::Edition::Edition2024)
+    else {
+        return vec![SpawnEntry {
+            path: path.to_owned(),
+            line: 1,
+            function: None,
+        }];
+    };
+    let mut found: BTreeMap<usize, Option<String>> = BTreeMap::new();
+    walk_spawns(tree.syntax(), text, 0, &mut found);
+    found
+        .into_iter()
+        .map(|(offset, function)| SpawnEntry {
+            path: path.to_owned(),
+            line: text[..offset.min(text.len())].matches('\n').count() + 1,
+            function,
+        })
+        .collect()
+}
+
+/// Record every shell spawn under `root`, whose text starts at byte `base` of
+/// the file, keyed by its program's offset. Pre-order, so an outer method chain
+/// is seen before the call it starts from and, carrying more of the argv, wins.
+fn walk_spawns(
+    root: &ra_ap_syntax::SyntaxNode,
+    text: &str,
+    base: usize,
+    found: &mut BTreeMap<usize, Option<String>>,
+) {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast;
+    for node in root.descendants() {
+        if test_code(&node) {
+            continue;
+        }
+        let mut record = |at: ra_ap_syntax::TextSize, argv: &[String]| {
+            let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+            if crate::shell_logic::spawns_shell(&words) {
+                found
+                    .entry(base + usize::from(at))
+                    .or_insert_with(|| owner_of(&node));
+            }
+        };
+        if let Some(chain) = ast::MethodCallExpr::cast(node.clone()) {
+            if let Some((at, argv)) = chained_argv(&chain) {
+                record(at, &argv);
+            }
+        } else if let Some(call) = ast::CallExpr::cast(node.clone()) {
+            if let Some((at, program)) = command_new(&call) {
+                record(at, &[program]);
+            }
+        } else if let Some(tuple) = ast::TupleExpr::cast(node.clone()) {
+            if let Some((at, argv)) = sequence(tuple.fields()) {
+                record(at, &argv);
+            }
+        } else if let Some(array) = ast::ArrayExpr::cast(node.clone()) {
+            if let Some((at, argv)) = sequence(array.exprs()) {
+                record(at, &argv);
+            }
+        } else if let Some(mac) = ast::MacroCall::cast(node.clone()) {
+            walk_macro(&mac, text, base, found);
+        }
+    }
+}
+
+/// A macro body is a token tree to the parser. One whose body is comma-separated
+/// expressions (`vec!`, `format!`, `assert!`) is re-read as a bracketed list and
+/// walked the same way, and `vec!`'s list is an argv as an array literal's is.
+fn walk_macro(
+    mac: &ra_ap_syntax::ast::MacroCall,
+    text: &str,
+    base: usize,
+    found: &mut BTreeMap<usize, Option<String>>,
+) {
+    use ra_ap_syntax::AstNode as _;
+    let Some(body) = mac.token_tree() else {
+        return;
+    };
+    let range = body.syntax().text_range();
+    let (start, end) = (usize::from(range.start()) + 1, usize::from(range.end()) - 1);
+    let Some(inner) = text.get(start..end) else {
+        return;
+    };
+    // `fn _f() { [` is 12 bytes, so an offset in the wrapper less 12 is one in
+    // the body.
+    let wrapped = format!("fn _f() {{ [{inner}]; }}");
+    let crate::facts::Look::Is(tree) =
+        crate::source::rust_tree(&wrapped, ra_ap_syntax::Edition::Edition2024)
+    else {
+        return;
+    };
+    let shift = |found: BTreeMap<usize, Option<String>>| -> BTreeMap<usize, Option<String>> {
+        found
+            .into_iter()
+            .map(|(at, owner)| (at.saturating_sub(12), owner))
+            .collect()
+    };
+    let mut inner_found = BTreeMap::new();
+    walk_spawns(tree.syntax(), &wrapped, 0, &mut inner_found);
+    let is_vec = mac
+        .path()
+        .is_some_and(|path| path.syntax().text().to_string() == "vec");
+    if !is_vec {
+        // Only `vec!` makes its list an argv; drop the wrapper array's own site.
+        if let Some(array) = tree
+            .syntax()
+            .descendants()
+            .find_map(ra_ap_syntax::ast::ArrayExpr::cast)
+            && let Some((at, _)) = sequence(array.exprs())
+        {
+            inner_found.remove(&usize::from(at));
+        }
+    }
+    let owner = owner_of(mac.syntax());
+    for (at, _) in shift(inner_found) {
+        found
+            .entry(base + start + at)
+            .or_insert_with(|| owner.clone());
+    }
+}
+
+/// Whether `node` sits in test code: an ancestor item carrying `#[test]` or
+/// exactly `#[cfg(test)]`. Test code is CLOUD-2336's, not this arm's.
+fn test_code(node: &ra_ap_syntax::SyntaxNode) -> bool {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast::HasAttrs as _;
+    node.ancestors().any(|ancestor| {
+        crate::module_graph::cfg_test(&ancestor)
+            || ra_ap_syntax::ast::Fn::cast(ancestor).is_some_and(|function| {
+                function.attrs().any(|attr| {
+                    attr.path()
+                        .is_some_and(|path| path.syntax().text().to_string() == "test")
+                })
+            })
+    })
+}
+
+/// The function, `const` or `static` holding `node`, by name.
+fn owner_of(node: &ra_ap_syntax::SyntaxNode) -> Option<String> {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast::{self, HasName as _};
+    node.ancestors().find_map(|ancestor| {
+        ast::Fn::cast(ancestor.clone())
+            .and_then(|item| item.name())
+            .or_else(|| ast::Const::cast(ancestor.clone()).and_then(|item| item.name()))
+            .or_else(|| ast::Static::cast(ancestor).and_then(|item| item.name()))
+            .map(|name| name.text().to_string())
+    })
+}
+
+/// A string literal, through `&` and parentheses, with its position.
+fn literal(expr: &ra_ap_syntax::ast::Expr) -> Option<(ra_ap_syntax::TextSize, String)> {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast;
+    match expr {
+        ast::Expr::Literal(literal) => match literal.kind() {
+            ast::LiteralKind::String(text) => Some((
+                literal.syntax().text_range().start(),
+                text.value().ok()?.into_owned(),
+            )),
+            _ => None,
+        },
+        ast::Expr::RefExpr(inner) => literal(&inner.expr()?),
+        ast::Expr::ParenExpr(inner) => literal(&inner.expr()?),
+        _ => None,
+    }
+}
+
+/// The word standing for an argument the source computes: an inline flag whose
+/// script is computed still carries one.
+const COMPUTED: &str = "<computed>";
+
+/// A sequence's leading string literals, then [`COMPUTED`] once for whatever
+/// follows them.
+fn literal_argv(items: impl IntoIterator<Item = ra_ap_syntax::ast::Expr>) -> Vec<String> {
+    let mut argv = Vec::new();
+    for item in items {
+        if let Some((_, word)) = literal(&item) {
+            argv.push(word);
+        } else {
+            argv.push(COMPUTED.to_owned());
+            break;
+        }
+    }
+    argv
+}
+
+/// A sequence spelled as an argv: its first two elements are string literals.
+/// One literal beside a value is a table row, not an argv.
+fn sequence(
+    items: impl Iterator<Item = ra_ap_syntax::ast::Expr>,
+) -> Option<(ra_ap_syntax::TextSize, Vec<String>)> {
+    let items: Vec<_> = items.collect();
+    let [first, second, ..] = items.as_slice() else {
+        return None;
+    };
+    let (at, _) = literal(first)?;
+    literal(second)?;
+    Some((at, literal_argv(items)))
+}
+
+/// `Command::new("<literal>")` by any path ending in it: the program's position
+/// and the program.
+fn command_new(call: &ra_ap_syntax::ast::CallExpr) -> Option<(ra_ap_syntax::TextSize, String)> {
+    use ra_ap_syntax::ast::{self, HasArgList as _};
+    let ast::Expr::PathExpr(callee) = call.expr()? else {
+        return None;
+    };
+    let segments: Vec<String> = std::iter::successors(callee.path(), ast::Path::qualifier)
+        .filter_map(|path| path.segment()?.name_ref())
+        .map(|name| name.text().to_string())
+        .collect();
+    // `successors` walks from the last segment outward.
+    let [new, ty, ..] = segments.as_slice() else {
+        return None;
+    };
+    if ty != "Command" || new != "new" {
+        return None;
+    }
+    literal(&call.arg_list()?.args().next()?)
+}
+
+/// A method chain rooted at `Command::new(<literal>)`: the program's position
+/// and the argv its `.arg`/`.args` links spell, up to the first computed word.
+fn chained_argv(
+    call: &ra_ap_syntax::ast::MethodCallExpr,
+) -> Option<(ra_ap_syntax::TextSize, Vec<String>)> {
+    use ra_ap_syntax::ast::{self, HasArgList as _};
+    let mut chain = vec![call.clone()];
+    let mut root = call.receiver()?;
+    while let ast::Expr::MethodCallExpr(inner) = root {
+        root = inner.receiver()?;
+        chain.push(inner);
+    }
+    let ast::Expr::CallExpr(root) = root else {
+        return None;
+    };
+    let (at, program) = command_new(&root)?;
+    let mut argv = vec![program];
+    for link in chain.iter().rev() {
+        if argv.last().is_some_and(|word| word == COMPUTED) {
+            break;
+        }
+        let method = link.name_ref().map(|name| name.text().to_string());
+        let first = link.arg_list().and_then(|args| args.args().next());
+        match method.as_deref() {
+            Some("arg") => argv.extend(literal_argv(first)),
+            Some("args") => {
+                let array = first.map(|arg| match arg {
+                    ast::Expr::RefExpr(inner) => inner.expr(),
+                    other => Some(other),
+                });
+                match array.flatten() {
+                    Some(ast::Expr::ArrayExpr(array)) => argv.extend(literal_argv(array.exprs())),
+                    _ => argv.push(COMPUTED.to_owned()),
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((at, argv))
+}
+
 impl Report {
     /// The pointer lines, one per entry, then the totals.
     #[must_use]
@@ -643,6 +989,14 @@ impl Report {
         }
         for entry in &self.exempt {
             rendered.push(format!("{} exempt {}", entry.path, entry.lines));
+        }
+        for entry in &self.spawns {
+            rendered.push(format!(
+                "{}:{} spawn {}",
+                entry.path,
+                entry.line,
+                entry.function.as_deref().unwrap_or(UNPARSED)
+            ));
         }
         let totals = self.totals;
         rendered.push(format!(
@@ -811,6 +1165,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
     }
 
     report.generated = generated_on_disk(root, declared, tracked);
+    report.spawns = spawns_on_disk(root, tracked);
     report.manifests.sort();
     report.steps.sort();
     report.files.sort();
@@ -1061,6 +1416,11 @@ pub struct Reach<'r, 'a> {
 /// `tracked` its glob matches, and whether a line of its check file holds the
 /// test name. A check file that cannot be read is `check_found: false`.
 ///
+/// `spawn` is one `{path, line, function}` per engine spawn site (CLOUD-2770):
+/// a string-literal argv outside test code in a tracked `src/**.rs` file whose
+/// program runs a shell. Present only with a [`Reach`] that applies, since
+/// both directions of the `[[census.shell.spawn]]` table need the whole tree.
+///
 /// Pointer-only (non-negotiable rule 4): a kind, a 1-based line, the detector's
 /// reason, a count and a boolean. Never a byte of the body.
 #[must_use]
@@ -1134,7 +1494,29 @@ pub fn tree_fact(
             base_side.insert(path.clone(), entry);
         }
     }
-    serde_json::json!({"head": head_side, "base": base_side, "generated": generated})
+    let mut fact =
+        serde_json::json!({"head": head_side, "base": base_side, "generated": generated});
+    // Engine spawn sites (CLOUD-2770), only where the whole tree was read: a
+    // fact that read a row's line sources alone would hand the ban an absent
+    // site as no site, and every declared row would read as naming nothing.
+    if let Some(reader) = reader {
+        let sources: BTreeSet<&str> = reader
+            .tracked
+            .iter()
+            .map(String::as_str)
+            .chain(head.keys().map(String::as_str))
+            .filter(|path| engine_source(path))
+            .collect();
+        let spawn: Vec<SpawnEntry> = sources
+            .into_iter()
+            .filter_map(|path| Some(spawn_sites(path, &read(path)?.join("\n"))))
+            .flatten()
+            .collect();
+        if let Some(object) = fact.as_object_mut() {
+            object.insert("spawn".to_owned(), serde_json::json!(spawn));
+        }
+    }
+    fact
 }
 
 /// `batten census shell`: render the census of this repository.
