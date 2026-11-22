@@ -738,6 +738,10 @@ pub enum Fact {
     /// instead of the working tree: head against base, read from git objects
     /// (plan item 4, CLOUD-1008's base side; 4b's Rego ratchet reads it).
     Base,
+    /// Architecture measures over the declared `use` graph, head and base:
+    /// Decoupling Level (Mo et al. 2016), propagation cost and the largest
+    /// component, from `coupling::measure` (plan step 3; 4b's ratchet reads it).
+    Coupling,
     /// Which module a **declared** Rust source file reaches, resolved through the
     /// crate root's own re-export table (CLOUD-762).
     Uses,
@@ -1017,6 +1021,11 @@ pub const UNITS: Class = Class::new(Cost::Read, Surface::Check);
 /// flight. A path the base does not hold, or whose blob its parser refuses, is
 /// absent — could-not-look — never an empty node set.
 pub const BASE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Coupling`] — measures derived from the projected `uses` edges.
+///
+/// `read` x `check`: computed from facts already acquired, no extra parse.
+pub const COUPLING: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Uses`] — a declared Rust file's `use` edges, resolved (CLOUD-762).
 ///
@@ -1642,6 +1651,7 @@ impl Fact {
         Fact::Invocations,
         Fact::Units,
         Fact::Base,
+        Fact::Coupling,
         Fact::Uses,
         Fact::Symbols,
         Fact::Review,
@@ -1697,6 +1707,7 @@ impl Fact {
             Fact::Invocations => "invocations",
             Fact::Units => "units",
             Fact::Base => "base",
+            Fact::Coupling => "coupling",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
             Fact::Review => "review",
@@ -1760,6 +1771,7 @@ impl Fact {
             Fact::Invocations => INVOCATIONS,
             Fact::Units => UNITS,
             Fact::Base => BASE,
+            Fact::Coupling => COUPLING,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
@@ -1855,6 +1867,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review
@@ -1963,6 +1976,7 @@ impl Fact {
             // Tree-only for `Invocations`' reason: a parse per declared file.
             Fact::Units => Some("units"),
             Fact::Base => Some("base"),
+            Fact::Coupling => Some("coupling"),
             Fact::Uses => Some("uses"),
             // The resolved-symbol tier (CLOUD-760). Tree surface like the two
             // above, and `Cost::Effect` where they are `Read` — the cost axis is
@@ -2070,6 +2084,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Tracked
             | Fact::GitIndex
@@ -2176,6 +2191,14 @@ impl Fact {
                     "type": "object",
                     "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
                     "required": ["nodes"],
+                },
+            }),
+            Fact::Coupling => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Coupling (plan step 3). Measures over the row's declared `use` graph at file level, each an object {decoupling_level, propagation_cost, largest_component, files}: `head` over the working tree, `base` over the row's `base` rev (absent when the row declares none). Decoupling Level is Mo et al. ICSE 2016 §3.1 with SCCs standing in for Design Rule Hierarchy modules (checked against the paper's Figure 2); propagation cost is reported for a reader and falls as unconnected files are added, so a ratchet gates `decoupling_level`, never it.",
+                "properties": {
+                    "head": {"type": "object"},
+                    "base": {"type": "object"},
                 },
             }),
             Fact::Base => serde_json::json!({
@@ -2563,6 +2586,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -2638,6 +2662,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Produced
             | Fact::Symbols
@@ -2862,6 +2887,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3092,6 +3118,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3174,6 +3201,7 @@ impl Fact {
             | Fact::Invocations
             | Fact::Units
             | Fact::Base
+            | Fact::Coupling
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review

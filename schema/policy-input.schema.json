@@ -157,6 +157,18 @@
             "null"
           ]
         },
+        "coupling": {
+          "description": "Fact::Coupling (plan step 3). Measures over the row's declared `use` graph at file level, each an object {decoupling_level, propagation_cost, largest_component, files}: `head` over the working tree, `base` over the row's `base` rev (absent when the row declares none). Decoupling Level is Mo et al. ICSE 2016 §3.1 with SCCs standing in for Design Rule Hierarchy modules (checked against the paper's Figure 2); propagation cost is reported for a reader and falls as unconnected files are added, so a ratchet gates `decoupling_level`, never it.",
+          "properties": {
+            "base": {
+              "type": "object"
+            },
+            "head": {
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
         "documents": {
           "additionalProperties": true,
           "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
