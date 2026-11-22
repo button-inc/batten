@@ -34,9 +34,6 @@ rustls-pki-types.workspace = true
 tokio.workspace = true
 tower-service.workspace = true
 webpki-roots.workspace = true
-# `propose::diff3`, the three-way text merge over gix's driver (CLOUD-1956).
-gix.workspace = true
-gix-diff.workspace = true
 imara-diff.workspace = true
 # `codemod`'s Rust backend (CLOUD-1580) and `module_graph`'s reader of it.
 ra_ap_syntax.workspace = true
