@@ -6871,6 +6871,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--replace[Replace the whole plan instead of merging these entries into it by id]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -9047,6 +9048,67 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(metrics)
+_arguments "${_arguments_options[@]}" : \
+'--root=[The crate'\''s source root, the directory holding lib.rs]:root:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(ratchet)
+_arguments "${_arguments_options[@]}" : \
+'--record=[The record file, one \`<root> cycle=<n> propagation=<bp> impls=<n> shims=<n>\` line per root]:record:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--check[Never write the record\: one looser than the tree is refused too]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__modules__subcmd__help_commands" \
@@ -9068,6 +9130,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (shims)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(metrics)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(ratchet)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -11410,6 +11480,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(metrics)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(ratchet)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -13422,6 +13500,8 @@ _batten__subcmd__help__subcmd__modules_commands() {
 'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
 'impls:Print how many inherent impls sit away from their type'\''s module, refusing more than --max' \
 'shims:Print how many re-exports of the crate'\''s own items sit outside its root, refusing more than --max' \
+'metrics:Print every module-graph metric of a source root as one record line' \
+'ratchet:Refuse any module-graph metric worse than the committed record, and tighten the record on improvement' \
     )
     _describe -t commands 'batten help modules commands' commands "$@"
 }
@@ -13434,6 +13514,16 @@ _batten__subcmd__help__subcmd__modules__subcmd__cycle_commands() {
 _batten__subcmd__help__subcmd__modules__subcmd__impls_commands() {
     local commands; commands=()
     _describe -t commands 'batten help modules impls commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__modules__subcmd__metrics_commands] )) ||
+_batten__subcmd__help__subcmd__modules__subcmd__metrics_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help modules metrics commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__modules__subcmd__ratchet_commands] )) ||
+_batten__subcmd__help__subcmd__modules__subcmd__ratchet_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help modules ratchet commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__modules__subcmd__shims_commands] )) ||
 _batten__subcmd__help__subcmd__modules__subcmd__shims_commands() {
@@ -14685,6 +14775,8 @@ _batten__subcmd__modules_commands() {
 'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
 'impls:Print how many inherent impls sit away from their type'\''s module, refusing more than --max' \
 'shims:Print how many re-exports of the crate'\''s own items sit outside its root, refusing more than --max' \
+'metrics:Print every module-graph metric of a source root as one record line' \
+'ratchet:Refuse any module-graph metric worse than the committed record, and tighten the record on improvement' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten modules commands' commands "$@"
@@ -14700,6 +14792,8 @@ _batten__subcmd__modules__subcmd__help_commands() {
 'cycle:Print how many modules the largest cycle of the module graph holds, refusing more than --max' \
 'impls:Print how many inherent impls sit away from their type'\''s module, refusing more than --max' \
 'shims:Print how many re-exports of the crate'\''s own items sit outside its root, refusing more than --max' \
+'metrics:Print every module-graph metric of a source root as one record line' \
+'ratchet:Refuse any module-graph metric worse than the committed record, and tighten the record on improvement' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten modules help commands' commands "$@"
@@ -14719,6 +14813,16 @@ _batten__subcmd__modules__subcmd__help__subcmd__impls_commands() {
     local commands; commands=()
     _describe -t commands 'batten modules help impls commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__modules__subcmd__help__subcmd__metrics_commands] )) ||
+_batten__subcmd__modules__subcmd__help__subcmd__metrics_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules help metrics commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__help__subcmd__ratchet_commands] )) ||
+_batten__subcmd__modules__subcmd__help__subcmd__ratchet_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules help ratchet commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__modules__subcmd__help__subcmd__shims_commands] )) ||
 _batten__subcmd__modules__subcmd__help__subcmd__shims_commands() {
     local commands; commands=()
@@ -14728,6 +14832,16 @@ _batten__subcmd__modules__subcmd__help__subcmd__shims_commands() {
 _batten__subcmd__modules__subcmd__impls_commands() {
     local commands; commands=()
     _describe -t commands 'batten modules impls commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__metrics_commands] )) ||
+_batten__subcmd__modules__subcmd__metrics_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules metrics commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__modules__subcmd__ratchet_commands] )) ||
+_batten__subcmd__modules__subcmd__ratchet_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten modules ratchet commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__modules__subcmd__shims_commands] )) ||
 _batten__subcmd__modules__subcmd__shims_commands() {
