@@ -382,7 +382,7 @@ pub struct Config {
     /// module, and the row reading it reported clean over a record that said
     /// otherwise.
     ///
-    /// **`MintDeclared` rather than swept**, which is what keeps could-not-look
+    /// **Declared rather than swept**, which is what keeps could-not-look
     /// readable: an absent record under a declared family is "the producer did
     /// not run", where the same absence with nothing declared is not a reading at
     /// all. [`RecordDeclared`] carries the whole argument.
@@ -1322,7 +1322,7 @@ pub struct Trust {
 
 /// The `[epoch]` table: which files govern this repository.
 ///
-/// `MintDeclared` as **config** rather than compiled in, because which files govern a
+/// Declared as **config** rather than compiled in, because which files govern a
 /// repository is that repository's business: an agent settings file, a
 /// contributor guide, a hook config — each meaningful in one repository and
 /// meaningless in the next. The core therefore carries only the default (this
@@ -1352,7 +1352,7 @@ pub struct Epoch {
 /// be a defect there, so the two tables answer different questions rather than
 /// one table answering both badly.
 ///
-/// `MintDeclared` as config for the reason [`Epoch`] gives: which files carry a
+/// Declared as config for the reason [`Epoch`] gives: which files carry a
 /// repository's contract is that repository's business, so a grep of
 /// `crates/batten` for any consumer's identifiers returns nothing
 /// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
@@ -2038,7 +2038,7 @@ pub struct ExecConfig {
     /// Whether Batten may put a dispatched command in its own process group and
     /// take responsibility for tearing that group down.
     ///
-    /// `MintDeclared` rather than inferred, because the residual case is not
+    /// Declared rather than inferred, because the residual case is not
     /// observable: an orchestrator two levels up intending to `kill(-pgid)` looks
     /// exactly like one that is not. Even when this is `true`, Batten still
     /// declines whenever mise's own two rules say an ancestor is already
@@ -2246,7 +2246,7 @@ pub struct ResultRow {
     /// Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s
     /// spelling. An empty string is the result itself.
     ///
-    /// `MintDeclared` rather than known, because how a server frames a payload is the
+    /// Declared rather than known, because how a server frames a payload is the
     /// server's business and this crate holds no opinion about it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub node: String,
@@ -2538,7 +2538,7 @@ pub struct Prune {
     pub regrowable: Option<serde_json::Value>,
     /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
     /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
-    /// `min-free`. `MintDeclared` with [`Prune::max_free_mb`] or not at all; absent,
+    /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
     /// the collector runs at [`DEFAULT_FREE_BAND`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_free_mb: Option<u64>,
@@ -2626,7 +2626,7 @@ pub struct Conformance {
 /// a 36-day branch against a two-day threshold, `batten check` exit `0`. That is
 /// CLOUD-1707's dead gate one surface over.
 ///
-/// # `MintDeclared` rather than swept, which is the whole design
+/// # Declared rather than swept, which is the whole design
 ///
 /// The projection could have read whatever files happen to sit in the store
 /// directory. It must not, for the reason [`crate::rules`] already gives about a
@@ -2717,7 +2717,7 @@ pub struct Redirect {
     pub read: Option<String>,
     /// The MCP server whose tool `read` names (CLOUD-2229).
     ///
-    /// `MintDeclared`, the read is refused only where some `[[mcp.source]]` resolves
+    /// Declared, the read is refused only where some `[[mcp.source]]` resolves
     /// this server, which is the question `batten mcp call` answers before it
     /// dispatches. Measured on #1132: in a cloud session no source resolved
     /// `serena`, so the refusal named a route the session could not take and
@@ -2795,7 +2795,7 @@ pub struct CredentialProbe {
     pub probe_url: Option<String>,
     /// The variables a session credential may arrive under, most specific first.
     ///
-    /// **`MintDeclared` here rather than listed in the engine, which is non-negotiable
+    /// **Declared here rather than listed in the engine, which is non-negotiable
     /// rule 1.** It was two GitHub-shaped literals in `crates/batten` for one
     /// commit, and a consumer on another forge — or on a host that injects under
     /// a third name — has neither: every candidate is then absent,
@@ -3008,7 +3008,7 @@ pub enum Base {
 pub struct McpCredential {
     /// The header the credential is sent in.
     ///
-    /// `MintDeclared` rather than assumed: `Authorization` is the common answer and the
+    /// Declared rather than assumed: `Authorization` is the common answer and the
     /// default, but a session-scoped endpoint may want its own name, and guessing
     /// one produces a 401 that says nothing about why.
     #[serde(default = "authorization")]
@@ -3361,7 +3361,7 @@ pub(crate) fn preset_name_schema(generator: &mut schemars::SchemaGenerator) -> s
     })
 }
 
-// MintDeclared through `token_enum!` (CLOUD-2442). `ALL`'s order is the order the
+// Declared through `token_enum!` (CLOUD-2442). `ALL`'s order is the order the
 // mediated chain runs the gates.
 token_enum! {
     serde
@@ -4212,7 +4212,7 @@ pub struct Rule {
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
-    /// **`MintDeclared`, never inferred from the path.** An extension is a naming
+    /// **Declared, never inferred from the path.** An extension is a naming
     /// convention — a JSON5 file is conventionally `.json5` and legally
     /// anything — and this column is what decides which parser reads the bytes.
     /// Guessing wrong yields "could not look" on a file that is perfectly well
@@ -4557,7 +4557,7 @@ pub struct Rule {
     /// asking it about one file would be asking a different, cheaper question
     /// that [`Rule::invocations`] already answers.
     ///
-    /// **`MintDeclared` rather than ambient, and here the reason is the cost class.**
+    /// **Declared rather than ambient, and here the reason is the cost class.**
     /// This is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`
     /// over the crate, which is seconds rather than the milliseconds every other
     /// fact costs. Every git fact is declared for a bill CLOUD-851 measured at
@@ -4567,7 +4567,7 @@ pub struct Rule {
     pub symbols: bool,
     /// The vendored reviews this policy row reads, **declared** (CLOUD-472).
     ///
-    /// Each becomes an entry of `input.tree.review` under its own `id`. `MintDeclared`
+    /// Each becomes an entry of `input.tree.review` under its own `id`. Declared
     /// per row for `symbols`' reason and more so: this is the second
     /// `Cost::Effect` fact, and a MISS dispatches an agent — minutes and tokens,
     /// where clippy is seconds. The digest key makes that once per unique
@@ -4870,7 +4870,7 @@ pub struct Rule {
     /// gate that confuses them reports green on every host that never had the
     /// root.
     ///
-    /// `MintDeclared` on the row rather than in a root table so
+    /// Declared on the row rather than in a root table so
     /// [`crate::trust::weakenings`] compares it for free: every `Rule` column
     /// outside `RULE_NON_PREDICATE` is compared byte-for-byte, so a branch
     /// repointing a row at a different file is reported as a weakening. That move
@@ -4981,7 +4981,7 @@ pub struct Rule {
     /// The programs whose exit status IS the answer, for a
     /// [`RuleKind::Pipeline`] row (CLOUD-443).
     ///
-    /// `MintDeclared` on the rule rather than as a config-root table because it is what
+    /// Declared on the rule rather than as a config-root table because it is what
     /// this rule is *defined over*: a global table would be a second authority
     /// with no other consumer, and the set would outlive the row that reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5209,7 +5209,7 @@ pub enum GitRead {
 /// An unclaimed case, an arm naming a target this tree does not have, or one case
 /// claimed twice, all refuse the deletion.
 ///
-/// **`MintDeclared`, never inferred.** The same argument [`Rule::retires_with`] makes
+/// **Declared, never inferred.** The same argument [`Rule::retires_with`] makes
 /// for `# subject:`: a name heuristic over case titles would be worse than
 /// nothing, because titles are prose. The engine knows the RELATIONSHIP — a
 /// deleted named thing is claimed by exactly one arm naming something that
@@ -5905,7 +5905,7 @@ pub struct MintDeclared {
     pub key_shape: Option<String>,
     /// The base ref the change is measured against, for [`MintKey::Delta`].
     ///
-    /// `MintDeclared` rather than defaulted: which ref a branch is *a change against*
+    /// Declared rather than defaulted: which ref a branch is *a change against*
     /// is the consumer's fact, and an engine that assumed one would be naming a
     /// branch in a repo-agnostic core (non-negotiable rule 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6675,7 +6675,7 @@ pub struct Program {
 
 /// The `[refusal]` table: what one emitted mediated line may cost.
 ///
-/// **`MintDeclared`, never a literal in the crate** (non-negotiable rule 2, and the
+/// **Declared, never a literal in the crate** (non-negotiable rule 2, and the
 /// same reasoning `[budget.instructions]` is built on): a ceiling written into
 /// `crates/batten` is this repository's judgement compiled into every consumer's
 /// engine, and a consumer whose harness renders differently could not move it
