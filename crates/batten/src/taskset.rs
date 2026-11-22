@@ -571,7 +571,6 @@ fn argv(entry: &Node) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn table(text: &str) -> Node {
         match crate::facts::Format::Toml.read(text) {
             Look::Is(node) => match node.at("tasks") {

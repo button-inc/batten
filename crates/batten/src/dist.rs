@@ -756,7 +756,6 @@ fn run_cargo_dist(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     const TARGET: &str = "x86_64-unknown-linux-gnu";
 
     /// A package rooted in a scratch directory, its binary built when `built`.

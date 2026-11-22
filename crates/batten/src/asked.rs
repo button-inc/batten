@@ -339,7 +339,6 @@ pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     const PAIR: &str = "rule-removed rule[task carry other]";
 
     fn result(answer: &str) -> serde_json::Value {

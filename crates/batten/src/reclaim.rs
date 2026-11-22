@@ -496,7 +496,6 @@ pub fn run(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
     }

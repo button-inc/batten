@@ -919,7 +919,6 @@ pub fn run_shell(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn keys(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
