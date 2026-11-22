@@ -17,6 +17,7 @@
 /// directory everywhere but python, where it is isolated mode. Reading every
 /// family through one table admitted `python3 -E /tmp/x.py` and refused
 /// `perl -ne '/re/ …' file`, whose program text it took for a script path.
+#[derive(Debug)]
 pub struct Grammar {
     /// Short options that make the program INLINE, or point it at a module or
     /// stdin — no script file follows. Read inside a bundle too (`-ne`, `-Bc`).
