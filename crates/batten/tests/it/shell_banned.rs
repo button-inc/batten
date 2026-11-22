@@ -759,6 +759,38 @@ fn a_spawn_row_naming_no_site_is_refused() {
     assert_eq!(found, [("src/lib.rs".to_owned(), None)], "{found:?}");
 }
 
+/// A struct field whose VALUE lists shell names is data, not an argv: the shape
+/// of `hook.rs`'s `COPILOT_ENTRY` (`read: &["bash", "command"]`), which the census
+/// once reported as a spawn. No row is needed for it.
+#[test]
+fn a_struct_field_naming_shells_is_no_spawn_site() {
+    let dir = repo_under(
+        "shell-ban-spawn-field",
+        &presence_config(""),
+        &[(
+            "src/lib.rs",
+            "pub struct Entry {\n    pub read: &'static [&'static str],\n}\n\n\
+             pub const COPILOT: Entry = Entry {\n    read: &[\"bash\", \"command\"],\n};\n",
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// The spawn arms are presence's: under `mode = "migrate"` an undeclared spawn is
+/// not refused (owner ruling, 2026-11-22), so a consumer still migrating is not
+/// held to the table its mode has not reached.
+#[test]
+fn an_undeclared_engine_shell_spawn_is_not_judged_while_migrating() {
+    let dir = repo_under(
+        "shell-ban-spawn-migrating",
+        &presence_config("mode = \"migrate\"\n"),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
 /// Test code is CLOUD-2336's: the same spawn inside `#[cfg(test)] mod tests`
 /// is no site, so no row is needed for it.
 #[test]
@@ -828,6 +860,12 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
         BTreeSet::from([
             ".claude/hooks/git-hook.sh",
             "completions/batten.bash",
+            // TEMPORARY, admitted by the owner in `.batten/asked.jsonl` (dbd96081):
+            // the generated fish and zsh completions stand here until plan step 14
+            // swaps both for `[[census.shell.generated]]` rows under v0.0.221.
+            // Step 14 deletes these two lines with the entries.
+            "completions/batten.fish",
+            "completions/batten.zsh",
             "setup.sh",
         ])
     );
