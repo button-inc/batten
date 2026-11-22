@@ -5401,6 +5401,13 @@ pub(crate) fn tree_document(
     // more coming. The prelude grows per family; the projection loop below does
     // not.
     let mut projected = project_paths(cache, declared, resolved);
+    // `input.tree.shell` (CLOUD-2625): the detector over the declared homes,
+    // read off the two maps the loop below moves out.
+    let mut shell = crate::census::tree_fact(
+        &projected.parsed,
+        &projected.read_lines,
+        resolved.git.base_delta.as_ref(),
+    );
 
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
     // `Fact::ALL` rather than writing keys means a fact the tree surface gains
@@ -5582,6 +5589,9 @@ pub(crate) fn tree_document(
             // changed nothing", which is the distinction the whole fact exists
             // to keep.
             crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
+            // CLOUD-2625. Computed before this loop takes `documents` and
+            // `lines`, because it is derived from both.
+            crate::facts::Fact::Shell => std::mem::take(&mut shell),
             crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
             | crate::facts::Fact::Stop
@@ -18096,6 +18106,7 @@ mod half_tests {
                 Fact::Base,
                 Fact::Coupling,
                 Fact::Uses,
+                Fact::Shell,
             ],
             "a fact joins the tree half only by an edit here, never by default"
         );

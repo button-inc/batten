@@ -10,8 +10,11 @@
 //! this tier proves they agree about WHAT. Two
 //! readings of "a shell line" would make those claims able to disagree — a wave
 //! could read as progress to one and as growth to the other. So the census does
-//! not choose its own detection; it carries the ban's, and this tier proves the
-//! two count the same over one fixture carrying every shape either can see.
+//! not choose its own detection. Since CLOUD-2625 there is ONE detection,
+//! `crate::shell::logic` on the parser's AST, which the census counts with and
+//! hands the ban as `input.tree.shell`, so the two agree by construction; this
+//! tier still proves they count the same over one fixture carrying every shape
+//! either can see.
 //!
 //! **How a count is read out of a gate that only reports growth.** The ban fires
 //! `task write refused` exactly when the head's count exceeds the base's. So for a
@@ -67,8 +70,9 @@ fn config() -> String {
     text
 }
 
-/// A manifest whose one task carries `lines` plain body lines — the shape both
-/// readings trivially count one per line.
+/// A manifest whose one task carries `lines` plain body lines. Two or more are a
+/// multi-command body and count one per line; ONE is a single plain command and
+/// counts zero (CLOUD-2625).
 fn plain_manifest(lines: usize) -> String {
     let mut text = String::from("[tasks.plain]\nrun = '''\n");
     for i in 0..lines {
@@ -78,7 +82,8 @@ fn plain_manifest(lines: usize) -> String {
     text
 }
 
-/// A workflow whose one step carries `lines` plain block lines.
+/// A workflow whose one step carries `lines` plain block lines, counted as
+/// [`plain_manifest`]'s are.
 fn plain_workflow(lines: usize) -> String {
     let mut text = String::from("name: ci\njobs:\n  a:\n    steps:\n      - run: |\n");
     for i in 0..lines {
@@ -95,9 +100,10 @@ fn plain_workflow(lines: usize) -> String {
 /// shell entry; a one-liner BEFORE any task header (a lone line, which the ban
 /// counts and attributes to no task).
 ///
-/// Not counted: a plain argv one-liner; a quoted keyword (the first word keeps
-/// its quote, so `"set -e"` is not a keyword to either reading); an array's plain
-/// entry; a body that closes on its own opening line; a task with no shell.
+/// Not counted: a plain argv one-liner; `set -e`, which is one plain command to
+/// the detector (CLOUD-2625); an array's plain entry; a body that closes on its
+/// own opening line; a task with no shell; and a glob inside shell quotes, which
+/// only a shell would expand and this one is told not to.
 const TRICKY_MANIFEST: &str = "\
 run = \"a | b\"
 
@@ -138,6 +144,9 @@ run = \"set -e\"
 
 [tasks.inline]
 run = '''echo closed'''
+
+[tasks.quoted-glob]
+run = \"echo 'a*b'\"
 ";
 
 /// Blocks by indentation with a comment and a blank inside, a folded block, a
@@ -240,7 +249,10 @@ fn the_census_counts_the_fixture_as_the_shapes_say() {
     // against a number a reader can check by hand: the manifest carries
     // 1 lone + 2 (body) + 2 (dquote) + 1 + 1 + 1 + 1 (array) = 9 shell lines, the
     // workflow 2 + 2 + 1 = 5, and the shell files 1 + 3 + 2 = 6 code lines (a
-    // shebang is a comment), with `install.sh` apart.
+    // shebang is a comment), with `install.sh` apart. Re-pinned on the AST
+    // detector (CLOUD-2625) with every number unmoved: the two bodies are
+    // multi-command, the folded block is two source lines, and `quoted-glob`
+    // counts 0 — its `*` is inside shell quotes.
     let dir = repo("census-counted", &plain_manifest(1), &plain_workflow(1));
     tricky_head(&dir);
     let document = census(&dir);
