@@ -1,5 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/measure_and_edit_routes.rs
 #MUTANT address-unread|s@^\tline_addressed(word)$@\tfalse@|a_line_addressed_in_place_edit_is_refused
+#MUTANT script-unread|s@^\tscript_file(word)$@\tfalse@|an_in_place_edit_under_an_unread_script_is_refused
 # `path edit unsafe`: an in-place `sed` aimed by line number at a repository
 # file (CLOUD-2803).
 #
@@ -43,6 +44,26 @@ in_place(program) if {
 	startswith(word, "--in-place")
 }
 
+# A script read from a file (`-f x.sed`, `--file=x.sed`) is text this module
+# cannot see, so an in-place run under it is judged as if addressed: its
+# addresses are unread, never cleared.
+violation contains {
+	"rule": "path edit unsafe",
+	"verdict": "path edit unsafe",
+	"subjects": [{"count": 1}],
+} if {
+	count(input.call.roots) > 0
+	some program in input.call.programs
+	program.name == "sed"
+	in_place(program)
+	some word in program.arguments
+	script_file(word)
+}
+
+script_file(word) if word in {"-f", "--file"}
+
+script_file(word) if startswith(word, "--file=")
+
 # A script whose first address is a line number or a numeric range: `52s/a/b/`,
 # `3,5d`, `1{/x/d}`, `7!d`. A file name such as `1.txt` is not one: an address
 # is followed by a command letter or a brace, never a dot.
@@ -70,6 +91,28 @@ test_every_in_place_spelling_with_a_line_address_is_refused if {
 		["-ni", "1{/x/d}", "src/x.rs"],
 		["--in-place", "7,$d", "src/x.rs"],
 		["--in-place=.orig", "7!d", "src/x.rs"],
+	] {
+		some _ in violation with input as call(argv, repo)
+	}
+}
+
+test_a_line_address_after_the_first_command_is_refused if {
+	every argv in [
+		["-i", "-e", "s/a/b/;52d", "src/x.rs"],
+		["-i", "s/a/b/\n7d", "src/x.rs"],
+		["-i", "/x/{3d}", "src/x.rs"],
+		["-i", "--expression=52d", "src/x.rs"],
+		["-i", "0~3d", "src/x.rs"],
+		["-i", "5,+2d", "src/x.rs"],
+	] {
+		some _ in violation with input as call(argv, repo)
+	}
+}
+
+test_an_in_place_script_file_is_refused_unread if {
+	every argv in [
+		["-i", "-f", "x.sed", "src/x.rs"],
+		["-i", "--file=x.sed", "src/x.rs"],
 	] {
 		some _ in violation with input as call(argv, repo)
 	}
