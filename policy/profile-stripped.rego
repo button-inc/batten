@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/it/measure_and_edit_routes.rs
+#MUTANT stripped-unread|s@^\tstripped(word)$@\tfalse@|callgrind_on_a_release_binary_is_refused
 # `program measure unread`: a CPU profiler pointed at a stripped release binary.
 #
 # `[profile.release]` has `strip = true`, so callgrind on `target/release/<bin>`
