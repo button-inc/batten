@@ -232,7 +232,11 @@ that distinguishes a passing gate from an absent one.
 
 A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
-`input.tree.uses`, `input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
+`input.tree.uses`, `input.tree.units` (per-unit syntax counts off the one lossless
+parse — CLOUD-1008), `input.tree.base` (the same `units` and `uses` read at a row's
+declared `base`), `input.tree.coupling` (M-score, Decoupling Level, propagation cost
+and largest cycle over the `uses` graph, head and base — CLOUD-2821),
+`input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
 `input.tree.produced`, `input.tree.records`, `input.tree["records-blocked"]`,
 `input.tree.landing`, `input.tree.shell` (the shell detector's answer over the
 declared `[census.shell]` homes, both sides of the delta — CLOUD-2625), and the git
