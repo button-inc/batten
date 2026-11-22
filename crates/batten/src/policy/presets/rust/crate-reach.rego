@@ -16,6 +16,13 @@
 # `mise run crate-reach-record` from the activated `cargo metadata` graph
 # (`cargo_graph`'s activation rule). No crate name is spelled here (rule 1).
 
+# METADATA
+# description: |
+#   Bound to the TREE surface: reads `input.tree.records["crate-reach"]`, never
+#   the mediated `{call, facts}` shape.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
 package batten
 
 import rego.v1
