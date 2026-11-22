@@ -38,7 +38,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use ra_ap_syntax::{AstNode as _, SourceFile, SyntaxKind, SyntaxNode, TextRange, TextSize, ast};
+use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxNode, TextRange, TextSize, ast};
 
 /// The environment variable that selects the active mutant.
 pub const ACTIVE: &str = "BATTEN_MUTANT";
@@ -633,7 +633,7 @@ pub fn render(
     skip: &BTreeSet<u32>,
     probe_from: Option<usize>,
 ) -> Rendered {
-    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let root = parse.tree().syntax().clone();
     let mut classic = Vec::new();
     let mut placed: Vec<(u32, Range<usize>)> = Vec::new();
@@ -3324,7 +3324,7 @@ pub fn case_digests<'c>(
 /// A source that will not parse keys on its whole text.
 fn common_reached(common: &str, texts: &[String]) -> String {
     use ra_ap_syntax::ast::HasModuleItem as _;
-    let parse = SourceFile::parse(common, ra_ap_syntax::Edition::Edition2024);
+    let parse = batten_facts::source::rust_parse(common, ra_ap_syntax::Edition::Edition2024);
     if !parse.errors().is_empty() {
         return blake3::hash(common.as_bytes()).to_hex().to_string();
     }
@@ -3347,7 +3347,10 @@ fn common_reached(common: &str, texts: &[String]) -> String {
     let mut wanted: BTreeSet<String> = texts
         .iter()
         .flat_map(|text| {
-            names_in(&SourceFile::parse(text, ra_ap_syntax::Edition::Edition2024).syntax_node())
+            names_in(
+                &batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024)
+                    .syntax_node(),
+            )
         })
         .collect();
     let mut taken = vec![false; items.len()];
@@ -3382,7 +3385,7 @@ fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
             .attrs()
             .any(|attr| attr.syntax().text().to_string().contains("test"))
     };
-    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let mut texts: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for function in parse
@@ -4787,7 +4790,7 @@ fn read_gates_and_includes(
     file: &str,
     spans: &[(usize, Range<usize>)],
 ) {
-    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let root = parse.tree().syntax().clone();
     let mut resolved: std::collections::BTreeMap<usize, Included> =
         std::collections::BTreeMap::new();
@@ -7848,7 +7851,7 @@ mod tests {
     /// The items of `source`, parsed.
     fn items_of(source: &str) -> Vec<ast::Item> {
         use ast::HasModuleItem as _;
-        SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024)
+        batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
             .tree()
             .items()
             .collect()
@@ -7856,7 +7859,7 @@ mod tests {
 
     /// The first token of `source` whose text is `text`.
     fn token_of(source: &str, text: &str) -> ra_ap_syntax::SyntaxToken {
-        SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024)
+        batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
             .tree()
             .syntax()
             .descendants_with_tokens()

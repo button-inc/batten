@@ -74,6 +74,13 @@ pub const RECIPES: &[Recipe] = &[
         skip: &["mutation_markers.rs"],
         apply: stream_adapter_exec,
     },
+    Recipe {
+        name: "one-rust-parse",
+        summary: "every `ra_ap_syntax` parse goes through `batten_facts::source::rust_parse`, the one lossless parse (CLOUD-1008)",
+        edition: Edition::E2024,
+        skip: &["mutation_markers.rs", "batten-facts/src/source.rs"],
+        apply: one_rust_parse,
+    },
 ];
 
 /// The recipe named `name`.
@@ -180,6 +187,17 @@ fn package_name(manifest: &str) -> Option<String> {
 #[must_use]
 pub fn named_tree(name: &str) -> Option<&'static TreeRecipe> {
     TREE_RECIPES.iter().find(|recipe| recipe.name == name)
+}
+
+/// The parse moves to its one home, arguments untouched: the edition each site
+/// passed is the edition it keeps.
+fn one_rust_parse(source: &str, _base: &str) -> Result<String, CouldNotLook> {
+    codemod::redirect_calls(
+        source,
+        Edition::E2024,
+        &["SourceFile::parse", "ra_ap_syntax::SourceFile::parse"],
+        "batten_facts::source::rust_parse",
+    )
 }
 
 fn rand_random(source: &str, _base: &str) -> Result<String, CouldNotLook> {
