@@ -716,6 +716,12 @@ reason = "publishing needs a key"
         batten::config_model::Harness::ExitCode,
         &dir,
         None,
+        &|server| {
+            resolved
+                .mcp
+                .as_ref()
+                .is_some_and(|mcp| batten::mcp::answers(mcp, &dir, server))
+        },
     )
     .expect("the policy assembles");
 

@@ -3,7 +3,7 @@
 # modules-ratchet` tightens a better one. Never loosen a line by hand.
 crates/batten-base/src cycle=2 propagation=481 impls=0 shims=0
 crates/batten-codemods/src cycle=1 propagation=5000 impls=0 shims=0
-crates/batten-core/src cycle=3 propagation=1698 impls=0 shims=0
+crates/batten-core/src cycle=3 propagation=1579 impls=0 shims=0
 crates/batten-facts/src cycle=1 propagation=1834 impls=0 shims=0
 crates/batten-fsio/src cycle=1 propagation=10000 impls=0 shims=0
 crates/batten-stream/src cycle=1 propagation=10000 impls=0 shims=0

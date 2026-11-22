@@ -1011,7 +1011,7 @@ fn committed(root: &Path, table: Option<&crate::config_model::Mutate>) -> Result
     };
     // Compiled here, where an error can still be a usage error, so the census's
     // declaration arm below never meets a scope it cannot read.
-    crate::rules::PathSet::scope(&table.scope)?;
+    crate::path_set::PathSet::scope(&table.scope)?;
     let declared = &table.gates;
     let tracked = if declared.iter().any(|entry| entry.contains('*')) {
         crate::git::tracked_paths(root)
@@ -4663,7 +4663,7 @@ fn declaring_files(
     table: &crate::config_model::Mutate,
     found: &mut BTreeMap<String, String>,
 ) {
-    let scope = crate::rules::PathSet::scope(&table.scope).ok();
+    let scope = crate::path_set::PathSet::scope(&table.scope).ok();
     let claimed: Vec<String> = found.values().cloned().collect();
     for path in crate::git::tracked_paths(root).unwrap_or_default() {
         if !table.scope.is_empty() && !scope.as_ref().is_some_and(|set| set.contains(&path)) {

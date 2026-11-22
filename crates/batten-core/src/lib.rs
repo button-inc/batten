@@ -28,6 +28,7 @@ pub mod grammar;
 pub mod interpreter;
 pub mod lease;
 pub mod main_watch;
+pub mod path_set;
 pub mod pr_watch;
 pub mod selector;
 pub mod severity;
