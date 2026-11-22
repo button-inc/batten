@@ -7,7 +7,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::capture::StreamedChild as _;
 
 const CONFIG: &str = r#"version = 1
 

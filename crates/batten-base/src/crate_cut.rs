@@ -21,8 +21,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use batten::module_graph::use_leaves;
-use batten::source::rust_parse;
+use crate::module_graph::use_leaves;
+use batten_facts::source::rust_parse;
 use ra_ap_syntax::ast::{HasModuleItem as _, HasName as _};
 use ra_ap_syntax::{AstNode as _, SyntaxKind, SyntaxToken, ast};
 use toml_edit::{DocumentMut, InlineTable, Item, Value};
@@ -593,4 +593,97 @@ fn new_manifest(
         }
     }
     Some(doc.to_string())
+}
+
+/// `batten modules cut` over the workspace at `root`: each refused site and
+/// each remainder site as a pointer, then the plan written, or with `dry_run`
+/// each path it would write or remove. Exit 2 when the set is not closed
+/// downward, and nothing is written.
+///
+/// # Errors
+///
+/// A file under `root` that cannot be read, or a planned write that fails.
+pub fn run_cut(
+    root: &std::path::Path,
+    cut: &Cut<'_>,
+    dry_run: bool,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    let (mut files, mut manifests) = (BTreeMap::new(), BTreeMap::new());
+    for path in workspace_sources(root)? {
+        let text = crate::fsio::read_to_string(&path)?;
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        if relative.ends_with("Cargo.toml") {
+            manifests.insert(relative, text);
+        } else {
+            files.insert(relative, text);
+        }
+    }
+    let plan = cut_crate(cut, &files, &manifests);
+    for site in &plan.refused {
+        writeln!(out, "refused {site}")?;
+    }
+    if !plan.refused.is_empty() {
+        writeln!(out, "modules cut: refused {}", plan.refused.len())?;
+        return Ok(ExitCode::Violation);
+    }
+    for site in &plan.remainder {
+        writeln!(out, "remainder {site}")?;
+    }
+    if dry_run {
+        for path in plan.writes.keys() {
+            writeln!(out, "write {path}")?;
+        }
+        for path in &plan.removes {
+            writeln!(out, "remove {path}")?;
+        }
+    } else {
+        for (relative, text) in &plan.writes {
+            let target = root.join(relative);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            batten_facts::durable::replace(&target, text)?;
+        }
+        for relative in &plan.removes {
+            std::fs::remove_file(root.join(relative))?;
+        }
+    }
+    writeln!(
+        out,
+        "modules cut: written {}, removed {}, remainder {}",
+        plan.writes.len(),
+        plan.removes.len(),
+        plan.remainder.len()
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// Every `.rs` file and `Cargo.toml` under `root`, skipping build output,
+/// hidden directories and test fixtures.
+fn workspace_sources(root: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if path.is_dir() {
+                if name != "target" && name != "fixtures" && !name.starts_with('.') {
+                    pending.push(path);
+                }
+            } else if name == "Cargo.toml" || name.ends_with(".rs") {
+                found.push(path);
+            }
+        }
+    }
+    Ok(found)
 }

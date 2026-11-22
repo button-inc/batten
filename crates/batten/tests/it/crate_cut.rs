@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use batten_codemods::cut::{Cut, Plan, cut_crate};
+use batten::crate_cut::{Cut, Plan, cut_crate};
 
 fn tree() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let files = [

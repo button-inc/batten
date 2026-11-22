@@ -30,6 +30,7 @@ pub mod ci;
 pub mod clock;
 pub mod codemod;
 pub mod config_edit;
+pub mod crate_cut;
 pub mod deferral;
 pub mod doc;
 pub mod effect;
