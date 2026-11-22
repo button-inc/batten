@@ -267,17 +267,17 @@ fn a_module_compares_module_edges_against_its_base() {
     );
 }
 
-/// Refuses a change that lowers Decoupling Level against the row's base: the
-/// ratchet plan step 3 retires `modules.lock` into.
+/// Refuses a change that lowers M-score against the row's base: the ratchet
+/// plan step 3 retires `modules.lock` into.
 const NO_DL_DROP: &str = r#"
 package batten
 
 import rego.v1
 
-rules contains "module decoupling dropped"
+rules contains "module score dropped"
 
-violation contains {"rule": "module decoupling dropped", "verdict": "module decoupling dropped"} if {
-  input.tree.coupling.head.decoupling_level < input.tree.coupling.base.decoupling_level
+violation contains {"rule": "module score dropped", "verdict": "module score dropped"} if {
+  input.tree.coupling.head.mscore < input.tree.coupling.base.mscore
 }
 "#;
 
@@ -285,7 +285,7 @@ violation contains {"rule": "module decoupling dropped", "verdict": "module deco
 /// base read from the working tree (both sides would agree), or a cycle that
 /// does not lower the level.
 #[test]
-fn a_module_refuses_a_lowered_decoupling_level() {
+fn a_module_refuses_a_lowered_mscore() {
     let root = scratch("coupling");
     fs::create_dir_all(root.join("src")).expect("src");
     fs::write(root.join("policy/gate.rego"), NO_DL_DROP).expect("module");
@@ -298,13 +298,13 @@ fn a_module_refuses_a_lowered_decoupling_level() {
     let base = common::git_in(&root, &["rev-parse", "HEAD"]);
     let base = base.trim();
 
-    // `c` now depends on `a`, so `a` gains a dependent and leaves the last layer:
-    // DL falls from 1.0. (A two-file cycle with no dependents would not lower
-    // it: the paper's size penalty starts above five files.)
+    // `c` now depends on `a`: `a` gains a dependent from the three files below
+    // it, so its cross-layer density is 1/3 and M-score falls from 1.0 to
+    // 0.25·(2/3) + 0.75.
     fs::write(root.join("src/c.rs"), "pub fn h() { crate::a::f() }\n").expect("c");
     let coupled = scan(&root, &[based_uses_row(&["src/*.rs"], base)]);
     assert_eq!(coupled.findings.len(), 1, "{:?}", coupled.findings);
-    assert_eq!(coupled.findings[0].rule, "module decoupling dropped");
+    assert_eq!(coupled.findings[0].rule, "module score dropped");
 
     // Decoupled again: the level is the base's, nothing refused.
     fs::write(root.join("src/c.rs"), "pub fn h() {}\n").expect("c");

@@ -2006,9 +2006,10 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
         patterns: &[],
     },
     // Plan step 3 / CLOUD-2821: Rust code quality judged against a base, from
-    // facts the engine measures. First module: Decoupling Level never falls,
-    // which retires the `modules.lock` ratchet's propagation-cost line (PC
-    // falls as unconnected files are added; Mo et al., ICSE 2016).
+    // facts the engine measures. First module: the module graph's M-score never
+    // falls and its largest cycle never grows, which retires `modules.lock`
+    // (Decoupling Level and propagation cost are reported, not gated: see the
+    // module's header for the evidence).
     Manifest {
         name: "rust-quality",
         version: 1,
@@ -2018,22 +2019,39 @@ push --force-with-lease=<branch>:<the head you rebased onto>",
             pointer: "<preset:rust-quality>/decoupling-level.rego",
             source: include_str!("policy/presets/rust-quality/decoupling-level.rego"),
         }],
-        verdicts: &[VendoredVerdict {
-            id: "module decoupling dropped",
-            gloss: "the change lowers the module graph's Decoupling Level against its base",
-            class: "Decoupling Level (Mo et al., ICSE 2016) scores how well a module graph \
-splits into small modules that few other files depend on, from 0 to 1. A new dependency on \
-a module, or files joined into one cycle past five, lowers it. Propagation cost is not \
-gated: it falls whenever an unconnected file is added, so it can be satisfied without \
-decoupling anything. Cut the new edge, or move the depended-upon code down so its \
-dependents need less of it.",
-            routes: &[run(
-                "edge cut first",
-                "remove the new `use`/qualified path the change added, or move the item it \
-names into a module below both",
-            )],
-            applicability: Applicability::Advice,
-        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "module score dropped",
+                gloss: "the change lowers the module graph's M-score against its base",
+                class: "M-score (Pisch et al., ESEM 2024) scores a module graph from 0 to 1: \
+small modules, few dependencies from lower layers into each, and sparse edges inside each \
+score higher. Over 1,220 releases it tracked maintenance effort and stayed stable where \
+Decoupling Level and propagation cost were distorted by size and isolated files, so adding \
+unconnected files cannot satisfy it. Cut the new edge, or move or inject what it reached.",
+                routes: &[run(
+                    "edge cut first",
+                    "remove the new `use`/qualified path the change added, move the item it \
+names into a module below both, or inject it (a trait or fn parameter in place of the \
+dependency; Lakos, Large-Scale C++ Vol. I, sections 3.5 and 3.7.5)",
+                )],
+                applicability: Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "module cycle grown",
+                gloss: "the change grows the largest cycle of files in the module graph",
+                class: "Files that depend on each other in a cycle can only be understood, \
+built and tested together. Cycles among files had the most impact on maintenance burden in \
+a 1,252-project study (ICSE 2025), and acyclic dependencies are a design imperative (Lakos, \
+Large-Scale C++ Vol. I, 2.2.24). The change joined more files to the largest cycle; break \
+the edge that closed it.",
+                routes: &[run(
+                    "cycle cut first",
+                    "find the edge the change added from a file below back into one above, \
+and remove it, move the item down, or inject it",
+                )],
+                applicability: Applicability::Advice,
+            },
+        ],
         patterns: &[],
     },
     // CLOUD-2270: a push replacing a head whose wait stopped red erases the
