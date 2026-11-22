@@ -91,7 +91,7 @@ fn literals(expr: &ast::Expr, out: &mut Vec<String>) {
 }
 
 /// Every string literal `list` passes, in order.
-fn arguments_of(list: Option<ast::ArgList>) -> Vec<String> {
+fn arguments_of(list: Option<&ast::ArgList>) -> Vec<String> {
     let mut arguments = Vec::new();
     for argument in list.iter().flat_map(ast::ArgList::args) {
         literals(&argument, &mut arguments);
@@ -132,7 +132,7 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
                 );
             found.push(Invocation {
                 program: callee(call.expr()),
-                arguments: arguments_of(list),
+                arguments: arguments_of(list.as_ref()),
                 line,
             });
         } else if let Some(call) = ast::MethodCallExpr::cast(node) {
@@ -145,7 +145,7 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
             };
             found.push(Invocation {
                 program: name.text().to_string(),
-                arguments: arguments_of(call.arg_list()),
+                arguments: arguments_of(call.arg_list().as_ref()),
                 line: line_of(source, name.syntax().text_range().start()),
             });
         }

@@ -2203,6 +2203,10 @@ impl Fact {
     /// Exhaustive with no wildcard arm, like the two matches above: a new fact
     /// decides its schema here or fails to compile.
     #[must_use]
+    // ONE ARM PER FACT, exhaustive by construction: a new variant fails to compile
+    // until its schema is written here. Splitting the match to satisfy a line count
+    // would scatter one table across helpers no reader opens together.
+    #[allow(clippy::too_many_lines)]
     pub fn schema_fragment(self) -> serde_json::Value {
         match self {
             Fact::Document => serde_json::json!({
@@ -2904,6 +2908,10 @@ impl Fact {
     /// one, and the thing could not be opened. A schema typing either as a bare
     /// object would refuse the module that handles them, which `opa check -s`
     /// catches and which is the whole argument for deriving these from the fact.
+    // ONE ARM PER FACT, exhaustive by construction: a new variant fails to compile
+    // until its schema is written here. Splitting the match to satisfy a line count
+    // would scatter one table across helpers no reader opens together.
+    #[allow(clippy::too_many_lines)]
     fn keyed_read_schema_fragment(self) -> serde_json::Value {
         match self {
             Fact::Forge => serde_json::json!({
