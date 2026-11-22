@@ -111,7 +111,10 @@ fn the_syntactic_tier_diverges_in_two_classes() {
     let mut phantom_internal = Vec::new();
     let mut unresolved = Vec::new();
     for (file, edges) in &tree {
-        for edge in edges {
+        // The classes are about what a LINE PREDICATE over `use` statements
+        // misreads, so the qualified-path edges (no `use` line at all) are not in
+        // this population.
+        for edge in edges.iter().filter(|edge| !edge.qualified) {
             match edge.origin {
                 // Resolved out of the root table: the text named no module.
                 Origin::Internal if edge.via_root => {
@@ -167,7 +170,7 @@ fn the_syntactic_tier_diverges_in_two_classes() {
 #[test]
 fn the_hidden_edges_resolve_to_the_module_the_text_never_names() {
     let tree = resolved_tree();
-    for file in ["trust.rs", "output.rs"] {
+    for file in ["trust_pin.rs", "output.rs"] {
         let edges = tree.get(file).expect("the module is in the tree");
         assert!(
             edges
@@ -232,6 +235,44 @@ fn an_unparseable_file_could_not_look_rather_than_having_no_edges() {
     // reaches for first — an unparseable root that answered with an empty table
     // would silently un-resolve every edge in the crate.
     assert!(root_exports("fn f( {{{").could_not_look());
+}
+
+/// A qualified path in code is an edge, exactly as a `use` is. Before the
+/// `qualified` field the fact read `use` items alone, so `config.rs` reached
+/// about thirty modules by `crate::m::f()` while its edges named seven, and every
+/// closure over the fact judged a graph missing most of its edges.
+#[test]
+fn a_qualified_path_in_code_is_an_edge() {
+    let source = "fn f() -> crate::model::Config {\n\
+                  crate::check::validate();\n\
+                  crate::check::validate();\n\
+                  let _ = \"crate::string::not_an_edge\";\n\
+                  // crate::comment::not_an_edge\n\
+                  crate::model::Config::default()\n}\n";
+    let Look::Is(edges) = use_edges(source) else {
+        panic!("the fixture parses");
+    };
+    let mut reached: Vec<(&str, &str)> = edges
+        .iter()
+        .filter(|edge| edge.qualified && edge.origin == Origin::Internal)
+        .map(|edge| (edge.to.as_str(), edge.item.as_str()))
+        .collect();
+    reached.sort_unstable();
+    // `validate` written twice is one dependency; the string and the comment are
+    // no edge at all.
+    assert_eq!(
+        reached,
+        [
+            ("check", "validate"),
+            ("model", "Config"),
+            ("model", "default")
+        ]
+    );
+    // A `use` edge is never marked qualified.
+    let Look::Is(used) = use_edges("use crate::model::Config;") else {
+        panic!("the fixture parses");
+    };
+    assert!(used.iter().all(|edge| !edge.qualified));
 }
 
 /// Module identity is stable across two runs over identical bytes, so a
