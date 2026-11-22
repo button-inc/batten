@@ -1,6 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/preset_manifest.rs
 #MUTANT unlisted-admitted|s@^\tnot regex.match(allow, other)$@\tfalse@|the_rust_preset_suite_passes
-# Preset `rust`, `crate reach unsafe`: a workspace package reaches a workspace package its
+# Preset `rust`, `crate reach unknown`: a workspace package reaches a workspace package its
 # `crate-allow-<package>` pattern does not admit (CLOUD-2798).
 #
 # A crate boundary stops a module cycle, but nothing stops a `Cargo.toml` edit
@@ -20,9 +20,9 @@ package batten
 
 import rego.v1
 
-rules contains "crate reach unsafe"
+rules contains "crate reach unknown"
 
-rules contains "crate declare absent"
+rules contains "crate declare missing"
 
 crate_reach_lines := input.tree.records["crate-reach"]
 
@@ -42,8 +42,8 @@ crate_reached_of(fields) := [] if count(fields) == 1
 crate_allow_of(name) := data.batten.patterns[concat("", ["crate-allow-", name])]
 
 violation contains {
-	"rule": "crate reach unsafe",
-	"verdict": "crate reach unsafe",
+	"rule": "crate reach unknown",
+	"verdict": "crate reach unknown",
 	"subjects": [{"artifact": name}, {"artifact": other}],
 } if {
 	some name, reached in crate_reach
@@ -53,8 +53,8 @@ violation contains {
 }
 
 violation contains {
-	"rule": "crate declare absent",
-	"verdict": "crate declare absent",
+	"rule": "crate declare missing",
+	"verdict": "crate declare missing",
 	"subjects": [{"artifact": name}],
 } if {
 	some name, _ in crate_reach

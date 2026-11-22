@@ -275,10 +275,10 @@ fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
 fn the_rust_preset_suite_passes() {
     let dir = common::scratch("rust-preset-suite");
     let mut config = String::from(
-        "version = 1\n\n[[rule]]\nid = \"crate reach unsafe\"\nkind = \"policy\"\n\
+        "version = 1\n\n[[rule]]\nid = \"crate reach unknown\"\nkind = \"policy\"\n\
          scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n",
     );
-    for class in ["crate reach unsafe", "crate declare absent"] {
+    for class in ["crate reach unknown", "crate declare missing"] {
         config.push_str(&format!(
             "\n[[verdict]]\nid = \"{class}\"\ngloss = \"fixture\"\nclass = \"\"\"\n\
              A fixture verdict for the vendored module's own cases.\n\"\"\"\n\
@@ -306,7 +306,7 @@ fn a_preset_remedy_is_a_verdict_route() {
          scope = \"tree\"\npreset = \"rust\"\nseverity = \"deny\"\n",
     );
     common::init_repo(&dir);
-    let out = said_by(&dir, &["policy", "explain", "crate reach unsafe"]);
+    let out = said_by(&dir, &["policy", "explain", "crate reach unknown"]);
     assert!(
         out.contains("batten modules cut --dry-run <from> <name> <module>"),
         "the remedy argv must be printed\n{out}"
