@@ -118,6 +118,7 @@ pub mod install;
 pub mod item_index;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
 pub use batten_facts::invocation;
+pub use batten_facts::units;
 pub mod journal;
 pub mod judge;
 /// The landing lap's replay half: advance the base, replay the branch onto it,
@@ -169,6 +170,7 @@ pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
+pub mod rego_units;
 pub use batten_facts::register;
 pub mod release;
 pub mod release_guard;

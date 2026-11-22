@@ -587,6 +587,14 @@ impl Corpus {
                 &format!("// {}\nuse crate::b::B;\npub struct A;\n", canary("modsource")),
             )
             .file("crate/src/b.rs", "use crate::a::A;\npub struct B;\n")
+            // `modules ratchet --check`'s record over the same crate
+            // (CLOUD-2821). Deliberately loose, so the verb runs to a verdict
+            // and its refusal (two numbers and a metric name) is what the
+            // census reads; never a byte of the source it measured.
+            .file(
+                "modules.lock",
+                "crate/src cycle=99 propagation=10000 impls=99 shims=99\n",
+            )
             // `doctor toolchain`'s manifest (CLOUD-1683). The declared key is a
             // PLAIN name, deliberately: the verdict names a missing declared key
             // as its subject, which `Check::subjects` licenses — an identifier
@@ -2178,6 +2186,21 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "modules shims",
         args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules metrics` and `modules ratchet` (CLOUD-2821) print one line of
+    // integers per root and a refusal naming a metric and two numbers, never a
+    // byte of source. Interim: both retire into the `rust-quality` preset.
+    Verb {
+        path: "modules metrics",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "modules ratchet",
+        args: &["--record", "modules.lock", "--check"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
