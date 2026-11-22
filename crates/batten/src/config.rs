@@ -3842,6 +3842,7 @@ fn default_rules() -> Vec<Rule> {
         invocation_sources: Vec::new(),
         uses: Vec::new(),
         use_sources: Vec::new(),
+        unit_sources: Vec::new(),
         external: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,

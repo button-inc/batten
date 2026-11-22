@@ -730,6 +730,10 @@ pub enum Fact {
     /// literal arguments — the token's syntactic POSITION, which no line
     /// predicate can see (CLOUD-914).
     Invocations,
+    /// Every function, comment and string in a **declared** source file, as
+    /// CLOUD-1009 D4 nodes with amendment A2's counts (CLOUD-1008): Rust
+    /// through the one lossless parse, Rego through regorus.
+    Units,
     /// Which module a **declared** Rust source file reaches, resolved through the
     /// crate root's own re-export table (CLOUD-762).
     Uses,
@@ -991,6 +995,16 @@ pub const EXTERNAL: Class = Class::new(Cost::Read, Surface::Check);
 /// binds here is the parse-coverage obligation: a file the parser cannot read is
 /// [`Look::CouldNotLook`], never an empty node set.
 pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Units`] — a declared source file's functions, comments and strings,
+/// as D4 nodes with counts (CLOUD-1008; CLOUD-1009 amendments A1, A2).
+///
+/// `read` x `check`, for [`INVOCATIONS`]' reason: a parse per declared file is
+/// unbounded in its input, so it never runs on a mediated call. Measurement
+/// only: integers, booleans and pointers, never a threshold and never a byte of
+/// source; the preset reading it decides (CLOUD-2821). A file its parser
+/// refuses is [`Look::CouldNotLook`], never an empty node set.
+pub const UNITS: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Uses`] — a declared Rust file's `use` edges, resolved (CLOUD-762).
 ///
@@ -1614,6 +1628,7 @@ impl Fact {
         Fact::Tasks,
         Fact::Extracted,
         Fact::Invocations,
+        Fact::Units,
         Fact::Uses,
         Fact::Symbols,
         Fact::Review,
@@ -1667,6 +1682,7 @@ impl Fact {
             Fact::Tasks => "tasks",
             Fact::Extracted => "extracted",
             Fact::Invocations => "invocations",
+            Fact::Units => "units",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
             Fact::Review => "review",
@@ -1728,6 +1744,7 @@ impl Fact {
             Fact::Tasks => TASKS,
             Fact::Extracted => EXTRACTED,
             Fact::Invocations => INVOCATIONS,
+            Fact::Units => UNITS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
@@ -1821,6 +1838,7 @@ impl Fact {
             | Fact::Captured
             | Fact::Extracted
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review
@@ -1926,6 +1944,8 @@ impl Fact {
             // of committed source, and the mediated path has no budget to parse
             // one.
             Fact::Invocations => Some("invocations"),
+            // Tree-only for `Invocations`' reason: a parse per declared file.
+            Fact::Units => Some("units"),
             Fact::Uses => Some("uses"),
             // The resolved-symbol tier (CLOUD-760). Tree surface like the two
             // above, and `Cost::Effect` where they are `Read` — the cost axis is
@@ -2031,6 +2051,7 @@ impl Fact {
             | Fact::Lines
             | Fact::Traversals
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Tracked
             | Fact::GitIndex
@@ -2130,6 +2151,15 @@ impl Fact {
                 "additionalProperties": {"type": "array", "items": {"type": "string"}},
             }),
             Fact::External => Self::external_schema_fragment(),
+            Fact::Units => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` bound to a call; name is the callee) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                    "required": ["nodes"],
+                },
+            }),
             Fact::Invocations => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
@@ -2495,6 +2525,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -2568,6 +2599,7 @@ impl Fact {
             | Fact::Lines
             | Fact::External
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Produced
             | Fact::Symbols
@@ -2790,6 +2822,7 @@ impl Fact {
             | Fact::AgentSourced
             | Fact::Prospective
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3018,6 +3051,7 @@ impl Fact {
             | Fact::Prospective
             | Fact::Produced
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3098,6 +3132,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Invocations
+            | Fact::Units
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review

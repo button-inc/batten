@@ -5205,6 +5205,7 @@ pub(crate) fn suite_input(
             lines: &crate::rules::declared_lines(rule, tracked)?,
             invocations: &crate::rules::declared_invocations(rule, tracked)?,
             uses: &crate::rules::declared_uses(rule, tracked)?,
+            units: &crate::rules::declared_units(rule, tracked)?,
             // EMPTY, unlike its neighbours above, and the asymmetry is the
             // point (CLOUD-1167). `documents` and the three beside it name paths
             // INSIDE the repository, so a declared one that is missing is a
