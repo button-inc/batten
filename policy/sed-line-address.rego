@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/it/measure_and_edit_routes.rs
+#MUTANT address-unread|s@^\tline_addressed(word)$@\tfalse@|a_line_addressed_in_place_edit_is_refused
 # `path edit unsafe`: an in-place `sed` aimed by line number at a repository
 # file (CLOUD-2803).
 #

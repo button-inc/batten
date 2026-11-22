@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/it/measure_and_edit_routes.rs
+#MUTANT profiler-unread|s@^\tprogram.name in profilers$@\tfalse@|a_profiler_is_sent_to_the_skill
 # `program measure first`: a profiler run by hand is handed `skills/profile`.
 #
 # MEASURED, and why this exists beside `program measure unread`. One session
