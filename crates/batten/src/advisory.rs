@@ -306,7 +306,6 @@ fn joined_text(texts: &[String]) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn entry(tier: AdvisoryTier, text: &str) -> Advice {
         Advice::new(tier, text)
     }

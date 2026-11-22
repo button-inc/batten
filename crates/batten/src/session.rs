@@ -517,7 +517,6 @@ pub fn forget_result(store_dir: &Path, root: &Root) -> Result<()> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "batten-session-{name}-{}-{:?}",

@@ -208,7 +208,6 @@ pub fn reduce(
 mod tests {
     use crate::facts::{Format, Look, Node, Reduction, TOKEN_MAX};
     #[cfg(test)]
-
     fn node(text: &str) -> Node {
         match Format::Json.read(text) {
             Look::Is(node) => node,

@@ -1316,7 +1316,6 @@ fn parse_line(line: &str, batch: &[&str]) -> Option<Match> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn date() -> Date {
         Date {
             year: 2026,

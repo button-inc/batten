@@ -1485,7 +1485,6 @@ impl Evidence {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn step(name: &str, status: &str, order: u64, group: &str) -> Step {
         Step {
             name: name.to_owned(),

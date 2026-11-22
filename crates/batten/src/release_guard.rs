@@ -230,7 +230,6 @@ pub fn run_settings(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn answer(status: u16, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {
             status,
