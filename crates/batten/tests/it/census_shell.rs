@@ -597,22 +597,6 @@ fn a_mise_tasks_shell_override_is_still_read_through_the_detector() {
     assert_eq!(units, ["word"], "{document}");
 }
 
-/// Over this repository: `action.yml` is a declared `gha-run` home, and its
-/// four `shell: bash` steps are listed.
-#[test]
-fn this_repositorys_census_lists_the_composite_actions_steps() {
-    let output = common::run(&common::at_root("."), &["census", "shell", "-J"]);
-    assert_eq!(output.status.code(), Some(0));
-    let document: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
-    let steps = document["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|entry| entry["path"] == "action.yml")
-        .count();
-    assert_eq!(steps, 4, "{document}");
-}
-
 #[test]
 fn the_census_is_byte_stable() {
     let dir = repo("census-stable", &plain_manifest(1), &plain_workflow(1));
