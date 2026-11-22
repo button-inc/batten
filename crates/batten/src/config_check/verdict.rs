@@ -1133,8 +1133,9 @@ means what this session runs may differ from what the tree declares.",
         gloss: "the context was compacted and the operator's directives on this branch are journaled",
         class: "Every operator message on a branch is journaled verbatim as it is given. A \
 compaction replaces the window with a summary, which drops what it judges minor, and a dropped \
-standing directive is work the session repeats. The count subject is how many messages the \
-journal holds; the path subject is the journal to read.",
+standing directive is work the session repeats. The branch's design corrections, kept by \
+`batten record named corrections`, survive the same way. Each count subject is how many entries \
+a record holds and the path subject after it is the record to read.",
         // The journal is per branch, so its exact path is the subject; the route
         // names the store that holds every branch's.
         routes: &[read("directive read first", ".git/batten-receipts")],
