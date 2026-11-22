@@ -511,7 +511,7 @@ fn split_one(
         cfg_test(module.syntax())
             || module
                 .attrs()
-                .any(|attribute| attribute.syntax().text().to_string().contains("path"))
+                .any(|attribute| attribute.simple_name().is_some_and(|name| name == "path"))
     });
     if inline.len() < 2 || guarded {
         return None;
@@ -770,7 +770,13 @@ fn extension_trait(name: &str, blocks: &[ast::Impl]) -> Option<ExtensionTrait> {
                     SyntaxKind::DOC_COMMENT => {
                         let _ = writeln!(declared, "    {child}");
                     }
-                    SyntaxKind::ATTR if child.to_string().contains("must_use") => {
+                    SyntaxKind::ATTR
+                        if child
+                            .as_node()
+                            .and_then(|node| ast::Attr::cast(node.clone()))
+                            .and_then(|attr| attr.simple_name())
+                            .is_some_and(|name| name == "must_use") =>
+                    {
                         let _ = writeln!(declared, "    {child}");
                     }
                     SyntaxKind::ATTR => {
@@ -1974,14 +1980,22 @@ fn from_root(segments: &[String], module: &[String]) -> Option<String> {
 pub fn cfg_test(node: &SyntaxNode) -> bool {
     node.ancestors().any(|ancestor| {
         ast::AnyHasAttrs::cast(ancestor).is_some_and(|item| {
+            // READ OFF THE ATTRIBUTE'S STRUCTURE, not its text: the path is
+            // `cfg` and the argument token tree holds exactly the one word
+            // `test`, however it is spaced. `cfg(all(test, …))` is not `test`
+            // alone and is not read as it, as before.
+            // `cfg(…)` is its own typed `Meta` kind in this parser
+            // (`CfgMeta`, `cfg` a keyword token), so the predicate is read as
+            // a bare `CfgAtom` naming `test` with no `= "value"`.
             item.attrs().any(|attr| {
-                let text: String = attr
-                    .syntax()
-                    .text()
-                    .to_string()
-                    .split_whitespace()
-                    .collect();
-                text == "#[cfg(test)]"
+                let Some(ast::Meta::CfgMeta(meta)) = attr.meta() else {
+                    return false;
+                };
+                let Some(ast::CfgPredicate::CfgAtom(atom)) = meta.cfg_predicate() else {
+                    return false;
+                };
+                atom.eq_token().is_none()
+                    && atom.ident_token().is_some_and(|word| word.text() == "test")
             })
         })
     })
@@ -2535,5 +2549,38 @@ mod tests {
         );
         assert_eq!(split["src/check/budget.rs"], "pub fn g() {}\n");
         assert!(!split.contains_key("src/mixed.rs"), "{split:?}");
+    }
+
+    /// Attributes are read off their structure, not their text. Fails by: a
+    /// doc attribute that merely says "path" read as `#[path]` (the module
+    /// would be wrongly left unsplit), a real `#[path]` not guarding, or a
+    /// spaced `#[cfg( test )]` not read as `cfg(test)`.
+    #[test]
+    fn attributes_are_read_by_their_path_not_their_text() {
+        let split = |text: &str| {
+            let files: BTreeMap<String, String> = [("src/check.rs".to_owned(), text.to_owned())]
+                .into_iter()
+                .collect();
+            split_inline_modules(&files)
+        };
+        let docs = split(
+            "#[doc = \"the path\"]\npub mod a {\n    pub fn f() {}\n}\n\npub mod b {\n    pub fn g() {}\n}\n",
+        );
+        assert!(docs.contains_key("src/check/a.rs"), "{docs:?}");
+        let real = split(
+            "#[path = \"x.rs\"]\npub mod a {\n    pub fn f() {}\n}\n\npub mod b {\n    pub fn g() {}\n}\n",
+        );
+        assert!(!real.contains_key("src/check/a.rs"), "{real:?}");
+
+        let parse =
+            parse("#[cfg( test )]\nmod t { fn f() {} }\n#[cfg(not(test))]\nmod u { fn g() {} }\n")
+                .expect("parses");
+        let fns: Vec<bool> = parse
+            .syntax()
+            .descendants()
+            .filter_map(ast::Fn::cast)
+            .map(|function| cfg_test(function.syntax()))
+            .collect();
+        assert_eq!(fns, [true, false]);
     }
 }
