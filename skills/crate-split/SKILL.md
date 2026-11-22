@@ -33,6 +33,11 @@ than the highest level of what it uses (Lakos, _Large-Scale C++ Software
 Design_, §1.10). In practice: start from modules that use no other module of
 the crate (leaves), then add only what they use. `batten modules metrics`
 reports each crate's largest cycle; a candidate set must not intersect it.
+The codemods example reads the same graph as Lakos levels and as the edges
+whose cut shrinks the largest cycle most:
+`mise exec -- cargo run -q -p batten-codemods --example codemod -- levels
+crates/<package>/src` and `… -- suggest crates/<package>/src 20`. Modules on
+the lowest levels, outside the cycle, are the first candidates.
 
 Prefer a set that **owns a domain with its behaviour** (the gix layout: one
 crate per concept, types and the functions over them together) over a set that
