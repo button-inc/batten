@@ -642,10 +642,7 @@ mod tests {
         "mcp posture",
         // The module-graph noun AND verb (CLOUD-2789): they only read.
         "modules",
-        "modules cycle",
-        "modules impls",
         "modules metrics",
-        "modules shims",
         // `modules ratchet` writes its record, so it is not here (CLOUD-2821).
         // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
         // pass over the declarations, reading what each gate declares
@@ -1126,11 +1123,8 @@ mod tests {
             // The module-graph noun and its verb (CLOUD-2789): the gate that
             // holds the crate's largest cycle from growing.
             "modules".to_owned(),
-            "modules cycle".to_owned(),
-            "modules impls".to_owned(),
             "modules metrics".to_owned(),
             "modules ratchet".to_owned(),
-            "modules shims".to_owned(),
             // CLOUD-1267's noun and its two verbs, retired out of
             // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
             // Stated here rather than regenerated, on the terms `checks`
