@@ -914,7 +914,7 @@ fn extension_trait(name: &str, blocks: &[ast::Impl]) -> Option<ExtensionTrait> {
 /// the file's top level (`None`): measured, a file-level import left the
 /// calls inside `config_check.rs`'s inline modules unresolved.
 fn calls(text: &str, items: &BTreeSet<String>) -> BTreeMap<Option<usize>, bool> {
-    let tree = SourceFile::parse(text, ra_ap_syntax::Edition::Edition2024).tree();
+    let tree = batten_facts::source::rust_parse(text, ra_ap_syntax::Edition::Edition2024).tree();
     let mut found: BTreeMap<Option<usize>, bool> = BTreeMap::new();
     for token in tree
         .syntax()
@@ -2113,7 +2113,7 @@ pub fn cfg_test(node: &SyntaxNode) -> bool {
 }
 
 fn parse(source: &str) -> Result<SourceFile, CouldNotLook> {
-    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let parse = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024);
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {

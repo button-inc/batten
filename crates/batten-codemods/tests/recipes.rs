@@ -57,6 +57,46 @@ fn the_stream_recipe_moves_the_call_and_imports_its_trait_once() {
     );
 }
 
+/// A file carrying both parse spellings and every decoy a text splice gets
+/// wrong: the call named in a string, a comment, a `use`, and a longer path.
+const PARSES: &str = "\
+use ra_ap_syntax::SourceFile;
+// SourceFile::parse(x, e) is the old spelling
+fn a(text: &str) {
+    let s = \"SourceFile::parse(text, e)\";
+    let one = SourceFile::parse(text, ra_ap_syntax::Edition::Edition2024);
+    let two = ra_ap_syntax::SourceFile::parse(text, ra_ap_syntax::Edition::Edition2021);
+    let longer = SourceFile::parse_with_errors(text);
+}
+";
+
+/// Fails by: a decoy rewritten, either spelling missed, an edition argument
+/// changed, or the recipe rewriting its own output a second time.
+#[test]
+fn the_parse_recipe_moves_both_spellings_and_keeps_each_edition() {
+    let recipe = batten_codemods::named("one-rust-parse").expect("saved");
+    let edited = (recipe.apply)(PARSES, "crate").unwrap();
+    assert_eq!(
+        edited,
+        PARSES
+            .replacen(
+                "let one = SourceFile::parse(",
+                "let one = batten_facts::source::rust_parse(",
+                1
+            )
+            .replacen(
+                "let two = ra_ap_syntax::SourceFile::parse(",
+                "let two = batten_facts::source::rust_parse(",
+                1
+            )
+    );
+    assert_eq!(
+        (recipe.apply)(&edited, "crate").unwrap(),
+        edited,
+        "idempotent"
+    );
+}
+
 /// Fails by: a read redirected inside a string, a longer path, or a method
 /// of the same name, or the recipe rewriting its own output again.
 #[test]

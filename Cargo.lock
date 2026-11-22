@@ -308,6 +308,7 @@ dependencies = [
  "hmac",
  "json5",
  "proc-macro2",
+ "ra_ap_syntax",
  "regex",
  "rustix",
  "schemars",
