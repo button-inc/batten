@@ -28,6 +28,7 @@ pub mod minted;
 pub mod register;
 pub mod scratch;
 pub mod source;
+pub mod units;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.
 pub mod uses;
