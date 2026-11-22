@@ -3036,8 +3036,16 @@
       "description": "One manifest whose command strings are counted.",
       "type": "object",
       "properties": {
+        "carrier": {
+          "description": "The carrier whose fields this manifest's commands are, by its id in\n`shell_logic::CARRIERS` (`mise-task` or `hk-step`, the two with a\nmanifest reader). Exactly one of `carrier` and `keys` (CLOUD-2627).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "keys": {
-          "description": "The keys whose values are commands, as they are spelled before ` = `.",
+          "description": "The keys whose values are commands, as they are spelled before ` = `,\nfor a manifest no carrier describes. Exactly one of `carrier` and\n`keys`.",
           "type": "array",
           "items": {
             "type": "string",
@@ -3060,8 +3068,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "path",
-        "keys"
+        "path"
       ]
     },
     "Marker": {
