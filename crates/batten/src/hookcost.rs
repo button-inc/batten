@@ -863,6 +863,7 @@ mod tests {
             // claimed a key it never used would say the stream had been
             // fingerprinted when nothing was.
             keyed: false,
+            torn: Vec::new(),
         }
     }
 
