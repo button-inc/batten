@@ -2,7 +2,7 @@
 # `batten modules ratchet`. A worse metric is refused; `mise run
 # modules-ratchet` tightens a better one. Never loosen a line by hand.
 crates/batten-base/src cycle=2 propagation=482 impls=0 shims=0
-crates/batten-codemods/src cycle=1 propagation=5000 impls=0 shims=0
+crates/batten-codemods/src cycle=1 propagation=3333 impls=0 shims=0
 crates/batten-core/src cycle=3 propagation=1698 impls=0 shims=0
 crates/batten-facts/src cycle=1 propagation=1834 impls=0 shims=0
 crates/batten-fsio/src cycle=1 propagation=10000 impls=0 shims=0
