@@ -38,7 +38,14 @@ pub type FileGraph = BTreeMap<String, BTreeSet<String>>;
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 #[non_exhaustive]
 pub struct Coupling {
-    /// Decoupling Level, 0 to 1 (Mo et al. 2016). Higher is better decoupled.
+    /// M-score, 0 to 1 (Pisch, Cai, Kazman, Lefever, Fang, ESEM 2024). The
+    /// measure a ratchet gates: DL's size penalty applies only in the lowest
+    /// layer, so one isolated file can lift a large module's penalty, and a
+    /// 1,252-project study found no significant correlation between DL and any
+    /// maintenance activity (ICSE 2025), where M-score "correlated well with
+    /// maintenance effort" over 1,220 releases.
+    pub mscore: f64,
+    /// Decoupling Level, 0 to 1 (Mo et al. 2016). Reported, never gated.
     pub decoupling_level: f64,
     /// Propagation cost: the mean share of files each file reaches, itself
     /// included (MacCormack et al.). Reported, never gated (see module docs).
@@ -129,6 +136,7 @@ pub fn measure(graph: &FileGraph) -> Coupling {
     let all = files.len();
     if all == 0 {
         return Coupling {
+            mscore: 1.0,
             decoupling_level: 1.0,
             propagation_cost: 0.0,
             largest_component: 0,
@@ -217,10 +225,65 @@ pub fn measure(graph: &FileGraph) -> Coupling {
         }
     }
 
+    // M-SCORE (ESEM 2024, formulas 1 to 7), on the same hierarchy: every
+    // module of every layer contributes SF·CLDDF·IMCF. SF carries the size
+    // penalty in EVERY layer (DL's lowest-layer-only penalty is the flaw it
+    // fixes); CLDDP is the density of lower-layer files' edges into the module;
+    // IMCP the density of the module's own internal edges (five files and up).
+    let edges: Vec<(&String, &String)> = graph
+        .iter()
+        .flat_map(|(from, to)| to.iter().map(move |target| (from, target)))
+        .filter(|(from, target)| from != target)
+        .collect();
+    let mut mscore = 0.0;
+    for (component, &(size, deps, own_depth)) in components.iter().zip(&shape) {
+        #[allow(clippy::cast_precision_loss)]
+        let penalty = if size >= 5 {
+            (size as f64).log(5.0).recip()
+        } else {
+            1.0
+        };
+        let cross = if deps == 0 {
+            0.0
+        } else {
+            let upper: BTreeSet<&String> = components
+                .iter()
+                .zip(&shape)
+                .filter(|(_, (_, d, depth))| *d > 0 && *depth <= own_depth)
+                .flat_map(|(members, _)| members.iter())
+                .collect();
+            let lower = all - upper.len();
+            let into = edges
+                .iter()
+                .filter(|(from, target)| component.contains(*target) && !upper.contains(from))
+                .count();
+            #[allow(clippy::cast_precision_loss)]
+            let density = if lower == 0 {
+                0.0
+            } else {
+                into as f64 / (lower * size) as f64
+            };
+            density
+        };
+        let inner = if size >= 5 {
+            let internal = edges
+                .iter()
+                .filter(|(from, target)| component.contains(*from) && component.contains(*target))
+                .count();
+            #[allow(clippy::cast_precision_loss)]
+            let density = internal as f64 / ((size - 1) * size) as f64;
+            density
+        } else {
+            0.0
+        };
+        mscore += share(size) * penalty * (1.0 - cross) * (1.0 - inner);
+    }
+
     #[allow(clippy::cast_precision_loss)]
     let propagation_cost =
         reaches.values().map(BTreeSet::len).sum::<usize>() as f64 / (all as f64 * all as f64);
     Coupling {
+        mscore,
         decoupling_level: level,
         propagation_cost,
         largest_component: components.iter().map(BTreeSet::len).max().unwrap_or(0),
@@ -261,6 +324,49 @@ mod tests {
                 "{groups} modules of {size} files: DL {measured:.3}, the paper says {expected}"
             );
         }
+    }
+
+    /// M-score's formula on graphs worked by hand. One 5-file cycle (5 internal
+    /// edges of 20 possible): SF = 1·(1/log5 5) = 1, IMCF = 1 − 5/20 = 0.75.
+    /// Eight singletons where `l0 -> u0` and `l1 -> u1`: `u0` and `u1` are upper
+    /// modules whose lower layer is the other six files, one edge each of six
+    /// possible, so each scores 1/8·(1 − 1/6); the six others score 1/8.
+    #[test]
+    fn mscore_matches_its_formula() {
+        let five = measure(&clusters(1, 5)).mscore;
+        assert!((five - 0.75).abs() < 1e-9, "5-file cycle: {five}");
+
+        let mut graph = FileGraph::new();
+        for module in ["u", "l"] {
+            for file in 0..4 {
+                graph.entry(format!("{module}{file}")).or_default();
+            }
+        }
+        graph.get_mut("l0").expect("l0").insert("u0".to_owned());
+        graph.get_mut("l1").expect("l1").insert("u1".to_owned());
+        let expected = 2.0 * 0.125 * (1.0 - 1.0 / 6.0) + 6.0 * 0.125;
+        let measured = measure(&graph).mscore;
+        assert!(
+            (measured - expected).abs() < 1e-9,
+            "{measured} vs {expected}"
+        );
+    }
+
+    /// The property M-score exists for: padding a tangle with isolated files
+    /// cannot lift its size penalty. A 25-file cycle padded with 25 isolated
+    /// files scores below 50 files in independent 5-file modules, and the
+    /// padding moves the score by less than DL's lowest-layer-only penalty would
+    /// let a real decoupling move it.
+    #[test]
+    fn padding_a_tangle_does_not_lift_its_size_penalty() {
+        let tangle = clusters(1, 25);
+        let mut padded = tangle.clone();
+        for pad in 0..25 {
+            padded.entry(format!("pad{pad}")).or_default();
+        }
+        let split = clusters(10, 5);
+        assert!(measure(&padded).mscore < measure(&split).mscore);
+        assert!(measure(&tangle).mscore < measure(&split).mscore);
     }
 
     /// A design rule many files depend on lowers DL; the same files independent

@@ -1452,13 +1452,23 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["treat an added path as a changed rule"],
     },
     VendoredDoc {
-        id: "module decoupling dropped",
+        id: "module cycle grown",
+        why: Some("Files in one cycle can only be understood and tested together"),
+        act: &[
+            "find the edge the change added back up into the cycle",
+            "remove it, move the item down, or inject it",
+        ],
+        dont: &["split a file to shrink the count while the edges stay"],
+    },
+    VendoredDoc {
+        id: "module score dropped",
         why: Some("A new dependency on a module costs every later change to it"),
         act: &[
             "cut the edge the change added",
             "move the item it needs into a module below both",
+            "or inject it: take a trait or fn parameter instead of the dependency",
         ],
-        dont: &["add unconnected files to lift the number; DL does not reward it"],
+        dont: &["add unconnected files to lift the number; M-score does not reward it"],
     },
     VendoredDoc {
         id: "directive read missing",
