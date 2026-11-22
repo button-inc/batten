@@ -8,7 +8,7 @@
 //! right.** `tests/facts.rs`'s `no_axis_match_carries_a_wildcard_arm` refuses a
 //! wildcard arm anywhere in `facts.rs`, so that a fact added later fails to
 //! compile instead of classifying itself. The walk below matches on
-//! `syn::Expr`, which has some forty variants and gains more with every minor
+//! `ast::Expr`, which has some forty variants and gains more with every minor
 //! release of the parser — a wildcard there is correct, and enumerating it would
 //! be a list that breaks on an upgrade for no property gained. Two matches with
 //! opposite right answers do not belong in one file, and moving this out is the
@@ -21,6 +21,9 @@
 /// and are never rendered into a finding by the engine. That split is
 /// [`Fact::Prospective`]'s exactly — a rule may decide over content, and what is
 /// reported is `path:line` and a rule id.
+use ra_ap_syntax::ast::HasArgList as _;
+use ra_ap_syntax::{AstNode as _, Edition, ast};
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[non_exhaustive]
 pub struct Invocation {
@@ -40,15 +43,6 @@ pub struct Invocation {
     pub line: usize,
 }
 
-/// The visitor's accumulator, at module scope rather than inside
-/// [`invocations`]: it holds no borrow from that function, and an item declared
-/// after a statement reads as if it were scoped to what precedes it when it is
-/// not (`clippy::items_after_statements`).
-#[derive(Default)]
-struct Sites {
-    found: Vec<Invocation>,
-}
-
 /// The literals a call PASSES. Descends through the grouping expressions an
 /// argument can legally wear — a reference, a parenthesis, a cast, an array or
 /// tuple built inline at the call — because a borrowed array of string literals
@@ -56,64 +50,53 @@ struct Sites {
 /// passes an argv.
 ///
 /// It deliberately does NOT descend into a nested CALL: that call's own
-/// arguments belong to it, and the visitor reaches it separately. Folding them
+/// arguments belong to it, and the walk reaches it separately. Folding them
 /// upward would attribute an inner call's literals to its caller.
-fn literals(expr: &syn::Expr, out: &mut Vec<String>) {
+fn literals(expr: &ast::Expr, out: &mut Vec<String>) {
     match expr {
-        syn::Expr::Lit(lit) => {
-            if let syn::Lit::Str(text) = &lit.lit {
-                out.push(text.value());
+        ast::Expr::Literal(lit) => {
+            if let ast::LiteralKind::String(text) = lit.kind()
+                && let Ok(value) = text.value()
+            {
+                out.push(value.into_owned());
             }
         }
-        syn::Expr::Reference(inner) => literals(&inner.expr, out),
-        syn::Expr::Paren(inner) => literals(&inner.expr, out),
-        syn::Expr::Cast(inner) => literals(&inner.expr, out),
-        syn::Expr::Array(array) => {
-            for element in &array.elems {
-                literals(element, out);
+        ast::Expr::RefExpr(inner) => {
+            if let Some(inner) = inner.expr() {
+                literals(&inner, out);
             }
         }
-        syn::Expr::Tuple(tuple) => {
-            for element in &tuple.elems {
-                literals(element, out);
+        ast::Expr::ParenExpr(inner) => {
+            if let Some(inner) = inner.expr() {
+                literals(&inner, out);
+            }
+        }
+        ast::Expr::CastExpr(inner) => {
+            if let Some(inner) = inner.expr() {
+                literals(&inner, out);
+            }
+        }
+        ast::Expr::ArrayExpr(array) => {
+            for element in array.exprs() {
+                literals(&element, out);
+            }
+        }
+        ast::Expr::TupleExpr(tuple) => {
+            for element in tuple.fields() {
+                literals(&element, out);
             }
         }
         _ => {}
     }
 }
 
-impl<'ast> syn::visit::Visit<'ast> for Sites {
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        let mut arguments = Vec::new();
-        for argument in &call.args {
-            literals(argument, &mut arguments);
-        }
-        self.found.push(Invocation {
-            program: callee(&call.func),
-            arguments,
-            line: line_of(call.paren_token.span.open()),
-        });
-        syn::visit::visit_expr_call(self, call);
+/// Every string literal `list` passes, in order.
+fn arguments_of(list: Option<ast::ArgList>) -> Vec<String> {
+    let mut arguments = Vec::new();
+    for argument in list.iter().flat_map(ast::ArgList::args) {
+        literals(&argument, &mut arguments);
     }
-
-    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        let mut arguments = Vec::new();
-        for argument in &call.args {
-            literals(argument, &mut arguments);
-        }
-        // The RECEIVER is not an argument, and not descending into it here is
-        // not an omission: `visit_expr_method_call` below walks it, so a call
-        // inside the receiver is still found as its own site. What is excluded
-        // is the receiver's LITERALS being read as this call's arguments —
-        // which is exactly what makes a concatenated needle array silent and
-        // the same token passed to `.arg(..)` loud.
-        self.found.push(Invocation {
-            program: call.method.to_string(),
-            arguments,
-            line: line_of(call.method.span()),
-        });
-        syn::visit::visit_expr_method_call(self, call);
-    }
+    arguments
 }
 
 /// Every call site in a Rust source text, or the reason there are none.
@@ -129,30 +112,65 @@ impl<'ast> syn::visit::Visit<'ast> for Sites {
 /// no call sites. The two are different answers and this function keeps them so.
 #[must_use]
 pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
-    use syn::visit::Visit;
-
-    // THE ONE PARSE (CLOUD-1008). This read `syn::parse_file` directly, as did
-    // two sites in `uses.rs`; three call sites are three error mappings that
-    // agreed only by luck, which is CLOUD-849's measured argument one grammar
-    // over.
-    let crate::facts::Look::Is(file) = crate::source::rust_or_could_not_look(source) else {
+    // THE ONE PARSE (CLOUD-1008): the lossless tree every source fact reads,
+    // could-not-look on any parse error. Nodes come in source pre-order, the
+    // order the former visitor pushed them.
+    let crate::facts::Look::Is(file) = crate::source::rust_tree(source, Edition::Edition2024)
+    else {
         return crate::facts::Look::CouldNotLook;
     };
-    let mut sites = Sites::default();
-    sites.visit_file(&file);
-    crate::facts::Look::Is(sites.found)
+    let mut found = Vec::new();
+    for node in file.syntax().descendants() {
+        if let Some(call) = ast::CallExpr::cast(node.clone()) {
+            let list = call.arg_list();
+            let line = list
+                .as_ref()
+                .and_then(ast::ArgList::l_paren_token)
+                .map_or_else(
+                    || line_of(source, call.syntax().text_range().start()),
+                    |paren| line_of(source, paren.text_range().start()),
+                );
+            found.push(Invocation {
+                program: callee(call.expr()),
+                arguments: arguments_of(list),
+                line,
+            });
+        } else if let Some(call) = ast::MethodCallExpr::cast(node) {
+            // The RECEIVER is not an argument: only the argument list's literals
+            // are this call's, which is exactly what makes a concatenated needle
+            // array silent and the same token passed to `.arg(..)` loud. A call
+            // inside the receiver is still found, as its own node.
+            let Some(name) = call.name_ref() else {
+                continue;
+            };
+            found.push(Invocation {
+                program: name.text().to_string(),
+                arguments: arguments_of(call.arg_list()),
+                line: line_of(source, name.syntax().text_range().start()),
+            });
+        }
+    }
+    crate::facts::Look::Is(found)
 }
 
 /// The callee as written, flattened to a path string.
-fn callee(func: &syn::Expr) -> String {
+fn callee(func: Option<ast::Expr>) -> String {
     match func {
-        syn::Expr::Path(path) => path
-            .path
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect::<Vec<_>>()
-            .join("::"),
+        Some(ast::Expr::PathExpr(path)) => {
+            let mut names = Vec::new();
+            let mut at = path.path();
+            while let Some(path) = at {
+                if let Some(segment) = path.segment() {
+                    names.push(segment.name_ref().map_or_else(
+                        || segment.syntax().text().to_string(),
+                        |name| name.text().to_string(),
+                    ));
+                }
+                at = path.qualifier();
+            }
+            names.reverse();
+            names.join("::")
+        }
         // A call whose callee is computed — a closure variable, an index, a
         // field. There is a call site and its program is not a name, which is a
         // different answer from "no call site" and is spelled as one.
@@ -160,9 +178,11 @@ fn callee(func: &syn::Expr) -> String {
     }
 }
 
-/// 1-indexed source line of a span.
-fn line_of(span: proc_macro2::Span) -> usize {
-    span.start().line
+/// 1-indexed source line of a text offset.
+fn line_of(source: &str, offset: ra_ap_syntax::TextSize) -> usize {
+    source.get(..usize::from(offset)).map_or(1, |head| {
+        head.bytes().filter(|byte| *byte == b'\n').count() + 1
+    })
 }
 
 #[cfg(test)]
