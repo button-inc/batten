@@ -437,14 +437,9 @@ fn collect_edges(tree: &ast::UseTree, first: Option<&str>, line: usize, out: &mu
     }
     let first = first.as_deref();
     match end {
-        End::Name => {
-            if let Some(name) = segments.last() {
-                push_leaf(name, first, line, out);
-            }
-        }
-        // Keyed by the ORIGINAL, because that is the name the root's table is
-        // keyed on; the local alias is this file's business alone.
-        End::Rename(_) => {
+        // A rename is keyed by the ORIGINAL, because that is the name the root's
+        // table is keyed on; the local alias is this file's business alone.
+        End::Name | End::Rename(_) => {
             if let Some(name) = segments.last() {
                 push_leaf(name, first, line, out);
             }

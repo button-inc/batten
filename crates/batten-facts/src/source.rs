@@ -250,12 +250,12 @@ mod tests {
             rust_tree("fn (", edition),
             crate::facts::Look::CouldNotLook
         ));
+        use ra_ap_syntax::AstNode as _;
         // LOSSLESS: the ordinary comment `syn` drops is a token here, which is
         // the comment span CLOUD-1008 asks for.
         let crate::facts::Look::Is(tree) = rust_tree("// ordinary\nfn f() {}\n", edition) else {
             panic!("the fixture parses");
         };
-        use ra_ap_syntax::AstNode as _;
         let comments = tree
             .syntax()
             .descendants_with_tokens()
