@@ -945,7 +945,7 @@ mod tests {
         let unreachable: Vec<&str> = RuleKind::ALL
             .iter()
             .filter(|&&kind| !reaches(kind))
-            .map(|kind| kind.as_str())
+            .map(super::super::rules::RuleKindExt::as_str)
             .collect();
         // `judge` alone, and for the one reason no implementation can retire:
         // it cannot mint a finding at all. The mediated kinds left this list with

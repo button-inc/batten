@@ -1877,7 +1877,7 @@ enum Channel {
 fn harnesses() -> Vec<&'static str> {
     batten::config_model::Harness::ALL
         .iter()
-        .map(|harness| harness.as_str())
+        .map(batten::hook::HarnessExt::as_str)
         .collect()
 }
 
@@ -2971,7 +2971,7 @@ fn the_census_covers_every_normalized_event() {
     let mut required: Vec<&str> = batten::config_model::Event::ALL
         .iter()
         .filter(|event| event.host_emitted())
-        .map(|event| event.as_str())
+        .map(batten::hook::EventExt::as_str)
         .collect();
     required.sort_unstable();
     assert_eq!(
@@ -11455,7 +11455,7 @@ fn every_harness_the_enum_declares_is_in_the_attribution_matrix() {
     // silently going uncovered by every case below.
     let declared: Vec<&str> = batten::config_model::Harness::ALL
         .iter()
-        .map(|harness| harness.as_str())
+        .map(batten::hook::HarnessExt::as_str)
         .collect();
     assert_eq!(declared, ATTRIBUTION_HOSTS);
 }
@@ -13767,7 +13767,7 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
     let approximating: Vec<&str> = RuleKind::ALL
         .iter()
         .filter(|kind| kind.decidability() == Decidability::Approximating)
-        .map(|kind| kind.as_str())
+        .map(batten::rules::RuleKindExt::as_str)
         .collect();
     assert_eq!(
         approximating,
