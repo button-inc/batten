@@ -68,12 +68,12 @@ use crate::config_model::{
     CallEvent, CeilingUnit, NativeGate, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
 };
 use crate::config_model::{comparable, is_env_assignment};
+use crate::path_set::PathSet;
 use crate::preset_catalog::RuleScope;
 use crate::receipt::Validity;
 use crate::redirect;
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::PathSet;
 use crate::severity::{self, ReportLevel, RuleSeverity};
 #[cfg(test)]
 use crate::shell::shell_commands;
@@ -4053,11 +4053,17 @@ impl Policy {
     /// Returns a [`UsageError`] (→ exit `1`) when the protected list is malformed
     /// — a `!` entry in an include-only key. Never a deny: a policy that cannot be
     /// read must fail loud, not refuse the call.
+    ///
+    /// `answers` says whether a declared MCP source answers a server name.
+    /// Handed in rather than called, because the wiring lookup lives in `mcp`,
+    /// a layer `hook` may not reach (`module-layering.rego`); the caller above
+    /// both passes `mcp::answers` over its own resolved config.
     pub fn from_resolved(
         resolved: &Resolved,
         harness: Harness,
         root: &std::path::Path,
         reference: Option<&str>,
+        answers: &dyn Fn(&str) -> bool,
     ) -> anyhow::Result<Policy> {
         Ok(Policy {
             harness,
@@ -4126,10 +4132,7 @@ impl Policy {
                     if let Some(known) = answered.borrow().get(server) {
                         return *known;
                     }
-                    let reachable = resolved
-                        .mcp
-                        .as_ref()
-                        .is_some_and(|mcp| crate::mcp::answers(mcp, root, server));
+                    let reachable = answers(server);
                     answered.borrow_mut().insert(server.to_owned(), reachable);
                     reachable
                 })
@@ -11992,7 +11995,7 @@ fn protects(policy: &Policy, path: &str) -> bool {
 /// bound, which can only miss a file, never invent a change.
 pub(crate) fn protected_state(
     root: &Path,
-    protected: &crate::rules::PathSet,
+    protected: &crate::path_set::PathSet,
 ) -> std::collections::BTreeMap<String, String> {
     const GLOB: [char; 4] = ['*', '?', '[', '{'];
     let mut state = std::collections::BTreeMap::new();
@@ -12013,7 +12016,7 @@ const PROTECTED_WALK_BOUND: usize = 20_000;
 fn walk_protected(
     root: &Path,
     start: &str,
-    protected: &crate::rules::PathSet,
+    protected: &crate::path_set::PathSet,
     state: &mut std::collections::BTreeMap<String, String>,
 ) {
     let mut pending = vec![start.trim_end_matches('/').to_owned()];
@@ -12115,7 +12118,7 @@ pub(crate) fn protected_state_of(
     root: &Path,
     patterns: &[String],
 ) -> Option<std::collections::BTreeMap<String, String>> {
-    let set = crate::rules::PathSet::includes("protected", patterns).ok()?;
+    let set = crate::path_set::PathSet::includes("protected", patterns).ok()?;
     Some(protected_state(root, &set))
 }
 
@@ -16289,8 +16292,9 @@ deny contains "refused by themodule" if {
                 .expect("write authority");
             let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
                 .expect("the authority resolves");
-            let policy = Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None)
-                .expect("policy loads");
+            let policy =
+                Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None, &|_| false)
+                    .expect("policy loads");
             assert_eq!(
                 policy.protected.contains("guard.rego"),
                 protected,
@@ -21216,8 +21220,8 @@ deny contains "refused by themodule" if {
         .expect("write authority");
         let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
             .expect("the authority resolves");
-        let policy =
-            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("loads");
+        let policy = Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None, &|_| false)
+            .expect("loads");
         let ids: Vec<&str> = policy.shapes.iter().map(|rule| rule.id.as_str()).collect();
         assert_eq!(ids, ["mediated-gate"]);
         assert_eq!(policy.bundles.len(), 1);
@@ -21250,8 +21254,8 @@ deny contains "refused by themodule" if {
             credential: None,
         });
         resolved.mcp = Some(mcp);
-        let policy =
-            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("loads");
+        let policy = Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None, &|_| false)
+            .expect("loads");
         assert_eq!(policy.redirects.len(), 1);
         assert_eq!(policy.redirects[0].read, None);
     }

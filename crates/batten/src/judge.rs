@@ -99,7 +99,7 @@ use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::identity;
-use crate::rules::PathSet;
+use crate::path_set::PathSet;
 // The section's declaration lives with the model (CLOUD-2789).
 use crate::config_model::{Judge, PayloadClass};
 
