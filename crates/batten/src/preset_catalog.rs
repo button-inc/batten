@@ -1941,6 +1941,50 @@ dependencies. A recovered crate outside it means the binary was not built from t
         ],
         patterns: &[],
     },
+    // A leased push naming no expected value is a force (git-push(1): its
+    // protection "is trivially defeated" by a background fetch). Its own bundle
+    // rather than a second `trunk-based` module, the CLOUD-2273 precedent: an
+    // enabling row is named for the one class it raises, so adding a class to
+    // `trunk-based` would break every consumer row named `trunk push forced`.
+    // Moved from a repository-local module (plan item 4c).
+    Manifest {
+        name: "lease-asserted",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:lease-asserted>/lease-unasserted.rego",
+            source: include_str!("policy/presets/lease-asserted/lease-unasserted.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "branch write unnamed",
+            gloss: "a push that overwrites the remote without having said what it expects to find",
+            class: "A leased push naming no expected value (`--force-with-lease`, or \
+`--force-with-lease=<ref>`) compares against this clone's remote-tracking ref, so `git fetch` \
+followed by the push compares EQUAL and overwrites the commit the fetch just brought in; \
+git-push(1) says its protection \"is trivially defeated if some background process is updating \
+refs\". The explicit `=<ref>:<sha>` form is not this class, because naming the sha IS the \
+assertion and a stale one is refused by git; nor is a lease with `--force-if-includes`, which \
+git refuses unless the remote-tracking tip was integrated locally.",
+            routes: &[
+                run(
+                    "patch run first",
+                    "git fetch, then rebase onto what is there",
+                ),
+                run(
+                    "task run other",
+                    "git push --force-with-lease=<ref>:<sha> — name the commit you expect to replace",
+                ),
+                admit(
+                    "path admit first",
+                    "the history being replaced is this clone's own and no other clone has \
+fetched it, so there is no expected value to name that a reader could check",
+                ),
+            ],
+            applicability: Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     Manifest {
         name: "trunk-based",
         version: 1,
@@ -1955,8 +1999,8 @@ dependencies. A recovered crate outside it means the binary was not built from t
             gloss: "a force push rewrites a shared branch under whoever already fetched it",
             class: "Rewriting a published branch invalidates every checkout of it that \
 already exists, and the holder finds out by having their next pull fail in a way that \
-looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
-is the same operation with the one check that makes it safe.",
+looks like their own mistake. An asserted `--force-with-lease=<ref>:<sha>` refuses when the \
+remote moved, which is the same operation with the one check that makes it safe.",
             // THE EXPLICIT FORM, never the bare flag (CLOUD-2057): a bare
             // `--force-with-lease` compares against this clone's tracking ref and
             // is itself refused by `branch write unsafe`, so naming it here sent a
