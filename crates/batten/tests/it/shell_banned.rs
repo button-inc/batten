@@ -37,8 +37,8 @@
 //! workflow paths became the consumer's `[census.shell]` table. Four behaviours
 //! follow: the ban reads EVERY declared manifest's command keys (in this
 //! repository that adds `hk.pkl`'s `check`/`fix` strings, which the census
-//! already counted), exempt entries are globs, a consumer declaring no census is
-//! not banned at all, and the table's globs are held to `*`, `?` and `**` — the
+//! already counted), exempt entries are globs, and the table's globs are held to
+//! `*`, `?` and `**` — the
 //! operators both the census and the ban read alike — so a brace, a class or an
 //! escape is refused at load rather than read two ways.
 //!
@@ -46,6 +46,14 @@
 //! whose base side is missing from `base-lines` refuses every shell unit it
 //! carries, as the consumer module did, rather than reading the unread base as
 //! holding them all.
+//!
+//! # Presence by default (CLOUD-2628)
+//!
+//! The stranger above still carries `exempt`, which reads as `mode =
+//! "migrate"`: every growth case here runs under that legacy reading. A census
+//! with no `mode` and no `exempt` — and a consumer with no census at all — is
+//! judged for PRESENCE over every tracked file, whatever its line sources, and
+//! the only shell it admits is a `[[census.shell.generated]]` entry's.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -513,26 +521,224 @@ fn a_census_glob_the_ban_cannot_read_is_refused_at_load() {
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
 }
 
-/// NO DECLARATION, NO BAN. A consumer enabling `shell-hygiene` for its naming
-/// rules alone has not said where its shell lives, and must not be refused a
-/// shell file it never agreed to stop writing.
-#[test]
-fn a_consumer_declaring_no_census_is_not_banned() {
-    let dir = Fixture::new("shell-ban-undeclared")
-        .config(&format!(
-            "version = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
-             preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
-             base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
-             documents = [\"batten.toml\"]\nline_sources = [\"tools/**\"]\n"
-        ))
-        .file("README.md", "x\n")
+/// The enabling row alone, with no census: what a consumer who only switched
+/// the preset on writes.
+fn undeclared_config() -> String {
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
+         base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+         documents = [\"batten.toml\"]\nline_sources = [\"tools/**\"]\n"
+    )
+}
+
+/// The enabling row and a `[census.shell]` whose body is `census`: no `exempt`,
+/// so presence unless `census` declares `mode = "migrate"`.
+fn presence_config(census: &str) -> String {
+    format!("{}\n[census.shell]\n{census}", undeclared_config())
+}
+
+/// A repository whose `origin/main` holds `files` under `config`.
+fn repo_under(name: &str, config: &str, files: &[(&str, &str)]) -> PathBuf {
+    Fixture::new(name)
+        .config(config)
+        .files(files)
         .git()
         .base_commit()
-        .build();
+        .build()
+}
+
+/// NO DECLARATION IS PRESENCE (CLOUD-2628, absorbing CLOUD-1809). Enabling the
+/// preset is the request for the ban; the census is only where a consumer says
+/// what it admits, so a consumer with none admits nothing — and the file sits
+/// outside the row's line sources, so the whole tree is what is read.
+#[test]
+fn a_consumer_declaring_no_census_is_judged_for_presence() {
+    let dir = repo_under(
+        "shell-ban-undeclared",
+        &undeclared_config(),
+        &[("README.md", "x\n")],
+    );
     change(&dir, "scripts/deploy.sh", "echo deploy\n");
     let (code, found) = findings(&dir);
-    assert!(found.is_empty(), "{found:?}");
-    assert_eq!(code, Some(0));
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
+}
+
+/// PRESENCE, NOT GROWTH. A shell file that has stood since the base is refused
+/// by default — no diff touches it — and the same tree declaring `mode =
+/// "migrate"` passes, since migrating judges only what grows.
+#[test]
+fn a_base_tree_shell_file_is_refused_by_default_and_admitted_under_migrate() {
+    let files: &[(&str, &str)] = &[("README.md", "x\n"), ("scripts/old.sh", "echo old\n")];
+    let dir = repo_under("shell-ban-presence", &presence_config(""), files);
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    // The report carries pointers, not classes. No diff touches the file, so
+    // no growth arm can point at it: the one finding is `shell present
+    // refused` (the module's own `test_` rules pin the class).
+    let (_, found) = findings(&dir);
+    assert_eq!(found, [("scripts/old.sh".to_owned(), None)], "{found:?}");
+
+    let dir = repo_under(
+        "shell-ban-presence-migrate",
+        &presence_config("mode = \"migrate\"\n"),
+        files,
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// A SHEBANG IS SHELL UNDER ANY NAME, and outside every line source: the fact
+/// probes every tracked file's first two bytes.
+#[test]
+fn a_shebang_under_any_suffix_is_refused() {
+    let dir = repo_under(
+        "shell-ban-presence-shebang",
+        &presence_config(""),
+        &[
+            ("README.md", "x\n"),
+            ("fixtures/p.in", "#!/bin/sh\necho p\n"),
+        ],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "fixtures/p.in"), "{found:?}");
+}
+
+/// One `[[census.shell.generated]]` row.
+fn generated_row(path: &str, check: &str) -> String {
+    format!(
+        "\n[[census.shell.generated]]\npath = \"{path}\"\n\
+         generator = \"batten completions bash\"\ncheck = \"{check}\"\n"
+    )
+}
+
+/// A check is what the admission stands on, so `validate` refuses a row with
+/// none at load, before any module reads the table.
+#[test]
+fn a_generated_entry_without_a_check_is_refused_at_load() {
+    let dir = repo_under(
+        "shell-ban-generated-unchecked",
+        &presence_config(
+            "\n[[census.shell.generated]]\npath = \"gen/*.sh\"\ngenerator = \"batten completions bash\"\n",
+        ),
+        &[("README.md", "x\n")],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+}
+
+/// A legacy `exempt` list and a generated table are two answers to one
+/// question, so a config carrying both is refused at load.
+#[test]
+fn a_config_with_both_exempt_and_generated_is_refused_at_load() {
+    let dir = repo_under(
+        "shell-ban-exempt-and-generated",
+        &presence_config(&format!(
+            "exempt = [\"bootstrap.sh\"]\n{}",
+            generated_row("gen/*.sh", "tests/gen.rs::pins_gen")
+        )),
+        &[("README.md", "x\n")],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+}
+
+/// The test file every generated case below points its `check` at.
+const PINS: (&str, &str) = ("tests/gen.rs", "#[test]\nfn pins_gen() {}\n");
+
+/// THE TABLE IN THE OTHER DIRECTION: an entry with nothing behind it is an
+/// admission waiting for a file nobody reviewed.
+#[test]
+fn a_generated_entry_covering_no_file_is_a_finding() {
+    let dir = repo_under(
+        "shell-ban-generated-empty",
+        &presence_config(&generated_row("gen/*.sh", "tests/gen.rs::pins_gen")),
+        &[("README.md", "x\n"), PINS],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    // The entry's own glob is the pointer, and its check is found, so the one
+    // finding is `shell path missing`.
+    let (_, found) = findings(&dir);
+    assert_eq!(found, [("gen/*.sh".to_owned(), None)], "{found:?}");
+}
+
+/// A check whose name no line of its file holds — or whose file is absent — is
+/// a test nothing runs, so the entry stands on nothing.
+#[test]
+fn a_generated_entry_whose_check_is_not_found_is_a_finding() {
+    for (name, pointer) in [
+        ("shell-ban-generated-misnamed", "tests/gen.rs::pins_other"),
+        ("shell-ban-generated-no-file", "tests/absent.rs::pins_gen"),
+    ] {
+        let dir = repo_under(
+            name,
+            &presence_config(&generated_row("gen/*.sh", pointer)),
+            &[("README.md", "x\n"), ("gen/a.sh", "echo gen\n"), PINS],
+        );
+        let output = check(&dir);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{pointer}: {}",
+            stdout(&output)
+        );
+        // The glob matches `gen/a.sh`, which is covered and so not present:
+        // the one finding is the entry's, and with a match it is `shell test
+        // missing`.
+        let (_, found) = findings(&dir);
+        assert_eq!(
+            found,
+            [("gen/*.sh".to_owned(), None)],
+            "{pointer}: {found:?}"
+        );
+    }
+}
+
+/// The only shell presence admits: a covered file whose check is found.
+#[test]
+fn a_generated_file_is_admitted() {
+    let dir = repo_under(
+        "shell-ban-generated",
+        &presence_config(&generated_row("gen/*.sh", "tests/gen.rs::pins_gen")),
+        &[("README.md", "x\n"), ("gen/a.sh", "echo gen\n"), PINS],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// LEGACY `exempt` IS MIGRATE. The stranger's config carries `exempt` and no
+/// `mode`, so a shell file standing at the base that the list does not name
+/// passes — presence is not judged — and growing it is refused.
+#[test]
+fn a_config_that_still_carries_exempt_keeps_its_growth_meaning() {
+    let dir = repo("shell-ban-legacy", &[("tools/x.sh", "echo a\necho b\n")]);
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    change(&dir, "tools/x.sh", "echo a\necho b\necho c\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tools/x.sh"), "{found:?}");
+}
+
+/// MIGRATING, AN EXISTING SHELL FILE MAY ONLY SHRINK — read outside the line
+/// sources too. An edit that does not grow it lands; one that does is refused.
+#[test]
+fn an_existing_shell_file_that_grows_under_migrate_is_refused() {
+    let dir = repo_under(
+        "shell-ban-migrate-grown",
+        &presence_config("mode = \"migrate\"\n"),
+        &[("scripts/x.sh", "echo a\necho b\n")],
+    );
+    change(&dir, "scripts/x.sh", "echo a\necho B\n");
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    change(&dir, "scripts/x.sh", "echo a\necho B\necho c\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "scripts/x.sh"), "{found:?}");
 }
 
 /// THE EXEMPTION SET, ASSERTED EXACTLY. It is this repository's
