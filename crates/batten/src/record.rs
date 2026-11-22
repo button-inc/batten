@@ -1018,6 +1018,72 @@ fn plan_merged(held: &str, incoming: &str) -> PlanMerge {
     }
 }
 
+/// The bullets under a row body's "Mechanism (decided)" heading (CLOUD-2810).
+///
+/// The heading is matched by its words at any markdown level or in bold
+/// (`## Mechanism (decided)`, `**Mechanism (decided)**`). A bullet is a line
+/// beginning `* ` or `- ` at column zero; an indented line continues the bullet
+/// above it, never a new one. The section ends at the next heading or bold line.
+#[must_use]
+pub fn mechanism_bullets(body: &str) -> usize {
+    let heading = |line: &str| {
+        line.trim_start_matches('#')
+            .trim()
+            .trim_matches('*')
+            .trim()
+            .eq_ignore_ascii_case("Mechanism (decided)")
+    };
+    let mut lines = body.lines().skip_while(|line| !heading(line));
+    if lines.next().is_none() {
+        return 0;
+    }
+    lines
+        .take_while(|line| !line.starts_with('#') && !line.starts_with("**"))
+        .filter(|line| line.starts_with("* ") || line.starts_with("- "))
+        .count()
+}
+
+/// Record each claimed row's decided-mechanism bullets as `pending` plan
+/// entries keyed `<row>-<n>` (CLOUD-2810), so `plan declare held` holds the lap
+/// until each is built, as it does for any entry.
+///
+/// An id the store already holds KEEPS ITS STATUS: re-claiming re-derives the
+/// entries without reopening a completed one. Returns how many were added.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub fn plan_mechanisms(git_dir: &Path, branch: &str, rows: &[(&str, &str)]) -> Result<usize> {
+    let incoming: String = rows
+        .iter()
+        .flat_map(|(id, body)| {
+            (1..=mechanism_bullets(body)).map(move |n| format!("{id}-{n} pending\n"))
+        })
+        .collect();
+    if incoming.is_empty() {
+        return Ok(0);
+    }
+    let claim = claim_of(git_dir, branch);
+    let path = crate::recorder::record_path(git_dir, "plan", branch, claim.as_deref());
+    let held = crate::fsio::read_to_string(&path).unwrap_or_default();
+    let held_ids: std::collections::BTreeSet<&str> = held
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    let fresh: String = incoming
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|id| !held_ids.contains(id))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let merged = plan_merged(&held, &fresh);
+    store(&path, &merged.body)?;
+    Ok(merged.added)
+}
+
 /// Refuse a plan whose line is not `<id> <status>` or whose status is not one
 /// of [`PLAN_STATUSES`] — before anything is keyed or written.
 fn plan_validated(raw: &str) -> Result<()> {
