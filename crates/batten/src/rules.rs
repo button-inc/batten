@@ -3934,35 +3934,80 @@ fn units_cache() -> Option<&'static Path> {
     .as_deref()
 }
 
+/// One parser behind the unit seam (CLOUD-1578): text in, unit nodes out.
+///
+/// The answer is a [`crate::facts::Look`], so a backend's three outcomes are
+/// three values: `Is(nodes)`, `IsNot` ("this path is not my language") and
+/// `CouldNotLook` ("it is mine and I could not parse it"). CLOUD-310 admits a
+/// backend to a VERDICT only if it can abstain, and this type is how that is
+/// held: a backend that cannot say `IsNot` cannot be written, and
+/// `every_unit_backend_abstains_off_its_language` checks that each one does.
+type UnitBackend = fn(&str, &str) -> crate::facts::Look<Vec<serde_json::Value>>;
+
+/// The routing table: which parser serves which language, and why. Adding a
+/// language is a row, not a new architecture (CLOUD-1578's point, mined from
+/// `mehen`'s shape with no code taken). A path whose extension has no row has
+/// no unit fact: absent, never an empty node list.
+const UNIT_BACKENDS: &[(&str, UnitBackend, &str)] = &[
+    (
+        "rs",
+        rust_units,
+        "ra_ap_syntax, the one lossless Rust parse (CLOUD-1008 D4); tree-sitter is refused for verdicts (CLOUD-310)",
+    ),
+    (
+        "rego",
+        rego_units,
+        "regorus, the engine's own evaluator, so a unit is what the runtime itself parsed",
+    ),
+];
+
+/// The Rust backend: the D4 units from the one lossless parse, each `fn`
+/// carrying the o200k token count of the slice a reader would be served.
+fn rust_units(rel_path: &str, text: &str) -> crate::facts::Look<Vec<serde_json::Value>> {
+    if !rel_path.ends_with(".rs") {
+        return crate::facts::Look::IsNot;
+    }
+    let crate::facts::Look::Is(units) = crate::units::units(text) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    crate::facts::Look::Is(
+        units
+            .into_iter()
+            .map(|unit| {
+                let slice = (unit.kind == "fn")
+                    .then(|| text.get(unit.offset..unit.offset + unit.bytes))
+                    .flatten();
+                let mut node = serde_json::json!(unit);
+                if let Some(slice) = slice {
+                    node["counts"]["tokens"] = serde_json::json!(crate::o200k::tokens(slice));
+                }
+                node
+            })
+            .collect(),
+    )
+}
+
+/// The Rego backend, over the module regorus parses.
+fn rego_units(rel_path: &str, text: &str) -> crate::facts::Look<Vec<serde_json::Value>> {
+    if !rel_path.ends_with(".rego") {
+        return crate::facts::Look::IsNot;
+    }
+    crate::rego_units::units(rel_path, text)
+        .map_or(crate::facts::Look::CouldNotLook, crate::facts::Look::Is)
+}
+
+/// Route a path to its backend by extension and read its answer. Both refusals
+/// are `None` here because the fact's contract is "absent, never empty"; the
+/// distinction matters to the type and to verdict admission, not to a row.
 fn unit_nodes_uncached(
     extension: &str,
     rel_path: &str,
     text: &str,
 ) -> Option<Vec<serde_json::Value>> {
-    match extension {
-        "rs" => {
-            let crate::facts::Look::Is(units) = crate::units::units(text) else {
-                return None;
-            };
-            Some(
-                units
-                    .into_iter()
-                    .map(|unit| {
-                        let slice = (unit.kind == "fn")
-                            .then(|| text.get(unit.offset..unit.offset + unit.bytes))
-                            .flatten();
-                        let mut node = serde_json::json!(unit);
-                        if let Some(slice) = slice {
-                            node["counts"]["tokens"] =
-                                serde_json::json!(crate::o200k::tokens(slice));
-                        }
-                        node
-                    })
-                    .collect(),
-            )
-        }
-        "rego" => crate::rego_units::units(rel_path, text),
-        _ => None,
+    let (_, backend, _) = UNIT_BACKENDS.iter().find(|(owns, ..)| *owns == extension)?;
+    match backend(rel_path, text) {
+        crate::facts::Look::Is(nodes) => Some(nodes),
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => None,
     }
 }
 
@@ -10045,6 +10090,37 @@ mod tests {
     use crate::rules::RuleExt as _;
     #[cfg(test)]
     use crate::rules::RuleKindExt as _;
+
+    /// CLOUD-1578 / CLOUD-310: a backend admitted to a verdict must abstain on a
+    /// language it does not own, with `IsNot`, rather than parse it and answer
+    /// (or fail and read as could-not-look). Every routed backend is handed every
+    /// OTHER route's path and must say `IsNot`, and each answers its own.
+    #[test]
+    fn every_unit_backend_abstains_off_its_language() {
+        let samples = [("rs", "pub fn f() {}\n"), ("rego", "package p\n\nx := 1\n")];
+        assert_eq!(
+            UNIT_BACKENDS.len(),
+            samples.len(),
+            "a new route brings its sample"
+        );
+        for (owns, backend, why) in UNIT_BACKENDS {
+            assert!(!why.is_empty(), "the `{owns}` route names its reason");
+            for (extension, text) in samples {
+                let answer = backend(&format!("m.{extension}"), text);
+                if extension == *owns {
+                    assert!(
+                        matches!(answer, crate::facts::Look::Is(_)),
+                        "the `{owns}` backend answers its own language"
+                    );
+                } else {
+                    assert!(
+                        matches!(answer, crate::facts::Look::IsNot),
+                        "the `{owns}` backend abstains on a `.{extension}` path"
+                    );
+                }
+            }
+        }
+    }
 
     /// The `units` memo round-trips: after one acquisition the entry exists at
     /// its content address and reads back as the same node list, and a second
