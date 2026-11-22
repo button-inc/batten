@@ -40,9 +40,11 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   - **Enforcement.** The vendored `linear-history` preset (`commit write
 loose`) refuses `git merge` (unless `--ff-only`) and a merging `git pull` at
     the call. It shipped in v0.0.217 and was not enabled here until #1276
-    needed it. The pre-push `branch-linear` step refuses any merge commit in
-    `origin/main..HEAD`. `linear-check` only asks whether the head contains
-    `origin/main`; it never looked inside the branch.
+    needed it. A merge made any other way is refused before the branch can
+    land: every `land` lap judges `land::linearity`, which refuses a range
+    carrying merge commits whenever `[ci] required_linear_history` holds, and
+    the host ruleset refuses it at the fast-forward. A pushed draft may still
+    carry one; it cannot land.
 - **Semver + changelog are automated.** `release-plz` reads commits since the
   last release and bumps version + `CHANGELOG.md` (`feat`→minor, `fix`→patch,
   `!`/`BREAKING CHANGE`→major) in the release PR. Do **not** hand-edit version or
