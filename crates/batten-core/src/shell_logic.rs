@@ -101,6 +101,11 @@ enum Takes {
     /// A multi-call binary: its first operand names the applet, and the
     /// applet is the program, looked up in this table again.
     Applet,
+    /// Through a Windows switch (`cmd /C`, `pwsh -Command`), which the POSIX
+    /// option grammar in `crate::hook` cannot read: switches are
+    /// case-insensitive and PowerShell's may be shortened. Read by
+    /// [`switch_script`].
+    Switch,
 }
 
 /// One program that takes a script. Its option grammar (which flag is inline,
@@ -265,12 +270,137 @@ const SED: Interpreter = Interpreter {
     takes: Takes::Operand,
 };
 
+/// `cmd.exe`: `/C` carries out the command string and stops, `/K` carries it
+/// out and remains, and `/R` is `/C`. Switches are case-insensitive, and the
+/// string may follow the switch in the same word.
+/// <https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd>
+const CMD: Interpreter = Interpreter {
+    program: "cmd",
+    takes: Takes::Switch,
+};
+
+/// Windows `PowerShell` (`powershell.exe`): `-Command` (`-c`) and
+/// `-EncodedCommand` (`-e`, `-ec`) carry script text, `-` reads it from stdin,
+/// and `-File` (`-f`) names a script file. With neither, the first operand is
+/// a command, because `-Command` is the default parameter. Parameter names are
+/// case-insensitive and may be shortened.
+/// <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe>
+const POWERSHELL: Interpreter = Interpreter {
+    program: "powershell",
+    takes: Takes::Switch,
+};
+
+/// `PowerShell` 7 (`pwsh`): as `powershell`, except that `-File` is the default
+/// parameter, so a bare first operand is a script file.
+/// <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_pwsh>
+const PWSH: Interpreter = Interpreter {
+    program: "pwsh",
+    takes: Takes::Switch,
+};
+
 /// Every program that takes a script, researched and cited row by row
 /// (CLOUD-2626). Every shell [`ShellKind`] names is here.
-const INTERPRETERS: [Interpreter; 20] = [
+const INTERPRETERS: [Interpreter; 23] = [
     SH, DASH, KSH, MKSH, ASH, YASH, BASH, ZSH, FISH, CSH, TCSH, BUSYBOX, PERL, PYTHON, NODE, RUBY,
-    AWK, GAWK, MAWK, SED,
+    AWK, GAWK, MAWK, SED, CMD, POWERSHELL, PWSH,
 ];
+
+/// The Windows shell `program` names, read as Windows reads a program name:
+/// case-insensitive, with or without `.exe`.
+fn windows_shell(program: &str) -> Option<&'static str> {
+    let stem = program
+        .len()
+        .checked_sub(".exe".len())
+        .filter(|at| {
+            program
+                .get(*at..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
+        })
+        .and_then(|at| program.get(..at))
+        .unwrap_or(program);
+    INTERPRETERS
+        .iter()
+        .filter(|row| row.takes == Takes::Switch)
+        .map(|row| row.program)
+        .find(|name| stem.eq_ignore_ascii_case(name))
+}
+
+/// `PowerShell` parameters whose value is the next word, by full name and
+/// documented alias; a shortened full name is read as the full name.
+const POWERSHELL_VALUED: &[&str] = &[
+    "configurationfile",
+    "configurationname",
+    "config",
+    "custompipename",
+    "executionpolicy",
+    "ep",
+    "ex",
+    "inputformat",
+    "in",
+    "if",
+    "outputformat",
+    "o",
+    "of",
+    "psconsolefile",
+    "settingsfile",
+    "settings",
+    "version",
+    "v",
+    "windowstyle",
+    "w",
+    "workingdirectory",
+    "wd",
+    "wo",
+];
+
+/// Whether a Windows shell's argv carries a script (the [`CMD`],
+/// [`POWERSHELL`] and [`PWSH`] rows).
+fn switch_script(program: &str, arguments: &[&str]) -> bool {
+    if program == "cmd" {
+        return arguments.iter().any(|word| cmd_switch(word));
+    }
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        if *word == "-" {
+            return true;
+        }
+        let Some(name) = word.strip_prefix('-').or_else(|| word.strip_prefix('/')) else {
+            // The first operand: a command under `powershell`, a file under
+            // `pwsh`.
+            return program == "powershell";
+        };
+        let name = name
+            .trim_start_matches('-')
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(name.as_str(), "c" | "e" | "ec")
+            || (name.len() >= 3 && "command".starts_with(&name))
+            || (name.len() >= 2 && "encodedcommand".starts_with(&name))
+        {
+            return true;
+        }
+        if name == "f" || (name.len() >= 2 && "file".starts_with(&name)) {
+            return false;
+        }
+        let valued = POWERSHELL_VALUED.iter().any(|full| {
+            *full == name || (name.len() >= 3 && full.len() > 3 && full.starts_with(&name))
+        });
+        if valued && !word.contains(':') {
+            words.next();
+        }
+    }
+    false
+}
+
+/// Whether one `cmd.exe` argument is `/C`, `/K` or `/R`, alone or with its
+/// string attached.
+fn cmd_switch(word: &str) -> bool {
+    word.strip_prefix('/')
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|switch| matches!(switch.to_ascii_lowercase(), 'c' | 'k' | 'r'))
+}
 
 /// Whether one argv runs a script: its program is in [`INTERPRETERS`] and the
 /// argv carries one, or it is a wrapper whose utility does.
@@ -288,14 +418,21 @@ fn runs_script(argv: &[&str]) -> bool {
 
 /// Whether `program`, a table row, carries a script in `arguments`.
 fn interpreter(program: &str, arguments: &[&str]) -> bool {
+    if let Some(windows) = windows_shell(program) {
+        return switch_script(windows, arguments);
+    }
     let family = crate::interpreter::family(program);
     let Some(row) = INTERPRETERS.iter().find(|row| row.program == family) else {
         return false;
     };
-    if row.takes == Takes::Applet {
-        return arguments
-            .split_first()
-            .is_some_and(|(applet, rest)| interpreter(file_name(applet), rest));
+    match row.takes {
+        Takes::Applet => {
+            return arguments
+                .split_first()
+                .is_some_and(|(applet, rest)| interpreter(file_name(applet), rest));
+        }
+        Takes::Switch => return switch_script(row.program, arguments),
+        Takes::Inline | Takes::Operand => {}
     }
     match crate::interpreter::carried(program, arguments) {
         crate::interpreter::Carried::Inline => true,
@@ -518,10 +655,17 @@ pub enum ShellKind {
     Yash,
     /// `busybox sh`, the multi-call binary told which applet to be.
     BusyboxSh,
+    /// `cmd.exe`, the Windows command interpreter.
+    Cmd,
+    /// `PowerShell`, as `powershell.exe` or `pwsh`.
+    PowerShell,
 }
 
 /// Every interpreter name a shebang may carry, and the shell it is.
-const SHELLS: [(&str, ShellKind); 11] = [
+const SHELLS: [(&str, ShellKind); 14] = [
+    ("cmd", ShellKind::Cmd),
+    ("powershell", ShellKind::PowerShell),
+    ("pwsh", ShellKind::PowerShell),
     ("sh", ShellKind::Sh),
     ("bash", ShellKind::Bash),
     ("zsh", ShellKind::Zsh),
@@ -551,26 +695,34 @@ pub fn shebang(first_line: &str) -> Option<ShellKind> {
     if program == "busybox" {
         return matches!(words.next(), Some("sh" | "ash")).then_some(ShellKind::BusyboxSh);
     }
+    let program = windows_shell(program).unwrap_or(program);
     SHELLS
         .iter()
         .find(|(name, _)| *name == program)
         .map(|(_, kind)| *kind)
 }
 
-/// The last `/`-separated component.
+/// The last `/`- or `\`-separated component: a Windows path names its program
+/// after a backslash.
 fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-/// File extensions that are shell whatever the first line says.
-const EXTENSIONS: [&str; 9] = [
-    ".sh", ".bash", ".bats", ".zsh", ".ksh", ".fish", ".csh", ".tcsh", ".command",
+/// File extensions that are shell whatever the first line says: the POSIX
+/// family's, then `PowerShell`'s script and module, and `cmd.exe`'s batch files.
+const EXTENSIONS: [&str; 13] = [
+    ".sh", ".bash", ".bats", ".zsh", ".ksh", ".fish", ".csh", ".tcsh", ".command", ".ps1", ".psm1",
+    ".bat", ".cmd",
 ];
 
-/// Whether a path is shell by its name alone.
+/// Whether a path is shell by its name alone. The extension is read
+/// case-insensitively, as Windows reads `RUN.BAT`.
 #[must_use]
 pub fn shell_path(path: &str) -> bool {
-    EXTENSIONS.iter().any(|extension| path.ends_with(extension))
+    let lower = path.to_ascii_lowercase();
+    EXTENSIONS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,6 +1201,43 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn a_windows_shell_switch_is_a_script() {
+        // `cmd /C|/K|/R`, PowerShell's `-Command`/`-EncodedCommand` in any
+        // case or shortening, stdin, and `powershell`'s default `-Command`.
+        for text in [
+            "cmd /C echo",
+            "cmd /d /k dir",
+            "CMD.EXE /cecho",
+            "cmd /R x",
+            "powershell -Command Get-Item",
+            "powershell -c x",
+            "pwsh -NoProfile -command x",
+            "pwsh -Comm x",
+            "pwsh -EncodedCommand AAAA",
+            "pwsh -ec AAAA",
+            "pwsh --command x",
+            "pwsh /Command x",
+            "pwsh -",
+            "powershell -NoLogo Get-Item",
+            "powershell -ExecutionPolicy Bypass Get-Item",
+        ] {
+            assert_eq!(shell(text), "interpreter-script", "{text}");
+        }
+        // A script file is argv here, as `bash script` is.
+        for text in [
+            "pwsh script.ps1",
+            "pwsh -File script.ps1",
+            "pwsh -ExecutionPolicy Bypass -File s.ps1",
+            "powershell -f s.ps1",
+            "pwsh -wd C:/x s.ps1",
+            "cmd",
+        ] {
+            assert!(matches!(logic(text), Verdict::Argv(_)), "{text}");
+        }
+    }
+
+    #[test]
     fn an_interpreter_inline_flag_is_a_script() {
         // Rule 10, one assertion per table row with an inline flag.
         for text in [
@@ -1211,6 +1400,11 @@ mod tests {
             ("#!/usr/bin/yash", ShellKind::Yash),
             ("#!/bin/busybox sh", ShellKind::BusyboxSh),
             ("#!/usr/bin/env busybox sh", ShellKind::BusyboxSh),
+            ("#!/usr/bin/env pwsh", ShellKind::PowerShell),
+            (
+                "#!/opt/microsoft/powershell/7/pwsh -NoProfile",
+                ShellKind::PowerShell,
+            ),
         ] {
             assert_eq!(shebang(line), Some(kind), "{line}");
         }
@@ -1237,10 +1431,15 @@ mod tests {
             "x.csh",
             "x.tcsh",
             "x.command",
+            "x.ps1",
+            "x.psm1",
+            "x.bat",
+            "RUN.BAT",
+            "x.cmd",
         ] {
             assert!(shell_path(path), "{path}");
         }
-        assert!(!shell_path("a/sh") && !shell_path("x.py"));
+        assert!(!shell_path("a/sh") && !shell_path("x.py") && !shell_path("x.psd1"));
     }
 
     fn text(row: &Carrier, value: &str) -> Form {
