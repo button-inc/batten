@@ -12,7 +12,7 @@ use batten::capture::StreamedChild as _;
 const CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "crate reach unsafe"
+id = "crate reach wrong"
 kind = "policy"
 scope = "tree"
 module = "policy/crate-reach.rego"
