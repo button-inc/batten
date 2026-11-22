@@ -1934,6 +1934,30 @@ pub struct ShellCensus {
     /// and a named test holds, one row per glob.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub generated: Vec<Generated>,
+    /// The only shell engine source may spawn (CLOUD-2770): one row per
+    /// function whose string-literal argv runs a shell because an external
+    /// format forces it. Held in both directions, whatever `mode` says.
+    #[serde(default, rename = "spawn", skip_serializing_if = "Vec::is_empty")]
+    pub spawns: Vec<Spawn>,
+}
+
+/// One `[[census.shell.spawn]]` row: an engine function that spawns a shell,
+/// and the external contract that forces it to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Spawn {
+    /// The source file, repo-relative.
+    pub path: String,
+    /// The function holding the spawn, by its name. Optional to the parser so
+    /// that the census's validation is what refuses its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    /// The external format that makes the argv a shell command line, with a
+    /// citation (a URL). Optional to the parser so that the census's
+    /// validation is what refuses its absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
 }
 
 impl ShellCensus {
