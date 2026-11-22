@@ -1201,7 +1201,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_windows_shell_switch_is_a_script() {
         // `cmd /C|/K|/R`, PowerShell's `-Command`/`-EncodedCommand` in any
         // case or shortening, stdin, and `powershell`'s default `-Command`.

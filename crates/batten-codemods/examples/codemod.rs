@@ -80,16 +80,6 @@ fn main() -> std::io::Result<()> {
         }
         return Ok(());
     }
-    // `cut-crate <from> <name> <module>…`: move a closed module set out of the
-    // package at `<from>` into a sibling package `<name>`, run at the workspace
-    // root. Refused and remainder sites print as `path:line`; nothing else does.
-    if asked == "cut-crate" {
-        let (Some(from), Some(name)) = (args.next(), args.next()) else {
-            return writeln!(out, "cut-crate: usage: cut-crate <from> <name> <module>…");
-        };
-        let modules: Vec<String> = args.collect();
-        return run_cut(&mut out, &from, &name, &modules);
-    }
     if let Some(chosen) = recipe::named_tree(&asked) {
         let root = args.next().unwrap_or_else(|| String::from("."));
         return run_tree(&mut out, chosen, std::path::Path::new(&root));
@@ -202,70 +192,6 @@ fn run_tree(
         "{}: files read {}, rewritten {rewritten}, refused {refused}",
         chosen.name,
         files.len()
-    )
-}
-
-/// `cut-crate` over the workspace at the current directory: refused sites
-/// and remainder as pointers, then the plan written and counted.
-fn run_cut(
-    out: &mut impl std::io::Write,
-    from: &str,
-    name: &str,
-    modules: &[String],
-) -> std::io::Result<()> {
-    let root = std::path::Path::new(".");
-    let (mut files, mut manifests) = (
-        std::collections::BTreeMap::new(),
-        std::collections::BTreeMap::new(),
-    );
-    for path in walk_matching(root, &|path| {
-        path.extension().is_some_and(|ext| ext == "rs")
-            || path.file_name().is_some_and(|file| file == "Cargo.toml")
-    }) {
-        let text = batten::fsio::read_to_string(&path)?;
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
-        if relative.ends_with("Cargo.toml") {
-            manifests.insert(relative, text);
-        } else {
-            files.insert(relative, text);
-        }
-    }
-    let modules: Vec<&str> = modules.iter().map(String::as_str).collect();
-    let cut = recipe::cut::Cut {
-        from,
-        name,
-        modules: &modules,
-    };
-    let plan = recipe::cut::cut_crate(&cut, &files, &manifests);
-    for site in &plan.refused {
-        writeln!(out, "refused {site}")?;
-    }
-    if !plan.refused.is_empty() {
-        return writeln!(out, "cut-crate: refused {}", plan.refused.len());
-    }
-    for site in &plan.remainder {
-        writeln!(out, "remainder {site}")?;
-    }
-    for (relative, text) in &plan.writes {
-        let target = root.join(relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        batten::durable::replace(&target, text.clone())?;
-    }
-    for relative in &plan.removes {
-        std::fs::remove_file(root.join(relative))?;
-    }
-    writeln!(
-        out,
-        "cut-crate: written {}, removed {}, remainder {}",
-        plan.writes.len(),
-        plan.removes.len(),
-        plan.remainder.len()
     )
 }
 

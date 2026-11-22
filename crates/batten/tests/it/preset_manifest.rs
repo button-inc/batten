@@ -10,7 +10,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-use batten::capture::StreamedChild as _;
 use batten::preset::ManifestExt as _;
 
 use common::Fixture;
@@ -308,7 +307,7 @@ fn a_preset_remedy_is_a_verdict_route() {
     common::init_repo(&dir);
     let out = said_by(&dir, &["policy", "explain", "crate reach unsafe"]);
     assert!(
-        out.contains("cut-crate <from> <name> <module>"),
+        out.contains("batten modules cut --dry-run <from> <name> <module>"),
         "the remedy argv must be printed\n{out}"
     );
 }
