@@ -110,6 +110,6 @@ pub(crate) fn declarable_tokens() -> Vec<&'static str> {
     Event::ALL
         .iter()
         .filter(|event| !matches!(event, Event::PreTool | Event::Unrecognized))
-        .map(|event| event.as_str())
+        .map(super::super::hook::EventExt::as_str)
         .collect()
 }

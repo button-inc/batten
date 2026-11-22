@@ -490,6 +490,33 @@ fn write_rows(
     Ok(())
 }
 
+/// Every test body in `files`, by canonical shape under `index` with no
+/// moves applied: what tells a test that moved files from one that is gone.
+fn test_shapes(
+    files: &BTreeMap<String, String>,
+    index: &crate::item_index::Index,
+) -> BTreeSet<String> {
+    let no_moves = BTreeMap::new();
+    files
+        .iter()
+        .flat_map(|(path, text)| {
+            let krate = index.crate_of(path).unwrap_or_default();
+            tests_in(text)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|test| {
+                    shape(&crate::item_index::canonical(
+                        &text[test.body.0..test.body.1],
+                        &krate,
+                        index,
+                        &no_moves,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// `batten test replay --base <ref>`: run each modified test's base form against
 /// HEAD, and admit what changed only through the `asked` ledger.
 ///
@@ -514,10 +541,10 @@ pub fn run(
     let mut findings = Vec::new();
     // The head text each modified file is spliced from, by path.
     let mut splices: BTreeMap<String, (String, Vec<Modified>)> = BTreeMap::new();
-    let moved = successors(&before, &after);
+    let successor_of = successors(&before, &after);
     // Every file the branch moved, old path to new (CLOUD-2789): what a base
     // body is translated through before it is judged.
-    let moves: BTreeMap<String, String> = moved
+    let moves: BTreeMap<String, String> = successor_of
         .iter()
         .filter_map(|(old, new)| Some((old.clone(), new.clone()?)))
         .filter(|(old, new)| old != new)
@@ -532,37 +559,16 @@ pub fn run(
     // `crate::` names a file's own crate only for a library source the index
     // read; in an integration test it is the test crate, which is not indexed,
     // so only paths through the tree's crates by name resolve there.
-    let base_krate = |path: &str| base_index.crate_of(path).unwrap_or_default();
-    let head_krate = |path: &str| head_index.crate_of(path).unwrap_or_default();
+    let crate_at_base = |path: &str| base_index.crate_of(path).unwrap_or_default();
+    let crate_at_head = |path: &str| head_index.crate_of(path).unwrap_or_default();
     // Every test body at HEAD, by canonical shape, read only if some base test
     // left its file: what tells a test that moved from one that is gone.
     let head_shapes: std::cell::OnceCell<BTreeSet<String>> = std::cell::OnceCell::new();
-    let shapes_at_head = || {
-        head_shapes.get_or_init(|| {
-            after
-                .iter()
-                .flat_map(|(path, text)| {
-                    let krate = head_krate(path);
-                    tests_in(text)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|test| {
-                            shape(&crate::item_index::canonical(
-                                &text[test.body.0..test.body.1],
-                                &krate,
-                                &head_index,
-                                &no_moves,
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect()
-        })
-    };
+    let shapes_at_head = || head_shapes.get_or_init(|| test_shapes(&after, &head_index));
     for (path, base_text) in &before {
         // A file gone at HEAD is compared against nothing, so each of its base
         // tests is removed; a moved one is compared at the path it moved to.
-        let head_path = moved.get(path).cloned().flatten();
+        let head_path = successor_of.get(path).cloned().flatten();
         let head_text = head_path
             .as_ref()
             .and_then(|head_path| after.get(head_path))
@@ -571,7 +577,7 @@ pub fn run(
             continue;
         }
         let test_path = head_path.as_deref().unwrap_or(path);
-        let (base_crate, head_crate) = (base_krate(path), head_krate(test_path));
+        let (base_crate, head_crate) = (crate_at_base(path), crate_at_head(test_path));
         let changed = compare_canonical(
             base_text,
             head_text,

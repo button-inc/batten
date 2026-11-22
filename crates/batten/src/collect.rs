@@ -1278,6 +1278,26 @@ pub fn collect(request: &Request<'_>) -> Pass {
     pass
 }
 
+/// Every unit a pass may collect, ranked: each locked tree's units and whole
+/// scratch, and the mutant copies under `copies`.
+///
+/// ONE WALK PER TREE: the fingerprint directories both name the nested build
+/// trees whose scratch is taken whole and are the units themselves.
+fn candidates(locks: &[(PathBuf, std::fs::File)], copies: Option<&Path>) -> Vec<Unit> {
+    let mut units = Vec::new();
+    let mut scratch = Vec::new();
+    for (tree, _) in locks {
+        let fingerprints = crate::prune::directories_named(tree, ".fingerprint");
+        let wholes = wholes_in(tree, &fingerprints);
+        scratch.extend(whole_units(tree, &wholes));
+        units.extend(units_in(tree, fingerprints, &wholes));
+    }
+    if let Some(dir) = copies {
+        scratch.extend(mutant_copies(dir));
+    }
+    ranked(units, scratch)
+}
+
 /// [`collect`]'s pass and its `disk-pass` trace line, composed whether or not
 /// the trace is asked for, so a case reads the counts the trace reports.
 fn pass_of(request: &Request<'_>) -> (Pass, String) {
@@ -1308,20 +1328,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         removed += units;
         freed += bytes;
     }
-    // ONE WALK PER TREE: the fingerprint directories both name the nested
-    // build trees whose scratch is taken whole and are the units themselves.
-    let mut units = Vec::new();
-    let mut scratch = Vec::new();
-    for (tree, _) in &locks {
-        let fingerprints = crate::prune::directories_named(tree, ".fingerprint");
-        let wholes = wholes_in(tree, &fingerprints);
-        scratch.extend(whole_units(tree, &wholes));
-        units.extend(units_in(tree, fingerprints, &wholes));
-    }
-    if let Some(dir) = request.copies {
-        scratch.extend(mutant_copies(dir));
-    }
-    let live = ranked(units, scratch);
+    let live = candidates(&locks, request.copies);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
     // none, and nothing said which guard stopped it.

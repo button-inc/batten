@@ -213,7 +213,7 @@ pub fn declarable_tokens() -> Vec<&'static str> {
     Event::ALL
         .iter()
         .filter(|event| **event != Event::Unrecognized)
-        .map(|event| event.as_str())
+        .map(super::super::hook::EventExt::as_str)
         .collect()
 }
 
