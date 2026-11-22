@@ -1594,6 +1594,7 @@
             "trunk-based",
             "linear-history",
             "rust-quality",
+            "rust",
             "red-head",
             "git",
             "claude-code-plan"
