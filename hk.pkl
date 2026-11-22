@@ -683,7 +683,10 @@ local gate = new Mapping<String, Step> {
     // one `target/clippy`, and `fuzz/` was checked by nothing while the step read as
     // covering it. Excluding it makes the job count honest; linting `fuzz/` is
     // CLOUD-2052's. `hk_contract.rs` holds every nested workspace to this list.
-    exclude = List("fuzz/**")
+    // `tools/batten-profile` and `tools/batten-semantic` are nested workspaces of
+    // the same shape, and like `fuzz/` nothing lints them yet: both are retired
+    // (folded into a verb or a preset remedy, CLOUD-2812/CLOUD-2817), not linted.
+    exclude = List("fuzz/**", "tools/batten-profile/**", "tools/batten-semantic/**")
     // CHEAP FIRST. Every sub-second lint over a file the build or the gate reads
     // runs before the first compile, so a Rego parse error, a TOML typo or an
     // unformatted file fails in under two seconds instead of after the whole

@@ -1177,7 +1177,11 @@ fn a_write_under_an_ignored_path_is_not_a_hazard() {
         // A PLAIN `mkdir`, NEVER `-p`: coreutils' `-p` changes directory to
         // make each component, and a `chdir` leaves every bare relative path
         // in the trace unresolvable — the reader's stated limit, not this case.
-        "#!/bin/sh\ncat input.txt >/dev/null\nmkdir bin/out\necho artefact >bin/out/a\nrm -r bin/out\n",
+        // `unlink` and `rmdir`, NEVER `rm -r`, for the same reason: `rm` is
+        // whatever `PATH` resolves, and a hosted session puts a shell stand-in
+        // first that changes directory (measured: two `chdir`s from it turned
+        // this trace unread). The writes are the same two syscalls.
+        "#!/bin/sh\ncat input.txt >/dev/null\nmkdir bin/out\necho artefact >bin/out/a\nunlink bin/out/a\nrmdir bin/out\n",
     );
     let out = repo.run_step(&["whole"], &["build"], &[]);
     let again = repo.run_step(&["whole"], &["build"], &[]);

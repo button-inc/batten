@@ -33,24 +33,46 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/batten/src/wiring.rs", 2),
 ];
 
-/// The call this ratchet counts.
+/// The call this ratchet counts, as a reader spells it.
 const NEEDLE: &str = ".canonicalize()";
 
-/// Bare calls per tracked engine source under `root`, comment lines excluded.
+/// Bare calls per tracked engine source under `root`, read off the one lossless
+/// parse: a method call named `canonicalize` with no argument. A comment, a
+/// string or a doc example spelling the call is a token, not a call, so it is
+/// never counted — the text scan this replaced counted all three.
+///
+/// Every crate of the workspace is read: the split (CLOUD-2789) moved `git.rs`
+/// into `batten-core`, and a walk of `crates/batten/src` alone stopped seeing
+/// the one file [`the_census_sees_the_calls_it_ratchets`] names.
 fn bare_calls(root: &Path) -> BTreeMap<String, usize> {
+    use ra_ap_syntax::{AstNode as _, ast, ast::HasArgList as _};
+
     let tracked = batten::git::tracked_paths(root).expect("the tracked set");
     let mut counts = BTreeMap::new();
     let sources = tracked.iter().filter(|path| {
-        path.starts_with("crates/batten/src/")
+        path.starts_with("crates/")
+            && path.contains("/src/")
             && Path::new(path).extension().is_some_and(|ext| ext == "rs")
     });
     for path in sources {
         let text = std::fs::read_to_string(root.join(path)).expect("read a tracked source");
-        let calls: usize = text
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .map(|line| line.matches(NEEDLE).count())
-            .sum();
+        let batten_facts::facts::Look::Is(file) =
+            batten_facts::source::rust_tree(&text, ra_ap_syntax::Edition::Edition2024)
+        else {
+            panic!("{path} did not parse: an unread file is could-not-look, never zero calls");
+        };
+        let calls = file
+            .syntax()
+            .descendants()
+            .filter_map(ast::MethodCallExpr::cast)
+            .filter(|call| {
+                call.name_ref()
+                    .is_some_and(|name| name.text() == "canonicalize")
+                    && call
+                        .arg_list()
+                        .is_some_and(|args| args.args().next().is_none())
+            })
+            .count();
         if calls > 0 {
             counts.insert(path.clone(), calls);
         }
