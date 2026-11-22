@@ -8679,7 +8679,7 @@ fn print_claim_refusals(
 /// pull request yet and some row carries a live one, so a claim no PR touches
 /// costs no forge call.
 fn asks_forge(request: &claim::Request, issues: &[claim::Issue]) -> bool {
-    request.own_pr.is_none() && issues.iter().any(|issue| issue.live_pr.is_some())
+    request.own_pr.is_none() && issues.iter().any(|issue| !issue.live_prs.is_empty())
 }
 
 /// The request with this branch's own pull request filled in (CLOUD-2697): a
@@ -33293,7 +33293,7 @@ mod tests {
             id: String::from("CLOUD-1"),
             status: String::from("Todo"),
             assigned: false,
-            live_pr: live_pr.map(String::from),
+            live_prs: live_pr.map(String::from).into_iter().collect(),
             description: None,
             created_at: None,
         };

@@ -104,8 +104,14 @@ pub struct Issue {
     /// other are indistinguishable in the payload. Reporting a name comparison
     /// would be a check that looks like it discriminates and does not.
     pub assigned: bool,
-    /// A **live** pull request attached to it, if any — the URL's number.
-    pub live_pr: Option<String>,
+    /// Every **live** pull request attached to it, by the URL's number, in
+    /// attachment order.
+    ///
+    /// ALL OF THEM, NOT THE FIRST (CLOUD-2697). The own-claim test asks whether
+    /// this branch's PR is the row's ONLY live one; reading the first alone let a
+    /// row carrying this branch's PR first and a rival's live PR second past every
+    /// competitor rule.
+    pub live_prs: Vec<String>,
     /// The body, when the caller supplied one.
     pub description: Option<String>,
     /// When the tracker says the row was created, for the prose-dialect cutover.
@@ -169,7 +175,7 @@ impl Issue {
             id,
             status,
             assigned: value.get("assignee").is_some_and(|value| !value.is_null()),
-            live_pr: live_pull_request(value),
+            live_prs: live_pull_requests(value),
             description: value
                 .get("description")
                 .and_then(serde_json::Value::as_str)
@@ -182,7 +188,7 @@ impl Issue {
     }
 }
 
-/// The first attachment that is a **live** GitHub pull request.
+/// Every attachment that is a **live** GitHub pull request, in order.
 ///
 /// LIVE, NOT MERELY PRESENT (CLOUD-520). This rule catches somebody who
 /// published before the column moved, which is a claim about an OPEN pull
@@ -198,18 +204,26 @@ impl Issue {
 /// the old behaviour — this narrowing can only ever turn a false refusal into a
 /// pull, never a real competitor into a silent pass. Malformed refuses too: a
 /// parse failure must not become a pass.
-fn live_pull_request(value: &serde_json::Value) -> Option<String> {
-    let attachments = value.get("attachments")?.as_array()?;
-    attachments.iter().find_map(|attachment| {
-        let url = attachment.get("url").and_then(serde_json::Value::as_str)?;
-        if !is_pull_request_url(url) {
-            return None;
-        }
-        if crate::forge::PullState::of(attachment).is_finished() {
-            return None;
-        }
-        Some(url.rsplit('/').next().unwrap_or(url).to_owned())
-    })
+fn live_pull_requests(value: &serde_json::Value) -> Vec<String> {
+    let Some(attachments) = value
+        .get("attachments")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    attachments
+        .iter()
+        .filter_map(|attachment| {
+            let url = attachment.get("url").and_then(serde_json::Value::as_str)?;
+            if !is_pull_request_url(url) {
+                return None;
+            }
+            if crate::forge::PullState::of(attachment).is_finished() {
+                return None;
+            }
+            Some(url.rsplit('/').next().unwrap_or(url).to_owned())
+        })
+        .collect()
 }
 
 /// What the caller asked for, beyond the payloads.
@@ -298,7 +312,11 @@ pub fn judge(
         // The column, the assignee and the PR are the forge recording that claim,
         // so none of them is a competitor; the readiness and sequence rules below
         // still decide.
-        let own = issue.live_pr.is_some() && issue.live_pr == request.own_pr;
+        let own = !issue.live_prs.is_empty()
+            && issue
+                .live_prs
+                .iter()
+                .all(|number| request.own_pr.as_deref() == Some(number.as_str()));
 
         if !own {
             if issue.status != ready_column {
@@ -318,7 +336,7 @@ pub fn judge(
                     kind: Kind::Competitor,
                 });
             }
-            if let Some(number) = &issue.live_pr {
+            for number in &issue.live_prs {
                 verdict.refusals.push(Refusal {
                     id: issue.id.clone(),
                     rule: format!(
@@ -964,7 +982,7 @@ mod tests {
             id: id.to_owned(),
             status: status.to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }
@@ -1092,7 +1110,7 @@ mod tests {
         let Ok(parsed) = Issue::parse(&merged) else {
             panic!("a well-formed payload must parse")
         };
-        assert_eq!(parsed.live_pr, None);
+        assert!(parsed.live_prs.is_empty());
     }
 
     #[test]
@@ -1111,8 +1129,8 @@ mod tests {
                 panic!("a well-formed payload must parse")
             };
             assert_eq!(
-                parsed.live_pr.as_deref(),
-                Some("9"),
+                parsed.live_prs,
+                [String::from("9")],
                 "only an explicit merged/closed reading may stand down"
             );
         }
@@ -1187,7 +1205,7 @@ mod tests {
     fn a_row_held_only_by_this_branchs_own_pr_is_its_claim() {
         let held = Issue {
             assigned: true,
-            live_pr: Some(String::from("1276")),
+            live_prs: vec![String::from("1276")],
             ..issue("CLOUD-1", "In Progress")
         };
         let grammar = crate::ready::Grammar::committed();
@@ -1221,6 +1239,47 @@ mod tests {
             panic!("a competitor needs no body")
         };
         assert!(unknown.refusals[0].rule.starts_with("not-todo"));
+    }
+
+    /// CLOUD-2697's "ONLY": a row carrying this branch's PR FIRST and a rival's
+    /// live PR SECOND is not this branch's claim. Fails by: the own-claim test
+    /// reading the first live PR alone, which let that row past every competitor
+    /// rule; or a rival's PR left out of the refusals.
+    #[test]
+    fn a_rivals_live_pr_beside_this_branchs_own_keeps_the_row_a_competitor() {
+        let parsed = Issue::parse(&serde_json::json!({
+            "id": "CLOUD-1", "status": "In Progress",
+            "attachments": [
+                { "url": "https://github.com/o/r/pull/1276", "state": "open" },
+                { "url": "https://github.com/o/r/pull/1300", "state": "open" }
+            ]
+        }));
+        let Ok(parsed) = parsed else {
+            panic!("a well-formed payload must parse")
+        };
+        assert_eq!(
+            parsed.live_prs,
+            [String::from("1276"), String::from("1300")]
+        );
+        let request = Request {
+            own_pr: Some(String::from("1276")),
+            ..Request::default()
+        };
+        let grammar = crate::ready::Grammar::committed();
+        let Ok(verdict) = judge(
+            &grammar,
+            &test_columns(),
+            std::slice::from_ref(&parsed),
+            &request,
+            Path::new("."),
+            None,
+        ) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(
+            verdict.refusals[0].rule.starts_with("not-todo"),
+            "{verdict:?}"
+        );
     }
 
     #[test]
