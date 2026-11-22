@@ -81,6 +81,7 @@ const CANDIDATES: &[&str] = &[
     "lane",
     "last",
     "late",
+    "crate",
     "layer",
     "lease",
     "list",
