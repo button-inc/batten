@@ -1110,7 +1110,7 @@ impl RuleExt for Rule {
                 self.id
             )));
         };
-        if crate::config_model::is_lookthrough_wrapper(program) {
+        if crate::interpreter::is_lookthrough_wrapper(program) {
             return Err(UsageError::raise(format!(
                 "rule {}: `pattern` names the wrapper `{program}`, which the matcher looks THROUGH to judge the program it wraps; name that program instead",
                 self.id
