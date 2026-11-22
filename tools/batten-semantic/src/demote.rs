@@ -16,9 +16,9 @@ use ra_ap_hir::{
     Adt, AsAssocItem as _, Crate, FindPathConfig, Module, ModuleDef, PathResolution, Semantics,
     Trait,
 };
-use ra_ap_syntax::ast::{HasGenericParams as _, HasVisibility as _};
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_ide_db::defs::Definition;
+use ra_ap_syntax::ast::{HasGenericParams as _, HasVisibility as _};
 use ra_ap_syntax::{AstNode, Edition, SyntaxKind, SyntaxNode, TextRange, ast};
 use ra_ap_vfs::{FileId, Vfs};
 
@@ -50,10 +50,11 @@ const FIND: FindPathConfig = FindPathConfig {
 
 pub fn run(db: &RootDatabase, vfs: &Vfs, write: bool) -> Result<(), Box<dyn Error>> {
     let sema = Semantics::new(db);
-    let Some(batten) = Crate::all(db)
-        .into_iter()
-        .find(|krate| krate.display_name(db).is_some_and(|name| name.to_string() == "batten"))
-    else {
+    let Some(batten) = Crate::all(db).into_iter().find(|krate| {
+        krate
+            .display_name(db)
+            .is_some_and(|name| name.to_string() == "batten")
+    }) else {
         println!("demote: no batten crate");
         return Ok(());
     };
@@ -101,8 +102,14 @@ pub fn run(db: &RootDatabase, vfs: &Vfs, write: bool) -> Result<(), Box<dyn Erro
                 range: adt_end..adt_end,
                 text: format!("\n\n{inherent}"),
             });
-            edits.entry(impl_file).or_default().push(removal(impl_node.syntax()));
-            edits.entry(trait_file).or_default().push(removal(trait_src.value.syntax()));
+            edits
+                .entry(impl_file)
+                .or_default()
+                .push(removal(impl_node.syntax()));
+            edits
+                .entry(trait_file)
+                .or_default()
+                .push(removal(trait_src.value.syntax()));
             tally.imports += needed.len();
             imports.entry(adt_file).or_default().extend(needed);
             remove_usages(db, &sema, trait_, &mut edits, &mut tally);
@@ -115,7 +122,10 @@ pub fn run(db: &RootDatabase, vfs: &Vfs, write: bool) -> Result<(), Box<dyn Erro
             continue;
         };
         let text: String = wanted.iter().map(|line| format!("{line}\n")).collect();
-        edits.entry(file).or_default().push(Edit { range: at..at, text });
+        edits.entry(file).or_default().push(Edit {
+            range: at..at,
+            text,
+        });
     }
     let mut files = 0_usize;
     if write {
@@ -125,7 +135,12 @@ pub fn run(db: &RootDatabase, vfs: &Vfs, write: bool) -> Result<(), Box<dyn Erro
                 continue;
             };
             let mut text = std::fs::read_to_string(&path)?;
-            list.sort_by(|a, b| b.range.start.cmp(&a.range.start).then(b.range.end.cmp(&a.range.end)));
+            list.sort_by(|a, b| {
+                b.range
+                    .start
+                    .cmp(&a.range.start)
+                    .then(b.range.end.cmp(&a.range.end))
+            });
             let mut floor = usize::MAX;
             for edit in list {
                 // Overlapping edits would corrupt the file: refuse the file.
@@ -196,11 +211,21 @@ fn file_of(db: &RootDatabase, file: ra_ap_hir::HirFileId) -> Option<FileId> {
 }
 
 /// Where an ADT's declaration ends, to insert the inherent impl after it.
-fn adt_end(db: &RootDatabase, sema: &Semantics<'_, RootDatabase>, adt: Adt) -> Option<(FileId, usize)> {
+fn adt_end(
+    db: &RootDatabase,
+    sema: &Semantics<'_, RootDatabase>,
+    adt: Adt,
+) -> Option<(FileId, usize)> {
     let (file, node) = match adt {
-        Adt::Struct(it) => sema.source(it).map(|src| (src.file_id, src.value.syntax().clone()))?,
-        Adt::Enum(it) => sema.source(it).map(|src| (src.file_id, src.value.syntax().clone()))?,
-        Adt::Union(it) => sema.source(it).map(|src| (src.file_id, src.value.syntax().clone()))?,
+        Adt::Struct(it) => sema
+            .source(it)
+            .map(|src| (src.file_id, src.value.syntax().clone()))?,
+        Adt::Enum(it) => sema
+            .source(it)
+            .map(|src| (src.file_id, src.value.syntax().clone()))?,
+        Adt::Union(it) => sema
+            .source(it)
+            .map(|src| (src.file_id, src.value.syntax().clone()))?,
     };
     Some((file_of(db, file)?, usize::from(node.text_range().end())))
 }
@@ -226,7 +251,10 @@ fn removal(node: &SyntaxNode) -> Edit {
 fn leading(node: &SyntaxNode) -> String {
     node.children_with_tokens()
         .take_while(|child| {
-            matches!(child.kind(), SyntaxKind::COMMENT | SyntaxKind::WHITESPACE | SyntaxKind::ATTR)
+            matches!(
+                child.kind(),
+                SyntaxKind::COMMENT | SyntaxKind::WHITESPACE | SyntaxKind::ATTR
+            )
         })
         .map(|child| child.to_string())
         .collect()
@@ -343,7 +371,8 @@ fn needed_imports(
             continue;
         };
         let text = name.text().to_string();
-        if matches!(text.as_str(), "Self" | "self" | "super" | "crate") || in_scope.contains(&text) {
+        if matches!(text.as_str(), "Self" | "self" | "super" | "crate") || in_scope.contains(&text)
+        {
             continue;
         }
         if let Some(PathResolution::Def(def)) = sema.resolve_path(&path)
@@ -401,7 +430,9 @@ fn remove_usages(
             let Some(use_item) = token.parent_ancestors().find_map(ast::Use::cast) else {
                 // A path naming the trait outside a `use`: inside the impl
                 // header it goes with the impl; elsewhere it is left.
-                if !token.parent_ancestors().any(|node| ast::Impl::can_cast(node.kind()) || ast::Trait::can_cast(node.kind())) {
+                if !token.parent_ancestors().any(|node| {
+                    ast::Impl::can_cast(node.kind()) || ast::Trait::can_cast(node.kind())
+                }) {
                     tally.left += 1;
                 }
                 continue;
@@ -410,7 +441,10 @@ fn remove_usages(
                 .use_tree()
                 .is_some_and(|tree| tree.use_tree_list().is_none());
             if single {
-                edits.entry(file).or_default().push(removal(use_item.syntax()));
+                edits
+                    .entry(file)
+                    .or_default()
+                    .push(removal(use_item.syntax()));
                 tally.uses_removed += 1;
             } else {
                 tally.left += 1;
@@ -422,15 +456,25 @@ fn remove_usages(
 
 /// Where new `use` lines go: after the file's last top-level `use`, else
 /// before its first item.
-fn import_point(db: &RootDatabase, sema: &Semantics<'_, RootDatabase>, file: FileId) -> Option<usize> {
+fn import_point(
+    db: &RootDatabase,
+    sema: &Semantics<'_, RootDatabase>,
+    file: FileId,
+) -> Option<usize> {
     let _ = db;
     let source = sema.parse_guess_edition(file);
     let items: Vec<ast::Item> = ra_ap_syntax::ast::HasModuleItem::items(&source).collect();
-    if let Some(last) = items.iter().filter_map(|item| match item {
-        ast::Item::Use(it) => Some(it.syntax().text_range().end()),
-        _ => None,
-    }).last() {
+    if let Some(last) = items
+        .iter()
+        .filter_map(|item| match item {
+            ast::Item::Use(it) => Some(it.syntax().text_range().end()),
+            _ => None,
+        })
+        .last()
+    {
         return Some(usize::from(last) + 1);
     }
-    items.first().map(|item| usize::from(item.syntax().text_range().start()))
+    items
+        .first()
+        .map(|item| usize::from(item.syntax().text_range().start()))
 }

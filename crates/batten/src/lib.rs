@@ -31784,10 +31784,10 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // is what let a validator vouch for override keys the loader drops.
         GenerateCommand::Schema { surface } => match surface {
             crate::surface_table::SchemaSurface::Authority => {
-                writeln!(out, "{}", config::schema()?)?
+                writeln!(out, "{}", config::schema()?)?;
             }
             crate::surface_table::SchemaSurface::Override => {
-                writeln!(out, "{}", config::override_schema()?)?
+                writeln!(out, "{}", config::override_schema()?)?;
             }
             crate::surface_table::SchemaSurface::PolicyInput => {
                 writeln!(out, "{}", policy::tree_input_schema()?)?;

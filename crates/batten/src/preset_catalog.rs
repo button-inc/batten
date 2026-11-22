@@ -31,6 +31,7 @@ pub enum RouteKind {
 }
 
 impl RouteKind {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             RouteKind::Command => "command",
@@ -91,9 +92,11 @@ pub enum Applicability {
 }
 
 impl Applicability {
+    #[must_use]
     pub fn repairs(&self) -> bool {
         !self.is_default()
     }
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Applicability::Advice => "advice",
@@ -2142,6 +2145,7 @@ pub enum RuleScope {
 
 impl RuleScope {
     pub const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             RuleScope::Tree => "tree",
