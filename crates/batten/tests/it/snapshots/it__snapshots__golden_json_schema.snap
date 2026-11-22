@@ -1,5 +1,6 @@
 ---
 source: crates/batten/tests/it/snapshots.rs
+assertion_line: 142
 expression: stdout_of(&output)
 ---
 {
@@ -2701,6 +2702,48 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "modules cut",
+          "id": "modules.cut",
+          "about": "Move a closed set of crate-root modules into a new sibling package, respelling every path, no shim",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": null,
+              "long": "dry-run",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print each path the cut would write or remove, and write nothing"
+            },
+            {
+              "name": "from",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The package directory to cut from, relative to the workspace root (crates/batten)"
+            },
+            {
+              "name": "modules",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The crate-root modules that move, by name"
+            },
+            {
+              "name": "name",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The new package's name; it lands beside the one cut from"
+            }
+          ],
+          "subcommands": []
+        },
         {
           "path": "modules metrics",
           "id": "modules.metrics",

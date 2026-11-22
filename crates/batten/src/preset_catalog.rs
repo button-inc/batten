@@ -2139,7 +2139,7 @@ and remove it, move the item down, or inject it",
         }],
         verdicts: &[
             VendoredVerdict {
-                id: "crate reach unsafe",
+                id: "crate reach unknown",
                 gloss: "a workspace crate reaches one its crate-allow pattern does not admit",
                 class: "A crate boundary is the one dependency rule the compiler enforces, \
 so a `Cargo.toml` edit that adds an edge can turn a wide crate graph back into a deep one \
@@ -2167,7 +2167,7 @@ without --dry-run",
                 applicability: Applicability::Advice,
             },
             VendoredVerdict {
-                id: "crate declare absent",
+                id: "crate declare missing",
                 gloss: "a workspace crate has no crate-allow pattern",
                 class: "Every workspace package declares what it may reach, so a new crate \
 cannot dodge the reach gate by being undeclared. The record shows a package with no \
