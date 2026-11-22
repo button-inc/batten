@@ -734,7 +734,13 @@ fn the_honoured_keys_still_load_together() {
 // pre-commit run of a cheap gate, and a list of stated exceptions is a second
 // authority that goes stale the same way the first one did.
 
-/// The `crates/batten/src/*.rs` entries of `hk.pkl`'s `schema-check` glob.
+/// The `crates/<crate>/src/**.rs` entries of `hk.pkl`'s `schema-check` glob,
+/// as repo-relative paths.
+///
+/// EVERY CRATE, by full path. This read only `crates/batten/src/` until the
+/// crate split moved most derives into `batten-base`, `batten-core` and
+/// `batten-facts`; the census then compared a sliver of the glob against a
+/// sliver of the derives, and the list drifted both ways unseen.
 fn schema_check_globbed_modules() -> Vec<String> {
     let hk = fs::read_to_string(at_root("hk.pkl")).expect("read hk.pkl");
     let start = hk
@@ -747,35 +753,45 @@ fn schema_check_globbed_modules() -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let entry = line.trim().trim_end_matches(',').trim_matches('"');
-            entry
-                .strip_prefix("crates/batten/src/")?
-                .strip_suffix(".rs")
-                .map(str::to_owned)
+            (entry.starts_with("crates/") && entry.contains("/src/") && entry.ends_with(".rs"))
+                .then(|| entry.to_owned())
         })
         .collect();
     modules.sort();
     modules
 }
 
-/// Every module under `crates/batten/src` that derives `JsonSchema`, which is
-/// exactly the set either schema can be reachable from.
+/// Every source file under any `crates/<crate>/src` that derives `JsonSchema`,
+/// as a repo-relative path: exactly the set either schema can be reachable
+/// from. Walks each crate's whole `src` tree, so a derive in a submodule
+/// counts too.
 fn modules_deriving_json_schema() -> Vec<String> {
-    let mut modules: Vec<String> = fs::read_dir(at_root("crates/batten/src"))
-        .expect("read the crate source directory")
-        .map(|entry| entry.expect("read a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .filter(|path| {
-            fs::read_to_string(path)
-                .expect("read a source file")
-                .contains("JsonSchema")
-        })
-        .map(|path| {
-            path.file_stem()
-                .expect("a .rs file has a stem")
-                .to_string_lossy()
-                .into_owned()
-        })
+    let mut pending: Vec<std::path::PathBuf> = fs::read_dir(at_root("crates"))
+        .expect("read the crates directory")
+        .map(|entry| entry.expect("read a directory entry").path().join("src"))
+        .filter(|src| src.is_dir())
         .collect();
+    let root = at_root("");
+    let mut modules: Vec<String> = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read a source directory") {
+            let path = entry.expect("read a directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && fs::read_to_string(&path)
+                    .expect("read a source file")
+                    .contains("JsonSchema")
+            {
+                modules.push(
+                    path.strip_prefix(&root)
+                        .expect("under the repository root")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
     modules.sort();
     modules
 }
