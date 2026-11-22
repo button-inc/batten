@@ -393,7 +393,7 @@ fn the_extension_guide_gives_every_rule_kind_a_row_in_the_table() {
         .collect();
     let missing: Vec<&str> = batten::config_model::RuleKind::ALL
         .iter()
-        .map(|kind| kind.as_str())
+        .map(batten::rules::RuleKindExt::as_str)
         .filter(|token| !rows.iter().any(|row| row.contains(&format!("`{token}`"))))
         .collect();
     assert!(
