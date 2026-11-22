@@ -502,7 +502,6 @@ fn pointer_if_outstanding(landing: &git::Landing, branch: &str) -> Option<Pointe
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn pointer(truncated: bool) -> Pointer {
         Pointer {
             branch: "feature".to_owned(),

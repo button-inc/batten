@@ -455,7 +455,6 @@ pub fn plan(existing: &[Record], incoming: &[Record]) -> Result<(Added, Vec<Reco
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn record(id: &str, class: &str) -> Record {
         Record {
             id: id.to_owned(),
