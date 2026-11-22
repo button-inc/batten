@@ -2702,58 +2702,6 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
-          "path": "modules cycle",
-          "id": "modules.cycle",
-          "about": "Print how many modules the largest cycle of the module graph holds, refusing more than --max",
-          "effect": "read",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "max",
-              "short": null,
-              "long": "max",
-              "takes_value": true,
-              "positional": false,
-              "help": "Refuse when the largest cycle holds more than this many modules (a non-negative integer)"
-            },
-            {
-              "name": "root",
-              "short": null,
-              "long": "root",
-              "takes_value": true,
-              "positional": false,
-              "help": "The crate's source root, the directory holding lib.rs"
-            }
-          ],
-          "subcommands": []
-        },
-        {
-          "path": "modules impls",
-          "id": "modules.impls",
-          "about": "Print how many inherent impls sit away from their type's module, refusing more than --max",
-          "effect": "read",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "max",
-              "short": null,
-              "long": "max",
-              "takes_value": true,
-              "positional": false,
-              "help": "Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)"
-            },
-            {
-              "name": "root",
-              "short": null,
-              "long": "root",
-              "takes_value": true,
-              "positional": false,
-              "help": "The crate's source root, the directory holding lib.rs"
-            }
-          ],
-          "subcommands": []
-        },
-        {
           "path": "modules metrics",
           "id": "modules.metrics",
           "about": "Print every module-graph metric of a source root as one record line",
@@ -2793,32 +2741,6 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "The record file, one `<root> cycle=<n> propagation=<bp> impls=<n> shims=<n>` line per root"
-            }
-          ],
-          "subcommands": []
-        },
-        {
-          "path": "modules shims",
-          "id": "modules.shims",
-          "about": "Print how many re-exports of the crate's own items sit outside its root, refusing more than --max",
-          "effect": "read",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "max",
-              "short": null,
-              "long": "max",
-              "takes_value": true,
-              "positional": false,
-              "help": "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)"
-            },
-            {
-              "name": "root",
-              "short": null,
-              "long": "root",
-              "takes_value": true,
-              "positional": false,
-              "help": "The crate's source root, the directory holding lib.rs"
             }
           ],
           "subcommands": []
@@ -5894,20 +5816,8 @@ expression: stdout_of(&output)
       "path": "modules"
     },
     {
-      "id": "modules.cycle",
-      "path": "modules cycle"
-    },
-    {
-      "id": "modules.impls",
-      "path": "modules impls"
-    },
-    {
       "id": "modules.metrics",
       "path": "modules metrics"
-    },
-    {
-      "id": "modules.shims",
-      "path": "modules shims"
     },
     {
       "id": "mutate.census",

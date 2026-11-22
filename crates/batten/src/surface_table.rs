@@ -2931,8 +2931,7 @@ pub(crate) const STEP_GROUP: FlagDecl = FlagDecl::positional(
     "The graph to run, as the step table's `group` field names it",
 );
 
-/// `--jobs <n>` on `step graph run`: how many rows run at once.
-/// `--root <dir>` on `modules cycle` (CLOUD-2789).
+/// `--root <dir>` on `modules metrics` (CLOUD-2821).
 pub(crate) const MODULES_ROOT: FlagDecl = FlagDecl {
     required: true,
     ..FlagDecl::valued(
@@ -2941,27 +2940,6 @@ pub(crate) const MODULES_ROOT: FlagDecl = FlagDecl {
         "The crate's source root, the directory holding lib.rs",
     )
 };
-
-/// `--max <n>` on `modules cycle` (CLOUD-2789).
-pub(crate) const MODULES_MAX: FlagDecl = FlagDecl::valued(
-    "max",
-    "max",
-    "Refuse when the largest cycle holds more than this many modules (a non-negative integer)",
-);
-
-/// `--max <n>` on `modules impls` (CLOUD-2792).
-pub(crate) const MODULES_IMPLS_MAX: FlagDecl = FlagDecl::valued(
-    "max",
-    "max",
-    "Refuse when more than this many inherent impls sit away from their type, ambiguous names included (a non-negative integer)",
-);
-
-/// `--max <n>` on `modules shims` (CLOUD-2792).
-pub(crate) const MODULES_SHIMS_MAX: FlagDecl = FlagDecl::valued(
-    "max",
-    "max",
-    "Refuse when more than this many re-exports of the crate's own items sit outside its root (a non-negative integer)",
-);
 
 /// `--record <path>` on `modules ratchet` (CLOUD-2821).
 pub(crate) const MODULES_RECORD: FlagDecl = FlagDecl {
@@ -7462,33 +7440,6 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_DISPATCHES,
         effect: Effect::Read,
         flags: &[],
-    },
-    CommandDecl {
-        path: "modules cycle",
-        id: "modules.cycle",
-        about: "Print how many modules the largest cycle of the module graph holds, refusing more than --max",
-        data_channel: false,
-        exits: EXITS_VERDICT,
-        effect: Effect::Read,
-        flags: &[MODULES_ROOT, MODULES_MAX],
-    },
-    CommandDecl {
-        path: "modules impls",
-        id: "modules.impls",
-        about: "Print how many inherent impls sit away from their type's module, refusing more than --max",
-        data_channel: false,
-        exits: EXITS_VERDICT,
-        effect: Effect::Read,
-        flags: &[MODULES_ROOT, MODULES_IMPLS_MAX],
-    },
-    CommandDecl {
-        path: "modules shims",
-        id: "modules.shims",
-        about: "Print how many re-exports of the crate's own items sit outside its root, refusing more than --max",
-        data_channel: false,
-        exits: EXITS_VERDICT,
-        effect: Effect::Read,
-        flags: &[MODULES_ROOT, MODULES_SHIMS_MAX],
     },
     CommandDecl {
         path: "modules metrics",

@@ -327,81 +327,6 @@ fn sources(root: &Path) -> anyhow::Result<Sources> {
     Ok((modules, files))
 }
 
-/// One `modules` gate: parse `--max`, measure, print the measure's one line,
-/// and refuse (exit 2, the verdict) a count above `max`.
-///
-/// THE ONE EXIT DISCIPLINE for every `modules` verb: `max` that is not a
-/// non-negative integer is a usage error (1); a root that cannot be read or a
-/// file that does not parse is could-not-look (3), with its reason on `err`.
-/// `measure` returns the gated count and the line that reports it, a count and
-/// never the members (rule 4); `remedy` ends the refusal.
-fn gate(
-    verb: &str,
-    max: Option<&str>,
-    remedy: &str,
-    out: &mut dyn std::io::Write,
-    err: &mut dyn std::io::Write,
-    measure: impl FnOnce() -> anyhow::Result<(usize, String)>,
-) -> anyhow::Result<crate::exit::ExitCode> {
-    use crate::exit::ExitCode;
-    let max = match max.map(str::parse::<usize>) {
-        None => None,
-        Some(Ok(max)) => Some(max),
-        Some(Err(_)) => {
-            writeln!(err, "modules {verb}: --max takes a non-negative integer")?;
-            return Ok(ExitCode::Usage);
-        }
-    };
-    let (count, line) = match measure() {
-        Ok(measured) => measured,
-        Err(reason) => {
-            writeln!(
-                err,
-                "modules {verb}: could not read the module graph: {reason}"
-            )?;
-            return Ok(ExitCode::Internal);
-        }
-    };
-    writeln!(out, "modules {verb}: {line}")?;
-    if let Some(max) = max.filter(|max| count > *max) {
-        writeln!(
-            err,
-            "modules {verb}: {count} is more than the committed {max}; {remedy}"
-        )?;
-        return Ok(ExitCode::Violation);
-    }
-    Ok(ExitCode::Success)
-}
-
-/// `modules cycle`: print the largest component's size, and refuse when it
-/// holds more than `max` modules. One line on `out`, `modules cycle: <n>
-/// module(s) in the largest component`.
-///
-/// # Errors
-///
-/// `out` or `err` cannot be written.
-pub fn run_cycle(
-    root: &Path,
-    max: Option<&str>,
-    out: &mut dyn std::io::Write,
-    err: &mut dyn std::io::Write,
-) -> anyhow::Result<crate::exit::ExitCode> {
-    gate(
-        "cycle",
-        max,
-        "break a cycle rather than grow one",
-        out,
-        err,
-        || {
-            let largest = read(root)?.largest_component();
-            Ok((
-                largest,
-                format!("{largest} module(s) in the largest component"),
-            ))
-        },
-    )
-}
-
 /// How many inherent impls sit away from their type (CLOUD-2792).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImplCensus {
@@ -1414,31 +1339,6 @@ fn self_type_path(found: &ast::Impl) -> Option<Vec<String>> {
     }
 }
 
-/// `modules impls`: print how many inherent impls sit away from their type,
-/// and refuse when outside plus ambiguous is more than `max` (CLOUD-2792).
-///
-/// # Errors
-///
-/// `out` or `err` cannot be written.
-pub fn run_impls(
-    root: &Path,
-    max: Option<&str>,
-    out: &mut dyn std::io::Write,
-    err: &mut dyn std::io::Write,
-) -> anyhow::Result<crate::exit::ExitCode> {
-    let remedy = "put the impl beside its type, or make it a free function where it is used";
-    gate("impls", max, remedy, out, err, || {
-        let census = impl_census(root)?;
-        Ok((
-            census.outside + census.ambiguous,
-            format!(
-                "{} outside their type's module, {} ambiguous",
-                census.outside, census.ambiguous
-            ),
-        ))
-    })
-}
-
 /// How many re-exports a crate makes of its own items outside its root.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ShimCensus {
@@ -1485,31 +1385,6 @@ pub fn shim_census(root: &Path) -> anyhow::Result<ShimCensus> {
         }
     }
     Ok(census)
-}
-
-/// `modules shims`: print how many re-exports of the crate's own items sit
-/// outside its root, and refuse more than `max` (CLOUD-2792).
-///
-/// # Errors
-///
-/// `out` or `err` cannot be written.
-pub fn run_shims(
-    root: &Path,
-    max: Option<&str>,
-    out: &mut dyn std::io::Write,
-    err: &mut dyn std::io::Write,
-) -> anyhow::Result<crate::exit::ExitCode> {
-    let remedy = "name the item at its home and delete the re-export";
-    gate("shims", max, remedy, out, err, || {
-        let census = shim_census(root)?;
-        Ok((
-            census.reexports,
-            format!(
-                "{} re-export(s), {} aliased",
-                census.reexports, census.aliased
-            ),
-        ))
-    })
 }
 
 /// Every module-graph quality metric of one source root (CLOUD-2821), each an
@@ -2438,9 +2313,9 @@ mod tests {
     }
 
     /// Fails by: an impl whose type the census cannot resolve (named through
-    /// a glob) hidden, rather than counted ambiguous and gated.
+    /// a glob) hidden, rather than counted ambiguous.
     #[test]
-    fn an_impl_the_census_cannot_resolve_is_ambiguous_and_gated() {
+    fn an_impl_the_census_cannot_resolve_is_ambiguous() {
         let root = crate_root(
             "impls-ambiguous",
             &[
@@ -2456,9 +2331,6 @@ mod tests {
                 ambiguous: 1
             }
         );
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run_impls(&root, Some("0"), &mut out, &mut err).unwrap();
-        assert_eq!(code, crate::exit::ExitCode::Violation);
     }
 
     /// Fails by: `lib.rs` treated as no module, so an impl elsewhere of a type
