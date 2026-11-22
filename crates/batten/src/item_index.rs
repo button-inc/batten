@@ -453,84 +453,123 @@ pub fn moved_items(before: &Index, after: &Index) -> BTreeMap<Key, Key> {
 #[must_use]
 pub fn canonical(body: &str, krate: &str, index: &Index, moves: &BTreeMap<Key, Key>) -> String {
     let mut out = String::with_capacity(body.len());
-    let bytes = body.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        let rest = &body[at..];
-        if let Some(len) = literal_len(rest) {
-            out.push_str(&rest[..len]);
-            at += len;
+    let mut last = 0;
+    for (at, segments, len) in token_paths(body) {
+        let Some(((file, name), used)) = index.resolve(krate, &segments) else {
             continue;
+        };
+        let (file, name) = moves
+            .get(&(file.clone(), name.clone()))
+            .cloned()
+            .unwrap_or((file, name));
+        out.push_str(&body[last..at]);
+        out.push('⟨');
+        out.push_str(&file);
+        out.push('#');
+        out.push_str(&name);
+        out.push('⟩');
+        for segment in &segments[used.min(segments.len())..] {
+            out.push_str("::");
+            out.push_str(segment);
         }
-        let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
-        if starts_path
-            && let Some((segments, len)) = path_at(rest)
-            && let Some(((file, name), used)) = index.resolve(krate, &segments)
-        {
-            let (file, name) = moves
-                .get(&(file.clone(), name.clone()))
-                .cloned()
-                .unwrap_or((file, name));
-            out.push('⟨');
-            out.push_str(&file);
-            out.push('#');
-            out.push_str(&name);
-            out.push('⟩');
-            for segment in &segments[used.min(segments.len())..] {
-                out.push_str("::");
-                out.push_str(segment);
-            }
-            at += len;
-            continue;
-        }
-        let next = rest.chars().next().map_or(1, char::len_utf8);
-        out.push_str(&rest[..next]);
-        at += next;
+        last = at + len;
     }
+    out.push_str(&body[last..]);
     out
+}
+
+/// Every `::`-joined path of two or more identifiers in `body`, as its byte
+/// offset, segments and length, read off the REAL Rust tokenizer (plan item 4c:
+/// this replaced a hand lexer that guessed where literals and comments end).
+///
+/// The body is lexed inside a macro token tree (`m!{…}`), so a fragment that is
+/// no item (a bare path, a block) still tokenizes, and every token of the file
+/// is read whatever the tree around it, so an unbalanced brace drops nothing. A
+/// string, char or comment is ONE token whose text no identifier test accepts,
+/// so a path inside a literal is never rewritten: the test asserts on that data.
+/// The path grammar is `path_at`'s: identifiers (no leading digit) joined by an
+/// adjacent `::`, starting where the previous token is not glued on as an
+/// identifier or a colon.
+fn token_paths(body: &str) -> Vec<(usize, Vec<String>, usize)> {
+    use ra_ap_syntax::{AstNode as _, SyntaxKind};
+    const OPEN: &str = "m!{";
+    let wrapped = format!("{OPEN}{body}\n}}");
+    let parse = batten_facts::source::rust_parse(&wrapped, Edition::Edition2024);
+    let tokens: Vec<(SyntaxKind, String, usize, usize)> = parse
+        .tree()
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .map(|token| {
+            let range = token.text_range();
+            (
+                token.kind(),
+                token.text().to_owned(),
+                usize::from(range.start()),
+                usize::from(range.end()),
+            )
+        })
+        .filter(|(_, _, start, end)| *start >= OPEN.len() && *end <= OPEN.len() + body.len())
+        .collect();
+    let ident = |kind: SyntaxKind, text: &str| {
+        !matches!(
+            kind,
+            SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+        ) && text.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    // `::` as one token, or as two adjacent `:` tokens, ending where it ends.
+    let colons = |at: usize| -> Option<(usize, usize)> {
+        let (kind, _, start, end) = tokens.get(at)?;
+        if *kind == SyntaxKind::COLON2 {
+            return Some((at + 1, *end));
+        }
+        let (next, _, next_start, next_end) = tokens.get(at + 1)?;
+        (*kind == SyntaxKind::COLON && *next == SyntaxKind::COLON && *next_start == *end)
+            .then_some((at + 2, *next_end))
+            .filter(|_| *start < *next_end)
+    };
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < tokens.len() {
+        let (kind, text, start, end) = &tokens[at];
+        let glued = at > 0 && {
+            let (prev_kind, prev_text, _, prev_end) = &tokens[at - 1];
+            *prev_end == *start
+                && (ident(*prev_kind, prev_text)
+                    || matches!(prev_kind, SyntaxKind::COLON | SyntaxKind::COLON2))
+        };
+        if glued || !ident(*kind, text) {
+            at += 1;
+            continue;
+        }
+        let mut segments = vec![text.clone()];
+        let mut stop = *end;
+        let mut next = at + 1;
+        while let Some((after, colon_end)) = colons(next).filter(|_| tokens[next].2 == stop) {
+            match tokens.get(after) {
+                Some((kind, text, seg_start, seg_end))
+                    if *seg_start == colon_end && ident(*kind, text) =>
+                {
+                    segments.push(text.clone());
+                    stop = *seg_end;
+                    next = after + 1;
+                }
+                _ => break,
+            }
+        }
+        if segments.len() >= 2 {
+            found.push((start - OPEN.len(), segments, stop - start));
+            at = next;
+        } else {
+            at += 1;
+        }
+    }
+    found
 }
 
 fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-/// The length of a string, raw string or char literal at the start of `text`.
-fn literal_len(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    if text.starts_with('"') {
-        let mut at = 1;
-        while at < bytes.len() {
-            match bytes[at] {
-                b'\\' => at += 2,
-                b'"' => return Some(at + 1),
-                _ => at += 1,
-            }
-        }
-        return Some(bytes.len());
-    }
-    if let Some(after) = text.strip_prefix('r') {
-        let hashes = after.bytes().take_while(|&b| b == b'#').count();
-        if after[hashes..].starts_with('"') {
-            let close = format!("\"{}", "#".repeat(hashes));
-            let body = &after[hashes + 1..];
-            return Some(
-                body.find(&close)
-                    .map_or(text.len(), |end| 1 + hashes + 1 + end + close.len()),
-            );
-        }
-    }
-    if text.starts_with('\'') {
-        // A char literal closes within a few characters; a lifetime does not.
-        let (close, _) = text[1..]
-            .char_indices()
-            .take(10)
-            .find(|&(_, c)| c == '\'')?;
-        let inner = &text[1..=close];
-        if inner.chars().count() == 1 || inner.starts_with('\\') {
-            return Some(close + 2);
-        }
-    }
-    None
 }
 
 /// A `::`-separated path of two or more identifiers at the start of `text`,
@@ -877,60 +916,52 @@ fn regroup_uses(text: &str, reader: &Reader, index: &Index) -> String {
 /// open a string that swallows the code after it, and its paths would be
 /// silently left at their shims.
 fn paths_in(body: &str) -> Vec<(usize, Vec<String>, usize)> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while at < body.len() {
-        let rest = &body[at..];
-        let comment = if rest.starts_with("//") {
-            Some(rest.find('\n').unwrap_or(rest.len()))
-        } else if rest.starts_with("/*") {
-            Some(rest.find("*/").map_or(rest.len(), |end| end + 2))
-        } else {
-            None
-        };
-        if let Some(len) = comment {
-            scan_paths(body, at, at + len, false, &mut found);
-            at += len;
-            continue;
-        }
-        let next = scan_paths(body, at, body.len(), true, &mut found);
-        at = next;
-    }
-    found
-}
-
-/// Paths in `body[from..to]`, appended to `found`. With `code`, a literal is
-/// skipped and the scan stops at a comment's start, returning where it
-/// stopped; without, everything up to `to` is read as path or prose.
-fn scan_paths(
-    body: &str,
-    from: usize,
-    to: usize,
-    code: bool,
-    found: &mut Vec<(usize, Vec<String>, usize)>,
-) -> usize {
-    let bytes = body.as_bytes();
-    let mut at = from;
-    while at < to {
-        let rest = &body[at..to];
-        if code {
-            if rest.starts_with("//") || rest.starts_with("/*") {
-                return at;
-            }
-            if let Some(len) = literal_len(rest) {
+    let mut found = token_paths(body);
+    for (start, end) in comment_spans(body) {
+        let mut at = start;
+        while at < end {
+            let rest = &body[at..end];
+            let bytes = body.as_bytes();
+            let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
+            if starts_path && let Some((segments, len)) = path_at(rest) {
+                found.push((at, segments, len));
                 at += len;
                 continue;
             }
+            at += rest.chars().next().map_or(1, char::len_utf8);
         }
-        let starts_path = at == 0 || !(is_ident_byte(bytes[at - 1]) || bytes[at - 1] == b':');
-        if starts_path && let Some((segments, len)) = path_at(rest) {
-            found.push((at, segments, len));
-            at += len;
-            continue;
-        }
-        at += rest.chars().next().map_or(1, char::len_utf8);
     }
-    to
+    found.sort_by_key(|(at, ..)| *at);
+    found
+}
+
+/// Every comment's byte span in `body`, from the real tokenizer (the same
+/// macro-wrapped lex as [`token_paths`]).
+fn comment_spans(body: &str) -> Vec<(usize, usize)> {
+    use ra_ap_syntax::{AstNode as _, SyntaxKind};
+    const OPEN: &str = "m!{";
+    let wrapped = format!("{OPEN}{body}\n}}");
+    let parse = batten_facts::source::rust_parse(&wrapped, Edition::Edition2024);
+    parse
+        .tree()
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        // A doc comment is its own kind (`///`, `//!`), and its paths are the
+        // links a respelling must follow too.
+        .filter(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+            )
+        })
+        .map(|token| {
+            let range = token.text_range();
+            (usize::from(range.start()), usize::from(range.end()))
+        })
+        .filter(|(start, end)| *start >= OPEN.len() && *end <= OPEN.len() + body.len())
+        .map(|(start, end)| (start - OPEN.len(), end - OPEN.len()))
+        .collect()
 }
 
 /// Pass 2: every path through a shim, respelled at the shim's target.
