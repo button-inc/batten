@@ -162,6 +162,7 @@ const PRESET_SCOPES: &[(&str, &[bool])] = &[
     ("trunk-based", &[false]),
     ("lease-asserted", &[false]),
     ("linear-history", &[false]),
+    ("rust", &[true]),
     ("rust-quality", &[true]),
     ("red-head", &[false]),
     ("git", &[false]),
