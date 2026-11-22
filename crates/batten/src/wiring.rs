@@ -1172,7 +1172,6 @@ fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// Build a claude-code merged surface carrying `commands` on one event.
     fn surface(commands: &[&str]) -> serde_json::Value {
         serde_json::json!({

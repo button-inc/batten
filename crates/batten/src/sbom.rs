@@ -1640,7 +1640,6 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// The binary reaches syft absolute and never verbatim (CLOUD-2563): a
     /// `\\?\` prefix is what `canonicalize` returns on Windows, and syft scanned
     /// nothing from it. Runs on the `windows` PR leg, where the prefix would appear.

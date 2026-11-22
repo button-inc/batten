@@ -132,7 +132,6 @@ pub fn apply(dir: &Path, dry_run: bool) -> Result<Outcome> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// The template has to survive the loader it is written for. A starter that
     /// does not parse is the one defect that makes every other property moot.
     #[test]

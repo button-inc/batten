@@ -927,7 +927,6 @@ pub fn adopt(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// Fails by: readiness answered as a constant rather than by the one
     /// definition of Ready.
     #[test]

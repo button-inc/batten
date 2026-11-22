@@ -2086,7 +2086,6 @@ fn frame(text: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A remote answering the handshake with `session` and the notification
     /// with `acknowledged`, recording the session header each call carried.
     fn serving_mcp(

@@ -609,7 +609,6 @@ impl Report {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A capture whose digest and count are honest, so a test that is not about
     /// the capture gates does not trip them.
     fn capture(body: &str) -> Capture {

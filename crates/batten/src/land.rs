@@ -6934,7 +6934,6 @@ mod tests {
 mod hold_tests {
     use super::{Hold, Step};
     #[cfg(test)]
-
     /// Fails by: a lap that keeps the last lap's phases, or records no entry.
     #[test]
     fn a_lap_opens_with_its_entry_and_no_phases() {
