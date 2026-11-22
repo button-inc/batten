@@ -25062,6 +25062,11 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
 /// Branch-keyed, so a landed branch's journal retires with it.
 const DIRECTIVES: &str = "directives";
 
+/// The record family holding a branch's design corrections, written by
+/// `batten record named corrections` and pointed at after a compaction beside
+/// the directives journal (plan item 4a).
+const CORRECTIONS: &str = "corrections";
+
 /// Journal the operator's message, verbatim, as it is given (CLOUD-2811).
 ///
 /// Only `UserPromptSubmit`: a system reminder or a hook notice is not the
@@ -25113,18 +25118,31 @@ fn report_directives(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advic
     ) else {
         return;
     };
-    let journal = recorder::record_path(&git_dir, DIRECTIVES, &branch, None);
-    let Ok(text) = std::fs::read_to_string(&journal) else {
-        return;
+    // Two records survive a compaction the same way (plan item 4a): what the
+    // operator said, journaled per prompt, and the design corrections found on
+    // the branch, kept by `record named corrections`. Each present one is a
+    // count subject and a path subject; neither's text is emitted.
+    let lines = |path: &Path| {
+        std::fs::read_to_string(path)
+            .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
+            .unwrap_or(0)
     };
-    let count = text.lines().filter(|line| !line.trim().is_empty()).count();
-    if count == 0 {
+    let journal = recorder::record_path(&git_dir, DIRECTIVES, &branch, None);
+    let corrections = record::family_path(&git_dir, &branch, CORRECTIONS);
+    let mut subjects = Vec::new();
+    for (path, noun) in [
+        (&journal, "operator message(s)"),
+        (&corrections, "design correction line(s)"),
+    ] {
+        let count = lines(path);
+        if count > 0 {
+            subjects.push(crate::verdict::artifact(&format!("{count} {noun}")));
+            subjects.push(crate::verdict::artifact(&path.display().to_string()));
+        }
+    }
+    if subjects.is_empty() {
         return;
     }
-    let subjects = [
-        crate::verdict::artifact(&format!("{count} operator message(s)")),
-        crate::verdict::artifact(&journal.display().to_string()),
-    ];
     push_finding(
         advice,
         severity::AdvisoryTier::Caution,
