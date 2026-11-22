@@ -750,17 +750,40 @@ fn walk_spawns(
                 record(at, &[program]);
             }
         } else if let Some(tuple) = ast::TupleExpr::cast(node.clone()) {
-            if let Some((at, argv)) = sequence(tuple.fields()) {
+            if !field_value(&node)
+                && let Some((at, argv)) = sequence(tuple.fields())
+            {
                 record(at, &argv);
             }
         } else if let Some(array) = ast::ArrayExpr::cast(node.clone()) {
-            if let Some((at, argv)) = sequence(array.exprs()) {
+            if !field_value(&node)
+                && let Some((at, argv)) = sequence(array.exprs())
+            {
                 record(at, &argv);
             }
         } else if let Some(mac) = ast::MacroCall::cast(node.clone()) {
             walk_macro(&mac, text, base, found);
         }
     }
+}
+
+/// Whether a sequence literal is a struct field's VALUE (`read: &["bash",
+/// "command"]`), looked through any `&`. A field holding names is data a type
+/// declares, not an argv handed to a spawn: `hook.rs`'s `COPILOT_ENTRY` names
+/// the keys a host writes, and read as an argv it was a false `shell write
+/// other`. A spawn's argv is a call's argument or a binding, never a field.
+fn field_value(node: &ra_ap_syntax::SyntaxNode) -> bool {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast;
+    let mut parent = node.parent();
+    while let Some(at) = parent.clone() {
+        if ast::RefExpr::can_cast(at.kind()) {
+            parent = at.parent();
+            continue;
+        }
+        return ast::RecordExprField::can_cast(at.kind());
+    }
+    false
 }
 
 /// A macro body is a token tree to the parser. One whose body is comma-separated
