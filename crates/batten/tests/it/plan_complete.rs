@@ -396,3 +396,63 @@ fn recording_one_entry_keeps_the_others() {
         "--replace rewrites the store"
     );
 }
+
+/// CLOUD-2810: claiming a row records each bullet under its "Mechanism
+/// (decided)" heading as a `pending` plan entry `<row>-<n>`, so the lap is held
+/// until each is built; re-claiming keeps a completed entry completed.
+///
+/// Fails by: no entries recorded, a continuation line counted as a bullet, a
+/// bullet outside the section counted, or a re-claim reopening a completed one.
+#[test]
+fn each_decided_mechanism_bullet_is_a_plan_entry() {
+    let body = format!(
+        "{}\n## Mechanism (decided)\n\n\
+         * **First.** One bullet.\n  continued, not a bullet.\n\
+         * **Second.** Two.\n\
+         - **Third.** Three.\n\n\
+         **Acceptance**\n\n* not a mechanism bullet\n",
+        crate::claim::refined_body()
+    );
+    let (dir, payload) = crate::claim::ready_to_pull_with("plan-mechanism", &body);
+    let output = crate::claim::check(&dir, &payload, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert!(
+        common::stdout(&output).contains("3 decided-mechanism plan entr(ies)"),
+        "{}",
+        common::stdout(&output)
+    );
+    let store = branch_plan_store(&dir);
+    for n in 1..=3 {
+        assert!(store.contains(&format!("CLOUD-1-{n} pending")), "{store}");
+    }
+    assert!(
+        !store.contains("CLOUD-1-4"),
+        "only the section's bullets: {store}"
+    );
+
+    record_plan(&dir, "CLOUD-1-1 completed\n", false);
+    let again = crate::claim::check(&dir, &payload, &["--takeover"]);
+    assert_eq!(again.status.code(), Some(0), "{}", common::stderr(&again));
+    let store = branch_plan_store(&dir);
+    assert!(
+        store.contains("CLOUD-1-1 completed"),
+        "a re-claim keeps it: {store}"
+    );
+}
+
+/// The plan store of whatever branch `dir` has checked out, through the
+/// engine's own path derivation ([`plan_store`] is keyed on `work`).
+fn branch_plan_store(dir: &Path) -> String {
+    let git_dir = common::git_in(dir, &["rev-parse", "--absolute-git-dir"]);
+    let git_dir = Path::new(git_dir.trim());
+    let branch = common::git_in(dir, &["branch", "--show-current"]);
+    let branch = branch.trim();
+    let claim = batten::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
+    fs::read_to_string(batten::recorder::record_path(
+        git_dir,
+        "plan",
+        branch,
+        claim.as_deref(),
+    ))
+    .expect("the plan store")
+}

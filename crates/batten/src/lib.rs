@@ -8763,6 +8763,30 @@ fn run_claim_check(
             Some(base.as_str()),
             &crate::clock::rfc3339_utc(now_unix()),
         )?;
+        // A DECIDED MECHANISM IS PLAN ENTRIES, not prose nothing checks
+        // (CLOUD-2810): each bullet is a `pending` `<row>-<n>`, held by `plan
+        // declare held` until it is built. After the mint, so the entries key on
+        // the claim the receipt just recorded.
+        if let Ok(git_dir) = git::git_dir(repo) {
+            let rows: Vec<(&str, &str)> = issues
+                .iter()
+                .map(|issue| {
+                    (
+                        issue.id.as_str(),
+                        issue.description.as_deref().unwrap_or(""),
+                    )
+                })
+                .collect();
+            let added = record::plan_mechanisms(&git_dir, &branch, &rows)?;
+            if !json && added > 0 {
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    out,
+                    &format!("claim check: {added} decided-mechanism plan entr(ies) recorded"),
+                )?;
+            }
+        }
     }
     if !json {
         // Not under `-J`, for the reason `ready lint` states: stdout is one
