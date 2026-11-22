@@ -632,7 +632,7 @@ fn every_native_class_is_raised_by_production_code() {
             let words: Vec<String> = tree
                 .syntax()
                 .children_with_tokens()
-                .filter_map(|element| element.into_token())
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
                 .filter(|token| !token.kind().is_trivia())
                 .map(|token| token.text().to_owned())
                 .collect();
