@@ -734,6 +734,10 @@ pub enum Fact {
     /// CLOUD-1009 D4 nodes with amendment A2's counts (CLOUD-1008): Rust
     /// through the one lossless parse, Rego through regorus.
     Units,
+    /// The per-file facts a row declares, acquired at its declared `base` rev
+    /// instead of the working tree: head against base, read from git objects
+    /// (plan item 4, CLOUD-1008's base side; 4b's Rego ratchet reads it).
+    Base,
     /// Which module a **declared** Rust source file reaches, resolved through the
     /// crate root's own re-export table (CLOUD-762).
     Uses,
@@ -1005,6 +1009,14 @@ pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
 /// source; the preset reading it decides (CLOUD-2821). A file its parser
 /// refuses is [`Look::CouldNotLook`], never an empty node set.
 pub const UNITS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Base`] — the per-file facts a row declares, at its `base` rev.
+///
+/// `read` x `check`, for [`UNITS`]' reason, and read from git OBJECTS rather
+/// than the working tree, so a base side cannot be changed by an edit in
+/// flight. A path the base does not hold, or whose blob its parser refuses, is
+/// absent — could-not-look — never an empty node set.
+pub const BASE: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Uses`] — a declared Rust file's `use` edges, resolved (CLOUD-762).
 ///
@@ -1629,6 +1641,7 @@ impl Fact {
         Fact::Extracted,
         Fact::Invocations,
         Fact::Units,
+        Fact::Base,
         Fact::Uses,
         Fact::Symbols,
         Fact::Review,
@@ -1683,6 +1696,7 @@ impl Fact {
             Fact::Extracted => "extracted",
             Fact::Invocations => "invocations",
             Fact::Units => "units",
+            Fact::Base => "base",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
             Fact::Review => "review",
@@ -1745,6 +1759,7 @@ impl Fact {
             Fact::Extracted => EXTRACTED,
             Fact::Invocations => INVOCATIONS,
             Fact::Units => UNITS,
+            Fact::Base => BASE,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
@@ -1839,6 +1854,7 @@ impl Fact {
             | Fact::Extracted
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review
@@ -1946,6 +1962,7 @@ impl Fact {
             Fact::Invocations => Some("invocations"),
             // Tree-only for `Invocations`' reason: a parse per declared file.
             Fact::Units => Some("units"),
+            Fact::Base => Some("base"),
             Fact::Uses => Some("uses"),
             // The resolved-symbol tier (CLOUD-760). Tree surface like the two
             // above, and `Cost::Effect` where they are `Read` — the cost axis is
@@ -2052,6 +2069,7 @@ impl Fact {
             | Fact::Traversals
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Tracked
             | Fact::GitIndex
@@ -2158,6 +2176,20 @@ impl Fact {
                     "type": "object",
                     "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
                     "required": ["nodes"],
+                },
+            }),
+            Fact::Base => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+                "properties": {
+                    "units": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                            "required": ["nodes"],
+                        },
+                    },
                 },
             }),
             Fact::Invocations => serde_json::json!({
@@ -2526,6 +2558,7 @@ impl Fact {
             | Fact::Extracted
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -2600,6 +2633,7 @@ impl Fact {
             | Fact::External
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Produced
             | Fact::Symbols
@@ -2823,6 +2857,7 @@ impl Fact {
             | Fact::Prospective
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3052,6 +3087,7 @@ impl Fact {
             | Fact::Produced
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Symbols
             | Fact::Plan
@@ -3133,6 +3169,7 @@ impl Fact {
             | Fact::Extracted
             | Fact::Invocations
             | Fact::Units
+            | Fact::Base
             | Fact::Uses
             | Fact::Symbols
             | Fact::Review

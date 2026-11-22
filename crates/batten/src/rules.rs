@@ -3448,6 +3448,9 @@ pub(crate) enum Wanted {
     Invocations,
     /// Parsed by its language's backend, reduced to unit nodes.
     Units,
+    /// A declared unit path read at the row's `base` rev (plan item 4). Keyed
+    /// `<rev>:<path>`, git's own spelling, since two rows may name two bases.
+    BaseUnits,
     /// Parsed as Rust, reduced to `use` edges.
     Uses,
 }
@@ -3783,6 +3786,8 @@ pub(crate) fn want_for(path: &str, wanted: Wanted) -> Option<Want> {
         Wanted::Invocations => Some(Want::Invocations),
         Wanted::Uses => Some(Want::Uses),
         Wanted::Units => Some(Want::Units),
+        // Read from git objects by `acquire_declared`, never from the file.
+        Wanted::BaseUnits => None,
         Wanted::Document => crate::facts::Format::for_path(path).map(Want::Parsed),
     }
 }
@@ -4120,6 +4125,26 @@ pub(crate) fn acquire_declared(
                 // put the shape of a private tree into an error message.
                 refuse_over_budget(cache.len(), READ_BUDGET)?;
                 let acquired = acquire(root, &key.0, want_for(&key.0, form));
+                cache.insert(key, acquired);
+            }
+        }
+        // THE BASE SIDE (plan item 4): each declared unit path read at the row's
+        // `base` rev, from git OBJECTS, so an edit in flight cannot change it.
+        // Keyed `<rev>:<path>`, and memoised by content through `unit_nodes`,
+        // so a base every branch shares is parsed once across sessions.
+        if let Some(base) = rule.base.as_deref() {
+            for path in declared_units(rule, files).unwrap_or_default() {
+                let key = (format!("{base}:{path}"), Wanted::BaseUnits);
+                if cache.contains_key(&key) {
+                    continue;
+                }
+                refuse_over_budget(cache.len(), READ_BUDGET)?;
+                let acquired = match crate::git::read_at(root, base, &path) {
+                    Ok(crate::git::BaseBlob::Found { text, .. }) => unit_nodes(&path, &text)
+                        .map_or(Acquired::No(NotAcquired::Unparsed), Acquired::Units),
+                    Ok(_) => Acquired::No(NotAcquired::Absent),
+                    Err(_) => Acquired::No(NotAcquired::Unreadable),
+                };
                 cache.insert(key, acquired);
             }
         }
@@ -4620,6 +4645,11 @@ pub(crate) struct Projected {
     pub call_sites: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Units`] — path -> its D4 unit nodes (CLOUD-1008).
     pub units: serde_json::Map<String, serde_json::Value>,
+    /// The base side of the unit family (plan item 4): path -> `{nodes}` at the
+    /// row's `base` rev. A path the base does not hold, or whose blob its parser
+    /// refused, is absent, and is NOT a missing path of the row: a file new on
+    /// this branch is the ordinary case.
+    pub base_units: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Uses`] — path -> its resolved `use` edges.
     pub use_edges: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::External`] — declared id -> parsed node.
@@ -4664,6 +4694,7 @@ fn project_paths(
         read_lines: serde_json::Map::new(),
         call_sites: serde_json::Map::new(),
         units: serde_json::Map::new(),
+        base_units: serde_json::Map::new(),
         use_edges: serde_json::Map::new(),
         external_files: serde_json::Map::new(),
         staged_nodes: serde_json::Map::new(),
@@ -4712,6 +4743,16 @@ fn project_paths(
                     out.missing.push(path.clone());
                     out.causes.push((path.clone(), why));
                 }
+            }
+        }
+    }
+    if let Some(base) = declared.base {
+        for path in declared.units {
+            if let Some(Acquired::Units(nodes)) =
+                cache.get(&(format!("{base}:{path}"), Wanted::BaseUnits))
+            {
+                out.base_units
+                    .insert(path.clone(), serde_json::json!({"nodes": nodes}));
             }
         }
     }
@@ -5291,6 +5332,9 @@ pub(crate) fn tree_document(
             }
             crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
             crate::facts::Fact::Units => serde_json::Value::Object(std::mem::take(&mut projected.units)),
+            crate::facts::Fact::Base => {
+                serde_json::json!({"units": std::mem::take(&mut projected.base_units)})
+            }
             // CLOUD-1167. Keyed by the row's declared id, so an id this row did
             // not name is simply not here — the negative half that makes this a
             // projection of a declared set rather than a filesystem scan.
@@ -5697,6 +5741,7 @@ fn policy_rule(
             invocations: &declared_invocation_paths,
             uses: &declared_use_paths,
             units: &declared_unit_paths,
+            base: rule.base.as_deref(),
             staged: &rule.staged,
             staged_format: rule.format,
             external: &rule.external,
@@ -10468,6 +10513,7 @@ mod tests {
                 invocations: &[],
                 uses: &[],
                 units: &[],
+                base: None,
                 staged: &[],
                 staged_format: None,
                 external: &[],
@@ -11090,6 +11136,7 @@ mod tests {
                 invocations: &["subject.rs".to_owned()],
                 uses: &[],
                 units: &[],
+                base: None,
                 staged: &[],
                 staged_format: None,
                 external: &[],
@@ -17887,6 +17934,7 @@ mod half_tests {
                 Fact::Staged,
                 Fact::Invocations,
                 Fact::Units,
+                Fact::Base,
                 Fact::Uses,
             ],
             "a fact joins the tree half only by an edit here, never by default"
