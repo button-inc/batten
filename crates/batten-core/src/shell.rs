@@ -5,6 +5,14 @@
 //! A leaf below `hook` (CLOUD-2789), which judges what this reads: a parser
 //! names no policy, so the modules that only need the words (`testing`, the
 //! census) do not reach up into the hooks.
+//!
+//! [`logic`] is the one detector deciding whether a text is shell logic on the
+//! same parser's AST (CLOUD-2625, ported from #1278's `crate::shell`), beside
+//! the parse it reads rather than above it.
+
+mod detector;
+
+pub use detector::{ShellKind, Verdict, kind_name, logic, shebang, shell_path};
 
 /// Every command a shell text runs, each as its words with quotes resolved and
 /// comments dropped, with the here-doc and here-string text fed to its stdin,

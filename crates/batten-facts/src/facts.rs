@@ -761,6 +761,9 @@ pub enum Fact {
     /// How the **declared** globs' paths differ from a **declared** base rev:
     /// added, edited, deleted (CLOUD-1059).
     BaseDelta,
+    /// Which lines of each declared `[census.shell]` home, and of each shell
+    /// file, are shell logic, on both sides of the delta (CLOUD-2625).
+    Shell,
     /// The lines a **declared** `[[recorder]]` accumulated on this branch
     /// (CLOUD-1051).
     Records,
@@ -1537,6 +1540,18 @@ pub const REVIEW: Class = Class::new(Cost::Effect, Surface::Check);
 /// a migration gate needs to know WHICH files moved and never what they say.
 pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Shell`] — the shell detector's answer over the declared homes'
+/// lines, on both sides of the delta (CLOUD-2625).
+///
+/// `read` x **`check`**, the meet of what it is derived from: [`LINES`] and
+/// [`DOCUMENT`] for the head and the declaration, [`BASE_DELTA`] for the base
+/// side. It reads nothing they did not, and parses every declared body with the
+/// grammar the mediation boundary uses — unbounded in the input for all three of
+/// their reasons, so never a mediated call's.
+///
+/// Pointer-only: a kind, a line number and the detector's reason per line.
+pub const SHELL: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::Records`] — the lines a declared recorder accumulated (CLOUD-1051).
 ///
 /// `read` x **`check`**, and the second axis is the interesting one because the
@@ -1656,6 +1671,7 @@ impl Fact {
         Fact::Symbols,
         Fact::Review,
         Fact::BaseDelta,
+        Fact::Shell,
         Fact::Records,
         Fact::RecordsBlocked,
         Fact::Instant,
@@ -1712,6 +1728,7 @@ impl Fact {
             Fact::Symbols => "symbols",
             Fact::Review => "review",
             Fact::BaseDelta => "base-delta",
+            Fact::Shell => "shell",
             Fact::Records => "records",
             Fact::RecordsBlocked => "records-blocked",
             Fact::Instant => "instant",
@@ -1776,6 +1793,7 @@ impl Fact {
             Fact::Symbols => SYMBOLS,
             Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
+            Fact::Shell => SHELL,
             Fact::Records => RECORDS,
             Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
@@ -1872,6 +1890,7 @@ impl Fact {
             | Fact::Symbols
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
@@ -1991,6 +2010,9 @@ impl Fact {
             // of the base tree and a walk of the working tree, which is a
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
+            // CLOUD-2625. Tree-only for `BaseDelta`'s and `Lines`' reasons: it
+            // is derived from both, and parses every declared body.
+            Fact::Shell => Some("shell"),
             Fact::Records => Some("records"),
             Fact::RecordsBlocked => Some("records-blocked"),
             // Hook-surface facts. The tree engine resolves none of them, and
@@ -2085,6 +2107,7 @@ impl Fact {
             | Fact::Units
             | Fact::Base
             | Fact::Coupling
+            | Fact::Shell
             | Fact::Uses
             | Fact::Tracked
             | Fact::GitIndex
@@ -2298,6 +2321,7 @@ impl Fact {
             // and a match arm per fact for twenty facts is not. Split along the
             // seam that already exists rather than by line count.
             Fact::BaseDelta => Self::base_delta_schema_fragment(),
+            Fact::Shell => Self::shell_schema_fragment(),
             Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
@@ -2315,6 +2339,37 @@ impl Fact {
                 Self::repository_schema_fragment(self)
             }
         }
+    }
+
+    /// [`Fact::Shell`]'s fragment (CLOUD-2625).
+    fn shell_schema_fragment() -> serde_json::Value {
+        let side = serde_json::json!({
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["manifest", "workflow", "file"]},
+                    "lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "line": {"type": "integer"},
+                                "reason": {"type": "string"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        });
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`crate::shell::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading.",
+            "properties": {"head": side.clone(), "base": side},
+            "additionalProperties": false,
+        })
     }
 
     /// [`Fact::BaseDelta`]'s fragment (CLOUD-1059), lifted out of
@@ -2591,6 +2646,7 @@ impl Fact {
             | Fact::Symbols
             | Fact::Plan
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Pinned
@@ -2669,6 +2725,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::GitHead
@@ -2893,6 +2950,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Pinned
             | Fact::GitHead
             | Fact::GitStatus
@@ -3124,6 +3182,7 @@ impl Fact {
             | Fact::Plan
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Staged
@@ -3206,6 +3265,7 @@ impl Fact {
             | Fact::Symbols
             | Fact::Review
             | Fact::BaseDelta
+            | Fact::Shell
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Instant
