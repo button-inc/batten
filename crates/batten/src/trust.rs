@@ -2190,9 +2190,9 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         census
             .manifests
             .iter()
-            // A carrier's fields, or the row's own keys: `mise.toml:run` reads
-            // the same whether a row names `keys = ["run"]` or the `mise-task`
-            // carrier (CLOUD-2627), so the change is no narrowing.
+            // A carrier's fields, or the row's own keys: a manifest's `run`
+            // reads the same whether its row names `keys = ["run"]` or the
+            // `mise-task` carrier (CLOUD-2627), so the change is no narrowing.
             .flat_map(|manifest| {
                 manifest
                     .fields()
