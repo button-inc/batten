@@ -9288,8 +9288,9 @@ mod tests {
     /// every non-trivia token outside an item carrying `#[cfg(test)]`. Comments
     /// and whitespace are trivia, so prose never reaches the scan.
     fn production_code(source: &str) -> String {
-        use ra_ap_syntax::{AstNode as _, NodeOrToken, SourceFile, ast, ast::HasAttrs as _};
-        let root = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).syntax_node();
+        use ra_ap_syntax::{AstNode as _, NodeOrToken, ast, ast::HasAttrs as _};
+        let root = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .syntax_node();
         let test_only: Vec<ra_ap_syntax::TextRange> = root
             .descendants()
             .filter_map(ast::Item::cast)

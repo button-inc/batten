@@ -35,7 +35,7 @@ use std::fmt;
 
 use ra_ap_syntax::ast::HasModuleItem as _;
 use ra_ap_syntax::syntax_editor::{SyntaxEdit, SyntaxEditor};
-use ra_ap_syntax::{AstNode as _, SourceFile, ast};
+use ra_ap_syntax::{AstNode as _, ast};
 
 /// The Rust edition a source is parsed under. There is deliberately no
 /// `Default`: see the module doc.
@@ -100,7 +100,7 @@ pub fn rename_method_calls(
     from: &str,
     to: &str,
 ) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
@@ -140,7 +140,7 @@ pub fn redirect_calls(
     from: &[&str],
     to: &str,
 ) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
@@ -270,7 +270,7 @@ pub struct LintAttribute {
 #[must_use]
 pub fn lint_attributes(source: &str, edition: Edition, lint: &str) -> Vec<LintAttribute> {
     let wanted: String = lint.split_whitespace().collect();
-    SourceFile::parse(source, edition.parser())
+    batten_facts::source::rust_parse(source, edition.parser())
         .syntax_node()
         .descendants()
         .filter_map(ast::TokenTreeMeta::cast)
@@ -377,7 +377,7 @@ fn held_leaves(items: &[ast::Item]) -> BTreeSet<String> {
 /// A whole-line comparison saw `use a::X;` as missing beside `use a::{X, Y};`
 /// and inserted a second import of `X`, which the compiler rejects (E0252).
 fn already_imported(held: &BTreeSet<String>, item: &str, edition: Edition) -> Option<bool> {
-    let parse = SourceFile::parse(item, edition.parser());
+    let parse = batten_facts::source::rust_parse(item, edition.parser());
     let tree = parse.tree().items().find_map(|top| match top {
         ast::Item::Use(wanted) => wanted.use_tree(),
         _ => None,
@@ -408,7 +408,7 @@ fn already_imported(held: &BTreeSet<String>, item: &str, edition: Edition) -> Op
 /// [`CouldNotLook`] when the parser reports any error over `source` under
 /// `edition`. The source is then not rewritten at all.
 pub fn ensure_use(source: &str, edition: Edition, item: &str) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
@@ -454,7 +454,7 @@ pub fn rewrite_paths(
     from: &str,
     to: &str,
 ) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
@@ -514,7 +514,7 @@ pub fn import_for_calls(
     item: &str,
     method: &str,
 ) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
@@ -598,7 +598,7 @@ pub fn rewrite_calls_by_chain(
     method: &str,
     rewrite: &dyn Fn(&[String]) -> Option<String>,
 ) -> Result<String, CouldNotLook> {
-    let parse = SourceFile::parse(source, edition.parser());
+    let parse = batten_facts::source::rust_parse(source, edition.parser());
     let errors = parse.errors();
     if !errors.is_empty() {
         return Err(CouldNotLook {
