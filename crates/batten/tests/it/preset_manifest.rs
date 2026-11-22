@@ -274,12 +274,13 @@ fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
 #[test]
 fn the_rust_preset_suite_passes() {
     let dir = common::scratch("rust-preset-suite");
-    let mut config = String::from("version = 1\n");
+    let mut config = String::from(
+        "version = 1\n\n[[rule]]\nid = \"crate reach unsafe\"\nkind = \"policy\"\n\
+         scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n",
+    );
     for class in ["crate reach unsafe", "crate declare absent"] {
         config.push_str(&format!(
-            "\n[[rule]]\nid = \"{class}\"\nkind = \"policy\"\nscope = \"tree\"\n\
-             module = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n\
-             \n[[verdict]]\nid = \"{class}\"\ngloss = \"fixture\"\nclass = \"\"\"\n\
+            "\n[[verdict]]\nid = \"{class}\"\ngloss = \"fixture\"\nclass = \"\"\"\n\
              A fixture verdict for the vendored module's own cases.\n\"\"\"\n\
              [[verdict.route]]\nid = \"module read first\"\nkind = \"document\"\n\
              target = \"policy/crate-reach.rego\"\n"
