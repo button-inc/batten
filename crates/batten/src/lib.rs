@@ -19955,6 +19955,7 @@ fn dispatch_envelope(
         return Ok(HookDispatch::undenied(ExitCode::Success));
     }
     rearm_unlanded(&envelope);
+    record_directive(&envelope);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
     // that is on this host is the capability table's answer rather than a literal
     // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits
@@ -22227,6 +22228,7 @@ fn collect_batch_advice(
     expire_wiring_record(envelope);
     expire_sightings(envelope);
     expire_history_reads(envelope);
+    report_directives(envelope, advice);
     repair_startup_rows(envelope, overrides);
     adopt_engine_pin(envelope, overrides, advice);
     report_container_health(envelope, overrides, advice);
@@ -25030,6 +25032,84 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
         let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
         let _ = std::fs::remove_file(dispatched);
     }
+}
+
+/// The receipt family journaling each operator message on a branch (CLOUD-2811).
+/// Branch-keyed, so a landed branch's journal retires with it.
+const DIRECTIVES: &str = "directives";
+
+/// Journal the operator's message, verbatim, as it is given (CLOUD-2811).
+///
+/// Only `UserPromptSubmit`: a system reminder or a hook notice is not the
+/// operator. One JSON line per message, so a prompt spanning lines stays one
+/// entry. Fail-silent like every hook-path write: a journal that will not take
+/// an entry must never cost the prompt.
+fn record_directive(envelope: &hook::Envelope) {
+    if envelope.event != crate::config_model::Event::UserPromptSubmit {
+        return;
+    }
+    let Some(prompt) = envelope
+        .input
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .filter(|prompt| !prompt.trim().is_empty())
+    else {
+        return;
+    };
+    let (Some(branch), Ok(git_dir)) = (
+        git::current_branch(Path::new(".")).ok().flatten(),
+        git::git_dir(Path::new(".")),
+    ) else {
+        return;
+    };
+    let journal = recorder::record_path(&git_dir, DIRECTIVES, &branch, None);
+    if let Some(parent) = journal.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let line = serde_json::json!({ "text": prompt }).to_string();
+    let _ = crate::durable::append(&journal, &line);
+}
+
+/// Point a compacted context at the branch's directives journal (CLOUD-2811).
+///
+/// **A POINTER, NEVER THE PAYLOAD** (house style §6): the finding names how many
+/// messages the journal holds and where it is, and the reader reads it. Only a
+/// `compact` start: `resume` and `fork` replay the transcript, so every message
+/// is still in the window, and `startup`/`clear` are a new session whose
+/// operator has not spoken yet.
+fn report_directives(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+    if envelope.event != crate::config_model::Event::SessionStart
+        || envelope.start_source.as_deref() != Some("compact")
+    {
+        return;
+    }
+    let (Some(branch), Ok(git_dir)) = (
+        git::current_branch(Path::new(".")).ok().flatten(),
+        git::git_dir(Path::new(".")),
+    ) else {
+        return;
+    };
+    let journal = recorder::record_path(&git_dir, DIRECTIVES, &branch, None);
+    let Ok(text) = std::fs::read_to_string(&journal) else {
+        return;
+    };
+    let count = text.lines().filter(|line| !line.trim().is_empty()).count();
+    if count == 0 {
+        return;
+    }
+    let subjects = [
+        crate::verdict::artifact(&format!("{count} operator message(s)")),
+        crate::verdict::artifact(&journal.display().to_string()),
+    ];
+    push_finding(
+        advice,
+        severity::AdvisoryTier::Caution,
+        refusal::Refusal::engine(
+            crate::error::Native::DirectiveReadMissing,
+            &subjects,
+            refusal::Fix::None,
+        ),
+    );
 }
 
 /// The receipt family recording that the unlanded pointer spoke (CLOUD-2332).
