@@ -1267,6 +1267,12 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["use a bare `--force-with-lease`, which compares a stale tracking ref"],
     },
     VendoredDoc {
+        id: "shell write refused",
+        why: Some("The tree arms would refuse the same file at verify, after the work around it"),
+        act: &["write it as Rust, a `batten` verb, or an argv task"],
+        dont: &["put a shell shebang on a file whose first line named none"],
+    },
+    VendoredDoc {
         id: "branch write unnamed",
         why: Some("A lease naming no expected value is defeated by any background fetch"),
         act: &[
