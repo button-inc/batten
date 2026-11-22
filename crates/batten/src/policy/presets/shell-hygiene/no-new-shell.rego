@@ -409,8 +409,13 @@ violation contains {
 # Engine source that spawns a shell (CLOUD-2770). The sites are the fact's: a
 # string-literal argv outside test code whose program the detector reads as a
 # shell. A site no `[[census.shell.spawn]]` row declares is refused, and a row
-# naming no site is refused too. Held in both directions whatever `mode` says,
-# like the generated table: a spawn is no migrating file that may shrink.
+# naming no site is refused too.
+#
+# PRESENCE ONLY: WHILE `[census.shell]` IS MIGRATING, BOTH ARMS ABSTAIN (owner
+# ruling, 2026-11-22, recorded in 383746da). The spawn table is the presence
+# regime's declaration, written in the same change that retires the migrating
+# `exempt` list, so judging spawns under migrate refused a consumer for a table
+# its own mode has not reached yet. Presence holds it in both directions.
 # ---------------------------------------------------------------------------
 
 spawn_rows contains [row.path, row.function] if {
@@ -433,6 +438,7 @@ violation contains {
 	"verdict": "shell spawn refused",
 	"subjects": [{"path": site.path, "line": site.line}],
 } if {
+	presence
 	some site in spawn_sites
 	not declared_spawn(site)
 }
@@ -447,6 +453,7 @@ violation contains {
 	"verdict": "shell spawn missing",
 	"subjects": [{"path": pair[0]}],
 } if {
+	presence
 	is_array(spawn_sites)
 	some pair in spawn_rows
 	not spawn_found(pair)
@@ -715,7 +722,11 @@ test_an_unread_base_refuses_every_shell_unit if {
 
 # --- engine spawn sites (CLOUD-2770) ----------------------------------------
 
-spawn_declared(rows) := {"census": {"shell": {"mode": "migrate", "spawn": rows}}}
+# Presence (no `mode`, no `exempt`): the regime the spawn table belongs to.
+spawn_declared(rows) := {"census": {"shell": {"spawn": rows}}}
+
+# The same table under migrate: both spawn arms abstain.
+spawn_migrating(rows) := {"census": {"shell": {"mode": "migrate", "spawn": rows}}}
 
 spawn_row := {"path": "src/lib.rs", "function": "run", "contract": "https://example.com/format"}
 
@@ -742,6 +753,20 @@ test_a_spawn_row_naming_no_site_is_refused if {
 		"shell": {"head": {}, "base": {}, "spawn": []},
 	}})
 	found == {"shell spawn missing"}
+}
+
+test_an_undeclared_spawn_is_not_judged_while_migrating if {
+	not "shell spawn refused" in verdicts({"tree": {
+		"documents": {"config.toml": spawn_migrating([])},
+		"shell": {"head": {}, "base": {}, "spawn": [spawn_site]},
+	}})
+}
+
+test_a_spawn_row_naming_no_site_is_not_judged_while_migrating if {
+	not "shell spawn missing" in verdicts({"tree": {
+		"documents": {"config.toml": spawn_migrating([spawn_row])},
+		"shell": {"head": {}, "base": {}, "spawn": []},
+	}})
 }
 
 test_a_spawn_row_is_not_judged_when_the_sites_were_not_read if {
