@@ -17,26 +17,7 @@ fn main() -> std::io::Result<()> {
     // `impl-plan <src>`: one pointer per impl `move-impl-home` would weigh,
     // written nowhere. The evidence for choosing a remedy per impl.
     if asked == "impl-plan" {
-        let src = args
-            .next()
-            .unwrap_or_else(|| String::from("crates/batten/src"));
-        let root = std::path::Path::new(".");
-        let files: std::collections::BTreeMap<String, String> = walk(&root.join(&src))
-            .into_iter()
-            .filter_map(|path| {
-                let text = batten::fsio::read_to_string(&path).ok()?;
-                let key = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .into_owned();
-                Some((key, text))
-            })
-            .collect();
-        for line in batten::module_graph::impl_plan(&src, &files) {
-            writeln!(out, "{line}")?;
-        }
-        return Ok(());
+        return run_impl_plan(&mut out, args.next());
     }
     // `fix <package>…`: apply rustc's machine-applicable suggestions to a
     // fixpoint, imports decided per build and per package
@@ -49,36 +30,7 @@ fn main() -> std::io::Result<()> {
     // as counts and module names (Lakos levels, propagation cost, and the
     // edges whose cut shrinks the largest cycle).
     if asked == "levels" || asked == "suggest" {
-        let src = args
-            .next()
-            .unwrap_or_else(|| String::from("crates/batten/src"));
-        let graph = batten::module_graph::read(std::path::Path::new(&src))
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        if asked == "levels" {
-            let levels = graph.levels();
-            let top = levels.values().max().copied().unwrap_or(0);
-            writeln!(
-                out,
-                "levels: {} module(s), {top} level(s), largest component {}, propagation cost {:.1}%",
-                levels.len(),
-                graph.largest_component(),
-                graph.propagation_cost()
-            )?;
-            for level in 1..=top {
-                let count = levels.values().filter(|at| **at == level).count();
-                writeln!(out, "level {level}: {count}")?;
-            }
-            return Ok(());
-        }
-        let shown: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(20);
-        let largest = graph.largest_component();
-        for (from, to, left) in graph.cut_ranking().into_iter().take(shown) {
-            writeln!(
-                out,
-                "{from} -> {to}: largest component {left} (now {largest})"
-            )?;
-        }
-        return Ok(());
+        return run_graph(&mut out, &asked, &mut args);
     }
     if let Some(chosen) = recipe::named_tree(&asked) {
         let root = args.next().unwrap_or_else(|| String::from("."));
@@ -193,6 +145,69 @@ fn run_tree(
         chosen.name,
         files.len()
     )
+}
+
+/// `impl-plan [src]`: one pointer per impl `move-impl-home` would weigh,
+/// written nowhere. The evidence for choosing a remedy per impl.
+fn run_impl_plan(out: &mut impl std::io::Write, src: Option<String>) -> std::io::Result<()> {
+    let src = src.unwrap_or_else(|| String::from("crates/batten/src"));
+    let root = std::path::Path::new(".");
+    let files: std::collections::BTreeMap<String, String> = walk(&root.join(&src))
+        .into_iter()
+        .filter_map(|path| {
+            let text = batten::fsio::read_to_string(&path).ok()?;
+            let key = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            Some((key, text))
+        })
+        .collect();
+    for line in batten::module_graph::impl_plan(&src, &files) {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// `levels [src]` and `suggest [src] [n]`: the module graph's structure, as
+/// counts and module names (Lakos levels, propagation cost, and the edges
+/// whose cut shrinks the largest cycle).
+fn run_graph(
+    out: &mut impl std::io::Write,
+    asked: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> std::io::Result<()> {
+    let src = args
+        .next()
+        .unwrap_or_else(|| String::from("crates/batten/src"));
+    let graph = batten::module_graph::read(std::path::Path::new(&src))
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if asked == "levels" {
+        let levels = graph.levels();
+        let top = levels.values().max().copied().unwrap_or(0);
+        writeln!(
+            out,
+            "levels: {} module(s), {top} level(s), largest component {}, propagation cost {:.1}%",
+            levels.len(),
+            graph.largest_component(),
+            graph.propagation_cost()
+        )?;
+        for level in 1..=top {
+            let count = levels.values().filter(|at| **at == level).count();
+            writeln!(out, "level {level}: {count}")?;
+        }
+        return Ok(());
+    }
+    let shown: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(20);
+    let largest = graph.largest_component();
+    for (from, to, left) in graph.cut_ranking().into_iter().take(shown) {
+        writeln!(
+            out,
+            "{from} -> {to}: largest component {left} (now {largest})"
+        )?;
+    }
+    Ok(())
 }
 
 /// The most passes `fix` runs: each pass is two `cargo check`s, and a
