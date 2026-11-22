@@ -414,7 +414,6 @@ pub fn unmediated_session() -> crate::refusal::Refusal {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn manifest(rows: &[(&str, &str)]) -> Manifest {
         rows.iter()
             .map(|(path, hash)| ((*path).to_owned(), (*hash).to_owned()))

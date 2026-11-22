@@ -1169,7 +1169,6 @@ pub fn routed_only_into_protection(
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn route(id: &str) -> Route {
         Route {
             id: id.to_owned(),

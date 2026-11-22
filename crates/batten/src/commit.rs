@@ -648,7 +648,6 @@ fn short(sha: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     fn policy() -> Commit {
         Commit {
             subject_pattern: r"^(feat|fix|chore)([(][a-z]+[)])?!?: .+".to_owned(),

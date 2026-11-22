@@ -610,7 +610,6 @@ fn pointer_of(span: &Span) -> Option<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     const SECRET: &[u8] = b"AKIAIOSFODNN7EXAMPLE trailing-secret-bytes";
     const UNMATCHED: &[u8] = b"UNMATCHED-FILE-SENTINEL-nothing-selected-this";
     const ENV_SENTINEL: &[u8] = b"ENV-VALUE-SENTINEL-never-a-payload-input";
