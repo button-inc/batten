@@ -3101,6 +3101,33 @@ pub(crate) fn rust_sources() -> Vec<PathBuf> {
     found
 }
 
+/// Every workspace crate's PRODUCTION sources: each member's `src`, never its
+/// `tests`. The census a split must not escape (#1276, CLOUD-2789) when the
+/// claim is about engine code rather than about test code: a module moved into
+/// `batten-core` is still engine code, and a walk of `crates/batten/src` alone
+/// stops seeing it the commit it moves.
+///
+/// # Panics
+///
+/// When the sweep finds too few files to be the engine, for the reason
+/// [`rust_sources`] gives.
+#[must_use]
+pub(crate) fn engine_sources() -> Vec<PathBuf> {
+    let src_of = |path: &PathBuf| {
+        path.strip_prefix(at_root("crates"))
+            .ok()
+            .and_then(|rest| rest.components().nth(1))
+            .is_some_and(|dir| dir.as_os_str() == "src")
+    };
+    let found: Vec<PathBuf> = rust_sources().into_iter().filter(src_of).collect();
+    assert!(
+        found.len() > 40,
+        "the engine sweep found {} files, which is too few to be the engine",
+        found.len()
+    );
+    found
+}
+
 fn collect_rust(dir: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
