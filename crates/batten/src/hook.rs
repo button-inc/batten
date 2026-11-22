@@ -3558,6 +3558,19 @@ fn decode_fields(harness: Harness, value: &Value, raw_event: String) -> Envelope
             .unwrap_or(Value::Null);
         match named {
             Value::String(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+            // A PROMPT EVENT CARRIES ITS TEXT AT TOP LEVEL (`UserPromptSubmit`'s
+            // `prompt`), not under `tool_input`, so `input` was `null` for every
+            // real prompt and `Field::Prompt` — which reads `input.prompt` —
+            // never saw one outside a hand-built envelope (found by CLOUD-2811's
+            // binary test). Folded into `input` here, the one place that shapes
+            // the envelope, so every reader of the prompt reads the same key.
+            Value::Null => value
+                .get("prompt")
+                .filter(|prompt| prompt.is_string())
+                .map_or(
+                    Value::Null,
+                    |prompt| serde_json::json!({ "prompt": prompt }),
+                ),
             other => other,
         }
     };

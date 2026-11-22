@@ -1452,6 +1452,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["treat an added path as a changed rule"],
     },
     VendoredDoc {
+        id: "directive read missing",
+        why: Some("A summary is lossy by construction, and a directive it drops is work repeated"),
+        act: &[
+            "read the journal the subject names, every entry, before the next tool call",
+            "fold each standing directive back into the plan",
+        ],
+        dont: &["trust the compaction summary's account of what the operator asked"],
+    },
+    VendoredDoc {
         id: "hook run missing",
         why: Some("An absent gate and a passing one look the same from outside"),
         act: &[
