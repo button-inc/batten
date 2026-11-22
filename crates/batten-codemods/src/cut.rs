@@ -61,6 +61,29 @@ struct Reach {
     offset: usize,
 }
 
+/// The names one cut is spelled in, shared by its phases.
+struct Names<'a> {
+    cut: &'a Cut<'a>,
+    src: String,
+    home: String,
+    manifest: String,
+    old: String,
+    old_ident: String,
+    new_ident: String,
+    modules: BTreeSet<&'a str>,
+}
+
+impl Names<'_> {
+    /// The path under the new crate's `src/` of a moved file, or `None`.
+    fn moved(&self, path: &str) -> Option<String> {
+        let rest = path.strip_prefix(&self.src)?;
+        self.modules
+            .iter()
+            .any(|module| rest == format!("{module}.rs") || rest.starts_with(&format!("{module}/")))
+            .then(|| rest.to_owned())
+    }
+}
+
 /// Plan `cut` over `files` (every `.rs` by path) and `manifests` (every
 /// `Cargo.toml` by path, the workspace root's as `Cargo.toml`). Running the
 /// plan's output through it again plans nothing.
@@ -71,49 +94,59 @@ pub fn cut_crate(
     manifests: &BTreeMap<String, String>,
 ) -> Plan {
     let mut plan = Plan::default();
-    let src = format!("{}/src/", cut.from);
-    let parent = cut.from.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let home = if parent.is_empty() {
-        cut.name.to_owned()
-    } else {
-        format!("{parent}/{}", cut.name)
-    };
-    let manifest_path = format!("{}/Cargo.toml", cut.from);
-    let Some(old) = manifests
-        .get(&manifest_path)
-        .and_then(|text| package_name(text))
-    else {
-        plan.refused
-            .push(format!("{manifest_path}: no [package] name"));
+    let manifest = format!("{}/Cargo.toml", cut.from);
+    let Some(old) = manifests.get(&manifest).and_then(|text| package_name(text)) else {
+        plan.refused.push(format!("{manifest}: no [package] name"));
         return plan;
     };
-    let old_ident = old.replace('-', "_");
-    let new_ident = cut.name.replace('-', "_");
-    let modules: BTreeSet<&str> = cut.modules.iter().copied().collect();
-    let moved_rest = |path: &str| -> Option<String> {
-        let rest = path.strip_prefix(&src)?;
-        modules
-            .iter()
-            .any(|module| rest == format!("{module}.rs") || rest.starts_with(&format!("{module}/")))
-            .then(|| rest.to_owned())
+    let parent = cut.from.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let names = Names {
+        cut,
+        src: format!("{}/src/", cut.from),
+        home: if parent.is_empty() {
+            cut.name.to_owned()
+        } else {
+            format!("{parent}/{}", cut.name)
+        },
+        manifest,
+        old_ident: old.replace('-', "_"),
+        new_ident: cut.name.replace('-', "_"),
+        old,
+        modules: cut.modules.iter().copied().collect(),
     };
-
     let moved: BTreeMap<&String, String> = files
-        .iter()
-        .filter_map(|(path, _)| moved_rest(path).map(|rest| (path, rest)))
+        .keys()
+        .filter_map(|path| names.moved(path).map(|rest| (path, rest)))
         .collect();
     if moved.is_empty() {
-        if !files.contains_key(&format!("{home}/src/lib.rs")) {
+        if !files.contains_key(&format!("{}/src/lib.rs", names.home)) {
             plan.refused.push(format!(
-                "{src}: none of {} is a module here",
+                "{}: none of {} is a module here",
+                names.src,
                 cut.modules.join(", ")
             ));
         }
         return plan;
     }
+    let used_roots = refuse_open(&names, &moved, files, &mut plan);
+    if !plan.refused.is_empty() {
+        return plan;
+    }
+    move_files(&names, &moved, files, &mut plan);
+    let needs = respell(&names, &moved, files, manifests, &mut plan);
+    wire_manifests(&names, needs, manifests, &used_roots, &mut plan);
+    plan
+}
 
-    // Closed downward, or refused.
-    let mut used_roots: BTreeSet<String> = BTreeSet::new();
+/// Refuse each site in a moved file that reaches an unmoved module or the old
+/// crate; return the crates the moved files name.
+fn refuse_open(
+    names: &Names<'_>,
+    moved: &BTreeMap<&String, String>,
+    files: &BTreeMap<String, String>,
+    plan: &mut Plan,
+) -> BTreeSet<String> {
+    let mut used_roots = BTreeSet::new();
     for path in moved.keys() {
         let text = &files[*path];
         let Some(tree) = parsed(text) else {
@@ -124,7 +157,7 @@ pub fn cut_crate(
             for child in reach
                 .children
                 .iter()
-                .filter(|child| !modules.contains(child.as_str()))
+                .filter(|child| !names.modules.contains(child.as_str()))
             {
                 plan.refused.push(format!(
                     "{path}:{} crate::{child}",
@@ -132,99 +165,135 @@ pub fn cut_crate(
                 ));
             }
         }
-        for reach in reaches(&tree, &old_ident) {
+        for reach in reaches(&tree, &names.old_ident) {
             for child in &reach.children {
                 plan.refused.push(format!(
-                    "{path}:{} {old_ident}::{child}",
-                    line_of(text, reach.offset)
+                    "{path}:{} {}::{child}",
+                    line_of(text, reach.offset),
+                    names.old_ident
                 ));
             }
         }
         used_roots.extend(path_roots(&tree));
     }
-    if !plan.refused.is_empty() {
-        return plan;
-    }
+    used_roots
+}
 
-    // The move.
-    for (path, rest) in &moved {
+/// Each moved file to its new home, and the new crate's root module.
+fn move_files(
+    names: &Names<'_>,
+    moved: &BTreeMap<&String, String>,
+    files: &BTreeMap<String, String>,
+    plan: &mut Plan,
+) {
+    for (path, rest) in moved {
         plan.removes.insert((*path).clone());
         plan.writes
-            .insert(format!("{home}/src/{rest}"), files[*path].clone());
+            .insert(format!("{}/src/{rest}", names.home), files[*path].clone());
     }
+    let old = &names.old;
     let mut lib = format!(
         "//! Cut from `{old}` by `cut-crate` (CLOUD-2789): the modules below\n\
          //! form a set no module left in `{old}` is reached from.\n\n"
     );
-    for module in &modules {
-        lib.push_str(&format!("pub mod {module};\n"));
+    for module in &names.modules {
+        lib.push_str("pub mod ");
+        lib.push_str(module);
+        lib.push_str(";\n");
     }
-    plan.writes.insert(format!("{home}/src/lib.rs"), lib);
+    plan.writes
+        .insert(format!("{}/src/lib.rs", names.home), lib);
+}
 
-    // Every path left behind is respelled; the packages it lands in gain the dependency.
+/// Respell every path left behind; return each package now naming the new
+/// crate, and whether its library (not only its tests) does.
+fn respell(
+    names: &Names<'_>,
+    moved: &BTreeMap<&String, String>,
+    files: &BTreeMap<String, String>,
+    manifests: &BTreeMap<String, String>,
+    plan: &mut Plan,
+) -> BTreeMap<String, bool> {
     let mut needs: BTreeMap<String, bool> = BTreeMap::new();
     for (path, text) in files {
         if moved.contains_key(path) {
             continue;
         }
-        let root = if path.starts_with(&src) {
-            "crate"
-        } else {
-            old_ident.as_str()
-        };
-        let mut edited = text.clone();
-        if path == &format!("{src}lib.rs") {
-            match drop_module_items(&edited, &modules) {
-                Some(dropped) => edited = dropped,
-                None => {
-                    plan.remainder.push(format!("{path}: could not look"));
-                    continue;
-                }
-            }
-        }
-        let Some(tree) = parsed(&edited) else {
-            if text.contains(cut.modules.first().copied().unwrap_or_default()) {
-                plan.remainder.push(format!("{path}: could not look"));
-            }
+        let Some((edited, respelled)) = respell_file(names, path, text, plan) else {
             continue;
         };
-        let mut splices: Vec<std::ops::Range<usize>> = Vec::new();
-        for reach in reaches(&tree, root) {
-            let moving = reach
-                .children
-                .iter()
-                .filter(|child| modules.contains(child.as_str()))
-                .count();
-            if moving == 0 {
-                continue;
-            }
-            if moving == reach.children.len() {
-                splices.push(reach.root);
-            } else {
-                plan.remainder
-                    .push(format!("{path}:{}", line_of(&edited, reach.offset)));
-            }
-        }
-        if splices.is_empty() && edited == *text {
-            continue;
-        }
-        splices.sort_by_key(|range| std::cmp::Reverse(range.start));
-        splices.dedup();
-        let respelled = !splices.is_empty();
-        for range in splices {
-            edited.replace_range(range, &new_ident);
-        }
         if respelled && let Some(package) = package_of(path, manifests) {
-            let in_src = path.starts_with(&format!(
-                "{}src/",
-                package.strip_suffix("Cargo.toml").unwrap_or("")
-            ));
-            let entry = needs.entry(package).or_insert(false);
-            *entry |= in_src;
+            let dir = package.strip_suffix("Cargo.toml").unwrap_or_default();
+            let in_src = path.starts_with(&format!("{dir}src/"));
+            *needs.entry(package).or_insert(false) |= in_src;
         }
         plan.writes.insert(path.clone(), edited);
     }
+    needs
+}
 
+/// One file left behind, respelled, and whether any path moved; `None` when
+/// nothing changed.
+fn respell_file(
+    names: &Names<'_>,
+    path: &str,
+    text: &str,
+    plan: &mut Plan,
+) -> Option<(String, bool)> {
+    let root = if path.starts_with(&names.src) {
+        "crate"
+    } else {
+        names.old_ident.as_str()
+    };
+    let mut edited = text.to_owned();
+    if path == format!("{}lib.rs", names.src) {
+        let Some(dropped) = drop_module_items(&edited, &names.modules) else {
+            plan.remainder.push(format!("{path}: could not look"));
+            return None;
+        };
+        edited = dropped;
+    }
+    let Some(tree) = parsed(&edited) else {
+        if names.modules.iter().any(|module| text.contains(module)) {
+            plan.remainder.push(format!("{path}: could not look"));
+        }
+        return None;
+    };
+    let mut splices: Vec<std::ops::Range<usize>> = Vec::new();
+    for reach in reaches(&tree, root) {
+        let moving = reach
+            .children
+            .iter()
+            .filter(|child| names.modules.contains(child.as_str()))
+            .count();
+        if moving == reach.children.len() && moving > 0 {
+            splices.push(reach.root);
+        } else if moving > 0 {
+            plan.remainder
+                .push(format!("{path}:{}", line_of(&edited, reach.offset)));
+        }
+    }
+    if splices.is_empty() && edited == text {
+        return None;
+    }
+    splices.sort_by_key(|range| std::cmp::Reverse(range.start));
+    splices.dedup();
+    let respelled = !splices.is_empty();
+    for range in splices {
+        edited.replace_range(range, &names.new_ident);
+    }
+    Some((edited, respelled))
+}
+
+/// Each package naming the new crate gains its dependency; the new crate gets
+/// its manifest.
+fn wire_manifests(
+    names: &Names<'_>,
+    needs: BTreeMap<String, bool>,
+    manifests: &BTreeMap<String, String>,
+    used_roots: &BTreeSet<String>,
+    plan: &mut Plan,
+) {
     let version = manifests
         .get("Cargo.toml")
         .and_then(|text| text.parse::<DocumentMut>().ok())
@@ -238,25 +307,30 @@ pub fn cut_crate(
             plan.remainder.push(format!("{package}: could not look"));
             continue;
         };
-        let relative = relative_to(&package, &home);
-        add_dependency(&mut doc, cut.name, &relative, version.as_deref(), in_src);
+        let relative = relative_to(&package, &names.home);
+        add_dependency(
+            &mut doc,
+            names.cut.name,
+            &relative,
+            version.as_deref(),
+            in_src,
+        );
         plan.writes.insert(package, doc.to_string());
     }
-    match new_manifest(
-        &manifests[&manifest_path],
-        cut.name,
-        &old,
-        &modules,
-        &used_roots,
-    ) {
-        Some(text) => {
-            plan.writes.insert(format!("{home}/Cargo.toml"), text);
-        }
-        None => plan
-            .remainder
-            .push(format!("{manifest_path}: could not look")),
+    let built = new_manifest(
+        &manifests[&names.manifest],
+        names.cut.name,
+        &names.old,
+        &names.modules,
+        used_roots,
+    );
+    if let Some(text) = built {
+        plan.writes
+            .insert(format!("{}/Cargo.toml", names.home), text);
+    } else {
+        plan.remainder
+            .push(format!("{}: could not look", names.manifest));
     }
-    plan
 }
 
 /// The file's tree, or `None` when the parser reports any error.
@@ -468,10 +542,10 @@ fn add_dependency(
     if doc.get(table).is_none() {
         doc[table] = toml_edit::table();
     }
-    if let Some(deps) = doc[table].as_table_like_mut() {
-        if deps.get(name).is_none() {
-            deps.insert(name, Item::Value(Value::InlineTable(entry)));
-        }
+    if let Some(deps) = doc[table].as_table_like_mut()
+        && deps.get(name).is_none()
+    {
+        deps.insert(name, Item::Value(Value::InlineTable(entry)));
     }
 }
 
