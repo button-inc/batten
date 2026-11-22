@@ -588,7 +588,18 @@ impl<'a> Row<'a> {
                     .filter(|url| crate::landed::is_pull_request_url(url))
                     .count()
             });
+        // LINEAR OMITS A NULL FIELD, so a row with no milestone arrives with no
+        // `projectMilestone` key at all, from `get_issue` and from the declared
+        // `list_issues` projection alike (measured on #1276: 1 of 17 listed rows
+        // carried the key; `get_issue` on that one carried it, on the rest it was
+        // missing). Reading every missing key as could-not-look left `board
+        // check` unable to judge 83 of 85 rows. The key's absence asserts "none"
+        // only where the payload carries the row's project, which Linear sends
+        // whenever there is one; with neither, it is still a fetch that did not
+        // look, never a pass.
+        let carries_project = object.contains_key("project") || object.contains_key("projectId");
         let milestone = match object.get("projectMilestone") {
+            None if carries_project => Presence::Empty,
             None => Presence::Absent,
             Some(value) if present(value) => Presence::Set,
             Some(_) => Presence::Empty,
@@ -1731,6 +1742,23 @@ mod tests {
         assert_eq!(read(&value), Some(Presence::Empty));
         value["projectMilestone"] = json!({"name": "M1"});
         assert_eq!(read(&value), Some(Presence::Set));
+    }
+
+    /// Fails by: a row Linear sent without the key (it omits nulls) read as a
+    /// fetch that did not look, which blinded the check on every milestone-less
+    /// row; or a payload carrying no project read as judged, which would pass
+    /// a projection that never asked for the field.
+    #[test]
+    fn a_missing_milestone_on_a_row_with_a_project_is_empty() {
+        let read = |value: &Value| Row::read(value).map(|row| row.milestone);
+        let mut value = row("CLOUD-1", "Todo", "");
+        value["project"] = json!("Batten");
+        assert_eq!(read(&value), Some(Presence::Empty));
+        let mut by_id = row("CLOUD-1", "Todo", "");
+        by_id["projectId"] = json!("p-1");
+        assert_eq!(read(&by_id), Some(Presence::Empty));
+        let bare = row("CLOUD-1", "Todo", "");
+        assert_eq!(read(&bare), Some(Presence::Absent));
     }
 
     #[test]
