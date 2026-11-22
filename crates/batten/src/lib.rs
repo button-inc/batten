@@ -7900,9 +7900,30 @@ fn run_claim_race(
     // indistinguishable from a competitor whose commits name no key, and the
     // `Refs:` trailer that actually resolves a claim lives in the log that read
     // did not return. `None` is carried out as an incomplete fill instead.
+    //
+    // A STACKED PULL REQUEST IS NOT A RIVAL. One built on this branch carries
+    // this branch's own commits, `Refs:` trailers and all, so its log read as
+    // claiming every key this branch serves (measured on #1276: #1279, stacked
+    // on it, "claimed" five of its keys). A competitor's commits that this
+    // branch also holds are subtracted BY SHA before its trailers are read,
+    // from local history rather than the forge, whose listing is capped.
+    let trunk = worktree::declared_trunk(repo).ok().flatten();
+    let shared: std::collections::BTreeSet<String> = trunk
+        .as_ref()
+        .and_then(|trunk| git::commits_in_range(repo, &trunk.tracking, "HEAD").ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let race::Filled { pulls, unanswered } =
         race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
-            bot::forge::commit_messages(&slug, number).ok()
+            bot::forge::commits(&slug, number).ok().map(|listing| {
+                listing
+                    .into_iter()
+                    .filter(|(sha, _)| !shared.contains(sha))
+                    .map(|(_, message)| message)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
         });
     // JUDGED FIRST, AND THE COULD-NOT-LOOK ARMS ONLY REPLACE THE CLEAN ONE,
     // because returning before `races` throws away refusing information the
