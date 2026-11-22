@@ -828,6 +828,24 @@
                 "type": "object"
               },
               "type": "object"
+            },
+            "spawn": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "function": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
             }
           },
           "type": "object"

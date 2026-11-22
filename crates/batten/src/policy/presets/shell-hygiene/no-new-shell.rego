@@ -9,6 +9,7 @@
 #MUTANT generated-entry-for-absent-file-admitted|s@^\tmeasured.matches == 0$@\tfalse@|a_generated_entry_covering_no_file_is_a_finding
 #MUTANT generated-check-not-found-admitted|s@^\tnot measured.check_found$@\tfalse@|a_generated_entry_whose_check_is_not_found_is_a_finding
 #MUTANT file-growth-unchecked|s@^\tgrown > 0$@\tfalse@|an_existing_shell_file_that_grows_under_migrate_is_refused
+#MUTANT engine-shell-spawn-unread|s@^\tnot declared_spawn(site)$@\tfalse@|an_undeclared_engine_shell_spawn_is_refused
 
 # No shell, and while migrating, no NEW shell, measured in lines.
 #
@@ -404,6 +405,53 @@ violation contains {
 	not measured.check_found
 }
 
+# ---------------------------------------------------------------------------
+# Engine source that spawns a shell (CLOUD-2770). The sites are the fact's: a
+# string-literal argv outside test code whose program the detector reads as a
+# shell. A site no `[[census.shell.spawn]]` row declares is refused, and a row
+# naming no site is refused too. Held in both directions whatever `mode` says,
+# like the generated table: a spawn is no migrating file that may shrink.
+# ---------------------------------------------------------------------------
+
+spawn_rows contains [row.path, row.function] if {
+	some shell in declarations
+	some row in object.get(shell, "spawn", [])
+	is_string(row.path)
+	is_string(row.function)
+}
+
+# Absent when the fact did not read the whole tree, so neither arm decides.
+spawn_sites := s if {
+	s := shell_fact.spawn
+	is_array(s)
+}
+
+declared_spawn(site) if [site.path, site.function] in spawn_rows
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell spawn refused",
+	"subjects": [{"path": site.path, "line": site.line}],
+} if {
+	some site in spawn_sites
+	not declared_spawn(site)
+}
+
+spawn_found(pair) if {
+	some site in spawn_sites
+	[site.path, site.function] == pair
+}
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell spawn missing",
+	"subjects": [{"path": pair[0]}],
+} if {
+	is_array(spawn_sites)
+	some pair in spawn_rows
+	not spawn_found(pair)
+}
+
 # --- the load-time tier ------------------------------------------------------
 #
 # These pin the PREDICATE over a fabricated input, for a consumer that is
@@ -663,6 +711,44 @@ test_an_unread_base_refuses_every_shell_unit if {
 			["task add refused", [{"path": "tasks.toml", "line": 1}]],
 		}
 	}
+}
+
+# --- engine spawn sites (CLOUD-2770) ----------------------------------------
+
+spawn_declared(rows) := {"census": {"shell": {"mode": "migrate", "spawn": rows}}}
+
+spawn_row := {"path": "src/lib.rs", "function": "run", "contract": "https://example.com/format"}
+
+spawn_site := {"path": "src/lib.rs", "line": 3, "function": "run"}
+
+test_an_undeclared_spawn_is_refused if {
+	found := verdicts({"tree": {
+		"documents": {"config.toml": spawn_declared([])},
+		"shell": {"head": {}, "base": {}, "spawn": [spawn_site]},
+	}})
+	found == {"shell spawn refused"}
+}
+
+test_a_declared_spawn_is_admitted if {
+	count(verdicts({"tree": {
+		"documents": {"config.toml": spawn_declared([spawn_row])},
+		"shell": {"head": {}, "base": {}, "spawn": [spawn_site]},
+	}})) == 0
+}
+
+test_a_spawn_row_naming_no_site_is_refused if {
+	found := verdicts({"tree": {
+		"documents": {"config.toml": spawn_declared([spawn_row])},
+		"shell": {"head": {}, "base": {}, "spawn": []},
+	}})
+	found == {"shell spawn missing"}
+}
+
+test_a_spawn_row_is_not_judged_when_the_sites_were_not_read if {
+	count(verdicts({"tree": {
+		"documents": {"config.toml": spawn_declared([spawn_row])},
+		"shell": {"head": {}, "base": {}},
+	}})) == 0
 }
 
 test_a_base_that_did_not_resolve_decides_nothing if {

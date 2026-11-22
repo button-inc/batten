@@ -702,6 +702,16 @@ pub fn shebang(first_line: &str) -> Option<ShellKind> {
         .map(|(_, kind)| *kind)
 }
 
+/// Whether an argv engine source spawns runs a shell (CLOUD-2770): its first
+/// word names a shell, read exactly as a shebang's interpreter is (`env` and
+/// `busybox sh` included), or its program takes a script and the argv carries
+/// one (rule 10's table). The census's spawn arm asks this, and declares no
+/// list of its own.
+#[must_use]
+pub fn spawns_shell(argv: &[&str]) -> bool {
+    shebang(&format!("#!{}", argv.join(" "))).is_some() || runs_script(argv)
+}
+
 /// The last `/`- or `\`-separated component: a Windows path names its program
 /// after a backslash.
 fn file_name(path: &str) -> &str {
@@ -1233,6 +1243,31 @@ mod tests {
             "cmd",
         ] {
             assert!(matches!(logic(text), Verdict::Argv(_)), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_spawned_argv_runs_a_shell_by_its_program_or_its_script() {
+        // CLOUD-2770: a shell program spawns a shell whatever its arguments; an
+        // interpreter only when the argv carries a script.
+        for argv in [
+            &["sh"][..],
+            &["/bin/bash", "script.sh"],
+            &["env", "-i", "zsh"],
+            &["busybox", "sh"],
+            &["perl", "-e", "<computed>"],
+            &["python3", "-c", "print(1)"],
+        ] {
+            assert!(spawns_shell(argv), "{argv:?}");
+        }
+        for argv in [
+            &["git", "status"][..],
+            &["python3", "x.py"],
+            &["node", "-v"],
+            &["cmd", "/C"],
+            &[],
+        ] {
+            assert!(!spawns_shell(argv), "{argv:?}");
         }
     }
 
