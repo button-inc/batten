@@ -2773,7 +2773,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
@@ -3080,7 +3080,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
