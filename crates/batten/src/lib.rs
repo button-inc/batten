@@ -194,6 +194,7 @@ pub mod sbom;
 pub use batten_base::secret;
 pub use batten_facts::scratch;
 pub mod secrets;
+pub use batten_core::path_set;
 pub use batten_core::selector;
 pub mod selfwrite;
 /// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),
@@ -19991,6 +19992,15 @@ impl HookDispatch {
     }
 }
 
+/// Whether a declared MCP source in `resolved` answers `server`, for
+/// [`hook::Policy::from_resolved`], which may not reach `mcp` itself.
+fn mcp_answers(resolved: &resolve::Resolved, root: &Path, server: &str) -> bool {
+    resolved
+        .mcp
+        .as_ref()
+        .is_some_and(|mcp| mcp::answers(mcp, root, server))
+}
+
 /// [`dispatch_envelope`]'s cheap prologue: an event the host does not declare
 /// allows with a verbose note (CLOUD-45), and otherwise the two boundary side
 /// effects run, re-arming an unlanded claim and recording an operator
@@ -21053,8 +21063,11 @@ fn config_write_breaks(
     let loaded = durable::replace(&probe, landed.as_bytes()).ok().map(|()| {
         let mut moved = overrides.clone();
         moved.config_in = Some(scratch.to_string_lossy().into_owned());
-        resolve::resolve(root, &moved)
-            .and_then(|resolved| hook::Policy::from_resolved(&resolved, harness, root, None))
+        resolve::resolve(root, &moved).and_then(|resolved| {
+            hook::Policy::from_resolved(&resolved, harness, root, None, &|server| {
+                mcp_answers(&resolved, root, server)
+            })
+        })
     });
     let _removed = std::fs::remove_dir_all(&scratch);
     let refused = loaded?.err()?;
@@ -27046,8 +27059,13 @@ fn load_hook_config(
         return Ok(loaded);
     }
     let resolved = HookLoads::resolve(here, overrides)?;
-    let policy =
-        hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
+    let policy = hook::Policy::from_resolved(
+        &resolved,
+        harness,
+        here,
+        overrides.config_from.as_deref(),
+        &|server| mcp_answers(&resolved, here, server),
+    )?;
     let loaded = (policy, resolved.waivers.clone(), resolved.prune.clone());
     HookLoads::keep(here, overrides, harness, &loaded);
     Ok(loaded)
@@ -27884,7 +27902,7 @@ fn run_judges(
         return Ok(Vec::new());
     }
 
-    let protected = rules::PathSet::includes("protected", &config.protected)?;
+    let protected = path_set::PathSet::includes("protected", &config.protected)?;
     let cap = judge::effective_cap(
         config.judge.as_ref().and_then(|j| j.max_payload_bytes),
         None,
@@ -32281,7 +32299,13 @@ pub fn land_ready_owes(
         }
     }
     resolved.rules = kept;
-    let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
+    let policy = without_set_hatches(hook::Policy::from_resolved(
+        &resolved,
+        harness,
+        root,
+        None,
+        &|server| mcp_answers(&resolved, root, server),
+    )?);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
     let raw = serde_json::json!({
         "hook_event_name": "PreToolUse",

@@ -69,7 +69,13 @@ fn module_policy(dir: &Path) -> Policy {
     .expect("write config");
     let resolved = batten::resolve::resolve(dir, &batten::resolve::Overrides::default())
         .expect("the config resolves");
-    Policy::from_resolved(&resolved, Harness::ExitCode, dir, None).expect("the policy assembles")
+    Policy::from_resolved(&resolved, Harness::ExitCode, dir, None, &|server| {
+        resolved
+            .mcp
+            .as_ref()
+            .is_some_and(|mcp| batten::mcp::answers(mcp, dir, server))
+    })
+    .expect("the policy assembles")
 }
 
 /// A pre-tool shell call, decoded from a real host payload.
