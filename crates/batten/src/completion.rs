@@ -429,7 +429,6 @@ pub fn no_fix_reason(target: &str) -> String {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// A push nobody could compute refuses like an unpushed one (CLOUD-2656).
     #[test]
     fn a_push_nobody_could_compute_is_never_read_as_pushed() {

@@ -1024,7 +1024,6 @@ pub fn case_target(program: &str, package_dir: &Path) -> Result<String> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// Fails by: two cases sharing a key (one's pass skipping the other), or
     /// a key that holds across another target (a stale pass reused).
     #[test]

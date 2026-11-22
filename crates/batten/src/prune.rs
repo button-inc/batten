@@ -847,7 +847,6 @@ const fn mebibytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// The volume a suite is writing to has room for more than the one MiB a
     /// constant reading would claim.
     ///

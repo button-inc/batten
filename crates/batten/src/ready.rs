@@ -1968,7 +1968,6 @@ pub fn verdict_token(
 mod issue_key_tests {
     use super::Grammar;
     #[cfg(test)]
-
     /// The consumer's own key, spelled from parts so this file carries no
     /// derivation of the token — `no-tracker-key-in-core` refuses one anywhere
     /// under `crates/**`, and a test is not exempt from the rule it is testing.

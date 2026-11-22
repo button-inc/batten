@@ -5325,7 +5325,6 @@ pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
 mod tests {
     use super::*;
     #[cfg(test)]
-
     /// One module publishing `a`, refusing a write, with one test that does.
     const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
 violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
