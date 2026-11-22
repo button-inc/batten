@@ -9152,6 +9152,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // budget for a syntax tree.
             crate::facts::Fact::Invocations => None,
             crate::facts::Fact::Units => None,
+            crate::facts::Fact::Base => None,
             // Not resolvable on the mediated call, for `Invocations`' reason and
             // one more: a `use` graph is a property of the WHOLE crate, resolved
             // against the root's table across every declared file, so it is
