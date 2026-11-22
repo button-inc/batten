@@ -54,7 +54,7 @@ use anyhow::Result;
 use crate::config_model::Config;
 use crate::error::UsageError;
 use crate::identity::{canonical_repo_path, surface_fingerprint};
-use crate::{git, trust};
+use crate::{git, trust_pin};
 
 /// The tracked path used when a config declares no `[epoch]` table.
 ///
@@ -280,7 +280,7 @@ fn write_cache(path: &Path, key: &str, epoch: &str) {
 /// bytes will come from.
 fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
     match base_ref {
-        Some(reference) => trust::load_base(dir, reference),
+        Some(reference) => trust_pin::load_base(dir, reference, crate::config::parse_base),
         None => crate::config::load(&dir.join(crate::config_model::CONFIG_FILE)),
     }
 }

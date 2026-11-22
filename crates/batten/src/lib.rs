@@ -242,6 +242,7 @@ pub mod tracker_reading;
 pub mod transcript;
 pub use batten_base::traversal;
 pub mod trust;
+pub mod trust_pin;
 pub use batten_base::turn;
 pub mod unsubscribe;
 pub use batten_base::verbs;
@@ -30525,7 +30526,7 @@ fn run_rules(
     // THE PIN IS MINTED HERE, and the position is the meaning (CLOUD-720):
     // "validated" is scoped to what this run already proved.
     if let Some(loaded) = config.base.as_ref() {
-        trust::record_pin(&root, loaded);
+        trust_pin::record_pin(&root, loaded);
     }
     // The severity axis reaches the exit contract exactly here: blocking is
     // derived through the taxonomy table, never name-matched (CLOUD-168), and
@@ -30653,9 +30654,18 @@ fn report_dispositions(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> R
 ///
 /// Split out of [`run_rules`] for [`report_clean_run`]'s reason — that funnel is
 /// at clippy's line ceiling, and a notice is not what should push it over.
-fn announce_degrade(mode: Mode, err: &mut dyn Write, base: Option<&trust::Loaded>) -> Result<()> {
-    if let Some(trust::Provenance::Pin(evidence)) = base.map(|base| &base.provenance) {
-        output::message(mode, Verbosity::Normal, err, &trust::pinned_note(evidence))?;
+fn announce_degrade(
+    mode: Mode,
+    err: &mut dyn Write,
+    base: Option<&trust_pin::Loaded>,
+) -> Result<()> {
+    if let Some(trust_pin::Provenance::Pin(evidence)) = base.map(|base| &base.provenance) {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &trust_pin::pinned_note(evidence),
+        )?;
     }
     Ok(())
 }
@@ -30680,7 +30690,7 @@ fn announce_degrade(mode: Mode, err: &mut dyn Write, base: Option<&trust::Loaded
 /// to be un-loweable (CLOUD-243). An unreadable authority grants no policy, so
 /// it is compared as one that declares nothing: every key the base declares
 /// reports as removed, each under its own key path.
-fn config_delta(base: Option<&trust::Loaded>) -> Option<Vec<trust::Weakening>> {
+fn config_delta(base: Option<&trust_pin::Loaded>) -> Option<Vec<trust::Weakening>> {
     let base = base?;
     let working = config::load(&Path::new(".").join(crate::config_model::CONFIG_FILE))
         .unwrap_or_else(|_| crate::config_model::Config::declaring_nothing());

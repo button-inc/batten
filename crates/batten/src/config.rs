@@ -509,7 +509,7 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 /// Parse a `batten.toml` read from a **git ref**, tolerating the keys
 /// [`RETIRED_KEYS`] names and nothing else.
 ///
-/// [`trust::load_base`] is the one funnel every out-of-band config load passes
+/// [`trust_pin::load_base`] is the one funnel every out-of-band config load passes
 /// through ([`crate::lint`], [`crate::epoch`], [`crate::resolve`]'s
 /// `--config-from`), so this is where the version skew between a ref and this
 /// build is answered — once, rather than per caller.
@@ -526,7 +526,7 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 /// As [`parse`], plus a [`UsageError`] (→ exit `1`) when `text` is not TOML at
 /// all.
 ///
-/// [`trust::load_base`]: crate::trust::load_base
+/// [`trust_pin::load_base`]: crate::trust_pin::load_base
 pub fn parse_base(text: &str, source: &str) -> Result<Config> {
     let mut table: toml::Table =
         toml::from_str(text).map_err(|err| config_error(source, text, &err))?;

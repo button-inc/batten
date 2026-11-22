@@ -67,6 +67,7 @@ use crate::config_model::Config;
 use crate::findings::line_of;
 use crate::severity::RuleSeverity;
 use crate::trust;
+use crate::trust_pin;
 
 /// Where in `batten.toml` a smell sits.
 ///
@@ -838,7 +839,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // whatever the working tree looks like, so it must be asked before the
     // working file's absence can route anywhere.
     let base = base_ref
-        .map(|reference| trust::load_base(dir, reference))
+        .map(|reference| trust_pin::load_base(dir, reference, crate::config::parse_base))
         .transpose()?;
     let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
