@@ -332,7 +332,7 @@ pub trait RuleKindExt: Sized {
 
     /// The stable lowercase token used in config and machine output (§6).
     #[must_use]
-    fn as_str(self) -> &'static str;
+    fn as_str(&self) -> &'static str;
 
     /// What this kind may reach beyond the inputs the boundary handed it
     /// (CLOUD-763).
@@ -462,7 +462,7 @@ impl RuleKindExt for RuleKind {
         RuleKind::Native,
     ];
 
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             RuleKind::Forbid => "forbid",
             RuleKind::Command => "command",
@@ -3964,7 +3964,10 @@ const UNIT_BACKENDS: &[(&str, UnitBackend, &str)] = &[
 /// The Rust backend: the D4 units from the one lossless parse, each `fn`
 /// carrying the o200k token count of the slice a reader would be served.
 fn rust_units(rel_path: &str, text: &str) -> crate::facts::Look<Vec<serde_json::Value>> {
-    if !rel_path.ends_with(".rs") {
+    if !std::path::Path::new(rel_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+    {
         return crate::facts::Look::IsNot;
     }
     let crate::facts::Look::Is(units) = crate::units::units(text) else {
@@ -3989,7 +3992,10 @@ fn rust_units(rel_path: &str, text: &str) -> crate::facts::Look<Vec<serde_json::
 
 /// The Rego backend, over the module regorus parses.
 fn rego_units(rel_path: &str, text: &str) -> crate::facts::Look<Vec<serde_json::Value>> {
-    if !rel_path.ends_with(".rego") {
+    if !std::path::Path::new(rel_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rego"))
+    {
         return crate::facts::Look::IsNot;
     }
     crate::rego_units::units(rel_path, text)

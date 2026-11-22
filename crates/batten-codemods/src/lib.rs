@@ -89,6 +89,13 @@ pub fn named(name: &str) -> Option<&'static Recipe> {
     RECIPES.iter().find(|recipe| recipe.name == name)
 }
 
+/// A tree recipe's rewrite: every `.rs` file and every `Cargo.toml` by path
+/// in, each changed file by path out.
+pub type TreeRewrite = fn(
+    files: &BTreeMap<String, String>,
+    manifests: &BTreeMap<String, String>,
+) -> BTreeMap<String, String>;
+
 /// One named migration whose rewrite of a file depends on the other files:
 /// moving a path to an item's home needs every crate's modules resolved.
 #[derive(Debug, Clone, Copy)]
@@ -102,10 +109,7 @@ pub struct TreeRecipe {
     /// The rewrite of a tree: every `.rs` file (path to text) and every
     /// `Cargo.toml` (path to text), both relative to the tree's root, in;
     /// each file whose text changes, out.
-    pub apply: fn(
-        files: &BTreeMap<String, String>,
-        manifests: &BTreeMap<String, String>,
-    ) -> BTreeMap<String, String>,
+    pub apply: TreeRewrite,
 }
 
 /// Every tree recipe, in the order they were first run.
