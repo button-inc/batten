@@ -1391,7 +1391,11 @@ step.",
     // names none and abstains for a consumer that declares none.
     Manifest {
         name: "shell-hygiene",
-        version: 2,
+        // 3 (CLOUD-2335): the write-time arm, a mediated module refusing a
+        // write that authors shell over the `shell-introduced` fact the hook
+        // decides with the same detector. A second row at `mediated_call`
+        // enables it.
+        version: 3,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -1417,6 +1421,12 @@ step.",
                 provider: None,
                 pointer: "<preset:shell-hygiene>/no-new-shell.rego",
                 source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:shell-hygiene>/no-shell-written.rego",
+                source: include_str!("policy/presets/shell-hygiene/no-shell-written.rego"),
             },
         ],
         verdicts: &[
@@ -1486,6 +1496,21 @@ reviewed change to the committed config. Anything else is a verb, a module or a 
                 routes: &[read(
                     "source read first",
                     "the census declaration's exempt set",
+                )],
+                applicability: Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell write refused",
+                gloss: "a write would create a shell file or put a shell shebang on line 1",
+                class: "This repository has stopped writing shell, and the write is where that is \
+cheapest to hear: the tree arms would refuse the same file at verify, after the work around it was \
+built. A write that creates a shell-named file, or puts a shebang naming a shell on a file whose \
+first line named none, is refused; an edit to a file that already starts with one is the tree \
+arms' to judge. The agent's own commands are never judged here, only what the repository would \
+commit.",
+                routes: &[read(
+                    "source write first",
+                    "write it as Rust, a `batten` verb, or an argv task",
                 )],
                 applicability: Applicability::Advice,
             },
