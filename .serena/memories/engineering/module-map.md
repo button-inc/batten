@@ -64,7 +64,8 @@ row here, so a new module lands with its line.
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_ config can still carry.
 - `brief.rs` (crate `batten-base`) — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
 - `surface_table.rs` — the command surface as data (house style §11, CLOUD-2789): `SURFACE`, the declaration types and their constructors, the value parsers and the value enums they parse into; `surface` interprets it, and a config check that a row names a real command reads it without naming the command layer.
-- `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review and a branch cannot lower its own bar.
+- `trust.rs` — house-style §8 config trust (CLOUD-31): names what a working tree WEAKENED against its base-ref config (`weakenings`), so a branch cannot lower its own bar unseen.
+- `trust_pin.rs` — the base-ref read beneath `trust`: `load_base`/`load` read the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review, and the last-known-good pin (CLOUD-720) answers an unreachable ref only where call and pinned config both permit. Below `resolve`, which loads layer 1 through it.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file > repo config > default`, declared as data in `SETTINGS`, not hard-coded per field.
 - `git.rs` (crate `batten-core`) — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
 - `state.rs` (crate `batten-core`) — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via `etcetera`; the segment derived at runtime, never baked in (rule 1).
