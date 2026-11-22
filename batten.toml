@@ -14602,8 +14602,10 @@ target = "skills/profile/SKILL.md"
 # enabled here, so on #1276 a rejected push was merged three times, one merge
 # carrying six conflict markers into a pushed skill. A repo-local module
 # re-implementing it was written first and deleted: two gates over one practice
-# is a second authority. The pre-push `branch-linear` step in `hk.pkl` is the
-# backstop for a merge made any other way.
+# is a second authority. A merge made any other way is refused at the lap by
+# `land::linearity` (a range carrying merge commits, under `[ci]
+# required_linear_history`); a shell step that duplicated it was retired as
+# authored shell.
 [[rule]]
 id = "commit write loose"
 no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
