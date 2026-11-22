@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 use batten::preset::ManifestExt as _;
 
 use common::Fixture;
@@ -247,5 +248,67 @@ fn a_module_reading_no_provider_loads_with_no_provider_declared() {
         "a provider-agnostic module must load with no provider declared: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// CLOUD-2812: `rust`, the first preset moved in, carries the crate-reach
+// module (CLOUD-2798) and its executable remedy as a verdict route.
+/// The vendored module, as the binary carries it.
+const MODULE: &str = include_str!("../../src/policy/presets/rust/crate-reach.rego");
+
+/// Run the binary at `dir` with `args`; stdout and stderr together.
+fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
+    let ran = common::batten()
+        .current_dir(dir)
+        .args(args)
+        .streamed_output()
+        .expect("run batten");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    )
+}
+
+/// Fails by: the unlisted arm or the undeclared arm unread, which reddens one
+/// of the module's three cases (`#MUTANT unlisted-admitted`).
+#[test]
+fn the_rust_preset_suite_passes() {
+    let dir = common::scratch("rust-preset-suite");
+    let mut config = String::from("version = 1\n");
+    for class in ["crate reach unsafe", "crate declare absent"] {
+        config.push_str(&format!(
+            "\n[[rule]]\nid = \"{class}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             module = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n\
+             \n[[verdict]]\nid = \"{class}\"\ngloss = \"fixture\"\nclass = \"\"\"\n\
+             A fixture verdict for the vendored module's own cases.\n\"\"\"\n\
+             [[verdict.route]]\nid = \"module read first\"\nkind = \"document\"\n\
+             target = \"policy/crate-reach.rego\"\n"
+        ));
+    }
+    common::write(&dir, "batten.toml", &config);
+    common::write(&dir, "policy/crate-reach.rego", MODULE);
+    common::init_repo(&dir);
+    let out = said_by(&dir, &["policy", "test"]);
+    assert!(out.contains("3 passed, 0 failed"), "{out}");
+}
+
+/// Fails by: a vendored verdict's command route not reaching `policy
+/// explain`, so a consumer enabling the preset is told the refusal but not
+/// the executable remedy.
+#[test]
+fn a_preset_remedy_is_a_verdict_route() {
+    let dir = common::scratch("rust-preset-explain");
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"crate graph wrong\"\nkind = \"policy\"\n\
+         scope = \"tree\"\npreset = \"rust\"\nseverity = \"deny\"\n",
+    );
+    common::init_repo(&dir);
+    let out = said_by(&dir, &["policy", "explain", "crate reach unsafe"]);
+    assert!(
+        out.contains("cut-crate <from> <name> <module>"),
+        "the remedy argv must be printed\n{out}"
     );
 }
