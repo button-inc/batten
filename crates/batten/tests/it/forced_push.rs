@@ -241,6 +241,60 @@ fn a_fast_forward_merge_and_a_rebasing_pull_are_admitted() {
     }
 }
 
+/// The decision under a tree enabling only the `lease-asserted` preset: a
+/// FIXTURE for `linear_decision`'s reason (the pinned release does not ship it).
+fn lease_decision(fixture: &str, command: &str) -> String {
+    let dir = common::scratch_repo(fixture);
+    std::fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n\n[[rule]]\nid = \"branch write unnamed\"\nkind = \"policy\"\n\
+         scope = \"mediated_call\"\npreset = \"lease-asserted\"\nseverity = \"deny\"\n",
+    )
+    .expect("write the fixture config");
+    common::stdout(&common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &bash_payload(command),
+    ))
+}
+
+/// git-push(1): a lease naming no expected value, bare or `=<refname>` alone,
+/// "is trivially defeated" by a background fetch. The preset refuses both,
+/// through the compiled binary's resolution of the call.
+#[test]
+fn a_bare_leased_push_is_refused_by_the_preset() {
+    for command in [
+        "git push --force-with-lease origin main",
+        "git push --force-with-lease=main origin main",
+        "git fetch origin && git push --force-with-lease origin main",
+        "time git push --force-with-lease origin main",
+    ] {
+        let out = lease_decision("lease-asserted-refused", command);
+        assert!(
+            out.contains("\"deny\"") && out.contains("branch write unnamed"),
+            "the lease module must refuse `{command}`\n{out}"
+        );
+    }
+}
+
+/// The anti-vacuity half, and the `includes-unread` mutant's case: git's own
+/// remedy (`--force-if-includes`) and the asserted `<ref>:<sha>` form pass.
+#[test]
+fn a_lease_with_force_if_includes_is_allowed() {
+    for command in [
+        "git push --force-with-lease --force-if-includes origin main",
+        "git push --force-with-lease=refs/heads/main:abc123 origin main",
+        "git stash push",
+        "time hg push --force-with-lease",
+    ] {
+        let out = lease_decision("lease-asserted-admitted", command);
+        assert!(
+            !out.contains("branch write unnamed"),
+            "the lease module must admit `{command}`\n{out}"
+        );
+    }
+}
+
 #[test]
 fn the_flag_named_in_prose_is_not_a_push() {
     // ANTI-VACUITY IN THE OTHER DIRECTION. A row keyed on the substring alone

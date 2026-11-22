@@ -156,6 +156,7 @@ fn scratch(name: &str) -> PathBuf {
 const PRESET_SCOPES: &[(&str, bool)] = &[
     ("commit-hygiene", false),
     ("trunk-based", false),
+    ("lease-asserted", false),
     ("linear-history", false),
     ("rust-quality", true),
     ("red-head", false),
